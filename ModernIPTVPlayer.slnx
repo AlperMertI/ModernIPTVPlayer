@@ -1,0 +1,19 @@
+<Solution>
+  <Configurations>
+    <Platform Name="ARM64" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="../mpv-winui-main/mpv-winui-main/src/Mpv.Core/Mpv.Core.csproj">
+    <Platform Solution="Debug|x64" Project="x64" />
+  </Project>
+  <Project Path="../mpv-winui-main/mpv-winui-main/src/Mpv.UI/Mpv.UI.csproj">
+    <Platform Solution="Debug|x64" Project="x64" />
+  </Project>
+  <Project Path="ModernIPTVPlayer.csproj">
+    <Platform Solution="*|ARM64" Project="ARM64" />
+    <Platform Solution="*|x64" Project="x64" />
+    <Platform Solution="*|x86" Project="x86" />
+    <Deploy />
+  </Project>
+</Solution>

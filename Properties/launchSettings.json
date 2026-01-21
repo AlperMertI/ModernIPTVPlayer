@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "ModernIPTVPlayer (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "ModernIPTVPlayer (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

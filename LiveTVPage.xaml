@@ -1,0 +1,371 @@
+<Page
+    x:Class="ModernIPTVPlayer.LiveTVPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:local="using:ModernIPTVPlayer"
+    xmlns:mpv="using:MpvWinUI"
+    mc:Ignorable="d"
+    NavigationCacheMode="Enabled"
+    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+
+    <Page.Resources>
+        <!-- Category List Item Style -->
+        <Style x:Key="CategoryItemStyle" TargetType="ListViewItem">
+            <Setter Property="Padding" Value="12,8"/> <!-- Reduced Padding -->
+            <Setter Property="Margin" Value="0,2"/>   <!-- Reduced Margin -->
+            <Setter Property="CornerRadius" Value="6"/> <!-- Slightly smaller radius -->
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                         <ListViewItemPresenter 
+                            ContentTransitions="{TemplateBinding ContentTransitions}"
+                            Control.IsTemplateFocusTarget="True"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            PointerOverBackground="#1AFFFFFF"
+                            FocusSecondaryBorderBrush="{ThemeResource SystemControlHighlightListAccentLowBrush}"
+                            SelectedBackground="#33FFFFFF"
+                            PlaceholderBackground="Transparent"
+                            SelectionCheckMarkVisualEnabled="False"
+                            CheckBrush="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Channel Tile Style -->
+        <Style x:Key="ChannelTileStyle" TargetType="GridViewItem">
+            <Setter Property="Margin" Value="4"/>
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="GridViewItem">
+                        <ListViewItemPresenter 
+                            ContentTransitions="{TemplateBinding ContentTransitions}"
+                            Control.IsTemplateFocusTarget="True"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            PointerOverBackground="#1AFFFFFF"
+                            FocusSecondaryBorderBrush="{ThemeResource SystemControlHighlightListAccentLowBrush}"
+                            SelectedBackground="#33FFFFFF"
+                            PlaceholderBackground="Transparent"
+                            SelectionCheckMarkVisualEnabled="False"
+                            CheckBrush="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Recent Item Style (Subtle Hover) -->
+        <Style x:Key="RecentItemStyle" TargetType="ListViewItem">
+            <Setter Property="Margin" Value="0"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                        <ListViewItemPresenter 
+                            ContentTransitions="{TemplateBinding ContentTransitions}"
+                            Control.IsTemplateFocusTarget="True"
+                            CornerRadius="{TemplateBinding CornerRadius}"
+                            PointerOverBackground="#1AFFFFFF"
+                            PointerOverBorderBrush="#66FFFFFF"
+                            SelectedBackground="Transparent"
+                            PlaceholderBackground="Transparent"
+                            SelectionCheckMarkVisualEnabled="False"
+                            CheckBrush="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
+
+    <Grid>
+        <Grid.Background>
+            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#FF0F1115" Offset="0.0"/>
+                <GradientStop Color="#FF181B24" Offset="1.0"/>
+            </LinearGradientBrush>
+        </Grid.Background>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="260"/> <!-- Slightly narrower Sidebar -->
+            <ColumnDefinition Width="*"/>   <!-- Content -->
+        </Grid.ColumnDefinitions>
+
+        <!-- SIDEBAR -->
+        <!-- Lighter background with acrylic-like tint -->
+        <Grid Grid.Column="0" Background="#99181818" BorderBrush="#1FFFFFFF" BorderThickness="0,0,1,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/> <!-- Search -->
+                <RowDefinition Height="*"/>    <!-- List -->
+            </Grid.RowDefinitions>
+
+            <!-- Search Box -->
+            <Grid Grid.Row="0" Margin="12,20,12,12">
+                <TextBox x:Name="SearchBox"
+                         PlaceholderText="Ara..."
+                         TextChanged="SearchBox_TextChanged"
+                         CornerRadius="6"
+                         BorderThickness="0"
+                         Background="#1AFFFFFF"
+                         Foreground="White"
+                         Padding="10,8"
+                         PlaceholderForeground="#99FFFFFF"/>
+            </Grid>
+
+            <!-- Category List -->
+            <ListView x:Name="CategoryListView"
+                      Grid.Row="1"
+                      SelectionMode="Single"
+                      ItemClick="CategoryListView_ItemClick"
+                      IsItemClickEnabled="True"
+                      Padding="8,0"
+                      PreviewKeyDown="CategoryListView_PreviewKeyDown"
+                      ItemContainerStyle="{StaticResource CategoryItemStyle}">
+                <ListView.ItemTemplate>
+                    <DataTemplate x:DataType="local:LiveCategory">
+                        <Grid Padding="12,6"> <!-- Reduced Inner Padding -->
+                            <TextBlock Text="{x:Bind CategoryName}" 
+                                       FontSize="15" 
+                                       FontWeight="Medium" 
+                                       Foreground="#EFFFFFFF" 
+                                       TextTrimming="CharacterEllipsis"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+            </ListView>
+
+            <!-- Loading Ring (Sidebar) -->
+            <ProgressRing x:Name="SidebarLoadingRing" IsActive="False"
+                          Grid.RowSpan="2"
+                          Width="40" Height="40"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Grid>
+
+        <!-- CONTENT AREA (Right Side) -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/> <!-- Action Header -->
+                <RowDefinition Height="Auto"/> <!-- Hero Area (Recently Watched) -->
+                <RowDefinition Height="*"/>    <!-- Channel Grid -->
+            </Grid.RowDefinitions>
+
+            <!-- 1. ACTION HEADER -->
+            <Grid Grid.Row="0" Height="60" Padding="32,0,32,0" Background="Transparent">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Left: Title -->
+                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                    <FontIcon Glyph="&#xE7F4;" FontSize="20" Foreground="#FF00B7C3"/> <!-- Accent Color Icon -->
+                    <TextBlock Text="Canlı TV" FontSize="20" FontWeight="SemiBold" Foreground="White"/>
+                </StackPanel>
+
+                <!-- Right: Actions -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="24" VerticalAlignment="Center">
+                    <!-- Clock -->
+                    <TextBlock x:Name="ClockTextBlock" Text="00:00" 
+                               FontSize="16" FontWeight="Normal" Foreground="#99FFFFFF" 
+                               VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    
+                    <AppBarButton Icon="Refresh" Width="40" Height="40" ToolTipService.ToolTip="Yenile" Click="RefreshButton_Click"/>
+                    <AppBarButton Icon="Sort" Width="40" Height="40" ToolTipService.ToolTip="Sırala" Click="SortButton_Click"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- 2. HERO AREA (Recently Watched) -->
+            <Grid Grid.Row="1" x:Name="HeroSection" Height="170" Margin="0,0,0,12" Visibility="Visible">
+                <!-- Cleaner, Consistent Background (Transparent) -->
+                <Grid.Background>
+                    <SolidColorBrush Color="Transparent"/>
+                </Grid.Background> 
+                
+                <StackPanel VerticalAlignment="Center" Padding="32,0">
+                    <TextBlock Text="Son İzlenenler" 
+                               FontSize="14" FontWeight="SemiBold" 
+                               Foreground="#99FFFFFF" Margin="0,0,0,12"/>
+                    
+                    <ListView x:Name="RecentListView"
+                              SelectionMode="None"
+                              IsItemClickEnabled="True"
+                              ItemClick="RecentListView_ItemClick"
+                              ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                              ScrollViewer.HorizontalScrollMode="Enabled"
+                              ScrollViewer.VerticalScrollMode="Disabled"
+                              ItemContainerStyle="{StaticResource RecentItemStyle}">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="16"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:LiveStream">
+                                <Grid Width="160" Height="140" CornerRadius="8" 
+                                      Background="Transparent" 
+                                      BorderBrush="#33FFFFFF" BorderThickness="1"
+                                      Padding="8">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Image Source="{x:Bind StreamIcon}" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Row="1" Text="{x:Bind Name}" 
+                                               FontSize="13" Foreground="White" 
+                                               MaxLines="2" TextTrimming="CharacterEllipsis" 
+                                               HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+            </Grid>
+
+            <!-- 3. CHANNEL CONTENT -->
+            <Grid Grid.Row="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/> <!-- Section Header -->
+                    <RowDefinition Height="*"/>    <!-- Grid -->
+                </Grid.RowDefinitions>
+
+                <!-- Section Header (e.g. "Sports (54)") -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="32,0,32,16">
+                    <TextBlock x:Name="HeaderTitle" Text="Tüm Kanallar" FontSize="18" FontWeight="SemiBold" Foreground="#F0F0F0"/>
+                    <TextBlock x:Name="HeaderCount" Text="(0)" FontSize="18" FontWeight="Normal" Foreground="#99FFFFFF"/>
+                </StackPanel>
+
+                <!-- Channels Grid (Dense Tiles) -->
+                <GridView x:Name="ChannelGridView"
+                          Grid.Row="1"
+                          SelectionMode="None"
+                          IsItemClickEnabled="True"
+                          ItemClick="ChannelGridView_ItemClick"
+                          Padding="24,4,24,32"
+                          SizeChanged="ChannelGridView_SizeChanged"
+                          ContainerContentChanging="ChannelGridView_ContainerContentChanging"
+                          ItemContainerStyle="{StaticResource ChannelTileStyle}">
+                <GridView.ItemTemplate>
+                    <DataTemplate x:DataType="local:LiveStream">
+                        <Grid Height="68" Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Icon -->
+                            <Border Grid.Column="0" 
+                                    Width="48" Height="48" 
+                                    CornerRadius="8" 
+                                    Background="#22FFFFFF"
+                                    VerticalAlignment="Center">
+                                <Grid>
+                                    <Image Source="{x:Bind StreamIcon}" 
+                                           Stretch="Uniform" 
+                                           HorizontalAlignment="Center" 
+                                           VerticalAlignment="Center"
+                                           Margin="4"/>
+                                    
+                                    <!-- Health Status Dot -->
+                                    <Ellipse Width="10" Height="10" 
+                                             Fill="{x:Bind StatusColor, Mode=OneWay}" 
+                                             Stroke="#222222" StrokeThickness="1"
+                                             HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                             Margin="0,0,-2,-2"
+                                             Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Name -->
+                            <TextBlock Grid.Column="1"
+                                       Text="{x:Bind Name}" 
+                                       VerticalAlignment="Top"
+                                       HorizontalAlignment="Left"
+                                       Foreground="#F0F0F0" 
+                                       FontSize="15"
+                                       FontWeight="Medium"
+                                       TextTrimming="CharacterEllipsis"
+                                       MaxLines="1"
+                                       Margin="14,10,4,0"/>
+                                       
+                            <!-- BADGES (Quality Info) -->
+                            <StackPanel Grid.Column="1" 
+                                        Orientation="Horizontal" 
+                                        HorizontalAlignment="Left" 
+                                        VerticalAlignment="Bottom"
+                                        Margin="14,0,0,10"
+                                        Spacing="4">
+                                
+                                <!-- Loading State -->
+                                <ProgressRing IsActive="{x:Bind IsProbing, Mode=OneWay}" 
+                                              Width="16" Height="16" 
+                                              Visibility="{x:Bind BoolToVis(IsProbing), Mode=OneWay}"/>
+                                
+                                <!-- Resolution Badge -->
+                                <Border Background="#CC00B7C3" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}">
+                                    <TextBlock Text="{x:Bind Resolution, Mode=OneWay}" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                                </Border>
+                                <!-- FPS Badge -->
+                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}">
+                                    <TextBlock Text="{x:Bind Fps, Mode=OneWay}" FontSize="10" Foreground="#DDDDDD"/>
+                                </Border>
+                                <!-- Codec Badge -->
+                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}">
+                                    <TextBlock Text="{x:Bind Codec, Mode=OneWay}" FontSize="10" Foreground="#DDDDDD"/>
+                                </Border>
+
+                                <!-- Offline Badge -->
+                                <Border Background="#CCFF0000" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(IsOffline), Mode=OneWay}">
+                                    <TextBlock Text="OFFLINE" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                                </Border>
+
+                                <!-- Unstable / Low Bitrate Badge -->
+                                <Border Background="#CCFFCC00" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(IsUnstable), Mode=OneWay}">
+                                    <TextBlock Text="SLOW/FAKE" FontSize="10" FontWeight="Bold" Foreground="#333333"/>
+                                </Border>
+                            </StackPanel>
+
+                            <!-- Context Menu -->
+                            <Grid.ContextFlyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem Text="Görüntü Kalitesini Kontrol Et (Analiz)" Icon="Video" Click="CheckQuality_Click" Tag="{x:Bind}"/>
+                                </MenuFlyout>
+                            </Grid.ContextFlyout>
+                        </Grid>
+                    </DataTemplate>
+                </GridView.ItemTemplate>
+                <GridView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ItemsWrapGrid Orientation="Horizontal" Loaded="ItemsWrapGrid_Loaded" ItemHeight="80"/>
+                    </ItemsPanelTemplate>
+                </GridView.ItemsPanel>
+            </GridView>
+
+            <!-- Loading Ring (Main) -->
+            <ProgressRing x:Name="MainLoadingRing" IsActive="False"
+                          Grid.Row="1"
+                          Width="60" Height="60"
+                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+            <!-- Empty State -->
+            <StackPanel x:Name="EmptyStatePanel" 
+                        Grid.Row="1" 
+                        Visibility="Collapsed" 
+                        HorizontalAlignment="Center" 
+                        VerticalAlignment="Center" 
+                        Spacing="12"
+                        Opacity="0.8">
+                <FontIcon Glyph="&#xE721;" FontSize="56" Foreground="#FFDDDDDD"/>
+                <TextBlock Text="Kanal bulunamadı." FontSize="18" Foreground="#FFDDDDDD" HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Grid>
+        
+
+    </Grid>
+    </Grid>
+</Page>

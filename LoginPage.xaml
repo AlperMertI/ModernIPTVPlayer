@@ -1,0 +1,85 @@
+<Page
+    x:Class="ModernIPTVPlayer.LoginPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Text="Modern IPTV Player" 
+                   Style="{ThemeResource TitleTextBlockStyle}" 
+                   HorizontalAlignment="Center" Margin="0,48,0,24"/>
+
+        <!-- Main Content (Centered) -->
+        <Grid Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center" Width="400">
+            
+            <Pivot x:Name="LoginPivot" SelectionChanged="LoginPivot_SelectionChanged">
+                
+                <!-- Tab 1: M3U Link -->
+                <PivotItem Header="M3U Bağlantısı">
+                    <Grid RowSpacing="12" Margin="0,12,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        
+                        <TextBox x:Name="UrlTextBox" Header="Playlist URL (M3U)" 
+                                 PlaceholderText="http://provider.com/playlist.m3u"
+                                 InputScope="Url"/>
+                        
+                        <Button x:Name="M3uLoginButton" Content="Giriş Yap" 
+                                Grid.Row="1" HorizontalAlignment="Stretch" 
+                                Style="{ThemeResource AccentButtonStyle}"
+                                Click="M3uLoginButton_Click"/>
+                    </Grid>
+                </PivotItem>
+
+                <!-- Tab 2: Xtream Codes -->
+                <PivotItem Header="Xtream Codes API">
+                    <Grid RowSpacing="12" Margin="0,12,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBox x:Name="HostTextBox" Header="Sunucu Adresi (Host)" 
+                                 PlaceholderText="http://server.com:8080" 
+                                 InputScope="Url"/>
+
+                        <TextBox x:Name="UsernameTextBox" Header="Kullanıcı Adı" 
+                                 Grid.Row="1" PlaceholderText="username"/>
+
+                        <PasswordBox x:Name="PasswordBox" Header="Şifre" 
+                                     Grid.Row="2" PlaceholderText="••••••"/>
+
+                        <Button x:Name="XtreamLoginButton" Content="Giriş Yap" 
+                                Grid.Row="3" HorizontalAlignment="Stretch" 
+                                Style="{ThemeResource AccentButtonStyle}"
+                                Click="XtreamLoginButton_Click"/>
+                    </Grid>
+                </PivotItem>
+
+            </Pivot>
+
+            <!-- Loading Indicator (Overlay) -->
+            <StackPanel x:Name="LoadingPanel" Visibility="Collapsed" 
+                        VerticalAlignment="Center" HorizontalAlignment="Center"
+                        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+                        Padding="24" CornerRadius="8" BorderThickness="1"
+                        BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}">
+                <ProgressRing IsActive="True" Width="48" Height="48"/>
+                <TextBlock Text="Giriş yapılıyor..." Margin="0,12,0,0"/>
+            </StackPanel>
+
+        </Grid>
+    </Grid>
+</Page>

@@ -1,0 +1,69 @@
+## Visual Studio & .NET Core
+.vs/
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Aa]rm/
+[Aa]rm64/
+bld/
+[Ll]og/
+[Ll]ogs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.launchSettings.json
+
+## WinUI / UWP / Windows App SDK
+AppPackages/
+BundleArtifacts/
+Package.StoreAssociation.xml
+_pkginfo.txt
+*.appx
+*.appxbundle
+*.appxupload
+*.msix
+*.msixbundle
+*.msixupload
+Generated\ Files/
+Generated_Code/
+
+## Build Results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.log
+*.dg
+*.lock.json
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+## Code Coverage
+*.coverage
+*.coveragexml
+
+## Azure / Cloud
+csx/
+ecf/
+rcf/
+*.azurePubxml
+*.pubxml
+*.publishsettings
+
+## Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+## MPV / External Libs
+*.dll
+*.exe
+*.pdb
+*.lib
+!Libs/**/libmpv*.dll
+# Keep libmpv if it's explicitly in Libs, but ignore built binaries
