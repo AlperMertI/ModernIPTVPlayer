@@ -8,6 +8,7 @@ using Windows.Media.Core;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Diagnostics;
 using System.Text.Json.Serialization;
 using System.Linq;
 using System.Net.Http; // Added for Diagnostic Check
@@ -51,7 +52,10 @@ namespace ModernIPTVPlayer
         private string _cachedResolution = "-";
         private string _cachedFps = "-";
         private string _cachedCodec = "-";
+        private string _cachedAudio = "-";
         private string _cachedColorspace = "-";
+        private string _cachedHdr = "-";
+        private int _nativeMonitorFps = 0;
         
         // Auto-Hide Logic
         private DispatcherTimer? _cursorTimer;
@@ -198,21 +202,47 @@ namespace ModernIPTVPlayer
                         var fpsValStr = await _mpvPlayer.GetPropertyAsync("estimated-fps");
                         if (string.IsNullOrEmpty(fpsValStr) || fpsValStr == "N/A") fpsValStr = await _mpvPlayer.GetPropertyAsync("container-fps");
                         if (double.TryParse(fpsValStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double fv))
+                        {
                             _cachedFps = $"{fv:F2} fps";
+                            if (_nativeMonitorFps > 0)
+                            {
+                                 _cachedFps += $" / {_nativeMonitorFps}Hz";
+                            }
+                        }
                         else
+                        {
                             _cachedFps = "- fps";
+                        }
 
-                        // Codec & Colorspace
+                        // Codec (Video & Audio)
                         string rawCodec = await _mpvPlayer.GetPropertyAsync("video-codec");
                         _cachedCodec = GetShortCodecName(rawCodec);
+
+                        string audioCodec = await _mpvPlayer.GetPropertyAsync("audio-codec");
+                        string audioChannels = await _mpvPlayer.GetPropertyAsync("audio-params/hr-channels");
+                        if (string.IsNullOrEmpty(audioChannels) || audioChannels == "N/A")
+                            audioChannels = await _mpvPlayer.GetPropertyAsync("audio-out-params/channels");
+                        
+                        _cachedAudio = $"{GetShortCodecName(audioCodec).ToUpper()} ({audioChannels})";
                         
                         _cachedColorspace = await _mpvPlayer.GetPropertyAsync("video-params/colormatrix");
                         if (string.IsNullOrEmpty(_cachedColorspace) || _cachedColorspace == "N/A") _cachedColorspace = "-";
 
+                        // HDR / Tone Mapping
+                        string hdrStatus = await _mpvPlayer.GetPropertyAsync("video-out-params/sig-peak");
+                        string gamma = await _mpvPlayer.GetPropertyAsync("video-out-params/gamma");
+                        if (!string.IsNullOrEmpty(hdrStatus) && hdrStatus != "N/A" && double.TryParse(hdrStatus, NumberStyles.Any, CultureInfo.InvariantCulture, out double peak) && peak > 1.0)
+                            _cachedHdr = $"HDR ({peak:F1} nits)";
+                        else
+                            _cachedHdr = $"SDR ({gamma})";
+
                         // Update Stats Overlay Texts (even if hidden, ready for show)
                         TxtResolution.Text = _cachedResolution;
                         TxtFps.Text = _cachedFps;
-                        TxtCodec.Text = _cachedCodec;
+                        TxtCodec.Text = _cachedCodec.ToUpper();
+                        TxtAudioCodec.Text = _cachedAudio;
+                        TxtColorspace.Text = _cachedColorspace;
+                        TxtHdr.Text = _cachedHdr;
 
                         _isStaticMetadataFetched = true;
                         
@@ -225,35 +255,95 @@ namespace ModernIPTVPlayer
                 {
                     // 2. Dynamic Metadata (Always poll when visible)
                     var bitrate = await _mpvPlayer.GetPropertyAsync("video-bitrate");
-                    if (!string.IsNullOrEmpty(bitrate) && bitrate != "N/A" && 
-                        double.TryParse(bitrate, NumberStyles.Any, CultureInfo.InvariantCulture, out double brVal))
-                    {
-                        string bText = $"{brVal / 1000:F0} kbps";
-                        if (TxtBitrate.Text != bText) TxtBitrate.Text = bText;
-                    }
-                    else if (TxtBitrate.Text != "Calculating...") 
-                    {
-                        TxtBitrate.Text = "Calculating...";
-                    }
+                    TxtBitrate.Text = FormatBitrate(bitrate);
+                    
+                    // Improved speed detection: Real-time network activity
+                    // Probe showed 'cache-speed' is the working property for this environment
+                    long speedVal = await GetPropertyLongSafe("cache-speed");
+                    TxtSpeed.Text = FormatSpeedLong(speedVal);
 
-                    // Drops & Mistimed
+                    var hwdec = await _mpvPlayer.GetPropertyAsync("hwdec-current");
+                    TxtHardware.Text = (hwdec != "no" && !string.IsNullOrEmpty(hwdec)) ? hwdec.ToUpper() : "SOFTWARE";
+
+                    // Drops & AV Sync
                     try 
                     {
-                        long drops = await _mpvPlayer.GetPropertyLongAsync("vo-drop-frame-count");
-                        long mistimed = await _mpvPlayer.GetPropertyLongAsync("mistimed-frame-count");
+                        // Some MPV versions use frame-drop-count directly for total drops
+                        long decDrops = await GetPropertyLongSafe("frame-drop-count");
+                        if (decDrops < 0) decDrops = await GetPropertyLongSafe("vo-drop-frame-count");
+                        if (decDrops < 0) decDrops = await GetPropertyLongSafe("decoder-frame-drop-count");
                         
-                        // Total drops = Drops
-                        TxtDropped.Text = $"{drops}";
-                        TxtMistimed.Text = mistimed.ToString();
+                        string avSync = await _mpvPlayer.GetPropertyAsync("avsync");
+                        string buffDur = await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration");
+
+                        // Drops
+                        TxtDroppedDecoder.Text = decDrops >= 0 ? $"{decDrops}" : "0";
+
+                        // AV Sync
+                        if (double.TryParse(avSync, NumberStyles.Any, CultureInfo.InvariantCulture, out double avVal))
+                        {
+                             TxtAvSync.Text = $"{avVal * 1000:F1} ms"; // Show in ms
+                             TxtAvSync.Foreground = (Math.Abs(avVal) > 0.1) 
+                                 ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange) 
+                                 : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White);
+                        }
+                        else
+                        {
+                             TxtAvSync.Text = "-";
+                        }
+
+                        // Buffer
+                        if (double.TryParse(buffDur, NumberStyles.Any, CultureInfo.InvariantCulture, out double buffVal))
+                        {
+                             TxtBuffer.Text = $"{buffVal:F1}s";
+                        }
+                        else
+                        {
+                             TxtBuffer.Text = "0s";
+                        }
                     }
                     catch (Exception)
                     {
-                        TxtDropped.Text = "-";
-                        TxtMistimed.Text = "-";
+                        TxtDroppedDecoder.Text = "-";
+                        TxtAvSync.Text = "-";
+                        TxtBuffer.Text = "-";
                     }
                 }
             }
             catch { /* Ignore errors during polling */ }
+        }
+
+
+        private async Task<long> GetPropertyLongSafe(string name)
+        {
+            try
+            {
+                return await _mpvPlayer.GetPropertyLongAsync(name);
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
+        private string FormatBitrate(string? bitrate)
+        {
+            if (string.IsNullOrEmpty(bitrate) || bitrate == "N/A") return "Calculating...";
+            if (double.TryParse(bitrate, NumberStyles.Any, CultureInfo.InvariantCulture, out double brVal))
+            {
+                if (brVal > 1000000) return $"{brVal / 1000000:F1} Mbps";
+                return $"{brVal / 1000:F0} kbps";
+            }
+            return "-";
+        }
+
+        private string FormatSpeedLong(long sVal)
+        {
+            if (sVal <= 0) return "0 KB/s";
+            double mbps = (sVal * 8.0) / 1000000.0;
+            if (sVal > 1024 * 1024) 
+                return $"{(double)sVal / (1024 * 1024):F2} MB/s ({mbps:F1} Mbps)";
+            return $"{(double)sVal / 1024:F0} KB/s ({mbps:F2} Mbps)";
         }
 
         private void ShowInfoPills()
@@ -549,6 +639,29 @@ namespace ModernIPTVPlayer
                     await _mpvPlayer.SetPropertyAsync("sub-scale-with-window", "yes");
                     await _mpvPlayer.SetPropertyAsync("sub-use-margins", "no");
 
+                    // Detect Physical Refresh Rate (Native override for MPV)
+                    try
+                    {
+                         // Use GetForegroundWindow as a robust fallback since we are the active app
+                         var ptr = GetForegroundWindow();
+                         var monitor = MonitorFromWindow(ptr, MONITOR_DEFAULTTONEAREST);
+                            
+                         var devMode = new DEVMODE();
+                         devMode.dmSize = (short)System.Runtime.InteropServices.Marshal.SizeOf(typeof(DEVMODE));
+                         if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref devMode))
+                         {
+                             if (devMode.dmDisplayFrequency > 0)
+                             {
+                                 System.Diagnostics.Debug.WriteLine($"[PlayerPage] Native Display Frequency: {devMode.dmDisplayFrequency}Hz");
+                                 _mpvPlayer?.SetDisplayFps(devMode.dmDisplayFrequency);
+                             }
+                         }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[PlayerPage] Failed to get native refresh rate: {ex.Message}");
+                    }
+
                     await _mpvPlayer.OpenAsync(_streamUrl);
                     _statsTimer?.Start();
                 }
@@ -572,7 +685,53 @@ namespace ModernIPTVPlayer
             }
         }
 
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
 
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+        private const uint MONITOR_DEFAULTTONEAREST = 2;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool EnumDisplaySettings(string? lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+        private const int ENUM_CURRENT_SETTINGS = -1;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct DEVMODE
+        {
+            [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string dmDeviceName;
+            public short dmSpecVersion;
+            public short dmDriverVersion;
+            public short dmSize;
+            public short dmDriverExtra;
+            public int dmFields;
+            public int dmPositionX;
+            public int dmPositionY;
+            public int dmDisplayOrientation;
+            public int dmDisplayFixedOutput;
+            public short dmColor;
+            public short dmDuplex;
+            public short dmYResolution;
+            public short dmTTOption;
+            public short dmCollate;
+            [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string dmFormName;
+            public short dmLogPixels;
+            public int dmBitsPerPel;
+            public int dmPelsWidth;
+            public int dmPelsHeight;
+            public int dmDisplayFlags;
+            public int dmDisplayFrequency;
+            public int dmICMMethod;
+            public int dmICMIntent;
+            public int dmMediaType;
+            public int dmDitherType;
+            public int dmReserved1;
+            public int dmReserved2;
+            public int dmPanningWidth;
+            public int dmPanningHeight;
+        }
 
         private void SeekSlider_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {

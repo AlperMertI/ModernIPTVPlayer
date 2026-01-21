@@ -10,6 +10,7 @@
     <NoWarn>NU1507;NU1008</NoWarn>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Platforms>AnyCPU;x64</Platforms>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
   <ItemGroup>
     <None Remove="Themes\Generic.xaml" />

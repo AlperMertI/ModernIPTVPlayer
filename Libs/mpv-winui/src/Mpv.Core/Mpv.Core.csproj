@@ -13,5 +13,6 @@
         <Title>Mpv - Core</Title>
         <Description>Mpv player core.</Description>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     </PropertyGroup>
 </Project>

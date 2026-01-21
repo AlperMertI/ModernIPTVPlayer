@@ -140,6 +140,7 @@ public sealed partial class Player
         Client.ObserveProperty(DurationProperty, Enums.Client.MpvFormat.Int64);
         Client.ObserveProperty(PositionProperty, Enums.Client.MpvFormat.Int64);
         Client.ObserveProperty(PausedForCacheProperty, Enums.Client.MpvFormat.Flag);
+        Client.ObserveProperty("display-fps", Enums.Client.MpvFormat.Double);
     }
 
     public bool IsMediaLoaded()
@@ -221,4 +222,7 @@ public sealed partial class Player
             await Client.ExecuteAsync($"screenshot-to-file {filePath}");
         }
     }
+
+    public double DisplayFps { get; private set; }
+    public event EventHandler<double>? DisplayFpsChanged;
 }

@@ -39,6 +39,7 @@ public sealed partial class MpvPlayer : Control
     }
 
     private bool _isRenderInitialized = false;
+    private bool _fpsRefined = false; // To retry FPS check after rendering starts
 
     public async Task InitializePlayerAsync()
     {
@@ -68,8 +69,13 @@ public sealed partial class MpvPlayer : Control
             Player.Client.SetProperty("gpu-context", "angle");
 
             // Optimize for background rendering (Step 2.5)
+
+
             Player.Client.SetProperty("opengl-swapinterval", "0");
-            Player.Client.SetProperty("video-sync", "desync");
+            Player.Client.SetProperty("video-sync", "display-resample");
+
+            Player.Client.SetProperty("audio-buffer", "1"); // Increase audio buffer to 1s to prevent underrun
+            Player.Client.SetProperty("autosync", "30"); // Smooth out A/V sync fluctuations
             Player.Client.SetProperty("opengl-glfinish", "no");
             Player.Client.SetProperty("opengl-waitvsync", "no");
 
@@ -86,8 +92,31 @@ public sealed partial class MpvPlayer : Control
 
             Player.Client.RequestLogMessage(MpvLogLevel.Warn);
             Player.LogMessageReceived += OnLogMessageReceived;
+            // Subscribe to FPS changes for dynamic offset calculation
+            Player.DisplayFpsChanged += OnDisplayFpsChanged;
+
             var args = new InitializeArgument(default); // Removed func: RenderContext.GetProcAddress
             await Player.InitializeAsync(args);
+
+            // Manual check to catch initial value if event fired too early or not at all
+            try
+            {
+               double initialFps = Player.Client.GetPropertyToDouble("display-fps");
+               if (initialFps > 0) 
+               {
+                   OnDisplayFpsChanged(Player, initialFps);
+               }
+               else
+               {
+                   Debug.WriteLine("[MpvPlayer] Initial FPS check returned <= 0, defaulting to 60Hz.");
+                   OnDisplayFpsChanged(Player, 60.0);
+               }
+            }
+            catch (Exception ex) 
+            { 
+                Debug.WriteLine($"[MpvPlayer] Initial FPS check failed ({ex.Message}), defaulting to 60Hz.");
+                OnDisplayFpsChanged(Player, 60.0);
+            }
 
             // Hook up the Update Callback - MOVED TO RenderingLoop
             _updateCallback = OnMpvUpdate;
@@ -125,6 +154,35 @@ public sealed partial class MpvPlayer : Control
     private void OnRender(TimeSpan e)
     {
         Render();
+    }
+    
+    // Allow external components (like PlayerPage) to inject the correct display rate
+    // This bridges the gap when MPV cannot detect it internally
+    public void SetDisplayFps(double fps)
+    {
+        if (fps <= 0) return;
+        Debug.WriteLine($"[MpvPlayer] External FPS set: {fps}");
+        _fpsRefined = true; // Prevent late check from overwriting or logging errors
+        // Trigger the internal logic
+        OnDisplayFpsChanged(Player, fps);
+    }
+    
+    private void OnDisplayFpsChanged(object? sender, double fps)
+    {
+        if (fps <= 0) return;
+
+        Debug.WriteLine($"[MpvPlayer] Detected FPS change: {fps}");
+
+        // Formula: (BufferCount + 0.5) / RefreshRate
+        // 0.075 (75ms) was good for 60Hz. 75ms * 60 = 4.5 frames latency.
+        double offset = 0.075 * (60.0 / fps);
+        
+        // Ensure this runs on a safe thread if needed, or MPV handles concurrency
+        if (Player?.Client != null && Player.Client.IsInitialized)
+        {
+             Player.Client.SetProperty("video-timing-offset", offset.ToString(System.Globalization.CultureInfo.InvariantCulture));
+             Debug.WriteLine($"[MpvPlayer] Updated offset: {offset:F4}s for {fps}Hz");
+        }
     }
 
     // Removed VisualState updates
@@ -168,9 +226,9 @@ public sealed partial class MpvPlayer : Control
             var result = await Task.Run(() => Player.Client.GetPropertyToString(propertyName));
             return result ?? "N/A";
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Suppress error and return default
+            Debug.WriteLine($"[MpvPlayer] GetPropertyAsync({propertyName}) failed: {ex.Message}");
             return "N/A";
         }
     }
@@ -184,11 +242,16 @@ public sealed partial class MpvPlayer : Control
             return await Task.Run(() => 
             {
                 try { return Player.Client.GetPropertyToLong(propertyName); }
-                catch { return 0; }
+                catch (Exception ex)
+                { 
+                    Debug.WriteLine($"[MpvPlayer] GetPropertyLongAsync({propertyName}) inner failed: {ex.Message}");
+                    return 0; 
+                }
             });
         }
-        catch
+        catch (Exception ex)
         {
+             Debug.WriteLine($"[MpvPlayer] GetPropertyLongAsync({propertyName}) failed: {ex.Message}");
             return 0;
         }
     }
@@ -201,11 +264,16 @@ public sealed partial class MpvPlayer : Control
             return await Task.Run(() => 
             {
                 try { return Player.Client.GetPropertyToBoolean(propertyName); }
-                catch { return false; }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[MpvPlayer] GetPropertyBoolAsync({propertyName}) inner failed: {ex.Message}");
+                    return false; 
+                }
             });
         }
-        catch
+        catch (Exception ex)
         {
+            Debug.WriteLine($"[MpvPlayer] GetPropertyBoolAsync({propertyName}) failed: {ex.Message}");
             return false;
         }
     }
@@ -390,6 +458,35 @@ public sealed partial class MpvPlayer : Control
                             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
                             _profiler.EndStep("GLClear");
 
+                            // Delayed FPS Check (Frame 30 approx 0.5s after start)
+                            // This catches high-refresh monitors if the initial check failed/defaulted
+                            if (!_fpsRefined && frameId == 30)
+                            {
+                                 _fpsRefined = true;
+                                 try 
+                                 {
+                                     this.DispatcherQueue.TryEnqueue(() => 
+                                     { 
+                                         // Property access should be safe on any thread, but using Dispatcher for safety
+                                         // Actually SetProperty is thread-safe. Just call the handler directly.
+                                         try {
+                                             double lateFps = Player.Client.GetPropertyToDouble("display-fps");
+                                             if (lateFps > 0) 
+                                             {
+                                                 Debug.WriteLine($"[MpvPlayer] Late FPS refinement detected: {lateFps}");
+                                                 // Only fire event if different, to avoid unnecessary updates
+                                                 if (Math.Abs(lateFps - 60.0) > 0.1)
+                                                 {
+                                                     OnDisplayFpsChanged(Player, lateFps);
+                                                 }
+                                             }
+                                         } catch (Exception ex) {
+                                              Debug.WriteLine($"[MpvPlayer] Late FPS check failed: {ex.Message}");
+                                         }
+                                     });
+                                 } catch {}
+                            }
+
                             _profiler.BeginStep("MPVInternal");
                             Player.RenderGL(fb.BufferWidth, fb.BufferHeight, fb.GLFrameBufferHandle);
                             _profiler.EndStep("MPVInternal");
@@ -423,6 +520,13 @@ public sealed partial class MpvPlayer : Control
                                     // Step 3: Present (DWM Submission)
                                     sw.Restart();
                                     currentFb.SubmitPresent();
+
+                                    // Phase 16: Report Swap to MPV for stats
+                                    if (Player?.RenderContext != null)
+                                    {
+                                         Player.RenderContext.ReportSwap();
+                                    }
+
                                     prof.RecordAsyncStep("DXPresent", sw.Elapsed.TotalMilliseconds);
 
                                     backBuffer->Release();

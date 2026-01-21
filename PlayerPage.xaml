@@ -241,36 +241,69 @@
                 Background="#AA000000"
                 IsHitTestVisible="False">
             <StackPanel Spacing="6">
-                <TextBlock Text="Yayın Bilgileri" FontWeight="Bold" Foreground="White" Margin="0,0,0,8" FontSize="14"/>
+                <TextBlock Text="Yayın Bilgileri" FontWeight="Bold" Foreground="White" Margin="0,0,0,4" FontSize="14"/>
                 
+                <!-- Video Group -->
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="Çözünürlük:" Foreground="#AAAAAA" Width="85"/>
+                    <TextBlock Text="Çözünürlük:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtResolution" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="FPS:" Foreground="#AAAAAA" Width="85"/>
+                    <TextBlock Text="FPS / Monitor:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtFps" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="Bitrate:" Foreground="#AAAAAA" Width="85"/>
-                    <TextBlock x:Name="TxtBitrate" Text="-" Foreground="White" FontWeight="SemiBold"/>
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="Codec:" Foreground="#AAAAAA" Width="85"/>
+                    <TextBlock Text="Video Codec:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtCodec" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="Dropped:" Foreground="#AAAAAA" Width="85"/>
-                    <TextBlock x:Name="TxtDropped" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock Text="Audio Codec:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtAudioCodec" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="Mistimed:" Foreground="#AAAAAA" Width="85"/>
-                    <TextBlock x:Name="TxtMistimed" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock Text="Colorspace:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtColorspace" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="HDR / Tone:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtHdr" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <!-- Connection Group -->
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                    <TextBlock Text="Download Speed:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtSpeed" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Bitrate:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtBitrate" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Buffer:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtBuffer" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <!-- Performance Group -->
+                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                    <TextBlock Text="Hardware:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtHardware" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="A/V Sync:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtAvSync" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Dropped:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtDroppedDecoder" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
             </StackPanel>
         </Border>

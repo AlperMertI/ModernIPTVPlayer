@@ -12,6 +12,8 @@
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Libs\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <None Remove="LiveTVPage.xaml" />
