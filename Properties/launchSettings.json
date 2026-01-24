@@ -1,7 +1,8 @@
 {
   "profiles": {
     "ModernIPTVPlayer (Package)": {
-      "commandName": "MsixPackage"
+      "commandName": "MsixPackage",
+      "nativeDebugging": false
     },
     "ModernIPTVPlayer (Unpackaged)": {
       "commandName": "Project"

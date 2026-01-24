@@ -32,7 +32,7 @@ public partial class MpvRenderContextNative
     private static partial MpvError mpv_render_context_report_swap(MpvRenderContextHandle context);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial void mpv_render_context_free(MpvRenderContextHandle context);
+    private static partial void mpv_render_context_free(IntPtr context);
 
     public delegate void MpvRenderUpdateCallback(IntPtr callbackCtx);
 }

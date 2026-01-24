@@ -340,6 +340,14 @@ public partial class MpvClientNative
         return Marshal.PtrToStructure<MpvEvent>(mpv_wait_event(Handle, timeout));
     }
 
+    /// <summary>
+    /// Interrupts mpv_wait_event().
+    /// </summary>
+    public void Wakeup()
+    {
+        mpv_wakeup(Handle);
+    }
+
     public void RequestLogMessage(MpvLogLevel level)
     {
         var errorCode = mpv_request_log_messages(Handle, level.ToLogLevel());

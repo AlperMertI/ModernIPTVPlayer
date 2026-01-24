@@ -96,45 +96,118 @@ public sealed partial class MpvPlayer : Control
     {
         if (Player == null || value == null) return;
         var valStr = value.ToString();
-        await Task.Run(() => Player.Client.SetProperty(name, valStr));
+        try
+        {
+            await Task.Run(() => Player.Client.SetProperty(name, valStr));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MPV_ERR] Failed to set property '{name}' to '{valStr}': {ex.Message}");
+        }
     }
 
     public async Task<string> GetPropertyAsync(string name)
     {
         if (Player == null) return "N/A";
-        return await Task.Run(() => Player.Client.GetPropertyToString(name));
+        try
+        {
+            return await Task.Run(() => Player.Client.GetPropertyToString(name));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MPV_ERR] Failed to get property '{name}': {ex.Message}");
+            return "N/A";
+        }
     }
 
     public async Task<bool> GetPropertyBoolAsync(string name)
     {
         if (Player == null) return false;
-        return await Task.Run(() => Player.Client.GetPropertyToBoolean(name));
+        try
+        {
+            return await Task.Run(() => Player.Client.GetPropertyToBoolean(name));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MPV_ERR] Failed to get bool property '{name}': {ex.Message}");
+            return false;
+        }
     }
 
     public async Task<long> GetPropertyLongAsync(string name)
     {
         if (Player == null) return -1;
-        return await Task.Run(() => Player.Client.GetPropertyToLong(name));
+        try
+        {
+            return await Task.Run(() => Player.Client.GetPropertyToLong(name));
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MPV_ERR] Failed to get long property '{name}': {ex.Message}");
+            return -1;
+        }
     }
 
     public async Task ExecuteCommandAsync(params string[] args)
     {
         if (Player == null) return;
-        await Player.Client.ExecuteAsync(args);
+        try
+        {
+            await Player.Client.ExecuteAsync(args);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MPV_ERR] Failed to execute command '{string.Join(" ", args)}': {ex.Message}");
+        }
     }
 
     public async Task CleanupAsync()
     {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] CleanupAsync STARTED (Strict Sequential Mode)");
+        
+        // 1. Stop the Render Loop FIRST to prevent access violations during disposal
+        if (_renderControl != null)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 1: Stopping Render Loop...");
+            await _renderControl.StopLoopAsync();
+        }
+
+        // 2. Dispose of libmpv AFTER rendering is guaranteed to have stopped
         if (Player != null)
         {
-            await Player.DisposeAsync();
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 2: Disposing Player...");
+            try
+            {
+                await Player.DisposeAsync();
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 2: Player.DisposeAsync SUCCESS");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 2: Player.DisposeAsync FAILED: {ex.Message}");
+            }
             Player = null;
         }
+
+        // 3. Destroy D3D11 Resources LAST
+        if (_renderControl != null)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 3: Destroying D3D11 Resources...");
+            _renderControl.DestroyResources();
+        }
+
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] CleanupAsync COMPLETED");
     }
 
     public void SetDisplayFps(double fps)
     {
-        Player?.Client.SetProperty("display-fps", fps);
+        try
+        {
+            Player?.Client.SetProperty("display-fps", fps);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MPV_ERR] Failed to set display-fps to {fps}: {ex.Message}");
+        }
     }
 
     // Dönüş: True = Çizim yapıldı, False = Yapılmadı

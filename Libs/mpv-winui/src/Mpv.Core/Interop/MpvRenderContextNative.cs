@@ -29,12 +29,15 @@ public partial class MpvRenderContextNative
     {
         int paramSize = Marshal.SizeOf<MpvRenderParam>();
         try {
-            // Marshalling
-            var ptr = Marshal.AllocHGlobal(paramSize * param.Length);
+            // Marshalling - ALWAYS add a null terminator (type=0) for mpv
+            var ptr = Marshal.AllocHGlobal(paramSize * (param.Length + 1));
             for (var i = 0; i < param.Length; i++)
             {
                 Marshal.StructureToPtr(param[i], ptr + (paramSize * i), false);
             }
+            // Null terminator
+            var terminator = new MpvRenderParam { Type = 0, Data = IntPtr.Zero };
+            Marshal.StructureToPtr(terminator, ptr + (paramSize * param.Length), false);
 
             Debug.WriteLine($"[LOG] Final Attempt: Calling mpv_render_context_create. Params count: {param.Length}");
             
@@ -95,11 +98,15 @@ public partial class MpvRenderContextNative
         
         try {
             var size = Marshal.SizeOf<MpvRenderParam>();
-            var ptr = Marshal.AllocHGlobal(size * param.Length);
+            // ALWAYS add a null terminator (type=0) for mpv
+            var ptr = Marshal.AllocHGlobal(size * (param.Length + 1));
             for (var i = 0; i < param.Length; i++)
             {
                 Marshal.StructureToPtr(param[i], ptr + (size * i), false);
             }
+            // Null terminator
+            var terminator = new MpvRenderParam { Type = 0, Data = IntPtr.Zero };
+            Marshal.StructureToPtr(terminator, ptr + (size * param.Length), false);
 
             var errorCode = mpv_render_context_render(Handle, ptr);
             
@@ -121,9 +128,10 @@ public partial class MpvRenderContextNative
 
     public void Destroy()
     {
+        if (Handle.Handle == IntPtr.Zero) return;
         try
         {
-            mpv_render_context_free(Handle);
+            mpv_render_context_free(Handle.Handle);
         }
         catch (Exception)
         {

@@ -17,7 +17,7 @@ using System.Numerics;
 
 namespace MpvWinUI.Common;
 
-public unsafe class D3D11RenderControl : ContentControl
+public class D3D11RenderControl : ContentControl
 {
     private SwapChainPanel _swapChainPanel;
     private ComPtr<ID3D11Device1> _device;
@@ -80,7 +80,7 @@ public unsafe class D3D11RenderControl : ContentControl
     private IntPtr _lastLinkedHandle = IntPtr.Zero;
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForMultipleObjects(uint nCount, IntPtr* lpHandles, bool bWaitAll, uint dwMilliseconds);
+    private static unsafe extern uint WaitForMultipleObjects(uint nCount, IntPtr* lpHandles, bool bWaitAll, uint dwMilliseconds);
 
     private const uint WAIT_OBJECT_0 = 0x00000000;
 
@@ -90,7 +90,7 @@ public unsafe class D3D11RenderControl : ContentControl
         Unloaded += OnUnloaded;
     }
 
-    public void Initialize()
+    public unsafe void Initialize()
     {
         if (_disposed) return;
 
@@ -132,7 +132,7 @@ public unsafe class D3D11RenderControl : ContentControl
         _renderTask = Task.Factory.StartNew(RenderLoop, _cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
 
-    private void RenderLoop()
+    private unsafe void RenderLoop()
     {
         Thread.CurrentThread.Priority = ThreadPriority.Highest; // Maksimum tepki hızı
         LogSync("Render Thread Engaged.");
@@ -235,7 +235,7 @@ public unsafe class D3D11RenderControl : ContentControl
         }
     }
 
-    private void PresentFrame()
+    private unsafe void PresentFrame()
     {
         if (_swapChain.Handle == null) return;
         try {
@@ -248,7 +248,7 @@ public unsafe class D3D11RenderControl : ContentControl
         }
     }
 
-    private void CreateDevice()
+    private unsafe void CreateDevice()
     {
         uint flags = (uint)CreateDeviceFlag.BgraSupport; 
         ID3D11Device* device;
@@ -275,7 +275,7 @@ public unsafe class D3D11RenderControl : ContentControl
         lock (_renderLock) { PerformResize(force: true); }
     }
 
-    private void PerformResize(bool force)
+    private unsafe void PerformResize(bool force)
     {
         if (_disposed || _device.Handle == null) return;
         var sw = Stopwatch.StartNew();
@@ -383,7 +383,7 @@ public unsafe class D3D11RenderControl : ContentControl
         catch (Exception ex) { LogSync($"[FATAL] Resize Exception: {ex}"); }
     }
 
-    private void UpdateWaitableObject()
+    private unsafe void UpdateWaitableObject()
     {
         if (_swapChain.Handle != null)
         {
@@ -392,7 +392,7 @@ public unsafe class D3D11RenderControl : ContentControl
         }
     }
 
-    private void CreateSwapChain(int width, int height)
+    private unsafe void CreateSwapChain(int width, int height)
     {
         if (_swapChain.Handle != null) return;
         
@@ -425,7 +425,7 @@ public unsafe class D3D11RenderControl : ContentControl
 
     private long _swapChainVersion = 0;
 
-    private void UpdateSwapChainOnUI()
+    private unsafe void UpdateSwapChainOnUI()
     {
         if (_disposed || _swapChainPanel == null || _swapChain.Handle == null) return;
         
@@ -485,17 +485,51 @@ public unsafe class D3D11RenderControl : ContentControl
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int SetSwapChainDelegate(IntPtr thisPtr, IntPtr swapChain);
 
+    public async Task StopLoopAsync()
+    {
+        if (_cts == null || _cts.IsCancellationRequested) return;
+        
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] StopLoopAsync STARTED");
+        _cts.Cancel();
+        _resizeEvent.Set(); // Wake up the loop if it's waiting
+
+        if (_renderTask != null)
+        {
+            try
+            {
+                // Wait for the task to complete
+                await _renderTask.ContinueWith(t => { }, TaskScheduler.Default);
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] RenderLoop TASK COMPLETED");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[D3D_CTRL] StopLoopAsync Error: {ex.Message}");
+            }
+        }
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] StopLoopAsync FINISHED");
+    }
+
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] OnUnloaded TRIGGERED");
         _disposed = true;
         _cts?.Cancel();
         _resizeEvent.Set();
+        
+        // Note: Actual resource destruction should happen AFTER libmpv is gone
+        // to avoid "Device Removed" or access violation during render callbacks.
+    }
+
+    public unsafe void DestroyResources()
+    {
         lock (_renderLock) {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DestroyResources STARTED");
             Interlocked.Exchange(ref _atomicBackBuffer, IntPtr.Zero);
             if (_swapChain.Handle != null) _swapChain.Dispose();
             if (_context.Handle != null) _context.Dispose();
             if (_device.Handle != null) _device.Dispose();
             if (_cachedNativePanel != IntPtr.Zero) { Marshal.Release(_cachedNativePanel); _cachedNativePanel = IntPtr.Zero; }
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DestroyResources COMPLETED");
         }
         _resizeEvent.Dispose();
     }

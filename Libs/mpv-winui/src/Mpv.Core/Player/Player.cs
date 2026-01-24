@@ -25,10 +25,57 @@ public sealed partial class Player
             return;
         }
 
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] DisposeAsync STARTED");
         _isDisposed = true;
-        Client.UnObserveProperties();
-        RenderContext?.Destroy();
+
+        // 1. Signal event loop to wake up and exit
+        try { Client.Wakeup(); } catch { }
+
+        // 2. Wait for event loop task to finish
+        if (_eventLoopTask != null)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] Awaiting EventLoop exit...");
+            try 
+            {
+                // We give the event loop a small window to exit gracefully
+                var timeoutTask = Task.Delay(1000);
+                var completedTask = await Task.WhenAny(_eventLoopTask, timeoutTask);
+                if (completedTask == timeoutTask)
+                {
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] WARNING: EventLoop exit timed out.");
+                }
+                else
+                {
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] EventLoop exit CONFIRMED.");
+                }
+            } 
+            catch (Exception ex) 
+            { 
+                Debug.WriteLine($"[CORE_PLAYER] EventLoop Await Error: {ex.Message}");
+            }
+        }
+
+        // 3. Clean up native resources
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] Step 3: UnObserving properties...");
+        try { Client.UnObserveProperties(); } catch (Exception ex) { Debug.WriteLine($"[CORE_PLAYER] UnObserve FAILED: {ex.Message}"); }
+        
+        if (RenderContext != null)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] Step 4: Destroying RenderContext...");
+            try 
+            { 
+                RenderContext.Destroy(); 
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] Step 4: RenderContext.Destroy SUCCESS");
+            } 
+            catch (Exception ex) 
+            { 
+                Debug.WriteLine($"[CORE_PLAYER] RenderContext.Destroy FAILED: {ex.Message}"); 
+            }
+        }
+        
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] Step 5: Calling Client.DestroyAsync...");
         await Client.DestroyAsync();
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [CORE_PLAYER] DisposeAsync COMPLETED");
     }
 
     public async Task TerminateAsync()

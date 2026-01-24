@@ -76,6 +76,5 @@ public static class Resolver
             System.Diagnostics.Debug.WriteLine($"[Mpv.Core] FAILED to load {libraryName} (Expected: {filename}): {ex.Message}");
             throw;
         }
-
     }
 }

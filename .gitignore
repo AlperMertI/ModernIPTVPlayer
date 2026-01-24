@@ -77,6 +77,7 @@ $RECYCLE.BIN/
 Libs/mpv-0.41.0/*
 !Libs/mpv-0.41.0/player/
 !Libs/mpv-0.41.0/include/
+!Libs/mpv-0.41.0/video/
 !Libs/mpv-0.41.0/meson.build
 !Libs/mpv-0.41.0/meson.options
 !Libs/mpv-0.41.0/subprojects/
