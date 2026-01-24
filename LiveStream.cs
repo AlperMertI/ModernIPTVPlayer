@@ -37,6 +37,9 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("category_id")]
         public string? CategoryId { get; set; }
 
+        [JsonPropertyName("rating")]
+        public string? Rating { get; set; }
+
         // Bu alan JSON'dan gelmez, biz oluşturacağız
         public string StreamUrl { get; set; } = "";
         

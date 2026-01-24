@@ -1,0 +1,43 @@
+<UserControl
+    x:Class="ModernIPTVPlayer.Controls.ShimmerCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ModernIPTVPlayer.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Width="200" Height="300">
+
+    <UserControl.Resources>
+        <Storyboard x:Name="ShimmerStoryboard" RepeatBehavior="Forever">
+            <DoubleAnimationUsingKeyFrames Storyboard.TargetName="ShimmerTransform" Storyboard.TargetProperty="X">
+                <LinearDoubleKeyFrame KeyTime="00:00:00" Value="-200"/>
+                <LinearDoubleKeyFrame KeyTime="00:00:01.5" Value="200"/>
+            </DoubleAnimationUsingKeyFrames>
+        </Storyboard>
+    </UserControl.Resources>
+
+    <Grid CornerRadius="12">
+        <Rectangle Fill="#1F1F1F"/>
+        
+        <!-- Mask for Shimmer -->
+        <Grid CornerRadius="12">
+             <Grid.Clip>
+                <RectangleGeometry Rect="0,0,200,300"/>
+            </Grid.Clip>
+            
+            <Rectangle Width="200" Height="300" Opacity="0.5">
+                <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="Transparent" Offset="0"/>
+                        <GradientStop Color="#40FFFFFF" Offset="0.5"/>
+                        <GradientStop Color="Transparent" Offset="1"/>
+                    </LinearGradientBrush>
+                </Rectangle.Fill>
+                <Rectangle.RenderTransform>
+                    <TranslateTransform x:Name="ShimmerTransform" X="-200"/>
+                </Rectangle.RenderTransform>
+            </Rectangle>
+        </Grid>
+    </Grid>
+</UserControl>

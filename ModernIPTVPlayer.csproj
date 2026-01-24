@@ -19,6 +19,9 @@
     <None Remove="LiveTVPage.xaml" />
     <None Remove="LoginPage.xaml" />
     <None Remove="PlayerPage.xaml" />
+    <None Remove="MoviesPage.xaml" />
+    <None Remove="SeriesPage.xaml" />
+    <None Remove="Controls\ShimmerCard.xaml" />
   </ItemGroup>
 
   <ItemGroup>
@@ -100,6 +103,21 @@
   </ItemGroup>
   <ItemGroup>
     <Page Update="LoginPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+  </ItemGroup>
+  <ItemGroup>
+    <Page Update="MoviesPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+  </ItemGroup>
+  <ItemGroup>
+    <Page Update="SeriesPage.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+  </ItemGroup>
+  <ItemGroup>
+    <Page Update="Controls\ShimmerCard.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>

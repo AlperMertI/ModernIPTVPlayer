@@ -44,7 +44,7 @@ namespace ModernIPTVPlayer
 
                 if (pageType != null && ContentFrame.CurrentSourcePageType != pageType)
                 {
-                    ContentFrame.Navigate(pageType);
+                    ContentFrame.Navigate(pageType, App.CurrentLogin);
                 }
             }
         }

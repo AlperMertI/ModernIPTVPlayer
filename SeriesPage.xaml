@@ -5,76 +5,288 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="using:ModernIPTVPlayer"
+    xmlns:controls="using:ModernIPTVPlayer.Controls"
     mc:Ignorable="d" 
-    NavigationCacheMode="Enabled"
-    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    NavigationCacheMode="Enabled">
 
-    <Grid>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="300"/>
-            <ColumnDefinition Width="*"/>
-        </Grid.ColumnDefinitions>
-
-        <!-- Categories -->
-        <Border Grid.Column="0" Background="#202020" BorderBrush="#303030" BorderThickness="0,0,1,0">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <TextBlock Text="DİZİLER" FontSize="18" FontWeight="Bold" Margin="16" Foreground="White"/>
-                <ListView x:Name="CategoryListView" Grid.Row="1" SelectionMode="Single" ItemClick="CategoryListView_ItemClick" IsItemClickEnabled="True">
-                    <ListView.ItemTemplate>
-                        <DataTemplate x:DataType="local:LiveCategory">
-                            <TextBlock Text="{x:Bind CategoryName}" Margin="0,8"/>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
-                </ListView>
-                <ProgressRing x:Name="LoadingRing" Grid.Row="1" IsActive="False" Width="40" Height="40" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Grid>
-        </Border>
-
-        <!-- Series List -->
-        <Grid Grid.Column="1" Background="#101010">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
-
-            <TextBlock Text="Diziler" FontSize="24" FontWeight="SemiBold" Margin="24,16" Foreground="White"/>
-
-            <GridView x:Name="SeriesGridView" Grid.Row="1" 
-                      SelectionMode="Single" 
-                      IsItemClickEnabled="True" 
-                      ItemClick="SeriesGridView_ItemClick"
-                      Padding="24">
-                <GridView.ItemTemplate>
-                    <DataTemplate x:DataType="local:LiveStream">
-                        <Grid Width="160" Height="240" Margin="0,0,16,16" Background="#252525" CornerRadius="8">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="*"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+    <Page.Resources>
+        <ThemeShadow x:Key="SharedShadow"/>
+        
+        <Style x:Key="SeriesCardStyle" TargetType="GridViewItem">
+            <Setter Property="Margin" Value="8"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="CanDrag" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="GridViewItem">
+                        <Grid x:Name="RootGrid" Background="Transparent" CornerRadius="12" RenderTransformOrigin="0.5,0.5">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal">
+                                        <Storyboard>
+                                            <PointerUpThemeAnimation Storyboard.TargetName="ContentPresenter" />
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleX" To="1.0" Duration="0:0:0.3">
+                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="1.0" Duration="0:0:0.3">
+                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                            </DoubleAnimation>
+                                            <DoubleAnimation Storyboard.TargetName="Shadow" Storyboard.TargetProperty="Opacity" To="0.3" Duration="0:0:0.3"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="PointerOver">
+                                        <Storyboard>
+                                            <PointerUpThemeAnimation Storyboard.TargetName="ContentPresenter" />
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleX" To="1.05" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="1.05" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="Shadow" Storyboard.TargetProperty="Opacity" To="0.8" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard>
+                                            <PointerDownThemeAnimation Storyboard.TargetName="ContentPresenter" />
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleX" To="0.95" Duration="0:0:0.1"/>
+                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="0.95" Duration="0:0:0.1"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
                             
-                            <!-- Poster (Using StreamIcon which maps to 'cover' in series usually) -->
-                            <Image Source="{x:Bind StreamIcon}" Stretch="UniformToFill" VerticalAlignment="Center"/>
-                            
-                            <!-- Title Overlay -->
-                            <Grid Grid.Row="1" Background="#CC000000" Padding="8">
-                                <TextBlock Text="{x:Bind Name}" 
-                                           TextWrapping="Wrap" 
-                                           MaxLines="2" 
-                                           FontSize="12" 
-                                           Foreground="White" 
-                                           HorizontalAlignment="Center" 
-                                           TextAlignment="Center"/>
-                            </Grid>
+                            <Grid.RenderTransform>
+                                <ScaleTransform x:Name="ScaleTrans"/>
+                            </Grid.RenderTransform>
+                            <Grid.Projection>
+                                <PlaneProjection x:Name="TiltProjection" RotationX="0" RotationY="0" GlobalOffsetZ="0"/>
+                            </Grid.Projection>
+
+                            <Border x:Name="Shadow" Background="Black" CornerRadius="12" Opacity="0.3" Margin="4,4,-4,-4">
+                                <Border.RenderTransform>
+                                    <TranslateTransform X="0" Y="4"/>
+                                </Border.RenderTransform>
+                            </Border>
+
+                            <ContentPresenter x:Name="ContentPresenter"
+                                Content="{TemplateBinding Content}"
+                                ContentTransitions="{TemplateBinding ContentTransitions}"
+                                HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch"/>
                         </Grid>
-                    </DataTemplate>
-                </GridView.ItemTemplate>
-            </GridView>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Page.Resources>
+
+    <Grid Background="#FF0F131C">
+        <Image x:Name="DynamicBackdropImage" Stretch="UniformToFill" Opacity="0.2"/>
+        <Rectangle Fill="#CC000000"/>
+
+        <SplitView x:Name="MainSplitView"
+                   DisplayMode="Overlay"
+                   IsPaneOpen="False"
+                   CompactPaneLength="0"
+                   OpenPaneLength="320"
+                   PaneBackground="#0F131C"
+                   LightDismissOverlayMode="On">
             
-            <ProgressRing x:Name="SeriesLoadingRing" Grid.Row="1" IsActive="False" Width="50" Height="50" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-        </Grid>
+            <SplitView.Pane>
+                <Grid>
+                    <Grid.Background>
+                        <AcrylicBrush TintColor="#0F131C" TintOpacity="0.85" FallbackColor="#0F131C"/>
+                    </Grid.Background>
+                    
+                    <Grid BorderBrush="#1FFFFFFF" BorderThickness="0,0,1,0" Padding="0,24,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+    
+                        <Grid Height="60" VerticalAlignment="Top" Padding="24,0">
+                            <TextBlock Text="DİZİLER" FontSize="28" FontWeight="ExtraBold" VerticalAlignment="Center" CharacterSpacing="50">
+                                <TextBlock.Foreground>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                        <GradientStop Color="#FFFFFF" Offset="0"/>
+                                        <GradientStop Color="#CCCCCC" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </TextBlock.Foreground>
+                            </TextBlock>
+                        </Grid>
+    
+                        <Grid Grid.Row="1" Padding="20,12">
+                            <Border x:Name="SearchPillBorder" CornerRadius="18" Background="#0AFFFFFF" BorderBrush="#1FFFFFFF" BorderThickness="1" Height="36"
+                                    PointerEntered="SearchPill_PointerEntered" PointerExited="SearchPill_PointerExited">
+                                <Grid VerticalAlignment="Stretch" Background="Transparent">
+                                    <FontIcon Glyph="&#xE721;" FontSize="13" Foreground="White" Opacity="0.5" 
+                                              HorizontalAlignment="Left" VerticalAlignment="Center" 
+                                              Margin="12,0,0,0" IsHitTestVisible="False"/>
+                                    <TextBox x:Name="CategorySearchBox" TextChanged="CategorySearchBox_TextChanged" 
+                                             GotFocus="CategorySearchBox_GotFocus" LostFocus="CategorySearchBox_LostFocus"
+                                             PlaceholderText="Dizi Ara..." 
+                                             BorderThickness="0" Background="Transparent" 
+                                             Foreground="White" PlaceholderForeground="#80FFFFFF" FontSize="13" 
+                                             VerticalAlignment="Stretch" VerticalContentAlignment="Center"
+                                             Padding="34,8,12,0"
+                                             HorizontalAlignment="Stretch"/> 
+                                </Grid>
+                            </Border>
+                        </Grid>
+    
+                        <ListView x:Name="CategoryListView" Grid.Row="2" 
+                                  SelectionMode="Single" 
+                                  ItemClick="CategoryListView_ItemClick" 
+                                  IsItemClickEnabled="True"
+                                  Padding="12,8"
+                                  ScrollViewer.VerticalScrollBarVisibility="Hidden"
+                                  ScrollViewer.IsVerticalScrollChainingEnabled="False"
+                                  ScrollViewer.IsScrollInertiaEnabled="True">
+                            <ListView.ItemContainerStyle>
+                                <Style TargetType="ListViewItem">
+                                    <Setter Property="CornerRadius" Value="6"/>
+                                    <Setter Property="Margin" Value="0,2"/>
+                                    <Setter Property="Padding" Value="12,6"/>
+                                    <Setter Property="MinHeight" Value="36"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListViewItem">
+                                                <Grid x:Name="Root" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                                    <VisualStateManager.VisualStateGroups>
+                                                        <VisualStateGroup x:Name="CommonStates">
+                                                            <VisualState x:Name="Normal"/>
+                                                            <VisualState x:Name="PointerOver">
+                                                                <Storyboard>
+                                                                    <ColorAnimation Storyboard.TargetName="Root" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#15FFFFFF" Duration="0:0:0.1"/>
+                                                                </Storyboard>
+                                                            </VisualState>
+                                                            <VisualState x:Name="Pressed">
+                                                                 <Storyboard>
+                                                                    <ColorAnimation Storyboard.TargetName="Root" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#0AFFFFFF" Duration="0:0:0.1"/>
+                                                                </Storyboard>
+                                                            </VisualState>
+                                                            <VisualState x:Name="Selected">
+                                                                <Storyboard>
+                                                                    <ColorAnimation Storyboard.TargetName="Root" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#1FFFFFFF" Duration="0:0:0.1"/>
+                                                                    <DoubleAnimation Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.1"/>
+                                                                </Storyboard>
+                                                            </VisualState>
+                                                        </VisualStateGroup>
+                                                    </VisualStateManager.VisualStateGroups>
+                                                    
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="3"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    
+                                                    <Rectangle x:Name="SelectionIndicator" Fill="{ThemeResource SystemAccentColor}" RadiusX="2" RadiusY="2" Opacity="0" Height="16" VerticalAlignment="Center"/>
+                                                    <ContentPresenter Grid.Column="1" Margin="8,0,0,0"/>
+                                                </Grid>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListView.ItemContainerStyle>
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="local:SeriesCategory">
+                                    <Grid>
+                                        <TextBlock Text="{x:Bind CategoryName}" FontSize="13" FontWeight="Normal" Opacity="0.9" TextTrimming="CharacterEllipsis" CharacterSpacing="20" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                        
+                        <ProgressRing x:Name="LoadingRing" Grid.Row="2" IsActive="False" Width="40" Height="40" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{ThemeResource AccentAAFillColorDefaultBrush}"/>
+                    </Grid>
+                </Grid>
+            </SplitView.Pane>
+
+            <SplitView.Content>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Padding="24,36,36,12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        
+                         <Button Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" Margin="0,0,16,0" VerticalAlignment="Center">
+                            <FontIcon Glyph="&#xE700;" FontSize="24" Foreground="White"/>
+                        </Button>
+
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock x:Name="SelectedCategoryTitle" Text="Son Eklenenler" FontSize="24" FontWeight="Bold" Foreground="White"/>
+                            <TextBlock Text="Göz at ve keşfet" FontSize="14" Opacity="0.5" Foreground="White" Margin="0,4,0,0"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16">
+                             <Button Style="{ThemeResource DateTimePickerFlyoutButtonStyle}" Content="Sırala" CornerRadius="20" Background="#1FFFFFFF" Foreground="White" BorderThickness="0"/>
+                             <Button x:Name="SearchButton" Click="SearchButton_Click" Width="40" Height="40" CornerRadius="20" Background="#1FFFFFFF" BorderThickness="0">
+                                 <FontIcon Glyph="&#xE721;" Foreground="White"/>
+                             </Button>
+                        </StackPanel>
+                    </Grid>
+
+                    <GridView x:Name="SeriesGridView" Grid.Row="1" 
+                              SelectionMode="Single" 
+                              IsItemClickEnabled="True" 
+                              ItemClick="SeriesGridView_ItemClick"
+                              ContainerContentChanging="SeriesGridView_ContainerContentChanging"
+                              Padding="24,0,24,36"
+                              ItemContainerStyle="{StaticResource SeriesCardStyle}">
+                        
+                        <GridView.ItemContainerTransitions>
+                            <TransitionCollection>
+                                <EntranceThemeTransition FromVerticalOffset="100" IsStaggeringEnabled="True"/>
+                            </TransitionCollection>
+                        </GridView.ItemContainerTransitions>
+
+                        <GridView.ItemTemplate>
+                            <DataTemplate x:DataType="local:SeriesStream">
+                                <Grid Width="200" Height="300" CornerRadius="12" Background="Transparent" IsHitTestVisible="False">
+                                    <Image Source="{x:Bind CoverImage}" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened" IsHitTestVisible="False"/>
+                                    <Rectangle VerticalAlignment="Bottom" Height="120" IsHitTestVisible="False">
+                                        <Rectangle.Fill>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                <GradientStop Color="Transparent" Offset="0"/>
+                                                <GradientStop Color="#CC000000" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </Rectangle.Fill>
+                                    </Rectangle>
+                                    <Grid VerticalAlignment="Bottom" Padding="12,12,12,16" IsHitTestVisible="False">
+                                        <StackPanel Spacing="4">
+                                            <TextBlock Text="{x:Bind Name}" FontSize="14" FontWeight="Bold" Foreground="White" TextTrimming="CharacterEllipsis" MaxLines="2"/>
+                                            <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.8">
+                                                <Border Background="#33FFFFFF" CornerRadius="4" Padding="6,2">
+                                                    <TextBlock Text="{x:Bind Rating}" FontSize="10" Foreground="#FFCC00" FontWeight="Bold"/>
+                                                </Border>
+                                                <TextBlock Text="Dizi" FontSize="12" Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center" Opacity="0.6"/>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                </Grid>
+                            </DataTemplate>
+                        </GridView.ItemTemplate>
+                    </GridView>
+                    
+                    <GridView x:Name="SkeletonGrid" Grid.Row="1" 
+                              Padding="24,0,24,36"
+                              Visibility="Collapsed"
+                              IsHitTestVisible="False">
+                        <GridView.ItemTemplate>
+                            <DataTemplate>
+                                <controls:ShimmerCard Margin="8"/>
+                            </DataTemplate>
+                        </GridView.ItemTemplate>
+                    </GridView>
+                    
+                    <ProgressRing x:Name="SeriesLoadingRing" Grid.Row="1" IsActive="False" Visibility="Collapsed"/>
+                </Grid>
+            </SplitView.Content>
+        </SplitView>
     </Grid>
 </Page>
