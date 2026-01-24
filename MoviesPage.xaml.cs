@@ -24,27 +24,14 @@ namespace ModernIPTVPlayer
         {
             base.OnNavigatedTo(e);
 
-            // Try to recover login params from AppSettings if not passed directly (since NavView navigation might not pass params)
             if (e.Parameter is LoginParams p)
             {
-                _loginInfo = p;
-            }
-            else if (App.CurrentLogin != null)
-            {
-                _loginInfo = App.CurrentLogin;
-            }
-            else
-            {
-                // Reconstruct from AppSettings (Last fallback)
-                if (AppSettings.LastLoginType == 1) // Xtream
+                if (_loginInfo != null && _loginInfo.PlaylistUrl != p.PlaylistUrl)
                 {
-                    _loginInfo = new LoginParams
-                    {
-                        Host = AppSettings.SavedHost,
-                        Username = AppSettings.SavedUsername,
-                        Password = AppSettings.SavedPassword
-                    };
+                    CategoryListView.ItemsSource = null;
+                    MovieGridView.ItemsSource = null;
                 }
+                _loginInfo = p;
             }
 
             if (_loginInfo != null && !string.IsNullOrEmpty(_loginInfo.Host))

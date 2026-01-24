@@ -28,11 +28,11 @@
                         IsBackButtonVisible="Collapsed"
                         IsBackEnabled="False"
                         IsSettingsVisible="True"
-                        Header="Modern IPTV"
+                        AlwaysShowHeader="False"
                         ItemInvoked="NavView_ItemInvoked"
                         BackRequested="NavView_BackRequested">
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="Giriş Yap" Tag="LoginPage">
+                <NavigationViewItem Content="Playlistlerim" Tag="LoginPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE77B;"/> <!-- User/Account -->
                     </NavigationViewItem.Icon>

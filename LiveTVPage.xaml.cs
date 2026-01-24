@@ -73,28 +73,22 @@ namespace ModernIPTVPlayer
 
             if (e.Parameter is LoginParams loginParams)
             {
-                _loginInfo = loginParams;
-            }
-            else if (App.CurrentLogin != null)
-            {
-                _loginInfo = App.CurrentLogin;
-            }
-            else
-            {
-                if (AppSettings.LastLoginType == 1) // Xtream
+                // Detect if the playlist has changed
+                if (_loginInfo != null && _loginInfo.PlaylistUrl != loginParams.PlaylistUrl)
                 {
-                    _loginInfo = new LoginParams
-                    {
-                        Host = AppSettings.SavedHost,
-                        Username = AppSettings.SavedUsername,
-                        Password = AppSettings.SavedPassword
-                    };
+                    System.Diagnostics.Debug.WriteLine("New playlist detected, clearing cache...");
+                    _allCategories.Clear();
+                    _allChannels.Clear();
+                    CategoryListView.ItemsSource = null;
+                    ChannelGridView.ItemsSource = null;
                 }
+                
+                _loginInfo = loginParams;
             }
 
             if (_loginInfo != null)
             {
-                if (_allCategories.Count > 0) return; // Already loaded
+                if (_allCategories.Count > 0) return; // Already loaded same playlist
 
                 if (!string.IsNullOrEmpty(_loginInfo.Host) && 
                     !string.IsNullOrEmpty(_loginInfo.Username) && 

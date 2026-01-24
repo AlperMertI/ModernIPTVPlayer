@@ -63,7 +63,7 @@ namespace ModernIPTVPlayer
             NavView.IsBackEnabled = ContentFrame.CanGoBack;
             NavView.IsBackEnabled = ContentFrame.CanGoBack;
             NavView.IsPaneVisible = true; // Default to visible, special cases below
-            NavView.AlwaysShowHeader = true; // Default to show header
+            NavView.AlwaysShowHeader = false; // Default to hide header for minimalist look
 
             // Reset Default State
             AppTitleBar.Visibility = Visibility.Visible;
@@ -72,7 +72,8 @@ namespace ModernIPTVPlayer
             // Make sure the header reflects the current page
             if (ContentFrame.SourcePageType == typeof(LoginPage))
             {
-                NavView.Header = "Giriş Yap";
+                NavView.Header = null;
+                NavView.AlwaysShowHeader = false;
                 NavView.IsPaneVisible = true;
                 NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
                     .FirstOrDefault(i => i.Tag.ToString() == "LoginPage");

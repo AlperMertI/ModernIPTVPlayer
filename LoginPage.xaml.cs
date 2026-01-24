@@ -10,6 +10,7 @@ namespace ModernIPTVPlayer
     public sealed partial class LoginPage : Page
     {
         private bool _isLoading = false;
+        private System.Collections.ObjectModel.ObservableCollection<Playlist> _playlists = new();
 
         public LoginPage()
         {
@@ -19,158 +20,193 @@ namespace ModernIPTVPlayer
 
         private void LoginPage_Loaded(object sender, RoutedEventArgs e)
         {
-            // Son kullanılan giriş yöntemini kontrol et
-            int lastType = AppSettings.LastLoginType;
-            LoginPivot.SelectedIndex = lastType;
-
-            if (lastType == 0) // M3U
+            LoadPlaylists();
+            
+            // Check for auto-login only on startup (when App.CurrentLogin is null)
+            if (App.CurrentLogin == null)
             {
-                var savedUrl = AppSettings.SavedPlaylistUrl;
-                if (!string.IsNullOrEmpty(savedUrl))
-                {
-                    UrlTextBox.Text = savedUrl;
-                    // Auto-login (M3U)
-                     _ = AttemptLogin(savedUrl, 0);
-                }
+                CheckAutoLogin();
             }
-            else // Xtream
+        }
+
+        private void CheckAutoLogin()
+        {
+            var lastId = AppSettings.LastPlaylistId;
+            if (lastId.HasValue)
             {
-                var host = AppSettings.SavedHost;
-                var user = AppSettings.SavedUsername;
-                var pass = AppSettings.SavedPassword;
-
-                if (!string.IsNullOrEmpty(host) && !string.IsNullOrEmpty(user) && !string.IsNullOrEmpty(pass))
+                foreach (var p in _playlists)
                 {
-                    HostTextBox.Text = host;
-                    UsernameTextBox.Text = user;
-                    PasswordBox.Password = pass;
-                    
-                    // Xtream: Create CLEAN host and URL
-                    string cleanHost = CleanHost(host);
-                    string authUrl = $"{cleanHost}/player_api.php?username={user}&password={pass}";
-                    string playlistUrl = $"{cleanHost}/get.php?username={user}&password={pass}&type=m3u_plus&output=ts";
-
-                    // Auto-login (Xtream)
-                    _ = AttemptLogin(authUrl, 1, playlistUrl, cleanHost);
+                    if (p.Id == lastId.Value)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Auto-login found for: {p.Name}");
+                        _ = LoginWithPlaylist(p);
+                        break;
+                    }
                 }
             }
         }
 
-        private async void M3uLoginButton_Click(object sender, RoutedEventArgs e)
+        private void LoadPlaylists()
         {
-            string url = UrlTextBox.Text.Trim();
-            if (string.IsNullOrEmpty(url))
+            try
             {
-                await ShowHelpDialog("Error", "Please enter a URL.");
-                return;
+                var json = AppSettings.PlaylistsJson;
+                var list = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.List<Playlist>>(json) 
+                           ?? new System.Collections.Generic.List<Playlist>();
+                
+                _playlists.Clear();
+                foreach (var p in list) _playlists.Add(p);
+                
+                PlaylistListView.ItemsSource = _playlists;
+                UpdateEmptyState();
             }
-            
-            // 0 = M3U
-            await AttemptLogin(url, 0);
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error loading playlists: {ex.Message}");
+            }
         }
 
-        private async void XtreamLoginButton_Click(object sender, RoutedEventArgs e)
+        private void UpdateEmptyState()
         {
-            string host = HostTextBox.Text.Trim();
-            string user = UsernameTextBox.Text.Trim();
-            string pass = PasswordBox.Password.Trim();
+            EmptyStatePanel.Visibility = _playlists.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            PlaylistListView.Visibility = _playlists.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
 
-            if (string.IsNullOrEmpty(host) || string.IsNullOrEmpty(user) || string.IsNullOrEmpty(pass))
+        private void SaveAllPlaylists()
+        {
+            var list = new System.Collections.Generic.List<Playlist>(_playlists);
+            AppSettings.PlaylistsJson = System.Text.Json.JsonSerializer.Serialize(list);
+            UpdateEmptyState();
+        }
+
+        private async void AddPlaylistButton_Click(object sender, RoutedEventArgs e)
+        {
+            var dialog = new PlaylistDialog { XamlRoot = this.XamlRoot };
+            var result = await dialog.ShowAsync();
+
+            if (result == ContentDialogResult.Primary)
             {
-                await ShowHelpDialog("Error", "Please fill all fields.");
-                return;
+                dialog.PrepareResult();
+                _playlists.Add(dialog.Result);
+                SaveAllPlaylists();
             }
+        }
 
-            // CLEAN THE HOST
-            string cleanHost = CleanHost(host);
+        private async void EditPlaylist_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            var playlist = btn?.Tag as Playlist;
+            if (playlist == null) return;
 
-            // 1. URL'leri Hazırla
-            string authUrl = $"{cleanHost}/player_api.php?username={user}&password={pass}";
-            string playlistUrl = $"{cleanHost}/get.php?username={user}&password={pass}&type=m3u_plus&output=ts";
-            
-            // 2. Xtream login (pass manual cleanHost)
-            await AttemptLogin(authUrl, 1, playlistUrl, cleanHost);
+            var dialog = new PlaylistDialog(playlist) { XamlRoot = this.XamlRoot };
+            var result = await dialog.ShowAsync();
+
+            if (result == ContentDialogResult.Primary)
+            {
+                dialog.PrepareResult();
+                // Find and update in collection
+                var index = _playlists.IndexOf(playlist);
+                if (index != -1)
+                {
+                    _playlists[index] = dialog.Result;
+                    SaveAllPlaylists();
+                }
+            }
+        }
+
+        private async void DeletePlaylist_Click(object sender, RoutedEventArgs e)
+        {
+            var btn = sender as Button;
+            var playlist = btn?.Tag as Playlist;
+            if (playlist == null) return;
+
+            ContentDialog deleteDialog = new ContentDialog
+            {
+                Title = "Playlisti Sil",
+                Content = $"'{playlist.Name}' playlistini silmek istediğinize emin misiniz?",
+                PrimaryButtonText = "Sil",
+                CloseButtonText = "İptal",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = this.XamlRoot
+            };
+
+            if (await deleteDialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                _playlists.Remove(playlist);
+                SaveAllPlaylists();
+            }
+        }
+
+        private void PlaylistListView_ItemClick(object sender, ItemClickEventArgs e)
+        {
+            if (e.ClickedItem is Playlist playlist)
+            {
+                _ = LoginWithPlaylist(playlist);
+            }
+        }
+
+        private async Task LoginWithPlaylist(Playlist p)
+        {
+            if (p.Type == PlaylistType.M3u)
+            {
+                await AttemptLogin(p.Url, 0, p);
+            }
+            else
+            {
+                string cleanHost = CleanHost(p.Host);
+                string authUrl = $"{cleanHost}/player_api.php?username={p.Username}&password={p.Password}";
+                string playlistUrl = $"{cleanHost}/get.php?username={p.Username}&password={p.Password}&type=m3u_plus&output=ts";
+                await AttemptLogin(authUrl, 1, p, playlistUrl, cleanHost);
+            }
         }
 
         private string CleanHost(string rawHost)
         {
             if (string.IsNullOrEmpty(rawHost)) return "";
-
-            // 1. Http
             string host = rawHost.Trim();
             if (!host.StartsWith("http")) host = "http://" + host;
-            
-            // 2. Trailing Slash
             host = host.TrimEnd('/');
-
-            // 3. Known Suffixes
-            // Remove common suffixes if user copy-pasted them
             if (host.EndsWith("/get.php")) host = host.Substring(0, host.Length - "/get.php".Length);
             if (host.EndsWith("/player_api.php")) host = host.Substring(0, host.Length - "/player_api.php".Length);
-            
-            // 4. Repeated Trailing Slash (just in case)
-            host = host.TrimEnd('/');
-
-            return host;
+            return host.TrimEnd('/');
         }
 
-        // Expanded signature to accept cleanHost
-        private async Task AttemptLogin(string checkUrl, int loginType, string? finalPlaylistUrl = null, string? manualHost = null)
+        private async Task AttemptLogin(string checkUrl, int loginType, Playlist p, string? finalPlaylistUrl = null, string? manualHost = null)
         {
             if (_isLoading) return;
             _isLoading = true;
             SetLoadingState(true);
 
-            // Eğer final URL verilmediyse (M3U modu), checkUrl kullanılır
             string targetUrl = finalPlaylistUrl ?? checkUrl;
 
             try
             {
-                // Use Shared HttpHelper to maintain cookies/session
                 HttpResponseMessage response = await HttpHelper.Client.GetAsync(checkUrl, HttpCompletionOption.ResponseHeadersRead);
                 
                 if (response.IsSuccessStatusCode)
                 {
-                   // SUCCESS
-                   if (loginType == 1 && manualHost != null)
-                   {
-                        // Xtream: Save Clean Host
-                        AppSettings.SavedHost = manualHost;
-                        AppSettings.SavedUsername = UsernameTextBox.Text.Trim();
-                        AppSettings.SavedPassword = PasswordBox.Password.Trim();
-                        AppSettings.LastLoginType = 1;
-                   }
-                   else
-                   {
-                        // M3U
-                        SaveCredentials(targetUrl, 0);
-                   }
+                    AppSettings.LastLoginType = loginType;
+                    AppSettings.LastPlaylistId = p.Id; // Persist the successful ID
 
-                    // Set Global Login Info for sidebar navigation
                     App.CurrentLogin = new LoginParams 
                     { 
                         PlaylistUrl = targetUrl,
-                        Host = (loginType == 1) ? manualHost : null, // Uses Sanitzed Host!
-                        Username = (loginType == 1) ? UsernameTextBox.Text.Trim() : null,
-                        Password = (loginType == 1) ? PasswordBox.Password.Trim() : null
+                        Host = (loginType == 1) ? manualHost : null,
+                        Username = (loginType == 1) ? p.Username : null,
+                        Password = (loginType == 1) ? p.Password : null
                     };
 
-                    // Navigate
                     Frame.Navigate(typeof(LiveTVPage), App.CurrentLogin);
                 }
                 else
                 {
-                    // Masked URL for debug
-                    string maskedUrl = checkUrl.Replace(PasswordBox.Password, "****");
-                    await ShowHelpDialog("Connection Failed", 
-                        $"Server Error: {response.StatusCode} ({(int)response.StatusCode})\n" +
-                        $"Message: {response.ReasonPhrase}\n" +
-                        $"Check URL: {maskedUrl}");
+                    string msg = $"Server Error: {response.StatusCode} ({(int)response.StatusCode})";
+                    await ShowHelpDialog("Giriş Başarısız", msg);
                 }
             }
             catch (Exception ex)
             {
-                await ShowHelpDialog("Error", $"Connection error: {ex.Message}");
+                await ShowHelpDialog("Hata", $"Bağlantı hatası: {ex.Message}");
             }
             finally
             {
@@ -179,25 +215,11 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void SaveCredentials(string url, int type)
-        {
-            AppSettings.LastLoginType = type;
-            if (type == 0)
-            {
-                AppSettings.SavedPlaylistUrl = url;
-            }
-            // Xtream logic is handled inside AttemptLogin success block now for better cleanliness
-        }
-
         private void SetLoadingState(bool isLoading)
         {
             LoadingPanel.Visibility = isLoading ? Visibility.Visible : Visibility.Collapsed;
-            LoginPivot.IsEnabled = !isLoading;
-        }
-
-        private void LoginPivot_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            // UI Cleanup if needed
+            PlaylistListView.IsEnabled = !isLoading;
+            AddPlaylistButton.IsEnabled = !isLoading;
         }
 
         private async Task ShowHelpDialog(string title, string content)
@@ -207,7 +229,7 @@ namespace ModernIPTVPlayer
             {
                 Title = title,
                 Content = content,
-                CloseButtonText = "OK",
+                CloseButtonText = "Tamam",
                 XamlRoot = this.XamlRoot
             };
             await dialog.ShowAsync();

@@ -33,23 +33,12 @@ namespace ModernIPTVPlayer
 
             if (e.Parameter is LoginParams p)
             {
-                _loginInfo = p;
-            }
-            else if (App.CurrentLogin != null)
-            {
-                _loginInfo = App.CurrentLogin;
-            }
-            else
-            {
-                if (AppSettings.LastLoginType == 1) 
+                if (_loginInfo != null && _loginInfo.PlaylistUrl != p.PlaylistUrl)
                 {
-                    _loginInfo = new LoginParams
-                    {
-                        Host = AppSettings.SavedHost,
-                        Username = AppSettings.SavedUsername,
-                        Password = AppSettings.SavedPassword
-                    };
+                    CategoryListView.ItemsSource = null;
+                    SeriesGridView.ItemsSource = null;
                 }
+                _loginInfo = p;
             }
 
             if (_loginInfo != null && !string.IsNullOrEmpty(_loginInfo.Host))

@@ -1,0 +1,69 @@
+<ContentDialog
+    x:Class="ModernIPTVPlayer.PlaylistDialog"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ModernIPTVPlayer"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Title="Playlist Yapılandırması"
+    PrimaryButtonText="Değişiklikleri Kaydet"
+    CloseButtonText="Vazgeç"
+    DefaultButton="Primary"
+    CornerRadius="12">
+
+    <Grid Width="420" Padding="0,10,0,0">
+        <StackPanel Spacing="20">
+            <!-- Header Section -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="Hesap Bilgileri" Style="{ThemeResource BodyStrongTextBlockStyle}" Foreground="{ThemeResource AccentAAFillColorDefaultBrush}"/>
+                <TextBlock Text="Playlist erişimi için gerekli bilgileri aşağıya girin." Style="{ThemeResource CaptionTextBlockStyle}" Opacity="0.6"/>
+            </StackPanel>
+
+            <TextBox x:Name="NameTextBox" 
+                     Header="Playlist Görünüm Adı" 
+                     PlaceholderText="Örn: Ev Sineması"/>
+            
+            <ComboBox x:Name="TypeComboBox" 
+                      Header="Servis Tipi" 
+                      HorizontalAlignment="Stretch" 
+                      SelectionChanged="TypeComboBox_SelectionChanged"
+                      SelectedIndex="0">
+                <ComboBoxItem Content="M3U URL (Standart Bağlantı)"/>
+                <ComboBoxItem Content="Xtream Codes (Kullanıcı Girişli)"/>
+            </ComboBox>
+
+            <Border Background="{ThemeResource SolidBackgroundFillColorBaseBrush}" 
+                    Padding="20" CornerRadius="8" BorderThickness="1" 
+                    BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+                <Grid>
+                    <!-- M3U Panel -->
+                    <StackPanel x:Name="M3uPanel" Spacing="12">
+                        <TextBox x:Name="UrlTextBox" 
+                                 Header="M3U Bağlantısı" 
+                                 PlaceholderText="http://provider.com/get.php?..."
+                                 TextWrapping="Wrap" AcceptsReturn="True" Height="80"/>
+                        <InfoBar IsOpen="True" Severity="Informational" IsClosable="False" 
+                                 Message="Genellikle .m3u veya .m3u8 ile biten bir bağlantıdır."/>
+                    </StackPanel>
+
+                    <!-- Xtream Panel -->
+                    <StackPanel x:Name="XtreamPanel" Spacing="16" Visibility="Collapsed">
+                        <TextBox x:Name="HostTextBox" Header="Sunucu Adresi" PlaceholderText="http://iptv-server.com:8080"/>
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="UsernameTextBox" Header="Kullanıcı" PlaceholderText="user123"/>
+                            <PasswordBox x:Name="PasswordBox" Grid.Column="1" Header="Şifre" PlaceholderText="******"/>
+                        </Grid>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <TextBlock Text="* Tüm bilgiler yerel olarak şifreli saklanır." 
+                       FontSize="11" Opacity="0.4" HorizontalAlignment="Center"/>
+        </StackPanel>
+    </Grid>
+</ContentDialog>
