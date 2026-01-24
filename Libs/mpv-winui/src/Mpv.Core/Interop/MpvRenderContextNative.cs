@@ -4,26 +4,57 @@ using Mpv.Core.Enums.Client;
 using Mpv.Core.Enums.Render;
 using Mpv.Core.Structs.Client;
 using Mpv.Core.Structs.Render;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
 
 namespace Mpv.Core.Interop;
 
 public partial class MpvRenderContextNative
 {
+    public const string MpvRenderApiTypeOpenGL = "opengl";
+    public const string MpvRenderApiTypeDXGI = "dxgi";
+    public const string MpvRenderApiTypeSoftware = "sw";
+
+    [LibraryImport(MpvIdentifier)]
+    private static partial IntPtr mpv_error_string(int error);
+
+    private static string GetMpvErrorString(MpvError error)
+    {
+        try {
+            var ptr = mpv_error_string((int)error);
+            return Marshal.PtrToStringAnsi(ptr) ?? "Unknown";
+        } catch { return "Error calling mpv_error_string"; }
+    }
     public MpvRenderContextNative(MpvHandle coreHandle, MpvRenderParam[] param)
     {
-        var errorCode = mpv_render_context_create(out var context, coreHandle, param);
-        if (errorCode != MpvError.Success)
-        {
-            throw new Exception($"Failed to create a render context. Error: {errorCode}", CreateError(errorCode));
+        int paramSize = Marshal.SizeOf<MpvRenderParam>();
+        try {
+            // Marshalling
+            var ptr = Marshal.AllocHGlobal(paramSize * param.Length);
+            for (var i = 0; i < param.Length; i++)
+            {
+                Marshal.StructureToPtr(param[i], ptr + (paramSize * i), false);
+            }
+
+            Debug.WriteLine($"[LOG] Final Attempt: Calling mpv_render_context_create. Params count: {param.Length}");
+            
+            // Handle'ı ham IntPtr olarak gönderiyoruz (coreHandle.Handle)
+            var errorCode = mpv_render_context_create(out var context, coreHandle.Handle, ptr);
+            
+            Debug.WriteLine($"[LOG] Result: {errorCode} ({GetMpvErrorString(errorCode)})");
+            
+            Marshal.FreeHGlobal(ptr);
+
+            if (errorCode != MpvError.Success)
+            {
+                throw new Exception($"Failed: {errorCode} ({GetMpvErrorString(errorCode)})", Utils.CreateError(errorCode));
+            }
+
+            Handle = context;
+        } catch (Exception ex) {
+            Debug.WriteLine($"[FATAL_LOG] CRASH in RenderContext Create: {ex}");
+            throw;
         }
-
-        Handle = context;
-    }
-
-    public int GLGetFrameBufferBinding()
-    {
-        glGetIntegerv(0x8CA6, out var data); // GL_DRAW_FRAMEBUFFER_BINDING
-        return data;
     }
 
     public void SetParameter(MpvRenderParam param)
@@ -60,10 +91,31 @@ public partial class MpvRenderContextNative
 
     public void Render(MpvRenderParam[] param)
     {
-        var errorCode = mpv_render_context_render(Handle, param);
-        if (errorCode != MpvError.Success)
-        {
-            throw new Exception($"Failed to render a frame. Error: {errorCode}", CreateError(errorCode));
+        if (Handle.Handle == IntPtr.Zero) return;
+        
+        try {
+            var size = Marshal.SizeOf<MpvRenderParam>();
+            var ptr = Marshal.AllocHGlobal(size * param.Length);
+            for (var i = 0; i < param.Length; i++)
+            {
+                Marshal.StructureToPtr(param[i], ptr + (size * i), false);
+            }
+
+            var errorCode = mpv_render_context_render(Handle, ptr);
+            
+            Marshal.FreeHGlobal(ptr);
+
+            if (errorCode != MpvError.Success)
+            {
+                Debug.WriteLine($"[LOG] Render error: {errorCode} ({GetMpvErrorString(errorCode)})");
+                throw new Exception($"Failed to render a frame. Error: {errorCode}", Utils.CreateError(errorCode));
+            }
+        } catch (AccessViolationException ex) {
+            Debug.WriteLine($"[CRITICAL_LOG] AccessViolation during Render! ContextHandle: {Handle.Handle}");
+            throw;
+        } catch (Exception ex) {
+            Debug.WriteLine($"[LOG] Render general exception: {ex}");
+            throw;
         }
     }
 

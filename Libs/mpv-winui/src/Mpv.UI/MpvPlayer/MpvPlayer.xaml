@@ -10,7 +10,8 @@
             <Setter.Value>
                 <ControlTemplate TargetType="local:MpvPlayer">
                     <Grid>
-                        <common:RenderControl x:Name="RenderControl" />
+                        <common:D3D11RenderControl x:Name="RenderControl" />
+                        <!-- Kendi UI kontrolleri kaldırıldı - PlayerPage kendi UI'ını kullanıyor -->
                     </Grid>
                 </ControlTemplate>
             </Setter.Value>

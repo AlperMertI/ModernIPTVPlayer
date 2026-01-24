@@ -47,16 +47,47 @@
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.250402" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.6901" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.251106002" />
-    <PackageReference Include="Mpv.NET" Version="1.2.0" />
   </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="Libs\mpv-winui\src\Mpv.UI\Mpv.UI.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <None Update="libmpv-2.dll">
+    <Content Include="libmpv-2.dll">
+      <Link>libmpv-2.dll</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
+    </Content>
+    <Content Include="libwinpthread-1.dll">
+      <Link>libwinpthread-1.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="libunwind.dll">
+      <Link>libunwind.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="libc++.dll">
+      <Link>libc++.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="libspirv-cross-c-shared.dll">
+      <Link>libspirv-cross-c-shared.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="libSPIRV-Tools.dll">
+      <Link>libSPIRV-Tools.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="libSPIRV-Tools-opt.dll">
+      <Link>libSPIRV-Tools-opt.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="glslang.dll">
+      <Link>glslang.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
+
+
   <ItemGroup>
     <Page Update="PlayerPage.xaml">
       <Generator>MSBuild:Compile</Generator>

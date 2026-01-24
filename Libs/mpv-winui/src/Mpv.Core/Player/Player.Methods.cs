@@ -154,16 +154,6 @@ public sealed partial class Player
                 ChangeState(PlaybackState.Playing);
             }
         }
-        else if (property.Name == "display-fps")
-        {
-             // We need to marshal it as a double
-             var val = Marshal.PtrToStructure<double>(property.DataPtr);
-             if (Math.Abs(DisplayFps - val) > 0.01)
-             {
-                 DisplayFps = val;
-                 DisplayFpsChanged?.Invoke(this, val);
-             }
-        }
     }
 
     private void ChangeState(PlaybackState state)

@@ -16,9 +16,6 @@ public sealed partial class Player
     private long _currentPosition;
     private Task? _eventLoopTask;
     private CancellationTokenSource? _eventLoopCancellationTokenSource;
-    private IntPtr _fboPtr;
-    private IntPtr _flipYPtr;
-    private IntPtr _untimedPtr;
 
     public event EventHandler<LogMessageReceivedEventArgs>? LogMessageReceived;
 

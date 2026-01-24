@@ -11,7 +11,7 @@ namespace Mpv.Core.Interop;
 public partial class MpvRenderContextNative
 {
     [LibraryImport(MpvIdentifier)]
-    private static partial MpvError mpv_render_context_create(out MpvRenderContextHandle context, MpvHandle handle, MpvRenderParam[] param);
+    private static partial MpvError mpv_render_context_create(out MpvRenderContextHandle context, IntPtr handle, IntPtr param);
 
     [LibraryImport(MpvIdentifier)]
     private static partial MpvError mpv_render_context_set_parameter(MpvRenderContextHandle context, MpvRenderParam param);
@@ -26,16 +26,13 @@ public partial class MpvRenderContextNative
     private static partial MpvRenderUpdateFlag mpv_render_context_update(MpvRenderContextHandle context);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial MpvError mpv_render_context_render(MpvRenderContextHandle context, MpvRenderParam[] param);
+    private static partial MpvError mpv_render_context_render(MpvRenderContextHandle context, IntPtr param);
 
     [LibraryImport(MpvIdentifier)]
     private static partial MpvError mpv_render_context_report_swap(MpvRenderContextHandle context);
 
     [LibraryImport(MpvIdentifier)]
     private static partial void mpv_render_context_free(MpvRenderContextHandle context);
-
-    [LibraryImport("gl")]
-    private static partial void glGetIntegerv(int pname, out int data);
 
     public delegate void MpvRenderUpdateCallback(IntPtr callbackCtx);
 }

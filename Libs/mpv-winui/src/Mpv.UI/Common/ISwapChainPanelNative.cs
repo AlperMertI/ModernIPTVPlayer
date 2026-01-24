@@ -4,11 +4,16 @@ using System.Runtime.InteropServices;
 
 namespace MpvWinUI.Common;
 
-[ComImport]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-[Guid("63aad0b8-7c24-40ff-85a8-640d944cc325")]
-public interface ISwapChainPanelNative
+public static class NSwapChainPanelNative
 {
-    [PreserveSig] HResult SetSwapChain([In] IntPtr swapChain);
-    [PreserveSig] ulong Release();
+    // WinUI 3 / Windows App SDK (microsoft.ui.xaml.media.dxinterop.h)
+    // OFFICIAL GUID for Microsoft.UI.Xaml.Controls.SwapChainPanel
+    public static readonly Guid IID_ISwapChainPanelNative = new("63AAD0B8-7C24-40FF-85A8-640D944CC325");
+    
+    // UWP / Legacy (windows.ui.xaml.media.dxinterop.h)
+    // OFFICIAL GUID for Windows.UI.Xaml.Controls.SwapChainPanel
+    public static readonly Guid IID_ISwapChainPanelNative_UWP = new("F92F2C83-05EF-4AA9-A391-76A4952044F4");
+
+    // Standard VTable Slot (0-2 are IUnknown)
+    public const int Slot_SetSwapChain = 3;
 }

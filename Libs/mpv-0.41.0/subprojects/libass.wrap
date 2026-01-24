@@ -1,0 +1,6 @@
+[wrap-git]
+url = https://github.com/libass/libass.git
+revision = master
+depth = 1
+[provide]
+libass = libass_dep

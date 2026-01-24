@@ -1,5 +1,4 @@
-﻿#nullable enable
-using Microsoft.UI.Xaml.Controls;
+﻿using Microsoft.UI.Xaml.Controls;
 using Mpv.Core;
 using MpvWinUI.Common;
 
@@ -7,8 +6,9 @@ namespace MpvWinUI;
 
 public sealed partial class MpvPlayer
 {
-    private RenderControl? _renderControl;
+    private D3D11RenderControl _renderControl;
 
 
-    public Player? Player { get; private set; }
+
+    public Player Player { get; private set; }
 }

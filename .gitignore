@@ -41,6 +41,11 @@ Generated_Code/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+v_build_error.txt
+*.o
+*.obj
+*.p/
+
 
 ## Code Coverage
 *.coverage
@@ -67,3 +72,12 @@ $RECYCLE.BIN/
 *.lib
 !Libs/**/libmpv*.dll
 # Keep libmpv if it's explicitly in Libs, but ignore built binaries
+
+# Specific ignores for MPV source to keep only core source code (Selective approach)
+Libs/mpv-0.41.0/*
+!Libs/mpv-0.41.0/player/
+!Libs/mpv-0.41.0/include/
+!Libs/mpv-0.41.0/meson.build
+!Libs/mpv-0.41.0/meson.options
+!Libs/mpv-0.41.0/subprojects/
+Libs/mpv-0.41.0/subprojects/*/

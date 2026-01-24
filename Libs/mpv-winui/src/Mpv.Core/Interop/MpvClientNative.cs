@@ -201,31 +201,8 @@ public partial class MpvClientNative
 
     public string GetPropertyToString(string name)
     {
-        var ptr = mpv_get_property_string(Handle, name);
-        if (ptr == IntPtr.Zero) return null;
-        try
-        {
-            return Marshal.PtrToStringUTF8(ptr);
-        }
-        finally
-        {
-            mpv_free(ptr);
-        }
-    }
-
-    public string GetPropertyAsJson(string name)
-    {
-        MpvNode node = default;
-        var errorCode = mpv_get_property(Handle, name, MpvFormat.NodeJson, out node);
-        if (errorCode != MpvError.Success)
-        {
-            System.Diagnostics.Debug.WriteLine($"[MpvClient] GetPropertyAsJson Error for {name}: {errorCode}");
-            return null;
-        }
-
-        var json = node.StringValue;
-        mpv_free_node_contents(ref node);
-        return json;
+        var property = mpv_get_property_string(Handle, name);
+        return property;
     }
 
     public MpvClientNative SetProperty(string name, bool data)

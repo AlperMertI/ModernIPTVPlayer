@@ -16,12 +16,6 @@ public sealed partial class Player
     {
         Client = new MpvClientNative();
         Dependencies = new Structs.Player.LibMpvDependencies();
-        
-        // Pre-allocate buffers for rendering to avoid per-frame allocations
-        _fboPtr = Marshal.AllocHGlobal(Marshal.SizeOf<MpvOpenGLFBO>());
-        _flipYPtr = Marshal.AllocHGlobal(sizeof(int));
-        _untimedPtr = Marshal.AllocHGlobal(sizeof(int));
-        Marshal.WriteInt32(_untimedPtr, 0);
     }
 
     public async Task DisposeAsync()
@@ -35,13 +29,6 @@ public sealed partial class Player
         Client.UnObserveProperties();
         RenderContext?.Destroy();
         await Client.DestroyAsync();
-
-        if (_fboPtr != IntPtr.Zero) Marshal.FreeHGlobal(_fboPtr);
-        if (_flipYPtr != IntPtr.Zero) Marshal.FreeHGlobal(_flipYPtr);
-        if (_untimedPtr != IntPtr.Zero) Marshal.FreeHGlobal(_untimedPtr);
-        _fboPtr = IntPtr.Zero;
-        _flipYPtr = IntPtr.Zero;
-        _untimedPtr = IntPtr.Zero;
     }
 
     public async Task TerminateAsync()
@@ -67,46 +54,86 @@ public sealed partial class Player
 
         if (argument?.OpenGLGetProcAddress is not null)
         {
-            InitializeRender(argument.OpenGLGetProcAddress);
+            var glParams = new MpvOpenGLInitParams
+            {
+                GetProcAddrFn = (ctx, name) =>
+                {
+                    return argument!.OpenGLGetProcAddress!(name);
+                },
+
+                GetProcAddressCtx = IntPtr.Zero
+            };
+
+            var glParamsPtr = Marshal.AllocHGlobal(Marshal.SizeOf(glParams));
+            Marshal.StructureToPtr(glParams, glParamsPtr, false);
+            var glStringPtr = Marshal.StringToCoTaskMemUTF8("opengl");
+            RenderContext = new MpvRenderContextNative(
+                Client.Handle,
+                [
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = glStringPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.OpenGLInitParams, Data = glParamsPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero },
+                ]);
+
+            Marshal.FreeHGlobal(glParamsPtr);
+            Marshal.FreeCoTaskMem(glStringPtr);
         }
     }
 
-    public void InitializeRender(Func<string, IntPtr> getProcAddress)
+    public async Task InitializeDXGIAsync(IntPtr device, IntPtr context)
     {
-        if (RenderContext != null)
+        if (Client.IsInitialized)
         {
             return;
         }
 
-        var glParams = new MpvOpenGLInitParams
-        {
-            GetProcAddrFn = (ctx, name) =>
-            {
-                return getProcAddress(name);
-            },
+        Debug.WriteLine($"[LOG] InitializeDXGIAsync - Using Persistent D3D11 Handles (Dev: {device:X})");
+        await Client.InitializeAsync();
+        
+        // vo=libmpv kullanıyoruz ki MPV bizim SwapChainPanel'imize render etsin
+        Client.SetProperty("vo", "libmpv");
+        Client.SetProperty("gpu-api", "d3d11");
+        Client.SetProperty("hwdec", "d3d11va");
+        
+        // MPV UI/OSD'yi tamamen kapat - bizim kendi UI'ımız var
+        // MPV UI/OSD'yi tamamen kapat - bizim kendi UI'ımız var
+        // Client.SetProperty("osc", "no");           // osc özelliği yoksa hata verir, kapattık
+        Client.SetProperty("osd-level", "0");      // OSD mesajları kapalı
+        Client.SetProperty("input-default-bindings", "no"); // Varsayılan tuş atamaları kapalı
+        Client.SetProperty("input-vo-keyboard", "no");      // VO keyboard input kapalı
+        
+        RerunEventLoop();
 
-            GetProcAddressCtx = IntPtr.Zero
-        };
+        var dxgiStringPtr = Marshal.StringToCoTaskMemUTF8("dxgi");
+        var dxgiParamsPtr = Marshal.AllocHGlobal(16);
+        Marshal.WriteIntPtr(dxgiParamsPtr, device);
+        Marshal.WriteIntPtr(dxgiParamsPtr + 8, context);
 
-        var glParamsPtr = Marshal.AllocHGlobal(Marshal.SizeOf(glParams));
-        Marshal.StructureToPtr(glParams, glParamsPtr, false);
-        var glStringPtr = Marshal.StringToCoTaskMemUTF8("opengl");
-        RenderContext = new MpvRenderContextNative(
-            Client.Handle,
-            [
-                new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = glStringPtr },
-                new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.OpenGLInitParams, Data = glParamsPtr },
-                new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero },
-            ]);
+        var advControlPtr = Marshal.AllocHGlobal(sizeof(int));
+        Marshal.WriteInt32(advControlPtr, 1);
 
-        Marshal.FreeHGlobal(glParamsPtr);
-        Marshal.FreeCoTaskMem(glStringPtr);
+        try {
+            RenderContext = new MpvRenderContextNative(
+                Client.Handle,
+                [
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = dxgiStringPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIInitParams, Data = dxgiParamsPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.AdvancedControl, Data = advControlPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero }
+                ]);
+            Debug.WriteLine("[LOG] DXGI RenderContext created SUCCESSFULLY with AdvancedControl!");
+        } catch (Exception ex) {
+            Debug.WriteLine($"[FATAL] DXGI failed: {ex.Message}");
+            throw;
+        }
+
+        Marshal.FreeHGlobal(dxgiParamsPtr);
+        Marshal.FreeCoTaskMem(dxgiStringPtr);
+        Marshal.FreeHGlobal(advControlPtr);
     }
 
     public void RenderGL(int width, int height, int fboInt)
     {
-        if (_fboPtr == IntPtr.Zero || _flipYPtr == IntPtr.Zero) return;
-
         var fbo = new MpvOpenGLFBO
         {
             Fbo = fboInt,
@@ -114,15 +141,44 @@ public sealed partial class Player
             H = height
         };
 
-        Marshal.StructureToPtr(fbo, _fboPtr, false);
-        Marshal.WriteInt32(_flipYPtr, 0);
+        var fboPtr = Marshal.AllocHGlobal(Marshal.SizeOf(fbo));
+        Marshal.StructureToPtr(fbo, fboPtr, false);
 
+        var flipYPtr = Marshal.AllocHGlobal(sizeof(int));
+        Marshal.WriteInt32(flipYPtr, 0);
         RenderContext!.Render([
-            new MpvRenderParam {Type=Enums.Render.MpvRenderParamType.Fbo, Data = _fboPtr },
-            new MpvRenderParam {Type=Enums.Render.MpvRenderParamType.FlipY, Data = _flipYPtr },
-            new MpvRenderParam {Type=Enums.Render.MpvRenderParamType.Untimed, Data = _untimedPtr },
+            new MpvRenderParam {Type=Enums.Render.MpvRenderParamType.Fbo, Data = fboPtr },
+            new MpvRenderParam {Type=Enums.Render.MpvRenderParamType.FlipY, Data = flipYPtr },
             new MpvRenderParam {Type=Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero },
             ]);
+
+        Marshal.FreeHGlobal(fboPtr);
+        Marshal.FreeHGlobal(flipYPtr);
+    }
+
+    public void RenderDXGI(IntPtr texture, int width, int height, bool block = true)
+    {
+        var fbo = new MpvDxgiFbo
+        {
+            Texture = texture,
+            Width = width,
+            Height = height
+        };
+
+        var fboPtr = Marshal.AllocHGlobal(Marshal.SizeOf(fbo));
+        Marshal.StructureToPtr(fbo, fboPtr, false);
+
+        var blockPtr = Marshal.AllocHGlobal(sizeof(int));
+        Marshal.WriteInt32(blockPtr, block ? 1 : 0);
+
+        RenderContext!.Render([
+            new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIFbo, Data = fboPtr },
+            new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.BlockForTargetTime, Data = blockPtr },
+            new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero },
+        ]);
+
+        Marshal.FreeHGlobal(fboPtr);
+        Marshal.FreeHGlobal(blockPtr);
     }
 
     public void RerunEventLoop()
@@ -140,7 +196,6 @@ public sealed partial class Player
         Client.ObserveProperty(DurationProperty, Enums.Client.MpvFormat.Int64);
         Client.ObserveProperty(PositionProperty, Enums.Client.MpvFormat.Int64);
         Client.ObserveProperty(PausedForCacheProperty, Enums.Client.MpvFormat.Flag);
-        Client.ObserveProperty("display-fps", Enums.Client.MpvFormat.Double);
     }
 
     public bool IsMediaLoaded()
@@ -222,7 +277,4 @@ public sealed partial class Player
             await Client.ExecuteAsync($"screenshot-to-file {filePath}");
         }
     }
-
-    public double DisplayFps { get; private set; }
-    public event EventHandler<double>? DisplayFpsChanged;
 }

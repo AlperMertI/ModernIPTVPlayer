@@ -64,7 +64,18 @@ public static class Resolver
             };
         }
 
-        _libraries[libraryName] = NativeLibrary.Load(filename, assembly, searchPath);
-        return _libraries[libraryName];
+        try 
+        {
+            var ptr = NativeLibrary.Load(filename, assembly, searchPath);
+            _libraries[libraryName] = ptr;
+            System.Diagnostics.Debug.WriteLine($"[Mpv.Core] Successfully loaded {libraryName} from {filename}");
+            return ptr;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[Mpv.Core] FAILED to load {libraryName} (Expected: {filename}): {ex.Message}");
+            throw;
+        }
+
     }
 }

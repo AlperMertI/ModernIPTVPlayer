@@ -116,9 +116,4 @@ public enum MpvFormat
     /// <para>some very specific situations. (Some commands use it.)</para>
     /// </summary>
     ByteArray = 9,
-
-    /// <summary>
-    /// Binary JSON format.
-    /// </summary>
-    NodeJson = 10,
 }

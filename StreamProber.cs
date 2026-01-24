@@ -22,7 +22,7 @@ namespace ModernIPTVPlayer
             await _player.InitializePlayerAsync();
             await _player.SetPropertyAsync("vo", "null"); // No video output
             await _player.SetPropertyAsync("ao", "null"); // No audio output
-            await _player.SetPropertyAsync("ytdl", "no");
+            // await _player.SetPropertyAsync("ytdl", "no"); // Removed: ytdl not available in this MPV build
             await _player.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "no");
             
 

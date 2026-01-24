@@ -1,0 +1,14 @@
+[wrap-file]
+directory = win-iconv-0.0.9
+source_url = https://github.com/win-iconv/win-iconv/archive/refs/tags/v0.0.9.tar.gz
+source_filename = win-iconv-0.0.9.tar.gz
+source_hash = f97e11b44576830bcb7363146f65dfe748f55f800da0ac876350ffb3f765d5de
+patch_filename = win-iconv_0.0.9-1_patch.zip
+patch_url = https://wrapdb.mesonbuild.com/v2/win-iconv_0.0.9-1/get_patch
+patch_hash = b732c2afe5c9bca0543093478ed6f21249f950f200667dc8dfae1ffb1f845694
+source_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/win-iconv_0.0.9-1/win-iconv-0.0.9.tar.gz
+wrapdb_version = 0.0.9-1
+
+[provide]
+dependency_names = iconv
+program_names = win_iconv

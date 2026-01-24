@@ -1,0 +1,15 @@
+[wrap-file]
+directory = libarchive-3.8.4
+source_url = https://github.com/libarchive/libarchive/releases/download/v3.8.4/libarchive-3.8.4.tar.xz
+source_filename = libarchive-3.8.4.tar.xz
+source_hash = c7b847b57feacf5e182f4d14dd6cae545ac6843d55cb725f58e107cdf1c9ad73
+source_fallback_url = https://wrapdb.mesonbuild.com/v2/libarchive_3.8.4-2/get_source/libarchive-3.8.4.tar.xz
+patch_filename = libarchive_3.8.4-2_patch.zip
+patch_url = https://wrapdb.mesonbuild.com/v2/libarchive_3.8.4-2/get_patch
+patch_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/libarchive_3.8.4-2/libarchive_3.8.4-2_patch.zip
+patch_hash = 02d84503ff42e3678b1c0d424b1ad2600a8f2e28cb78dca72d481831f972193a
+wrapdb_version = 3.8.4-2
+
+[provide]
+dependency_names = libarchive
+program_names = bsdcat, bsdcpio, bsdtar

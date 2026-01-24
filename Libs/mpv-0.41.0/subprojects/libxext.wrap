@@ -1,0 +1,13 @@
+[wrap-file]
+directory = libXext-1.3.6
+source_url = https://xorg.freedesktop.org/releases/individual/lib/libXext-1.3.6.tar.xz
+source_filename = libXext-1.3.6.tar.xz
+source_hash = edb59fa23994e405fdc5b400afdf5820ae6160b94f35e3dc3da4457a16e89753
+patch_filename = libxext_1.3.6-1_patch.zip
+patch_url = https://wrapdb.mesonbuild.com/v2/libxext_1.3.6-1/get_patch
+patch_hash = 7a55176b27a018759e382a17cefa51c52a43d084079d5429c43e1dc455054eca
+source_fallback_url = https://github.com/mesonbuild/wrapdb/releases/download/libxext_1.3.6-1/libXext-1.3.6.tar.xz
+wrapdb_version = 1.3.6-1
+
+[provide]
+xext = xext_dep

@@ -596,7 +596,7 @@ namespace ModernIPTVPlayer
                     await _mpvPlayer.OpenAsync(_streamUrl);
                     
                     // Force these properties again just in case
-                    await _mpvPlayer.SetPropertyAsync("ytdl", "no");
+                    // await _mpvPlayer.SetPropertyAsync("ytdl", "no"); // Removed: ytdl not available in this MPV build
 
                     // ----------------------------------------------------------------------------------
                     // OPTİMİZASYONLAR: Ses ve Altyazı Takılmalarını Önleme & Akıllı RAM Yönetimi

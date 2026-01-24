@@ -166,11 +166,6 @@ public enum MpvRenderParamType
     /// being slightly off.
     /// </summary>
     BlockForTargetTime = 12,
-    
-    /// <summary>
-    /// Alias for BlockForTargetTime used to disable blocking wait.
-    /// </summary>
-    Untimed = 12,
 
     /// <summary>
     /// Use to skip rendering in mpv_render_context_render().
@@ -286,4 +281,17 @@ public enum MpvRenderParamType
     /// See Mpv_RENDER_PARAM_SW_STRIDE for alignment requirements.
     /// </summary>
     SWPointer = 20,
+
+    /// <summary>
+    /// Required parameters for initializing the DXGI renderer. Valid for
+    /// mpv_render_context_create().
+    /// Type: mpv_dxgi_init_params*
+    /// </summary>
+    DXGIInitParams = 21,
+
+    /// <summary>
+    /// Describes a DXGI render target. Valid for mpv_render_context_render().
+    /// Type: mpv_dxgi_fbo*
+    /// </summary>
+    DXGIFbo = 22,
 }
