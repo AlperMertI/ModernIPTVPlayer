@@ -34,7 +34,7 @@
         </Style>
     </Page.Resources>
 
-    <Grid Background="#FF0D0D0D">
+    <Grid Background="#FF0D0D0D" PointerExited="RootGrid_PointerExited">
         <!-- Dynamic Backdrop - Original 3-Layer Radial Gradient System -->
         <!-- Dynamic Backdrop Control -->
         <controls:DynamicBackdrop x:Name="BackdropControl" />
@@ -240,7 +240,8 @@
                                     ImageUrl="{x:Bind IconUrl}" 
                                     Width="200" 
                                     Height="300" 
-                                    ColorsExtracted="PosterCard_ColorsExtracted"/>
+                                    ColorsExtracted="PosterCard_ColorsExtracted"
+                                    HoverStarted="ExpandedCard_HoverStarted"/>
                             </DataTemplate>
                         </GridView.ItemTemplate>
                     </GridView>
@@ -259,7 +260,16 @@
                     <ProgressRing x:Name="MovieLoadingRing" Grid.Row="1" IsActive="False" Visibility="Collapsed"/>
                 </Grid>
             </SplitView.Content>
+
         </SplitView>
+        
+        <!-- Expanded Card Overlay Layer (High Z-Index) -->
+        <Canvas x:Name="OverlayCanvas">
+            <controls:ExpandedCard x:Name="ActiveExpandedCard" Visibility="Collapsed" 
+                                   PlayClicked="ExpandedCard_PlayClicked"
+                                   DetailsClicked="ExpandedCard_DetailsClicked"
+                                   AddListClicked="ExpandedCard_AddListClicked"/>
+        </Canvas>
     </Grid>
 </Page>
 

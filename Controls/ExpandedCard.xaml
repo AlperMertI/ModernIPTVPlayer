@@ -1,0 +1,136 @@
+<UserControl
+    x:Class="ModernIPTVPlayer.Controls.ExpandedCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ModernIPTVPlayer.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Width="320" Height="420">
+
+    <Grid x:Name="RootGrid" CornerRadius="12" Background="#1A1A1A" BorderBrush="#33FFFFFF" BorderThickness="1">
+
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="200"/> <!-- Video/Backdrop Area -->
+            <RowDefinition Height="*"/>   <!-- Info Area -->
+            <RowDefinition Height="Auto"/> <!-- Actions -->
+        </Grid.RowDefinitions>
+
+        <!-- 1. BACKDROP & VIDEO -->
+        <Grid Grid.Row="0">
+            <!-- Fallback Image with Gradient -->
+            <Grid x:Name="BackdropContainer">
+                <Image x:Name="BackdropImage" Stretch="UniformToFill" Opacity="0.8"/>
+                <!-- Gradient Overlay for Text Readability (only on backdrop) -->
+                <Rectangle>
+                    <Rectangle.Fill>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="Transparent" Offset="0"/>
+                            <GradientStop Color="#1A1A1A" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Rectangle.Fill>
+                </Rectangle>
+            </Grid>
+            
+            <!-- Video Player (WebView for Youtube Trailer) - On top of backdrop -->
+            <WebView2 x:Name="TrailerWebView" Visibility="Collapsed" DefaultBackgroundColor="Black"/>
+            
+            <!-- Mute Button (Bottom Right Corner) -->
+            <Button x:Name="MuteButton" 
+                    Click="MuteButton_Click"
+                    HorizontalAlignment="Right" 
+                    VerticalAlignment="Bottom" 
+                    Margin="0,0,8,8"
+                    Width="32" Height="32"
+                    CornerRadius="16"
+                    Background="#66000000"
+                    BorderThickness="0"
+                    Padding="0"
+                    Visibility="Collapsed">
+                <FontIcon x:Name="MuteIcon" Glyph="&#xE74F;" FontSize="14" Foreground="White"/>
+            </Button>
+            
+            <!-- Loading Indicator -->
+            <ProgressRing x:Name="LoadingRing" IsActive="True" Foreground="White" Width="30" Height="30"/>
+        </Grid>
+
+        <!-- 2. INFO AREA -->
+        <StackPanel Grid.Row="1" Padding="16,4,16,0" Spacing="6">
+            <TextBlock x:Name="TitleText" Text="Movie Title" 
+                       Style="{StaticResource TitleTextBlockStyle}" 
+                       FontSize="18" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>
+
+            <!-- Tech Badges (Dynamic) -->
+            <StackPanel x:Name="TechBadgesPanel" Orientation="Horizontal" Spacing="6" Height="20">
+                <!-- Badges will be added here dynamically -->
+                <TextBlock Text="Analiz ediliyor..." FontSize="10" Foreground="#66FFFFFF" VerticalAlignment="Center" FontStyle="Italic"/>
+            </StackPanel>
+
+             <StackPanel Orientation="Horizontal" Spacing="8">
+                 <Border x:Name="MoodTag" Background="#FF009900" CornerRadius="4" Padding="6,2" Visibility="Collapsed">
+                     <TextBlock x:Name="MoodText" Text="98% Match" FontSize="11" FontWeight="Bold"/>
+                 </Border>
+                 
+                 <TextBlock x:Name="RatingText" Text="★ 8.5" Foreground="#FFCC00" FontSize="12" VerticalAlignment="Center"/>
+                 <TextBlock x:Name="YearText" Text="2024" Foreground="#99FFFFFF" FontSize="12" VerticalAlignment="Center"/>
+             </StackPanel>
+
+             <TextBlock x:Name="GenresText" Text="Action • Adventure • Sci-Fi" Foreground="#99FFFFFF" FontSize="11" TextTrimming="CharacterEllipsis"/>
+             
+             <!-- Description with Skeleton Loading -->
+             <Grid Margin="0,4,0,0" Height="50" VerticalAlignment="Top">
+                 <!-- Real Content (Initially Hidden) -->
+                 <TextBlock x:Name="DescText" 
+                            Text="Details..." 
+                            Foreground="#BBFFFFFF" 
+                            FontSize="12" 
+                            TextWrapping="Wrap" 
+                            MaxLines="3" 
+                            TextTrimming="CharacterEllipsis" 
+                            Opacity="0"/>
+
+                 <!-- Skeleton Loader -->
+                 <StackPanel x:Name="DescSkeleton" Spacing="4" VerticalAlignment="Top">
+                     <Border Height="10" Width="240" HorizontalAlignment="Left" CornerRadius="4" Background="#22FFFFFF"/>
+                     <Border Height="10" Width="200" HorizontalAlignment="Left" CornerRadius="4" Background="#18FFFFFF"/>
+                     <Border Height="10" Width="160" HorizontalAlignment="Left" CornerRadius="4" Background="#10FFFFFF"/>
+                 </StackPanel>
+             </Grid>
+        </StackPanel>
+
+        <!-- 3. ACTION BUTTONS -->
+        <StackPanel Grid.Row="2" Padding="16" Spacing="8" Orientation="Horizontal">
+            <!-- Play Button -->
+            <Button x:Name="PlayButton" Click="PlayButton_Click" Background="White" Foreground="Black" CornerRadius="4" Padding="16,6">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon Glyph="&#xE768;" FontSize="12"/>
+                    <TextBlock Text="Play" FontWeight="Bold"/>
+                </StackPanel>
+            </Button>
+
+            <!-- Details Button -->
+             <Button x:Name="DetailsButton" Click="DetailsButton_Click" Background="#33FFFFFF" Foreground="White" CornerRadius="4" Padding="10,6">
+                 <ToolTipService.ToolTip>
+                     <ToolTip Content="More Info"/>
+                 </ToolTipService.ToolTip>
+                 <FontIcon Glyph="&#xE946;" FontSize="16"/> 
+             </Button>
+
+             <!-- Add/Fav Button -->
+             <Button x:Name="FavButton" Click="FavButton_Click" Background="#33FFFFFF" Foreground="White" CornerRadius="4" Padding="10,6">
+                 <FontIcon Glyph="&#xE710;" FontSize="16"/> 
+             </Button>
+        </StackPanel>
+        
+        <!-- Ambience Glow (Code Behind will set this) -->
+        <Grid x:Name="AmbienceGrid" IsHitTestVisible="False" Opacity="0.15">
+             <Grid.Background>
+                 <RadialGradientBrush Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.8" RadiusY="0.8">
+                     <GradientStop Color="Cyan" Offset="0"/>
+                     <GradientStop Color="Transparent" Offset="1"/>
+                 </RadialGradientBrush>
+             </Grid.Background>
+        </Grid>
+    </Grid>
+</UserControl>

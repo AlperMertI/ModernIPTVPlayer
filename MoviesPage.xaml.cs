@@ -18,6 +18,8 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Linq;
+using ModernIPTVPlayer.Controls;
+using System.Numerics;
 
 namespace ModernIPTVPlayer
 {
@@ -52,9 +54,21 @@ namespace ModernIPTVPlayer
 
             if (_loginInfo != null && !string.IsNullOrEmpty(_loginInfo.Host))
             {
-                if (CategoryListView.ItemsSource != null) return;
-                await LoadVodCategoriesAsync();
+                if (CategoryListView.ItemsSource == null)
+                {
+                    await LoadVodCategoriesAsync();
+                }
             }
+            
+            // OPTIMIZATION: Warm up the trailer player after 3 seconds of idle time.
+            // This ensures the WebView is initialized by the time the user hovers a movie.
+            var warmupTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            warmupTimer.Tick += (s, args) =>
+            {
+                warmupTimer.Stop();
+                ActiveExpandedCard?.PrepareForTrailer();
+            };
+            warmupTimer.Start();
         }
 
         private List<LiveCategory> _allCategories = new();
@@ -290,122 +304,294 @@ namespace ModernIPTVPlayer
         }
 
         // ==========================================
-        // 3D TILT EFFECT & CONTAINER LOGIC
+        // EXPANDED CARD LOGIC
         // ==========================================
         
-        private void MovieGridView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
-        {
-            if (args.InRecycleQueue)
-            {
-                var container = args.ItemContainer;
-                container.PointerMoved -= MovieItem_PointerMoved;
-                container.PointerExited -= MovieItem_PointerExited;
-                container.PointerEntered -= MovieItem_PointerEntered;
-            }
-            else
-            {
-                var container = args.ItemContainer;
-                if (container.Background == null) container.Background = new SolidColorBrush(Colors.Transparent);
-                
-                container.PointerMoved -= MovieItem_PointerMoved;
-                container.PointerMoved += MovieItem_PointerMoved;
-                
-                container.PointerExited -= MovieItem_PointerExited;
-                container.PointerExited += MovieItem_PointerExited;
-                
-                container.PointerEntered -= MovieItem_PointerEntered;
-                container.PointerEntered += MovieItem_PointerEntered;
-            }
-        }
+        private DispatcherTimer _hoverTimer;
+        private PosterCard _pendingHoverCard;
+        private System.Threading.CancellationTokenSource _closeCts;
         
-        private void MovieItem_PointerEntered(object sender, PointerRoutedEventArgs e)
+        private DispatcherTimer _flightTimer;
+        
+        private void ExpandedCard_HoverStarted(object sender, EventArgs e)
         {
-            if (sender is GridViewItem item && item.Content is LiveStream stream && !string.IsNullOrEmpty(stream.IconUrl))
+            if (sender is PosterCard card)
             {
-                System.Diagnostics.Debug.WriteLine($"\n=== HOVER: {stream.Name} ===");
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] HoverStarted on: {((LiveStream)card.DataContext).Name}");
                 
-                // 2. Update local GlowEffect with extensive debugging
-                var glow = GetTemplateChild<Border>(item, "GlowEffect");
-                System.Diagnostics.Debug.WriteLine($"GLOW DEBUG: GetTemplateChild returned {(glow != null ? "Border" : "NULL")}");
-                
-                if (glow != null)
+                // CRITICAL: If we moved to a new card, CANCEL any pending close logic (C# Task)
+                if (_closeCts != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"  ActualSize: {glow.ActualWidth}x{glow.ActualHeight}");
-                    System.Diagnostics.Debug.WriteLine($"  Margin: {glow.Margin}");
-                    System.Diagnostics.Debug.WriteLine($"  Visibility: {glow.Visibility}, Opacity: {glow.Opacity}");
+                    System.Diagnostics.Debug.WriteLine("[ExpandedCard] Cancelling pending close task.");
+                    _closeCts.Cancel();
+                }
+
+                var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
+                
+                // ALSO CRITICAL: Stop the composition animation running on the visual (GPU)
+                visual.StopAnimation("Opacity");
+                visual.StopAnimation("Scale");
+                
+                // If it was already visible, keep it that way for morphing
+                bool isAlreadyOpen = ActiveExpandedCard.Visibility == Visibility.Visible;
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] State check - Visibility: {ActiveExpandedCard.Visibility}, Opacity: {visual.Opacity}, isAlreadyOpen: {isAlreadyOpen}");
+
+                if (isAlreadyOpen)
+                {
+                    // Ensure it stays visible and opaque during the flight timer
+                    visual.Opacity = 1f;
                     
-                    // Check parent
-                    var parent = glow.Parent as FrameworkElement;
-                    if (parent != null)
+                    // Throttle the fast path slightly (350ms) to avoid triggering on every single card crossed during fast movement
+                    if (_flightTimer == null) 
                     {
-                        System.Diagnostics.Debug.WriteLine($"  Parent Type: {parent.GetType().Name}");
-                        System.Diagnostics.Debug.WriteLine($"  Parent Size: {parent.ActualWidth}x{parent.ActualHeight}");
+                        _flightTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+                        _flightTimer.Tick += FlightTimer_Tick;
+                    }
+                    else
+                    {
+                        _flightTimer.Stop(); // Reset logic
                     }
                     
-                    
-                    // Apply color to the radial gradient stop
-                    if (glow.Background is RadialGradientBrush brush)
+                    _pendingHoverCard = card;
+                    _flightTimer.Start();
+                }
+                else
+                {
+                    // SLOW PATH: Opening from scratch. Use debounce.
+                    _pendingHoverCard = card;
+                    if (_hoverTimer == null)
                     {
-                        // The actual color will be set by the PosterCard_ColorsExtracted event handler
-                        // This part might need to be updated if the glow color is also dynamic based on the extracted colors
-                        // For now, we'll assume the glow color is handled by the PosterCard itself or a default.
-                        // If the glow color needs to be set here, we'd need the extracted colors passed or retrieved.
-                        // For this change, we're removing the direct color extraction from here.
+                        _hoverTimer = new DispatcherTimer();
+                        _hoverTimer.Interval = TimeSpan.FromMilliseconds(600); // 600ms debounce
+                        _hoverTimer.Tick += HoverTimer_Tick;
                     }
-                }
-            }
-        }
-        
-        private void MovieItem_PointerMoved(object sender, PointerRoutedEventArgs e)
-        {
-            if (sender is GridViewItem item)
-            {
-                var rootGrid = GetTemplateChild<Grid>(item, "RootGrid");
-                
-                if (rootGrid != null && rootGrid.Projection is PlaneProjection projection)
-                {
-                    var pointerPosition = e.GetCurrentPoint(rootGrid).Position;
-                    var center = new Windows.Foundation.Point(rootGrid.ActualWidth / 2, rootGrid.ActualHeight / 2);
+                    else
+                    {
+                        _hoverTimer.Stop();
+                    }
+                    _hoverTimer.Start();
                     
-                    var xDiff = pointerPosition.X - center.X;
-                    var yDiff = pointerPosition.Y - center.Y;
-
-                    projection.RotationY = -xDiff / 15.0;
-                    projection.RotationX = yDiff / 15.0;
+                    // Predictive prefetch
+                    ActiveExpandedCard.PrepareForTrailer();
                 }
             }
         }
 
-        private void MovieItem_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        private void FlightTimer_Tick(object sender, object e)
         {
-            if (sender is GridViewItem item)
+            _flightTimer.Stop();
+            if (_pendingHoverCard != null && _pendingHoverCard.IsHovered)
             {
-                var rootGrid = GetTemplateChild<Grid>(item, "RootGrid");
-                if (rootGrid != null && rootGrid.Projection is PlaneProjection projection)
-                {
-                     // Reset smoothly
-                     projection.RotationX = 0;
-                     projection.RotationY = 0;
-                }
+                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Flight Timer Triggered - Morphing...");
+                 ShowExpandedCard(_pendingHoverCard);
             }
         }
 
-        // Helper to find named elements in the template
-        private T GetTemplateChild<T>(DependencyObject parent, string name) where T : DependencyObject
+        private void HoverTimer_Tick(object sender, object e)
         {
-             int count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent);
-             for (int i = 0; i < count; i++)
+            _hoverTimer.Stop();
+            if (_pendingHoverCard != null && _pendingHoverCard.IsHovered) // Only show if still hovering
+            {
+                System.Diagnostics.Debug.WriteLine("[ExpandedCard] Hover Timer Triggered - Popping...");
+                ShowExpandedCard(_pendingHoverCard);
+            }
+        }
+
+        private async void ShowExpandedCard(PosterCard sourceCard)
+        {
+            try
+            {
+                _closeCts?.Cancel();
+                _closeCts = new System.Threading.CancellationTokenSource();
+
+                // 1. Get Coordinates
+                var transform = sourceCard.TransformToVisual(OverlayCanvas);
+                var position = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
+                
+                double widthDiff = 320 - sourceCard.ActualWidth;
+                double heightDiff = 420 - sourceCard.ActualHeight;
+                
+                double targetX = position.X - (widthDiff / 2);
+                double targetY = position.Y - (heightDiff / 2);
+
+                // Boundary Checks
+                if (targetX < 10) targetX = 10;
+                if (targetX + 320 > OverlayCanvas.ActualWidth) targetX = OverlayCanvas.ActualWidth - 330;
+                if (targetY < 10) targetY = 10;
+                if (targetY + 420 > OverlayCanvas.ActualHeight) targetY = OverlayCanvas.ActualHeight - 430;
+
+                var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
+                var compositor = visual.Compositor;
+
+                // 0. Enable Translation
+                ElementCompositionPreview.SetIsTranslationEnabled(ActiveExpandedCard, true);
+
+                // 2. Handle State (Pop vs Morph)
+                bool isMorph = ActiveExpandedCard.Visibility == Visibility.Visible && visual.Opacity > 0.1f;
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Show Card - TargetLayout: ({targetX:F2}, {targetY:F2}), CurrentLayout: ({Canvas.GetLeft(ActiveExpandedCard):F2}, {Canvas.GetTop(ActiveExpandedCard):F2}), VisualOpacity: {visual.Opacity:F2}, isMorph: {isMorph}");
+
+                if (isMorph)
+                {
+                    // --- MORPH MODE ---
+                    ActiveExpandedCard.StopTrailer();
+
+                    double oldLeft = Canvas.GetLeft(ActiveExpandedCard);
+                    double oldTop = Canvas.GetTop(ActiveExpandedCard);
+                    
+                    // Update Layout Position
+                    Canvas.SetLeft(ActiveExpandedCard, targetX);
+                    Canvas.SetTop(ActiveExpandedCard, targetY);
+                    // Force update layout? XAML usually handles this.
+                    ActiveExpandedCard.UpdateLayout(); 
+
+                    float deltaX = (float)(oldLeft - targetX);
+                    float deltaY = (float)(oldTop - targetY);
+                    
+                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Morph Calculation: Old({oldLeft:F2}) - New({targetX:F2}) = Delta({deltaX:F2})");
+                    
+                    // Set TRANSLATION to compensate (Layout has moved to target, so we translate back to old position)
+                    visual.Properties.InsertVector3("Translation", new Vector3(deltaX, deltaY, 0));
+                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Set Visual.Translation = {deltaX}, {deltaY}");
+                    
+                    var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
+                    offsetAnim.Target = "Translation";
+                    var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.2f, 0.8f), new Vector2(0.2f, 1.0f));
+                    offsetAnim.InsertKeyFrame(1.0f, Vector3.Zero, easing);
+                    offsetAnim.Duration = TimeSpan.FromMilliseconds(400);
+                    
+                    visual.StartAnimation("Translation", offsetAnim);
+                    
+                    // Ensure full visibility
+                    visual.Opacity = 1f;
+                    visual.Scale = new Vector3(1f, 1f, 1f);
+                }
+                else
+                {
+                    // --- POP MODE ---
+                    System.Diagnostics.Debug.WriteLine("[ExpandedCard] Pop Mode - Reseting Translation to Zero.");
+                    visual.StopAnimation("Translation");
+                    visual.StopAnimation("Offset");
+                    visual.Properties.InsertVector3("Translation", Vector3.Zero);
+                    visual.Scale = new Vector3(0.8f, 0.8f, 1f);
+                    visual.Opacity = 0;
+
+                    Canvas.SetLeft(ActiveExpandedCard, targetX);
+                    Canvas.SetTop(ActiveExpandedCard, targetY);
+                    ActiveExpandedCard.Visibility = Visibility.Visible;
+
+                    var springAnim = compositor.CreateSpringVector3Animation();
+                    springAnim.Target = "Scale";
+                    springAnim.FinalValue = new Vector3(1f, 1f, 1f);
+                    springAnim.DampingRatio = 0.7f;
+                    springAnim.Period = TimeSpan.FromMilliseconds(50);
+                    
+                    var fadeAnim = compositor.CreateScalarKeyFrameAnimation();
+                    fadeAnim.Target = "Opacity";
+                    fadeAnim.InsertKeyFrame(1f, 1f);
+                    fadeAnim.Duration = TimeSpan.FromMilliseconds(200);
+
+                    visual.StartAnimation("Scale", springAnim);
+                    visual.StartAnimation("Opacity", fadeAnim);
+                }
+
+                // 3. Load Data
+                if (sourceCard.DataContext is LiveStream stream)
+                {
+                    await ActiveExpandedCard.LoadDataAsync(stream);
+                }
+
+                ActiveExpandedCard.PointerExited -= ActiveExpandedCard_PointerExited;
+                ActiveExpandedCard.PointerExited += ActiveExpandedCard_PointerExited;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error Showing: {ex.Message}");
+            }
+        }
+
+        private async void RootGrid_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            // If the card is visible and mouse leaves the window/root grid, close it.
+            if (ActiveExpandedCard.Visibility == Visibility.Visible)
+            {
+                await CloseExpandedCardAsync();
+            }
+        }
+
+        private async void ActiveExpandedCard_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+             await CloseExpandedCardAsync();
+        }
+
+        private async Task CloseExpandedCardAsync()
+        {
+             try 
              {
-                 var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
-                 if (child is FrameworkElement fe && fe.Name == name && child is T typed)
+                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Close Request - Sequence Start.");
+                 _closeCts?.Cancel();
+                 _closeCts = new System.Threading.CancellationTokenSource();
+                 var token = _closeCts.Token;
+
+                 ActiveExpandedCard.StopTrailer();
+
+                 await Task.Delay(50, token);
+                 
+                 if (token.IsCancellationRequested) 
                  {
-                     return typed;
+                     System.Diagnostics.Debug.WriteLine("[ExpandedCard] Exit task cancelled (Switch detected).");
+                     return;
                  }
-                 var result = GetTemplateChild<T>(child, name);
-                 if (result != null) return result;
+
+                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Exit animation starting...");
+                 var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
+                 var compositor = visual.Compositor;
+                 
+                 var fadeOut = compositor.CreateScalarKeyFrameAnimation();
+                 fadeOut.Target = "Opacity";
+                 fadeOut.InsertKeyFrame(1f, 0f);
+                 fadeOut.Duration = TimeSpan.FromMilliseconds(200);
+                 
+                 var scaleDown = compositor.CreateVector3KeyFrameAnimation();
+                 scaleDown.Target = "Scale";
+                 scaleDown.InsertKeyFrame(1f, new Vector3(0.95f, 0.95f, 1f));
+                 scaleDown.Duration = TimeSpan.FromMilliseconds(200);
+                 
+                 visual.StartAnimation("Opacity", fadeOut);
+                 visual.StartAnimation("Scale", scaleDown);
+                 
+                 await Task.Delay(200, token);
+                 if (token.IsCancellationRequested) return;
+
+                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Setting Visibility = Collapsed.");
+                 ActiveExpandedCard.Visibility = Visibility.Collapsed;
              }
-             return null;
+             catch (TaskCanceledException)
+             {
+                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Close cancelled - Switched!");
+             }
+             catch (Exception ex)
+             {
+                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Close Error: {ex.Message}");
+             }
         }
+
+        // Expanded Card Events
+        private void ExpandedCard_PlayClicked(object sender, EventArgs e)
+        {
+            ShowMessageDialog("Play", "Video Player Starting...");
+        }
+
+        private void ExpandedCard_DetailsClicked(object sender, EventArgs e)
+        {
+            ShowMessageDialog("Details", "Navigating to Details Page...");
+        }
+
+        private void ExpandedCard_AddListClicked(object sender, EventArgs e)
+        {
+             ShowMessageDialog("Favorites", "Added to your list.");
+        }
+
+
 
         private async void SearchButton_Click(object sender, RoutedEventArgs e)
         {

@@ -15,9 +15,10 @@ namespace ModernIPTVPlayer.Controls
 {
     public sealed partial class PosterCard : UserControl
     {
-        private bool _isHovered;
+        public bool IsHovered { get; private set; }
 
         public event EventHandler<(Color Primary, Color Secondary)> ColorsExtracted;
+        public event EventHandler HoverStarted;
 
         public static readonly DependencyProperty ImageUrlProperty =
             DependencyProperty.Register("ImageUrl", typeof(string), typeof(PosterCard), new PropertyMetadata(null, OnImageUrlChanged));
@@ -73,8 +74,9 @@ namespace ModernIPTVPlayer.Controls
 
         private async void OnPointerEntered(object sender, PointerRoutedEventArgs e)
         {
-            _isHovered = true;
+            IsHovered = true;
             HoverInStoryboard.Begin();
+            HoverStarted?.Invoke(this, EventArgs.Empty);
             
             // Still extract colors for internal use/events, but no visual glow here
             if (!string.IsNullOrEmpty(ImageUrl))
@@ -89,7 +91,7 @@ namespace ModernIPTVPlayer.Controls
 
         private void OnPointerExited(object sender, PointerRoutedEventArgs e)
         {
-             _isHovered = false;
+             IsHovered = false;
              HoverOutStoryboard.Begin();
              
              TiltProjection.RotationX = 0;
@@ -98,7 +100,7 @@ namespace ModernIPTVPlayer.Controls
 
         private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
         {
-            if (_isHovered)
+            if (IsHovered)
             {
                 var pointerPosition = e.GetCurrentPoint(RootGrid).Position;
                 var center = new Windows.Foundation.Point(RootGrid.ActualWidth / 2, RootGrid.ActualHeight / 2);
