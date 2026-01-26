@@ -6,11 +6,16 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Input;
 using Windows.UI;
+using Windows.Graphics.Imaging;
+using Windows.Storage.Streams;
 using System;
+using System.IO;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace ModernIPTVPlayer
 {
@@ -18,12 +23,13 @@ namespace ModernIPTVPlayer
     {
         private LoginParams? _loginInfo;
         private HttpClient _httpClient;
-
         public SeriesPage()
         {
             this.InitializeComponent();
             _httpClient = HttpHelper.Client;
         }
+
+
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
@@ -109,8 +115,6 @@ namespace ModernIPTVPlayer
 
         private async Task LoadSeriesCategoriesAsync()
         {
-            ShowMessageDialog("Debug (Dizi)", $"Yükleme başlıyor... Host: {_loginInfo?.Host}");
-            
             string api = "";
             try
             {
@@ -142,6 +146,13 @@ namespace ModernIPTVPlayer
                 {
                     _allCategories = categories;
                     CategoryListView.ItemsSource = _allCategories;
+
+                    // Auto-select first category
+                    if (_allCategories.Count > 0)
+                    {
+                        CategoryListView.SelectedIndex = 0;
+                        await LoadSeriesAsync(_allCategories[0]);
+                    }
                 }
                 else
                 {
@@ -250,6 +261,12 @@ namespace ModernIPTVPlayer
             }
         }
 
+        private void PosterCard_ColorsExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
+        {
+             // Update the global backdrop when a poster decides its colors are ready/hovered
+             BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+        }
+
         private async void ShowMessageDialog(string title, string content)
         {
             if (this.XamlRoot == null) return;
@@ -262,80 +279,7 @@ namespace ModernIPTVPlayer
             };
             await dialog.ShowAsync();
         }
-        // ==========================================
-        // 3D TILT EFFECT & CONTAINER LOGIC
-        // ==========================================
         
-        private void SeriesGridView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
-        {
-            if (args.InRecycleQueue)
-            {
-                var container = args.ItemContainer;
-                container.PointerMoved -= SeriesItem_PointerMoved;
-                container.PointerExited -= SeriesItem_PointerExited;
-            }
-            else
-            {
-                var container = args.ItemContainer;
-                 if (container.Background == null) container.Background = new SolidColorBrush(Colors.Transparent);
-
-                container.PointerMoved -= SeriesItem_PointerMoved;
-                container.PointerMoved += SeriesItem_PointerMoved;
-                
-                container.PointerExited -= SeriesItem_PointerExited;
-                container.PointerExited += SeriesItem_PointerExited;
-            }
-        }
-
-        private void SeriesItem_PointerMoved(object sender, PointerRoutedEventArgs e)
-        {
-            if (sender is GridViewItem item)
-            {
-                var rootGrid = GetTemplateChild<Grid>(item, "RootGrid");
-                
-                if (rootGrid != null && rootGrid.Projection is PlaneProjection projection)
-                {
-                    var pointerPosition = e.GetCurrentPoint(rootGrid).Position;
-                    var center = new Windows.Foundation.Point(rootGrid.ActualWidth / 2, rootGrid.ActualHeight / 2);
-                    
-                    var xDiff = pointerPosition.X - center.X;
-                    var yDiff = pointerPosition.Y - center.Y;
-
-                    projection.RotationY = -xDiff / 15.0;
-                    projection.RotationX = yDiff / 15.0;
-                }
-            }
-        }
-
-        private void SeriesItem_PointerExited(object sender, PointerRoutedEventArgs e)
-        {
-            if (sender is GridViewItem item)
-            {
-                var rootGrid = GetTemplateChild<Grid>(item, "RootGrid");
-                if (rootGrid != null && rootGrid.Projection is PlaneProjection projection)
-                {
-                     projection.RotationX = 0;
-                     projection.RotationY = 0;
-                }
-            }
-        }
-
-        private T GetTemplateChild<T>(DependencyObject parent, string name) where T : DependencyObject
-        {
-             int count = VisualTreeHelper.GetChildrenCount(parent);
-             for (int i = 0; i < count; i++)
-             {
-                 var child = VisualTreeHelper.GetChild(parent, i);
-                 if (child is FrameworkElement fe && fe.Name == name && child is T typed)
-                 {
-                     return typed;
-                 }
-                 var result = GetTemplateChild<T>(child, name);
-                 if (result != null) return result;
-             }
-             return null;
-        }
-
         private async void SearchButton_Click(object sender, RoutedEventArgs e)
         {
              // Placeholder for Global Spotlight Search
@@ -348,5 +292,7 @@ namespace ModernIPTVPlayer
             };
             await searchDialog.ShowAsync();
         }
+
+
     }
 }

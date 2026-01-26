@@ -13,59 +13,14 @@
         <ThemeShadow x:Key="SharedShadow"/>
         
         <Style x:Key="SeriesCardStyle" TargetType="GridViewItem">
-            <Setter Property="Margin" Value="8"/>
+            <Setter Property="Margin" Value="0"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="CornerRadius" Value="12"/>
             <Setter Property="CanDrag" Value="False"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="GridViewItem">
-                        <Grid x:Name="RootGrid" Background="Transparent" CornerRadius="12" RenderTransformOrigin="0.5,0.5">
-                            <VisualStateManager.VisualStateGroups>
-                                <VisualStateGroup x:Name="CommonStates">
-                                    <VisualState x:Name="Normal">
-                                        <Storyboard>
-                                            <PointerUpThemeAnimation Storyboard.TargetName="ContentPresenter" />
-                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleX" To="1.0" Duration="0:0:0.3">
-                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                            </DoubleAnimation>
-                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="1.0" Duration="0:0:0.3">
-                                                <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                            </DoubleAnimation>
-                                            <DoubleAnimation Storyboard.TargetName="Shadow" Storyboard.TargetProperty="Opacity" To="0.3" Duration="0:0:0.3"/>
-                                        </Storyboard>
-                                    </VisualState>
-                                    <VisualState x:Name="PointerOver">
-                                        <Storyboard>
-                                            <PointerUpThemeAnimation Storyboard.TargetName="ContentPresenter" />
-                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleX" To="1.05" Duration="0:0:0.2"/>
-                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="1.05" Duration="0:0:0.2"/>
-                                            <DoubleAnimation Storyboard.TargetName="Shadow" Storyboard.TargetProperty="Opacity" To="0.8" Duration="0:0:0.2"/>
-                                        </Storyboard>
-                                    </VisualState>
-                                    <VisualState x:Name="Pressed">
-                                        <Storyboard>
-                                            <PointerDownThemeAnimation Storyboard.TargetName="ContentPresenter" />
-                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleX" To="0.95" Duration="0:0:0.1"/>
-                                            <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="0.95" Duration="0:0:0.1"/>
-                                        </Storyboard>
-                                    </VisualState>
-                                </VisualStateGroup>
-                            </VisualStateManager.VisualStateGroups>
-                            
-                            <Grid.RenderTransform>
-                                <ScaleTransform x:Name="ScaleTrans"/>
-                            </Grid.RenderTransform>
-                            <Grid.Projection>
-                                <PlaneProjection x:Name="TiltProjection" RotationX="0" RotationY="0" GlobalOffsetZ="0"/>
-                            </Grid.Projection>
-
-                            <Border x:Name="Shadow" Background="Black" CornerRadius="12" Opacity="0.3" Margin="4,4,-4,-4">
-                                <Border.RenderTransform>
-                                    <TranslateTransform X="0" Y="4"/>
-                                </Border.RenderTransform>
-                            </Border>
-
+                        <Grid Background="Transparent" CornerRadius="12">
                             <ContentPresenter x:Name="ContentPresenter"
                                 Content="{TemplateBinding Content}"
                                 ContentTransitions="{TemplateBinding ContentTransitions}"
@@ -78,9 +33,13 @@
         </Style>
     </Page.Resources>
 
-    <Grid Background="#FF0F131C">
-        <Image x:Name="DynamicBackdropImage" Stretch="UniformToFill" Opacity="0.2"/>
-        <Rectangle Fill="#CC000000"/>
+    <Grid Background="#FF0D0D0D">
+        <!-- Dynamic Backdrop - Original 3-Layer Radial Gradient System -->
+        <!-- Dynamic Backdrop Control -->
+        <controls:DynamicBackdrop x:Name="BackdropControl" />
+
+        <!-- Subtle vignette overlay -->
+        <Rectangle Fill="#15000000" IsHitTestVisible="False"/>
 
         <SplitView x:Name="MainSplitView"
                    DisplayMode="Overlay"
@@ -189,7 +148,15 @@
                             <ListView.ItemTemplate>
                                 <DataTemplate x:DataType="local:SeriesCategory">
                                     <Grid>
-                                        <TextBlock Text="{x:Bind CategoryName}" FontSize="13" FontWeight="Normal" Opacity="0.9" TextTrimming="CharacterEllipsis" CharacterSpacing="20" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                                        <TextBlock Text="{x:Bind CategoryName}" 
+                                                   FontSize="14" 
+                                                   FontFamily="Segoe UI Variable Text"
+                                                   FontWeight="Medium" 
+                                                   Opacity="0.85" 
+                                                   TextTrimming="CharacterEllipsis" 
+                                                   CharacterSpacing="30" 
+                                                   VerticalAlignment="Center" 
+                                                   Margin="8,0,0,0"/>
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>
@@ -219,14 +186,39 @@
                         </Button>
 
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock x:Name="SelectedCategoryTitle" Text="Son Eklenenler" FontSize="24" FontWeight="Bold" Foreground="White"/>
-                            <TextBlock Text="Göz at ve keşfet" FontSize="14" Opacity="0.5" Foreground="White" Margin="0,4,0,0"/>
+                            <TextBlock x:Name="SelectedCategoryTitle" 
+                                       Text="Son Eklenenler" 
+                                       FontSize="28" 
+                                       FontFamily="Segoe UI Variable Display" 
+                                       FontWeight="SemiBold" 
+                                       CharacterSpacing="-20"
+                                       Foreground="White"/>
+                            <TextBlock Text="Göz at ve keşfet" 
+                                       FontSize="14" 
+                                       FontFamily="Segoe UI Variable Text"
+                                       Opacity="0.6" 
+                                       CharacterSpacing="40"
+                                       Foreground="White" 
+                                       Margin="0,4,0,0"/>
                         </StackPanel>
 
                         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16">
-                             <Button Style="{ThemeResource DateTimePickerFlyoutButtonStyle}" Content="Sırala" CornerRadius="20" Background="#1FFFFFFF" Foreground="White" BorderThickness="0"/>
-                             <Button x:Name="SearchButton" Click="SearchButton_Click" Width="40" Height="40" CornerRadius="20" Background="#1FFFFFFF" BorderThickness="0">
-                                 <FontIcon Glyph="&#xE721;" Foreground="White"/>
+                             <Button Style="{ThemeResource DateTimePickerFlyoutButtonStyle}" 
+                                     Content="Sırala" 
+                                     CornerRadius="20" 
+                                     Background="#1FFFFFFF" 
+                                     Foreground="White" 
+                                     BorderThickness="0"
+                                     Padding="16,4"
+                                     FontFamily="Segoe UI Variable Small"/>
+                             <Button x:Name="SearchButton" 
+                                     Click="SearchButton_Click" 
+                                     Width="42" 
+                                     Height="42" 
+                                     CornerRadius="21" 
+                                     Background="#1FFFFFFF" 
+                                     BorderThickness="0">
+                                 <FontIcon Glyph="&#xE721;" FontSize="18" Foreground="White"/>
                              </Button>
                         </StackPanel>
                     </Grid>
@@ -235,7 +227,6 @@
                               SelectionMode="Single" 
                               IsItemClickEnabled="True" 
                               ItemClick="SeriesGridView_ItemClick"
-                              ContainerContentChanging="SeriesGridView_ContainerContentChanging"
                               Padding="24,0,24,36"
                               ItemContainerStyle="{StaticResource SeriesCardStyle}">
                         
@@ -247,28 +238,7 @@
 
                         <GridView.ItemTemplate>
                             <DataTemplate x:DataType="local:SeriesStream">
-                                <Grid Width="200" Height="300" CornerRadius="12" Background="Transparent" IsHitTestVisible="False">
-                                    <Image Source="{x:Bind CoverImage}" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened" IsHitTestVisible="False"/>
-                                    <Rectangle VerticalAlignment="Bottom" Height="120" IsHitTestVisible="False">
-                                        <Rectangle.Fill>
-                                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                                <GradientStop Color="Transparent" Offset="0"/>
-                                                <GradientStop Color="#CC000000" Offset="1"/>
-                                            </LinearGradientBrush>
-                                        </Rectangle.Fill>
-                                    </Rectangle>
-                                    <Grid VerticalAlignment="Bottom" Padding="12,12,12,16" IsHitTestVisible="False">
-                                        <StackPanel Spacing="4">
-                                            <TextBlock Text="{x:Bind Name}" FontSize="14" FontWeight="Bold" Foreground="White" TextTrimming="CharacterEllipsis" MaxLines="2"/>
-                                            <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.8">
-                                                <Border Background="#33FFFFFF" CornerRadius="4" Padding="6,2">
-                                                    <TextBlock Text="{x:Bind Rating}" FontSize="10" Foreground="#FFCC00" FontWeight="Bold"/>
-                                                </Border>
-                                                <TextBlock Text="Dizi" FontSize="12" Foreground="White" FontWeight="SemiBold" VerticalAlignment="Center" Opacity="0.6"/>
-                                            </StackPanel>
-                                        </StackPanel>
-                                    </Grid>
-                                </Grid>
+                                <controls:PosterCard ImageUrl="{x:Bind Cover}" Width="200" Height="300" ColorsExtracted="PosterCard_ColorsExtracted"/>
                             </DataTemplate>
                         </GridView.ItemTemplate>
                     </GridView>
@@ -290,3 +260,4 @@
         </SplitView>
     </Grid>
 </Page>
+

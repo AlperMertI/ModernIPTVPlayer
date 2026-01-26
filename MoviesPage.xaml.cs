@@ -17,6 +17,7 @@ using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace ModernIPTVPlayer
 {
@@ -24,44 +25,16 @@ namespace ModernIPTVPlayer
     {
         private LoginParams? _loginInfo;
         private HttpClient _httpClient;
-        private Windows.UI.Color _currentBackdropColor = Windows.UI.Color.FromArgb(0, 0, 0, 0);
-        private ConcurrentDictionary<string, Windows.UI.Color> _colorCache = new();
-        private string? _lastProcessedImageUrl;
-        private DispatcherTimer? _backdropAnimationTimer;
-        private Windows.UI.Color _animatingFromColor;
-        private DispatcherTimer? _breathingTimer;
-        private double _breathPhase = 0;
-
+        // _currentBackdropColor removed
+        // _colorCache removed
+        // _lastProcessedImageUrl removed
         public MoviesPage()
         {
             this.InitializeComponent();
             _httpClient = HttpHelper.Client;
-            StartBreathingAnimation();
         }
         
-        private void StartBreathingAnimation()
-        {
-            _breathingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(40) };
-            _breathingTimer.Tick += (s, e) =>
-            {
-                _breathPhase += 0.025; // Slow, subtle breathing
-                if (_breathPhase > Math.PI * 2) _breathPhase = 0;
-                
-                // Subtle opacity pulsing for layers
-                // Primary: 0.35 to 0.55 (main glow breathes)
-                PrimaryGlowLayer.Opacity = 0.45 + 0.10 * Math.Sin(_breathPhase);
-                
-                // Ambient: inverse pulse (creates depth perception)
-                AmbientLayer.Opacity = 0.25 + 0.05 * Math.Sin(_breathPhase + Math.PI);
-                
-                // Bloom: faster, subtle pulse
-                BloomLayer.Opacity = 0.15 + 0.05 * Math.Sin(_breathPhase * 1.5);
-                
-                // Secondary (top-right): different phase for variety
-                SecondaryGlowLayer.Opacity = 0.12 + 0.04 * Math.Sin(_breathPhase * 0.7 + Math.PI/2);
-            };
-            _breathingTimer.Start();
-        }
+
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
@@ -147,9 +120,6 @@ namespace ModernIPTVPlayer
 
         private async Task LoadVodCategoriesAsync()
         {
-            // PROMPT: Start diag
-            ShowMessageDialog("Debug", $"Yükleme başlıyor... Host: {_loginInfo?.Host}");
-
             try
             {
                 LoadingRing.IsActive = true;
@@ -313,6 +283,12 @@ namespace ModernIPTVPlayer
             }
         }
 
+        private void PosterCard_ColorsExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
+        {
+             // Update the global backdrop when a poster decides its colors are ready/hovered
+             BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+        }
+
         // ==========================================
         // 3D TILT EFFECT & CONTAINER LOGIC
         // ==========================================
@@ -342,11 +318,41 @@ namespace ModernIPTVPlayer
             }
         }
         
-        private async void MovieItem_PointerEntered(object sender, PointerRoutedEventArgs e)
+        private void MovieItem_PointerEntered(object sender, PointerRoutedEventArgs e)
         {
             if (sender is GridViewItem item && item.Content is LiveStream stream && !string.IsNullOrEmpty(stream.IconUrl))
             {
-                await UpdateBackdropColorAsync(stream.IconUrl);
+                System.Diagnostics.Debug.WriteLine($"\n=== HOVER: {stream.Name} ===");
+                
+                // 2. Update local GlowEffect with extensive debugging
+                var glow = GetTemplateChild<Border>(item, "GlowEffect");
+                System.Diagnostics.Debug.WriteLine($"GLOW DEBUG: GetTemplateChild returned {(glow != null ? "Border" : "NULL")}");
+                
+                if (glow != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"  ActualSize: {glow.ActualWidth}x{glow.ActualHeight}");
+                    System.Diagnostics.Debug.WriteLine($"  Margin: {glow.Margin}");
+                    System.Diagnostics.Debug.WriteLine($"  Visibility: {glow.Visibility}, Opacity: {glow.Opacity}");
+                    
+                    // Check parent
+                    var parent = glow.Parent as FrameworkElement;
+                    if (parent != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"  Parent Type: {parent.GetType().Name}");
+                        System.Diagnostics.Debug.WriteLine($"  Parent Size: {parent.ActualWidth}x{parent.ActualHeight}");
+                    }
+                    
+                    
+                    // Apply color to the radial gradient stop
+                    if (glow.Background is RadialGradientBrush brush)
+                    {
+                        // The actual color will be set by the PosterCard_ColorsExtracted event handler
+                        // This part might need to be updated if the glow color is also dynamic based on the extracted colors
+                        // For now, we'll assume the glow color is handled by the PosterCard itself or a default.
+                        // If the glow color needs to be set here, we'd need the extracted colors passed or retrieved.
+                        // For this change, we're removing the direct color extraction from here.
+                    }
+                }
             }
         }
         
@@ -428,165 +434,6 @@ namespace ModernIPTVPlayer
             await dialog.ShowAsync();
         }
         
-        // ==========================================
-        // DYNAMIC BACKDROP COLOR SYSTEM
-        // ==========================================
-        
-        private async Task UpdateBackdropColorAsync(string imageUrl)
-        {
-            if (imageUrl == _lastProcessedImageUrl) return;
-            _lastProcessedImageUrl = imageUrl;
-            
-            try
-            {
-                Windows.UI.Color dominantColor;
-                
-                if (_colorCache.TryGetValue(imageUrl, out var cached))
-                {
-                    dominantColor = cached;
-                }
-                else
-                {
-                    dominantColor = await ExtractDominantColorAsync(imageUrl);
-                    _colorCache.TryAdd(imageUrl, dominantColor);
-                }
-                
-                System.Diagnostics.Debug.WriteLine($"BACKDROP: Extracted color R={dominantColor.R}, G={dominantColor.G}, B={dominantColor.B}");
-                AnimateBackdropColor(dominantColor);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"BACKDROP ERROR: {ex.Message}");
-            }
-        }
-        
-        private async Task<Windows.UI.Color> ExtractDominantColorAsync(string imageUrl)
-        {
-            using var response = await _httpClient.GetAsync(imageUrl);
-            response.EnsureSuccessStatusCode();
-            
-            using var stream = await response.Content.ReadAsStreamAsync();
-            using var memStream = new InMemoryRandomAccessStream();
-            await stream.CopyToAsync(memStream.AsStreamForWrite());
-            memStream.Seek(0);
-            
-            var decoder = await BitmapDecoder.CreateAsync(memStream);
-            
-            // Scale entire image down to 10x10 for simple averaging
-            uint targetSize = 10;
-            var transform = new BitmapTransform 
-            { 
-                ScaledWidth = targetSize, 
-                ScaledHeight = targetSize,
-                InterpolationMode = BitmapInterpolationMode.Linear
-            };
-            
-            var pixelData = await decoder.GetPixelDataAsync(
-                BitmapPixelFormat.Bgra8,
-                BitmapAlphaMode.Premultiplied,
-                transform,
-                ExifOrientationMode.IgnoreExifOrientation,
-                ColorManagementMode.DoNotColorManage);
-            
-            var pixels = pixelData.DetachPixelData();
-            
-            long totalR = 0, totalG = 0, totalB = 0;
-            int pixelCount = pixels.Length / 4;
-            
-            if (pixelCount == 0) return Windows.UI.Color.FromArgb(0, 0, 0, 0);
-            
-            for (int i = 0; i < pixels.Length; i += 4)
-            {
-                totalB += pixels[i];
-                totalG += pixels[i + 1];
-                totalR += pixels[i + 2];
-            }
-            
-            byte avgR = (byte)(totalR / pixelCount);
-            byte avgG = (byte)(totalG / pixelCount);
-            byte avgB = (byte)(totalB / pixelCount);
-            
-            // Boost saturation slightly for more vibrant backdrop
-            float saturationBoost = 1.4f;
-            avgR = (byte)Math.Min(255, avgR * saturationBoost);
-            avgG = (byte)Math.Min(255, avgG * saturationBoost);
-            avgB = (byte)Math.Min(255, avgB * saturationBoost);
-            
-            return Windows.UI.Color.FromArgb(255, avgR, avgG, avgB);
-        }
-        
-        private void AnimateBackdropColor(Windows.UI.Color targetColor)
-        {
-            // Stop any existing animation
-            if (_backdropAnimationTimer != null)
-            {
-                _backdropAnimationTimer.Stop();
-                _backdropAnimationTimer = null;
-            }
-            
-            var startColor = _currentBackdropColor;
-            var steps = 18;
-            var stepDuration = TimeSpan.FromMilliseconds(22);
-            int currentStep = 0;
-            
-            _backdropAnimationTimer = new DispatcherTimer { Interval = stepDuration };
-            _backdropAnimationTimer.Tick += (s, e) =>
-            {
-                currentStep++;
-                float t = (float)currentStep / steps;
-                t = 1 - (1 - t) * (1 - t); // EaseOut
-                
-                byte r = (byte)(startColor.R + (targetColor.R - startColor.R) * t);
-                byte g = (byte)(startColor.G + (targetColor.G - startColor.G) * t);
-                byte b = (byte)(startColor.B + (targetColor.B - startColor.B) * t);
-                
-                _currentBackdropColor = Windows.UI.Color.FromArgb(255, r, g, b);
-                
-                // Bloom uses +40 brightness for "light source" effect
-                byte br = (byte)Math.Min(255, r + 40);
-                byte bg = (byte)Math.Min(255, g + 40);
-                byte bb = (byte)Math.Min(255, b + 40);
-                
-                // Apply brushes to Grid.Background (original working approach)
-                // Layer 1: Ambient - wide soft wash
-                AmbientLayer.Background = CreateRadialBrush(r, g, b, 255, 100, 0.0, 0.0, 1.8, 1.4);
-                // Layer 2: Primary - focused vibrant glow
-                PrimaryGlowLayer.Background = CreateRadialBrush(r, g, b, 255, 150, 0.1, 0.15, 0.9, 0.7);
-                // Layer 3: Bloom - bright corner highlight
-                BloomLayer.Background = CreateRadialBrush(br, bg, bb, 255, 180, 0.0, 0.0, 0.4, 0.3);
-                // Layer 4: Secondary top-right light (slightly desaturated)
-                byte sr = (byte)((r + 255) / 2); // Blend with white for subtle effect
-                byte sg = (byte)((g + 255) / 2);
-                byte sb = (byte)((b + 255) / 2);
-                SecondaryGlowLayer.Background = CreateRadialBrush(sr, sg, sb, 200, 80, 1.0, 0.0, 0.6, 0.5);
-                
-                if (currentStep >= steps)
-                {
-                    _backdropAnimationTimer?.Stop();
-                    _backdropAnimationTimer = null;
-                }
-            };
-            _backdropAnimationTimer.Start();
-        }
-        
-        private RadialGradientBrush CreateRadialBrush(byte r, byte g, byte b, byte alpha1, byte alpha2, 
-            double centerX, double centerY, double radiusX, double radiusY)
-        {
-            var brush = new RadialGradientBrush
-            {
-                Center = new Windows.Foundation.Point(centerX, centerY),
-                RadiusX = radiusX,
-                RadiusY = radiusY,
-                GradientOrigin = new Windows.Foundation.Point(centerX, centerY)
-            };
-            // 6 gradient stops for smooth anti-banding
-            brush.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(alpha1, r, g, b), Offset = 0 });
-            brush.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb((byte)(alpha1 * 0.85), r, g, b), Offset = 0.15 });
-            brush.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb((byte)(alpha1 * 0.60), r, g, b), Offset = 0.35 });
-            brush.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(alpha2, r, g, b), Offset = 0.55 });
-            brush.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb((byte)(alpha2 * 0.35), r, g, b), Offset = 0.8 });
-            brush.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(0, r, g, b), Offset = 1 });
-            return brush;
-        }
+
     }
 }
