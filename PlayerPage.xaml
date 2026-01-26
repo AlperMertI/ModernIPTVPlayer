@@ -200,11 +200,9 @@
                         VerticalAlignment="Stretch"
                         IsHitTestVisible="False"/>
 
-        <mpv:MpvPlayer x:Name="VideoPlayer"
-                   Visibility="Visible"
-                   HorizontalAlignment="Stretch"
-                   VerticalAlignment="Stretch"
-                   IsHitTestVisible="False"/>
+        <Grid x:Name="PlayerContainer" 
+              HorizontalAlignment="Stretch" 
+              VerticalAlignment="Stretch"/>
 
         <!-- 2. Brightness Overlay (Simulated Dimming) -->
         <Rectangle x:Name="BrightnessOverlay"

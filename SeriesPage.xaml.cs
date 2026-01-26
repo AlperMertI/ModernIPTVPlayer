@@ -27,9 +27,41 @@ namespace ModernIPTVPlayer
         {
             this.InitializeComponent();
             _httpClient = HttpHelper.Client;
+            
+            MediaGrid.ItemClicked += MediaGrid_ItemClicked;
+            MediaGrid.PlayAction += MediaGrid_PlayAction;
+            MediaGrid.DetailsAction += MediaGrid_DetailsAction;
+            MediaGrid.AddListAction += MediaGrid_AddListAction;
+            MediaGrid.ColorExtracted += MediaGrid_ColorExtracted;
         }
 
+        private void MediaGrid_ItemClicked(object sender, ModernIPTVPlayer.Models.IMediaStream e)
+        {
+             Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
+        }
 
+        private void MediaGrid_PlayAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
+        {
+            // For Series, play intent usually means resume or play first.
+            // Navigating to details allows user to pick.
+            Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
+        }
+        
+        private void MediaGrid_DetailsAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
+        {
+             // Navigate to new MediaInfoPage with animation
+             Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
+        }
+        
+        private void MediaGrid_AddListAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
+        {
+            ShowMessageDialog("Listem", "Listeye Eklendi");
+        }
+        
+        private void MediaGrid_ColorExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
+        {
+            BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+        }
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
@@ -40,7 +72,7 @@ namespace ModernIPTVPlayer
                 if (_loginInfo != null && _loginInfo.PlaylistUrl != p.PlaylistUrl)
                 {
                     CategoryListView.ItemsSource = null;
-                    SeriesGridView.ItemsSource = null;
+                    MediaGrid.ItemsSource = null;
                 }
                 _loginInfo = p;
             }
@@ -120,7 +152,7 @@ namespace ModernIPTVPlayer
             {
                 LoadingRing.IsActive = true;
                 CategoryListView.ItemsSource = null;
-                SeriesGridView.ItemsSource = null;
+                MediaGrid.ItemsSource = null;
                 _allCategories.Clear();
 
                 string baseUrl = _loginInfo.Host.TrimEnd('/');
@@ -169,29 +201,21 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private List<int> _skeletonList = new List<int>(new int[20]);
-        
         private async Task LoadSeriesAsync(SeriesCategory category)
         {
             SelectedCategoryTitle.Text = category.CategoryName;
 
             if (category.Series != null && category.Series.Count > 0)
             {
-                SeriesGridView.ItemsSource = category.Series;
-                SeriesGridView.Visibility = Visibility.Visible;
-                SkeletonGrid.Visibility = Visibility.Collapsed;
+                MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Series);
                 return;
             }
 
             try
             {
                 // SHOW SKELETON
-                SeriesGridView.Visibility = Visibility.Collapsed;
-                SkeletonGrid.Visibility = Visibility.Visible;
-                SkeletonGrid.ItemsSource = _skeletonList;
+                MediaGrid.IsLoading = true;
                 
-                SeriesGridView.ItemsSource = null;
-
                 string baseUrl = _loginInfo.Host.TrimEnd('/');
                 string api = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series&category_id={category.CategoryId}";
 
@@ -208,7 +232,7 @@ namespace ModernIPTVPlayer
                 if (seriesList != null)
                 {
                     category.Series = seriesList;
-                    SeriesGridView.ItemsSource = category.Series;
+                    MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Series);
                 }
             }
             catch (Exception ex)
@@ -217,8 +241,7 @@ namespace ModernIPTVPlayer
             }
             finally
             {
-                SkeletonGrid.Visibility = Visibility.Collapsed;
-                SeriesGridView.Visibility = Visibility.Visible;
+                if (MediaGrid.ItemsSource == null) MediaGrid.IsLoading = false;
             }
         }
 
@@ -248,23 +271,6 @@ namespace ModernIPTVPlayer
             {
                 await LoadSeriesAsync(category);
             }
-        }
-
-        private void SeriesGridView_ItemClick(object sender, ItemClickEventArgs e)
-        {
-            if (e.ClickedItem is SeriesStream series)
-            {
-                // Series Click - Usually opens episodes.
-                // For now, we don't have an EpisodesPage.
-                // Just show Dialog saying "Coming Soon" or similar?
-                ShowMessageDialog("Dizi Bilgisi", $"'{series.Name}' dizisi seçildi. Bölümler özelliği hazırlanıyor.");
-            }
-        }
-
-        private void PosterCard_ColorsExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
-        {
-             // Update the global backdrop when a poster decides its colors are ready/hovered
-             BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
         }
 
         private async void ShowMessageDialog(string title, string content)

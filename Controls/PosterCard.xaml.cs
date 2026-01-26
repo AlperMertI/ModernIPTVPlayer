@@ -29,6 +29,15 @@ namespace ModernIPTVPlayer.Controls
             set { SetValue(ImageUrlProperty, value); }
         }
 
+        public static readonly DependencyProperty IsTiltEnabledProperty =
+            DependencyProperty.Register("IsTiltEnabled", typeof(bool), typeof(PosterCard), new PropertyMetadata(true));
+
+        public bool IsTiltEnabled
+        {
+            get { return (bool)GetValue(IsTiltEnabledProperty); }
+            set { SetValue(IsTiltEnabledProperty, value); }
+        }
+
         private static void OnImageUrlChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
             if (d is PosterCard card)
@@ -100,7 +109,7 @@ namespace ModernIPTVPlayer.Controls
 
         private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
         {
-            if (IsHovered)
+            if (IsHovered && IsTiltEnabled)
             {
                 var pointerPosition = e.GetCurrentPoint(RootGrid).Position;
                 var center = new Windows.Foundation.Point(RootGrid.ActualWidth / 2, RootGrid.ActualHeight / 2);

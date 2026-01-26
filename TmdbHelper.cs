@@ -139,6 +139,9 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("vote_average")]
         public double VoteAverage { get; set; }
 
+        [JsonPropertyName("release_date")]
+        public string ReleaseDate { get; set; }
+
         public string FullBackdropUrl => !string.IsNullOrEmpty(BackdropPath) ? $"https://image.tmdb.org/t/p/w1280{BackdropPath}" : null;
     }
 

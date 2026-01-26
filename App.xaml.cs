@@ -30,6 +30,7 @@ namespace ModernIPTVPlayer
     {
         private Window? _window;
         public static LoginParams? CurrentLogin { get; set; }
+        public static MpvWinUI.MpvPlayer? HandoffPlayer = null;
 
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         public static extern int MessageBox(IntPtr hWnd, String text, String caption, uint type);

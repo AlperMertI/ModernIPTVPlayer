@@ -34,9 +34,14 @@ namespace ModernIPTVPlayer
         {
             this.InitializeComponent();
             _httpClient = HttpHelper.Client;
+            
+            // Wire up MediaGrid events
+            MediaGrid.ItemClicked += MediaGrid_ItemClicked;
+            MediaGrid.PlayAction += MediaGrid_PlayAction;
+            MediaGrid.DetailsAction += MediaGrid_DetailsAction;
+            MediaGrid.AddListAction += MediaGrid_AddListAction;
+            MediaGrid.ColorExtracted += MediaGrid_ColorExtracted;
         }
-        
-
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
@@ -47,7 +52,7 @@ namespace ModernIPTVPlayer
                 if (_loginInfo != null && _loginInfo.PlaylistUrl != p.PlaylistUrl)
                 {
                     CategoryListView.ItemsSource = null;
-                    MovieGridView.ItemsSource = null;
+                    MediaGrid.ItemsSource = null;
                 }
                 _loginInfo = p;
             }
@@ -59,16 +64,6 @@ namespace ModernIPTVPlayer
                     await LoadVodCategoriesAsync();
                 }
             }
-            
-            // OPTIMIZATION: Warm up the trailer player after 3 seconds of idle time.
-            // This ensures the WebView is initialized by the time the user hovers a movie.
-            var warmupTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-            warmupTimer.Tick += (s, args) =>
-            {
-                warmupTimer.Stop();
-                ActiveExpandedCard?.PrepareForTrailer();
-            };
-            warmupTimer.Start();
         }
 
         private List<LiveCategory> _allCategories = new();
@@ -138,20 +133,14 @@ namespace ModernIPTVPlayer
             {
                 LoadingRing.IsActive = true;
                 CategoryListView.ItemsSource = null;
-                MovieGridView.ItemsSource = null;
+                MediaGrid.ItemsSource = null;
                 _allCategories.Clear();
 
                 string baseUrl = _loginInfo.Host.TrimEnd('/');
                 string api = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_categories";
 
-                // DEBUG: Show URL
-                System.Diagnostics.Debug.WriteLine($"DEBUG LOAD: {api}");
-
                 string json = await _httpClient.GetStringAsync(api);
                 
-                // DEBUG: Show JSON length
-                System.Diagnostics.Debug.WriteLine($"DEBUG JSON LEN: {json?.Length ?? 0}");
-
                 if (string.IsNullOrEmpty(json))
                 {
                     ShowMessageDialog("Hata", "API'den boş cevap döndü.");
@@ -168,7 +157,6 @@ namespace ModernIPTVPlayer
 
                 if (categories != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"DEBUG CAT COUNT: {categories.Count}");
                     _allCategories = categories;
                     CategoryListView.ItemsSource = _allCategories;
                     
@@ -187,7 +175,7 @@ namespace ModernIPTVPlayer
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Error loading movie categories: {ex.Message}");
-                ShowMessageDialog("Kritik Hata", $"Veri çekilirken hata oluştu:\n{ex.Message}");
+                // ShowMessageDialog("Kritik Hata", $"Veri çekilirken hata oluştu:\n{ex.Message}");
             }
             finally
             {
@@ -195,31 +183,22 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private List<int> _skeletonList = new List<int>(new int[20]); // 20 placeholders
-
         private async Task LoadVodStreamsAsync(LiveCategory category)
         {
-            // Update Title when category selected
             SelectedCategoryTitle.Text = category.CategoryName;
 
             if (category.Channels != null && category.Channels.Count > 0)
             {
-                MovieGridView.ItemsSource = category.Channels;
-                 // Ensure Grid is visible and Skeleton hidden
-                MovieGridView.Visibility = Visibility.Visible;
-                SkeletonGrid.Visibility = Visibility.Collapsed;
+                // Note: LiveStream implements IMediaStream due to our changes :)
+                MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Channels);
                 return;
             }
 
             try
             {
                 // SHOW SKELETON
-                MovieGridView.Visibility = Visibility.Collapsed;
-                SkeletonGrid.Visibility = Visibility.Visible;
-                SkeletonGrid.ItemsSource = _skeletonList;
+                MediaGrid.IsLoading = true;
                 
-                MovieGridView.ItemsSource = null;
-
                 string baseUrl = _loginInfo.Host.TrimEnd('/');
                 string api = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams&category_id={category.CategoryId}";
 
@@ -242,7 +221,7 @@ namespace ModernIPTVPlayer
                     }
 
                     category.Channels = streams;
-                    MovieGridView.ItemsSource = category.Channels;
+                    MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Channels);
                 }
             }
             catch (Exception ex)
@@ -251,351 +230,58 @@ namespace ModernIPTVPlayer
             }
             finally
             {
-                // HIDE SKELETON
-                SkeletonGrid.Visibility = Visibility.Collapsed;
-                MovieGridView.Visibility = Visibility.Visible;
+                // HIDE SKELETON (Handled by setter if ItemsSource is not null, but explicit is fine)
+                // If error, maybe empty list?
+                if (MediaGrid.ItemsSource == null) MediaGrid.IsLoading = false; 
             }
         }
         
-        private void Image_ImageOpened(object sender, RoutedEventArgs e)
-        {
-            if (sender is Image img)
-            {
-                img.Opacity = 0;
-                var anim = new DoubleAnimation
-                {
-                    To = 1,
-                    Duration = TimeSpan.FromSeconds(0.6),
-                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-                };
-                
-                var sb = new Storyboard();
-                sb.Children.Add(anim);
-                Storyboard.SetTarget(anim, img);
-                Storyboard.SetTargetProperty(anim, "Opacity");
-                sb.Begin();
-            }
-        }
-
         private async void CategoryListView_ItemClick(object sender, ItemClickEventArgs e)
         {
-            // Reset Scroll to Top
-            // Note: GridView doesn't have a direct ScrollToTop, but setting ItemsSource usually resets it.
-            // If needed we can find the ScrollViewer.
-            
             if (e.ClickedItem is LiveCategory category)
             {
                 await LoadVodStreamsAsync(category);
             }
         }
 
-        private void MovieGridView_ItemClick(object sender, ItemClickEventArgs e)
-        {
-            if (e.ClickedItem is LiveStream stream)
-            {
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name));
-            }
-        }
-
-        private void PosterCard_ColorsExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
-        {
-             // Update the global backdrop when a poster decides its colors are ready/hovered
-             BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
-        }
-
         // ==========================================
-        // EXPANDED CARD LOGIC
+        // UNIFIED GRID EVENTS
         // ==========================================
-        
-        private DispatcherTimer _hoverTimer;
-        private PosterCard _pendingHoverCard;
-        private System.Threading.CancellationTokenSource _closeCts;
-        
-        private DispatcherTimer _flightTimer;
-        
-        private void ExpandedCard_HoverStarted(object sender, EventArgs e)
+
+        private void MediaGrid_ItemClicked(object sender, ModernIPTVPlayer.Models.IMediaStream e)
         {
-            if (sender is PosterCard card)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] HoverStarted on: {((LiveStream)card.DataContext).Name}");
-                
-                // CRITICAL: If we moved to a new card, CANCEL any pending close logic (C# Task)
-                if (_closeCts != null)
-                {
-                    System.Diagnostics.Debug.WriteLine("[ExpandedCard] Cancelling pending close task.");
-                    _closeCts.Cancel();
-                }
-
-                var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
-                
-                // ALSO CRITICAL: Stop the composition animation running on the visual (GPU)
-                visual.StopAnimation("Opacity");
-                visual.StopAnimation("Scale");
-                
-                // If it was already visible, keep it that way for morphing
-                bool isAlreadyOpen = ActiveExpandedCard.Visibility == Visibility.Visible;
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] State check - Visibility: {ActiveExpandedCard.Visibility}, Opacity: {visual.Opacity}, isAlreadyOpen: {isAlreadyOpen}");
-
-                if (isAlreadyOpen)
-                {
-                    // Ensure it stays visible and opaque during the flight timer
-                    visual.Opacity = 1f;
-                    
-                    // Throttle the fast path slightly (350ms) to avoid triggering on every single card crossed during fast movement
-                    if (_flightTimer == null) 
-                    {
-                        _flightTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
-                        _flightTimer.Tick += FlightTimer_Tick;
-                    }
-                    else
-                    {
-                        _flightTimer.Stop(); // Reset logic
-                    }
-                    
-                    _pendingHoverCard = card;
-                    _flightTimer.Start();
-                }
-                else
-                {
-                    // SLOW PATH: Opening from scratch. Use debounce.
-                    _pendingHoverCard = card;
-                    if (_hoverTimer == null)
-                    {
-                        _hoverTimer = new DispatcherTimer();
-                        _hoverTimer.Interval = TimeSpan.FromMilliseconds(600); // 600ms debounce
-                        _hoverTimer.Tick += HoverTimer_Tick;
-                    }
-                    else
-                    {
-                        _hoverTimer.Stop();
-                    }
-                    _hoverTimer.Start();
-                    
-                    // Predictive prefetch
-                    ActiveExpandedCard.PrepareForTrailer();
-                }
-            }
+            Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
         }
 
-        private void FlightTimer_Tick(object sender, object e)
+        private void MediaGrid_PlayAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
         {
-            _flightTimer.Stop();
-            if (_pendingHoverCard != null && _pendingHoverCard.IsHovered)
-            {
-                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Flight Timer Triggered - Morphing...");
-                 ShowExpandedCard(_pendingHoverCard);
-            }
-        }
-
-        private void HoverTimer_Tick(object sender, object e)
-        {
-            _hoverTimer.Stop();
-            if (_pendingHoverCard != null && _pendingHoverCard.IsHovered) // Only show if still hovering
-            {
-                System.Diagnostics.Debug.WriteLine("[ExpandedCard] Hover Timer Triggered - Popping...");
-                ShowExpandedCard(_pendingHoverCard);
-            }
-        }
-
-        private async void ShowExpandedCard(PosterCard sourceCard)
-        {
-            try
-            {
-                _closeCts?.Cancel();
-                _closeCts = new System.Threading.CancellationTokenSource();
-
-                // 1. Get Coordinates
-                var transform = sourceCard.TransformToVisual(OverlayCanvas);
-                var position = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
-                
-                double widthDiff = 320 - sourceCard.ActualWidth;
-                double heightDiff = 420 - sourceCard.ActualHeight;
-                
-                double targetX = position.X - (widthDiff / 2);
-                double targetY = position.Y - (heightDiff / 2);
-
-                // Boundary Checks
-                if (targetX < 10) targetX = 10;
-                if (targetX + 320 > OverlayCanvas.ActualWidth) targetX = OverlayCanvas.ActualWidth - 330;
-                if (targetY < 10) targetY = 10;
-                if (targetY + 420 > OverlayCanvas.ActualHeight) targetY = OverlayCanvas.ActualHeight - 430;
-
-                var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
-                var compositor = visual.Compositor;
-
-                // 0. Enable Translation
-                ElementCompositionPreview.SetIsTranslationEnabled(ActiveExpandedCard, true);
-
-                // 2. Handle State (Pop vs Morph)
-                bool isMorph = ActiveExpandedCard.Visibility == Visibility.Visible && visual.Opacity > 0.1f;
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Show Card - TargetLayout: ({targetX:F2}, {targetY:F2}), CurrentLayout: ({Canvas.GetLeft(ActiveExpandedCard):F2}, {Canvas.GetTop(ActiveExpandedCard):F2}), VisualOpacity: {visual.Opacity:F2}, isMorph: {isMorph}");
-
-                if (isMorph)
-                {
-                    // --- MORPH MODE ---
-                    ActiveExpandedCard.StopTrailer();
-
-                    double oldLeft = Canvas.GetLeft(ActiveExpandedCard);
-                    double oldTop = Canvas.GetTop(ActiveExpandedCard);
-                    
-                    // Update Layout Position
-                    Canvas.SetLeft(ActiveExpandedCard, targetX);
-                    Canvas.SetTop(ActiveExpandedCard, targetY);
-                    // Force update layout? XAML usually handles this.
-                    ActiveExpandedCard.UpdateLayout(); 
-
-                    float deltaX = (float)(oldLeft - targetX);
-                    float deltaY = (float)(oldTop - targetY);
-                    
-                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Morph Calculation: Old({oldLeft:F2}) - New({targetX:F2}) = Delta({deltaX:F2})");
-                    
-                    // Set TRANSLATION to compensate (Layout has moved to target, so we translate back to old position)
-                    visual.Properties.InsertVector3("Translation", new Vector3(deltaX, deltaY, 0));
-                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Set Visual.Translation = {deltaX}, {deltaY}");
-                    
-                    var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
-                    offsetAnim.Target = "Translation";
-                    var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.2f, 0.8f), new Vector2(0.2f, 1.0f));
-                    offsetAnim.InsertKeyFrame(1.0f, Vector3.Zero, easing);
-                    offsetAnim.Duration = TimeSpan.FromMilliseconds(400);
-                    
-                    visual.StartAnimation("Translation", offsetAnim);
-                    
-                    // Ensure full visibility
-                    visual.Opacity = 1f;
-                    visual.Scale = new Vector3(1f, 1f, 1f);
-                }
-                else
-                {
-                    // --- POP MODE ---
-                    System.Diagnostics.Debug.WriteLine("[ExpandedCard] Pop Mode - Reseting Translation to Zero.");
-                    visual.StopAnimation("Translation");
-                    visual.StopAnimation("Offset");
-                    visual.Properties.InsertVector3("Translation", Vector3.Zero);
-                    visual.Scale = new Vector3(0.8f, 0.8f, 1f);
-                    visual.Opacity = 0;
-
-                    Canvas.SetLeft(ActiveExpandedCard, targetX);
-                    Canvas.SetTop(ActiveExpandedCard, targetY);
-                    ActiveExpandedCard.Visibility = Visibility.Visible;
-
-                    var springAnim = compositor.CreateSpringVector3Animation();
-                    springAnim.Target = "Scale";
-                    springAnim.FinalValue = new Vector3(1f, 1f, 1f);
-                    springAnim.DampingRatio = 0.7f;
-                    springAnim.Period = TimeSpan.FromMilliseconds(50);
-                    
-                    var fadeAnim = compositor.CreateScalarKeyFrameAnimation();
-                    fadeAnim.Target = "Opacity";
-                    fadeAnim.InsertKeyFrame(1f, 1f);
-                    fadeAnim.Duration = TimeSpan.FromMilliseconds(200);
-
-                    visual.StartAnimation("Scale", springAnim);
-                    visual.StartAnimation("Opacity", fadeAnim);
-                }
-
-                // 3. Load Data
-                if (sourceCard.DataContext is LiveStream stream)
-                {
-                    await ActiveExpandedCard.LoadDataAsync(stream);
-                }
-
-                ActiveExpandedCard.PointerExited -= ActiveExpandedCard_PointerExited;
-                ActiveExpandedCard.PointerExited += ActiveExpandedCard_PointerExited;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error Showing: {ex.Message}");
-            }
-        }
-
-        private async void RootGrid_PointerExited(object sender, PointerRoutedEventArgs e)
-        {
-            // If the card is visible and mouse leaves the window/root grid, close it.
-            if (ActiveExpandedCard.Visibility == Visibility.Visible)
-            {
-                await CloseExpandedCardAsync();
-            }
-        }
-
-        private async void ActiveExpandedCard_PointerExited(object sender, PointerRoutedEventArgs e)
-        {
-             await CloseExpandedCardAsync();
-        }
-
-        private async Task CloseExpandedCardAsync()
-        {
-             try 
+             if (e is LiveStream stream)
              {
-                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Close Request - Sequence Start.");
-                 _closeCts?.Cancel();
-                 _closeCts = new System.Threading.CancellationTokenSource();
-                 var token = _closeCts.Token;
-
-                 ActiveExpandedCard.StopTrailer();
-
-                 await Task.Delay(50, token);
-                 
-                 if (token.IsCancellationRequested) 
-                 {
-                     System.Diagnostics.Debug.WriteLine("[ExpandedCard] Exit task cancelled (Switch detected).");
-                     return;
-                 }
-
-                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Exit animation starting...");
-                 var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
-                 var compositor = visual.Compositor;
-                 
-                 var fadeOut = compositor.CreateScalarKeyFrameAnimation();
-                 fadeOut.Target = "Opacity";
-                 fadeOut.InsertKeyFrame(1f, 0f);
-                 fadeOut.Duration = TimeSpan.FromMilliseconds(200);
-                 
-                 var scaleDown = compositor.CreateVector3KeyFrameAnimation();
-                 scaleDown.Target = "Scale";
-                 scaleDown.InsertKeyFrame(1f, new Vector3(0.95f, 0.95f, 1f));
-                 scaleDown.Duration = TimeSpan.FromMilliseconds(200);
-                 
-                 visual.StartAnimation("Opacity", fadeOut);
-                 visual.StartAnimation("Scale", scaleDown);
-                 
-                 await Task.Delay(200, token);
-                 if (token.IsCancellationRequested) return;
-
-                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Setting Visibility = Collapsed.");
-                 ActiveExpandedCard.Visibility = Visibility.Collapsed;
+                 Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name));
              }
-             catch (TaskCanceledException)
-             {
-                 System.Diagnostics.Debug.WriteLine("[ExpandedCard] Close cancelled - Switched!");
-             }
-             catch (Exception ex)
-             {
-                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Close Error: {ex.Message}");
-             }
+             // If implicit cast needed for SeriesStream, handle it (SeriesStream currently doesn't inherit LiveStream but implements IMediaStream)
+             // Series playback should ideally play first episode or resume.
+             // For now just handle LiveStream or Log
         }
 
-        // Expanded Card Events
-        private void ExpandedCard_PlayClicked(object sender, EventArgs e)
+        private void MediaGrid_DetailsAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
         {
-            ShowMessageDialog("Play", "Video Player Starting...");
+             // Navigate to new MediaInfoPage with animation
+             Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
         }
 
-        private void ExpandedCard_DetailsClicked(object sender, EventArgs e)
+        private void MediaGrid_AddListAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
         {
-            ShowMessageDialog("Details", "Navigating to Details Page...");
+             ShowMessageDialog("Listem", "Listenize eklendi.");
         }
 
-        private void ExpandedCard_AddListClicked(object sender, EventArgs e)
+        private void MediaGrid_ColorExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
         {
-             ShowMessageDialog("Favorites", "Added to your list.");
+            BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
         }
-
-
 
         private async void SearchButton_Click(object sender, RoutedEventArgs e)
         {
-            // Placeholder for Global Spotlight Search
             ContentDialog searchDialog = new ContentDialog
             {
                 Title = "Global Arama",
@@ -606,7 +292,6 @@ namespace ModernIPTVPlayer
             await searchDialog.ShowAsync();
         }
 
-        // TODO: Implement UpdateDynamicBackdrop(string imageUrl) when ready
         private async void ShowMessageDialog(string title, string content)
         {
             if (this.XamlRoot == null) return;
@@ -618,6 +303,13 @@ namespace ModernIPTVPlayer
                 XamlRoot = this.XamlRoot 
             };
             await dialog.ShowAsync();
+        }
+
+        private void RootGrid_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            // Handled inside UnifiedMediaGrid now, or we can forward if needed.
+            // But since MediaGrid handles its own popup closing, we might not need this here 
+            // unless we want to force close from the page level.
         }
         
 

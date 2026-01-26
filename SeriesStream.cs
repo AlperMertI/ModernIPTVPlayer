@@ -2,10 +2,17 @@ using System.Text.Json.Serialization;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 
+using ModernIPTVPlayer.Models;
+
 namespace ModernIPTVPlayer
 {
-    public class SeriesStream
+    public class SeriesStream : IMediaStream
     {
+        // IMediaStream Implementation
+        public int Id => SeriesId;
+        public string Title => Name;
+        public string PosterUrl => Cover;
+
         [JsonPropertyName("num")]
         public object Num { get; set; } // Sometimes int, sometimes string
 

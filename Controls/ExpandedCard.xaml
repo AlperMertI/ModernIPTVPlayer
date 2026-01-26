@@ -56,7 +56,7 @@
         </Grid>
 
         <!-- 2. INFO AREA -->
-        <StackPanel Grid.Row="1" Padding="16,4,16,0" Spacing="6">
+        <StackPanel Grid.Row="1" Padding="16,4,16,0" Spacing="6" Tapped="DetailsArea_Tapped" Background="Transparent" IsHitTestVisible="True">
             <TextBlock x:Name="TitleText" Text="Movie Title" 
                        Style="{StaticResource TitleTextBlockStyle}" 
                        FontSize="18" FontWeight="Bold" TextTrimming="CharacterEllipsis"/>

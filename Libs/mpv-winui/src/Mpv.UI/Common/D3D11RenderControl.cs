@@ -61,6 +61,7 @@ public class D3D11RenderControl : ContentControl
     public int RenderHeight => _swapChainHeight > 0 ? _swapChainHeight : CurrentHeight;
     
     public bool ForceRedraw { get; set; }
+    public bool PreserveStateOnUnload { get; set; } = false;
 
     public event EventHandler Ready;
     
@@ -224,7 +225,7 @@ public class D3D11RenderControl : ContentControl
                     // UNMUTED: Performance logging for analysis
                     if (totalMs > 1.0f || opMs > 0) 
                     {
-                         LogSync($"[DRAW_PERF] ID: {ActiveResizeId} | Total: {totalMs:F1}ms | Wait: {waitMs:F1}ms | Lock: {lockMs:F1}ms | Resize: {opMs:F1}ms | Render: {renderMs:F1}ms | Gpu: {presentMs:F1}ms | Drawn: {didDraw}");
+                          // LogSync($"[DRAW_PERF] ID: {ActiveResizeId} | Total: {totalMs:F1}ms | Wait: {waitMs:F1}ms | Lock: {lockMs:F1}ms | Resize: {opMs:F1}ms | Render: {renderMs:F1}ms | Gpu: {presentMs:F1}ms | Drawn: {didDraw}");
                     }
                 }
                 catch (Exception ex)
@@ -511,6 +512,12 @@ public class D3D11RenderControl : ContentControl
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        if (PreserveStateOnUnload)
+        {
+             Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] OnUnloaded SKIPPED (PreserveStateOnUnload=true)");
+             return;
+        }
+
         Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] OnUnloaded TRIGGERED");
         _disposed = true;
         _cts?.Cancel();

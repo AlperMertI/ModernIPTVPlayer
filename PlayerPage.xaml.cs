@@ -56,6 +56,8 @@ namespace ModernIPTVPlayer
         private string _cachedColorspace = "-";
         private string _cachedHdr = "-";
         private int _nativeMonitorFps = 0;
+        private bool _isHandoff = false;
+        private bool _bufferUnlocked = false;
         
         // Auto-Hide Logic
         private DispatcherTimer? _cursorTimer;
@@ -115,6 +117,21 @@ namespace ModernIPTVPlayer
                 
                 double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double duration);
                 double.TryParse(positionStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double position);
+
+                // ---------- HANDOFF BUFFER UNLOCK LOGIC ----------
+                // Ensuring buffer limits are lifted only after playback truly begins prevent startup race conditions.
+                if (_isHandoff && !_bufferUnlocked && position > 0.1)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[HANDOFF_UNLOCK] Playback started at {position}s. Unlocking buffer limits...");
+                    
+                    // FORCE UNLOCK LIMITS
+                    await _mpvPlayer.SetPropertyAsync("cache", "yes");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", "120");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "300MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
+                    
+                    _bufferUnlocked = true;
+                }
 
                 var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
                 // Fix: Default to isSeekable = true unless explicitly "no". 
@@ -491,188 +508,196 @@ namespace ModernIPTVPlayer
                 return;
             }
 
-            _mpvPlayer = this.VideoPlayer;
-
+            // 1. Determine Player Instance
             if (_useMpvPlayer)
             {
-                VideoPlayer.Visibility = Visibility.Visible;
                 MediaFoundationPlayer.Visibility = Visibility.Collapsed;
-                
                 // Ensure native player is completely stopped
                 MediaFoundationPlayer.Source = null;
                 try { MediaFoundationPlayer.MediaPlayer?.Pause(); } catch {}
 
-                try
+                if (App.HandoffPlayer != null)
                 {
-                    // 0. PRE-FLIGHT CHECK
-                    ShowOsd("Bağlantı Kontrol Ediliyor...");
-                    var checkResult = await CheckStreamUrlAsync(_streamUrl);
-
-                    if (!checkResult.Success)
-                    {
-                        await ShowMessageDialog("Yayın Hatası", checkResult.ErrorMsg);
-                        if (Frame.CanGoBack) Frame.GoBack();
-                        return;
-                    }
-
-                    // Update URL with the cleaned version (e.g. port 80 removed)
-                    _streamUrl = checkResult.Url;
-
-                    // 1. MUST INITIALIZE PLAYER before setting any properties!
-                    await VideoPlayer.InitializePlayerAsync();
-
-                    // Standard Browser User-Agent
-                    string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+                    // HANDOFF MODE
+                    Debug.WriteLine("[PlayerPage] Doing Handoff...");
+                    _isHandoff = true;
+                    _bufferUnlocked = false;
+                    _mpvPlayer = App.HandoffPlayer;
+                    App.HandoffPlayer = null; // Consume
                     
-                    // REFERER STRATEGY: 
-                    // HttpClient (which works) DOES NOT send a Referer.
-                    // MPV was sending specific referer which caused failure. 
-                    // Disabling Referer to match HttpClient behavior.
-                    /* 
-                    string referer = "";
-                    if (Uri.TryCreate(finalStreamUrl, UriKind.Absolute, out var uri))
-                    {
-                        referer = $"{uri.Scheme}://{uri.Authority}/";
-                    }
-                    */
-
-                    // COOKIE SHARING FROM HTTPCLIENT TO MPV
-                    string cookieHeader = "";
-                    try
-                    {
-                        var targetUri = new Uri(_streamUrl);
-                        // 1. Try strict URI matching first
-                        var cookies = HttpHelper.CookieContainer.GetCookies(targetUri);
-                        
-                        // 2. If valid cookies found, use them. If not, Dump ALL cookies.
-                        if (cookies.Count == 0)
-                        {
-                            System.Diagnostics.Debug.WriteLine("[MPV] GetCookies(uri) returned 0. Trying Reflection...");
-                            cookies = GetAllCookies(HttpHelper.CookieContainer);
-                        }
-
-                        System.Diagnostics.Debug.WriteLine($"[MPV] Found {cookies.Count} cookies in container.");
-
-                        foreach (System.Net.Cookie c in cookies)
-                        {
-                            // Filter logic: If we have many cookies (unlikely in this app), maybe filter?
-                            // For now, send key ones.
-                            cookieHeader += $"{c.Name}={c.Value}; ";
-                        }
-                    } 
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[MPV] Cookie Error: {ex.Message}");
-                    }
-
-                    // Headers
-                    // Removing Sec-Fetch-Mode as it might trigger strict server checks if unused
-                    // Adding Accept-Language to match HttpClient exactly
-                    string headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n"; 
+                    // Attach to Visual Tree
+                    PlayerContainer.Children.Add(_mpvPlayer);
                     
-                    if (!string.IsNullOrEmpty(cookieHeader))
-                    {
-                         headers += $"Cookie: {cookieHeader}\n";
-                         System.Diagnostics.Debug.WriteLine($"[MPV] Added Cookies: {cookieHeader}");
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[MPV] No Cookies found for {_streamUrl}");
-                    }
+                    // Reset Visual Properties that might have been hidden/ghosted
+                    _mpvPlayer.Visibility = Visibility.Visible;
+                    _mpvPlayer.Opacity = 1;
+                    _mpvPlayer.IsHitTestVisible = true; // Player page needs hits? Actually grid handles events usually.
+                                                        // But previous XAML had IsHitTestVisible="False" for VideoPlayer to let Grid catch events?
+                                                        // Let's check: MainGrid has pointer events. VideoPlayer had HitTest=False.
+                    _mpvPlayer.IsHitTestVisible = false; // Matched original behavior
+                    _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
+                    _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
 
-                    // Apply Properties
-                    await _mpvPlayer.SetPropertyAsync("user-agent", userAgent);
-                    
-                    // await _mpvPlayer.SetPropertyAsync("referrer", referer); // DISABLED
-                    await _mpvPlayer.SetPropertyAsync("http-header-fields", headers);
-
-                    // ----------------------------------------------------------------------------------
-                    // PERFORMANCE TUNING: HARDWARE ACCELERATION
-                    // ----------------------------------------------------------------------------------
-                    // Note: Explicitly setting 'vo' is removed as it interferes with MpvWinUI's render API.
-                    await _mpvPlayer.SetPropertyAsync("hwdec", "auto-safe");   // Hardware decoding priority
-                    
-                    // CRITICAL: Ensure we actually LOAD the file now that headers are set.
-                    await _mpvPlayer.OpenAsync(_streamUrl);
-                    
-                    // Force these properties again just in case
-                    // await _mpvPlayer.SetPropertyAsync("ytdl", "no"); // Removed: ytdl not available in this MPV build
-
-                    // ----------------------------------------------------------------------------------
-                    // OPTİMİZASYONLAR: Ses ve Altyazı Takılmalarını Önleme & Akıllı RAM Yönetimi
-                    // ----------------------------------------------------------------------------------
-                    
+                    // RESTORE BUFFER LIMITS FOR FULL PLAYBACK
+                    // We limited valid in MediaInfoPage, now expand it.
                     await _mpvPlayer.SetPropertyAsync("cache", "yes");
-                    await _mpvPlayer.SetPropertyAsync("cache-pause", "no");
-                    // hr-seek can be slow on network streams, disabling for speed test
-                    await _mpvPlayer.SetPropertyAsync("hr-seek", "no"); 
-                    // Reduce cache size to prevent massive rebuffering on seek
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "150M");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "50M");
-
-
-
-                    // 3. Genel Performans Profili:
-                    // Bazı ağır decode işlemlerini ve renk düzeltmelerini atlayarak
-                    // seek ve track switch hızını ciddi oranda artırır.
-                    await _mpvPlayer.SetPropertyAsync("profile", "fast");
-
-                    // 4. Threading ve Rendering:
-                    // 6. Network Seek Optimization:
-                    // "mkv-subtitle-preroll" disabled to prevent backward seeking on sub load
-                    await _mpvPlayer.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "no");
-
-                    // 6. Network Seek Optimizasyonu:
-                    // "mkv-subtitle-preroll" videoyu geriye sarmaya çalıştığı için kapatıldı.
-                    // Bu, 10 saniyelik "geriye sarma" donmasını ÇÖZER.
-                    await _mpvPlayer.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "no");
-
-                    // "subs-with-video" özelliği bazı libmpv sürümlerinde runtime property olarak 
-                    // desteklenmediği için kaldırıldı.
-
-                    // Daha ileriye dönük önbellekleme (20 saniye)
-                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", "20");
-                    // ----------------------------------------------------------------------------------
+                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", "120");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "300MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
                     
-                    // Altyazı gecikmesi ve stil sorunları için ek ayarlar
-                    await _mpvPlayer.SetPropertyAsync("sub-ass-shaper", "simple");
-                    await _mpvPlayer.SetPropertyAsync("sub-scale-with-window", "yes");
-                    await _mpvPlayer.SetPropertyAsync("sub-use-margins", "no");
+                    // Force a small seek to re-trigger demuxer? No, might stutter.
+                    // But some properties need cache flush.
 
-                    // Detect Physical Refresh Rate (Native override for MPV)
-                    try
-                    {
-                         // Use GetForegroundWindow as a robust fallback since we are the active app
-                         var ptr = GetForegroundWindow();
-                         var monitor = MonitorFromWindow(ptr, MONITOR_DEFAULTTONEAREST);
-                            
-                         var devMode = new DEVMODE();
-                         devMode.dmSize = (short)System.Runtime.InteropServices.Marshal.SizeOf(typeof(DEVMODE));
-                         if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref devMode))
-                         {
-                             if (devMode.dmDisplayFrequency > 0)
-                             {
-                                 System.Diagnostics.Debug.WriteLine($"[PlayerPage] Native Display Frequency: {devMode.dmDisplayFrequency}Hz");
-                                 _mpvPlayer?.SetDisplayFps(devMode.dmDisplayFrequency);
-                             }
-                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[PlayerPage] Failed to get native refresh rate: {ex.Message}");
-                    }
+                    // DIAGNOSTICS
+                    var checkBytes = await _mpvPlayer.GetPropertyAsync("demuxer-max-bytes");
+                    var checkSecs = await _mpvPlayer.GetPropertyAsync("demuxer-readahead-secs");
+                    var checkCache = await _mpvPlayer.GetPropertyAsync("cache");
+                    System.Diagnostics.Debug.WriteLine($"[HANDOFF_DIAG] Cache: {checkCache} | MaxBytes: {checkBytes} | Secs: {checkSecs}");
 
-                    await _mpvPlayer.OpenAsync(_streamUrl);
+                    // It is already playing or paused. Ensure playing.
+                    await _mpvPlayer.SetPropertyAsync("pause", "no");
+
+                    // Start Stats Timer
                     _statsTimer?.Start();
                 }
-                catch (Exception ex)
+                else
                 {
-                    await ShowMessageDialog("MPV Oynatıcı Hatası", $"MPV başlatılamadı. \n\nHata: {ex.Message}");
+                     // FRESH START MODE
+                     _mpvPlayer = new MpvWinUI.MpvPlayer();
+                     PlayerContainer.Children.Add(_mpvPlayer);
+                     _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
+                     _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
+                     _mpvPlayer.IsHitTestVisible = false;
+
+                     try
+                    {
+                        // 0. PRE-FLIGHT CHECK
+                        ShowOsd("Bağlantı Kontrol Ediliyor...");
+                        var checkResult = await CheckStreamUrlAsync(_streamUrl);
+
+                        if (!checkResult.Success)
+                        {
+                            await ShowMessageDialog("Yayın Hatası", checkResult.ErrorMsg);
+                            if (Frame.CanGoBack) Frame.GoBack();
+                            return;
+                        }
+
+                        // Update URL with the cleaned version (e.g. port 80 removed)
+                        _streamUrl = checkResult.Url;
+
+                        // 1. MUST INITIALIZE PLAYER before setting any properties!
+                        await _mpvPlayer.InitializePlayerAsync();
+
+                        // Standard Browser User-Agent
+                        string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+                        
+                        // COOKIE SHARING FROM HTTPCLIENT TO MPV
+                        string cookieHeader = "";
+                        try
+                        {
+                            var targetUri = new Uri(_streamUrl);
+                            // 1. Try strict URI matching first
+                            var cookies = HttpHelper.CookieContainer.GetCookies(targetUri);
+                            
+                            // 2. If valid cookies found, use them. If not, Dump ALL cookies.
+                            if (cookies.Count == 0)
+                            {
+                                System.Diagnostics.Debug.WriteLine("[MPV] GetCookies(uri) returned 0. Trying Reflection...");
+                                cookies = GetAllCookies(HttpHelper.CookieContainer);
+                            }
+
+                            System.Diagnostics.Debug.WriteLine($"[MPV] Found {cookies.Count} cookies in container.");
+
+                            foreach (System.Net.Cookie c in cookies)
+                            {
+                                // Filter logic: If we have many cookies (unlikely in this app), maybe filter?
+                                // For now, send key ones.
+                                cookieHeader += $"{c.Name}={c.Value}; ";
+                            }
+                        } 
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MPV] Cookie Error: {ex.Message}");
+                        }
+
+                        // Headers
+                        string headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n"; 
+                        
+                        if (!string.IsNullOrEmpty(cookieHeader))
+                        {
+                             headers += $"Cookie: {cookieHeader}\n";
+                             System.Diagnostics.Debug.WriteLine($"[MPV] Added Cookies: {cookieHeader}");
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MPV] No Cookies found for {_streamUrl}");
+                        }
+
+                        // Apply Properties
+                        await _mpvPlayer.SetPropertyAsync("user-agent", userAgent);
+                        await _mpvPlayer.SetPropertyAsync("http-header-fields", headers);
+
+                        // ----------------------------------------------------------------------------------
+                        // PERFORMANCE TUNING: HARDWARE ACCELERATION
+                        // ----------------------------------------------------------------------------------
+                        await _mpvPlayer.SetPropertyAsync("hwdec", "auto-safe");   // Hardware decoding priority
+                        
+                        // CRITICAL: Ensure we actually LOAD the file now that headers are set.
+                        await _mpvPlayer.OpenAsync(_streamUrl);
+                        
+                         // ----------------------------------------------------------------------------------
+                        // OPTİMİZASYONLAR: Ses ve Altyazı Takılmalarını Önleme & Akıllı RAM Yönetimi
+                        // ----------------------------------------------------------------------------------
+                        
+                        await _mpvPlayer.SetPropertyAsync("cache", "yes");
+                        await _mpvPlayer.SetPropertyAsync("cache-pause", "no"); // Don't pause on low cache
+                        await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "150M");
+                        await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "50M");
+
+                        // 3. Genel Performans Profili (Low Latency)
+                        await _mpvPlayer.SetPropertyAsync("profile", "fast");
+
+                        // 4. Subtitle Preroll Fix
+                        await _mpvPlayer.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "no");
+
+                        // ----------------------------------------------------------------------------------
+                        
+                        // Altyazı gecikmesi ve stil sorunları için ek ayarlar
+                        await _mpvPlayer.SetPropertyAsync("sub-scale-with-window", "yes");
+
+                        // Detect Physical Refresh Rate (Native override for MPV)
+                        try
+                        {
+                             // Use GetForegroundWindow as a robust fallback since we are the active app
+                             var ptr = GetForegroundWindow();
+                             var monitor = MonitorFromWindow(ptr, MONITOR_DEFAULTTONEAREST);
+                                
+                             var devMode = new DEVMODE();
+                             devMode.dmSize = (short)System.Runtime.InteropServices.Marshal.SizeOf(typeof(DEVMODE));
+                             if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref devMode))
+                             {
+                                 if (devMode.dmDisplayFrequency > 0)
+                                 {
+                                     System.Diagnostics.Debug.WriteLine($"[PlayerPage] Native Display Frequency: {devMode.dmDisplayFrequency}Hz");
+                                     _mpvPlayer?.SetDisplayFps(devMode.dmDisplayFrequency);
+                                 }
+                             }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[PlayerPage] Failed to get native refresh rate: {ex.Message}");
+                        }
+
+                        _statsTimer?.Start();
+                    }
+                    catch (Exception ex)
+                    {
+                        await ShowMessageDialog("MPV Oynatıcı Hatası", $"MPV başlatılamadı. \n\nHata: {ex.Message}");
+                    }
                 }
             }
             else
             {
-                VideoPlayer.Visibility = Visibility.Collapsed;
                 MediaFoundationPlayer.Visibility = Visibility.Visible;
                 try
                 {

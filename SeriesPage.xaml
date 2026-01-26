@@ -223,38 +223,7 @@
                         </StackPanel>
                     </Grid>
 
-                    <GridView x:Name="SeriesGridView" Grid.Row="1" 
-                              SelectionMode="Single" 
-                              IsItemClickEnabled="True" 
-                              ItemClick="SeriesGridView_ItemClick"
-                              Padding="24,0,24,36"
-                              ItemContainerStyle="{StaticResource SeriesCardStyle}">
-                        
-                        <GridView.ItemContainerTransitions>
-                            <TransitionCollection>
-                                <EntranceThemeTransition FromVerticalOffset="100" IsStaggeringEnabled="True"/>
-                            </TransitionCollection>
-                        </GridView.ItemContainerTransitions>
-
-                        <GridView.ItemTemplate>
-                            <DataTemplate x:DataType="local:SeriesStream">
-                                <controls:PosterCard ImageUrl="{x:Bind Cover}" Width="200" Height="300" ColorsExtracted="PosterCard_ColorsExtracted"/>
-                            </DataTemplate>
-                        </GridView.ItemTemplate>
-                    </GridView>
-                    
-                    <GridView x:Name="SkeletonGrid" Grid.Row="1" 
-                              Padding="24,0,24,36"
-                              Visibility="Collapsed"
-                              IsHitTestVisible="False">
-                        <GridView.ItemTemplate>
-                            <DataTemplate>
-                                <controls:ShimmerCard Margin="8"/>
-                            </DataTemplate>
-                        </GridView.ItemTemplate>
-                    </GridView>
-                    
-                    <ProgressRing x:Name="SeriesLoadingRing" Grid.Row="1" IsActive="False" Visibility="Collapsed"/>
+                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="1" />
                 </Grid>
             </SplitView.Content>
         </SplitView>

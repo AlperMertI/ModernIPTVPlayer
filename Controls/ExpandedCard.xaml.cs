@@ -555,6 +555,7 @@ namespace ModernIPTVPlayer.Controls
 
         private void PlayButton_Click(object sender, RoutedEventArgs e) => PlayClicked?.Invoke(this, EventArgs.Empty);
         private void DetailsButton_Click(object sender, RoutedEventArgs e) => DetailsClicked?.Invoke(this, EventArgs.Empty);
+        private void DetailsArea_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e) => DetailsClicked?.Invoke(this, EventArgs.Empty);
         private void FavButton_Click(object sender, RoutedEventArgs e) => AddListClicked?.Invoke(this, EventArgs.Empty);
     }
 }

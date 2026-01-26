@@ -5,10 +5,17 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
+using ModernIPTVPlayer.Models;
+
 namespace ModernIPTVPlayer
 {
-    public class LiveStream : INotifyPropertyChanged
+    public class LiveStream : INotifyPropertyChanged, IMediaStream
     {
+        // IMediaStream Implementation
+        public int Id => StreamId;
+        public string Title => Name;
+        public string PosterUrl => IconUrl;
+
         public event PropertyChangedEventHandler? PropertyChanged;
 
         private void OnPropertyChanged([CallerMemberName] string? propertyName = null)

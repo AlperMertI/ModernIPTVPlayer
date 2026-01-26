@@ -254,4 +254,20 @@ public sealed partial class MpvPlayer : Control
 
         return true;
     }
+
+    public void EnableHandoffMode()
+    {
+        if (_renderControl != null)
+        {
+            _renderControl.PreserveStateOnUnload = true;
+        }
+    }
+
+    public void DisableHandoffMode()
+    {
+        if (_renderControl != null)
+        {
+            _renderControl.PreserveStateOnUnload = false;
+        }
+    }
 }

@@ -221,55 +221,11 @@
                         </StackPanel>
                     </Grid>
 
-                    <GridView x:Name="MovieGridView" Grid.Row="1" 
-                              SelectionMode="Single" 
-                              IsItemClickEnabled="True" 
-                              ItemClick="MovieGridView_ItemClick"
-                              Padding="24,0,24,36"
-                              ItemContainerStyle="{StaticResource MovieCardStyle}">
-                        
-                        <GridView.ItemContainerTransitions>
-                            <TransitionCollection>
-                                <EntranceThemeTransition FromVerticalOffset="100" IsStaggeringEnabled="True"/>
-                            </TransitionCollection>
-                        </GridView.ItemContainerTransitions>
-
-                        <GridView.ItemTemplate>
-                            <DataTemplate x:DataType="local:LiveStream">
-                                <controls:PosterCard 
-                                    ImageUrl="{x:Bind IconUrl}" 
-                                    Width="200" 
-                                    Height="300" 
-                                    ColorsExtracted="PosterCard_ColorsExtracted"
-                                    HoverStarted="ExpandedCard_HoverStarted"/>
-                            </DataTemplate>
-                        </GridView.ItemTemplate>
-                    </GridView>
-                    
-                    <GridView x:Name="SkeletonGrid" Grid.Row="1" 
-                              Padding="24,0,24,36"
-                              Visibility="Collapsed"
-                              IsHitTestVisible="False">
-                        <GridView.ItemTemplate>
-                            <DataTemplate>
-                                <controls:ShimmerCard Margin="8"/>
-                            </DataTemplate>
-                        </GridView.ItemTemplate>
-                    </GridView>
-                    
-                    <ProgressRing x:Name="MovieLoadingRing" Grid.Row="1" IsActive="False" Visibility="Collapsed"/>
+                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="1" />
                 </Grid>
             </SplitView.Content>
 
         </SplitView>
-        
-        <!-- Expanded Card Overlay Layer (High Z-Index) -->
-        <Canvas x:Name="OverlayCanvas">
-            <controls:ExpandedCard x:Name="ActiveExpandedCard" Visibility="Collapsed" 
-                                   PlayClicked="ExpandedCard_PlayClicked"
-                                   DetailsClicked="ExpandedCard_DetailsClicked"
-                                   AddListClicked="ExpandedCard_AddListClicked"/>
-        </Canvas>
     </Grid>
 </Page>
 
