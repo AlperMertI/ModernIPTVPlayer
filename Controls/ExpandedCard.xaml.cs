@@ -4,19 +4,22 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Windows.UI;
+using ModernIPTVPlayer;
+using ModernIPTVPlayer.Models;
 
 namespace ModernIPTVPlayer.Controls
 {
     public sealed partial class ExpandedCard : UserControl
     {
         public event EventHandler PlayClicked;
-        public event EventHandler DetailsClicked;
+        public event EventHandler<TmdbMovieResult> DetailsClicked;
         public event EventHandler AddListClicked;
         
         // Hold data
-        private LiveStream _stream;
+        private ModernIPTVPlayer.Models.IMediaStream _stream;
         private TmdbMovieResult _tmdbInfo;
         
         // Pre-initialization state
@@ -24,12 +27,12 @@ namespace ModernIPTVPlayer.Controls
         private bool _youtubePlayerReady = false;
         private string _trailerFolder;
         private string _virtualHost = "trailers.moderniptv.local";
+        private Microsoft.UI.Composition.Compositor _compositor;
 
         public ExpandedCard()
         {
             this.InitializeComponent();
-            // Note: WebView2 is NOT pre-initialized here to save RAM
-            // Use PrepareForTrailer() for predictive prefetch during hover delay
+            _compositor = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(this).Compositor;
         }
         
         /// <summary>
@@ -189,6 +192,7 @@ namespace ModernIPTVPlayer.Controls
                 videoId: videoId,
                 suggestedQuality: 'hd720'
             });
+            player.playVideo();
         }
         
         // Called from C# to stop playback
@@ -220,13 +224,13 @@ namespace ModernIPTVPlayer.Controls
         /// </summary>
         public void StopTrailer()
         {
-            ResetState();
+            ResetState(isStopping: true);
         }
 
         /// <summary>
         /// Resets the card to initial state before loading new data
         /// </summary>
-        private void ResetState()
+        private void ResetState(bool isStopping = false)
         {
             // Reset trailer/WebView - stop video via JavaScript (preserve pre-initialized player)
             TrailerWebView.Visibility = Visibility.Collapsed;
@@ -240,10 +244,9 @@ namespace ModernIPTVPlayer.Controls
             // Show backdrop container again
             BackdropContainer.Visibility = Visibility.Visible;
             
-            // Reset description skeleton
-            DescText.Opacity = 0;
-            DescText.Text = "";
-            DescSkeleton.Visibility = Visibility.Visible;
+            // Reset content visibility
+            RealContentPanel.Opacity = 0;
+            FullSkeleton.Visibility = Visibility.Visible;
             
             // Reset badges
             TechBadgesPanel.Children.Clear();
@@ -257,43 +260,72 @@ namespace ModernIPTVPlayer.Controls
             RatingText.Text = "";
             YearText.Text = "";
             
+            // Reset Ambience
+            AmbienceGrid.Visibility = Visibility.Visible;
+            
             // Reset loading ring
-            LoadingRing.IsActive = true;
-            LoadingRing.Visibility = Visibility.Visible;
+            if (!isStopping)
+            {
+                LoadingRing.IsActive = true;
+                LoadingRing.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                LoadingRing.IsActive = false;
+                LoadingRing.Visibility = Visibility.Collapsed;
+            }
             
             // CRITICAL: DO NOT clear BackdropImage.Source here!
             // If we are morphing, we want to show the OLD image flying until the NEW image loads.
             // Clearing it causes a "blink" or invisible (black) animation.
         }
 
-        public async Task LoadDataAsync(LiveStream stream)
+        public async Task LoadDataAsync(ModernIPTVPlayer.Models.IMediaStream stream)
         {
             // Reset all state first (except image)
             ResetState();
             
             _stream = stream;
-            TitleText.Text = stream.Name;
+            TitleText.Text = stream.Title;
             
             // Set initial low-res image (or clear it if none)
-            if (!string.IsNullOrEmpty(stream.IconUrl))
+            if (!string.IsNullOrEmpty(stream.PosterUrl))
             {
-                BackdropImage.Source = new BitmapImage(new Uri(stream.IconUrl));
+                BackdropImage.Source = new BitmapImage(new Uri(stream.PosterUrl));
             }
             else
             {
                 BackdropImage.Source = null;
             }
             
+            // Ensure History is Ready
+            await HistoryManager.Instance.InitializeAsync();
+            
             // Initial Tooltip (Static parse)
             UpdateTooltip(stream);
+            UpdatePlayButton(stream);
 
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Searching TMDB for: {stream.Name}");
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Searching TMDB for: {stream.Title}");
                 
                 // Parallel Execution: TMDB + Probing
-                var tmdbTask = TmdbHelper.SearchMovieAsync(stream.Name);
-                var probeTask = ProbeStreamInternal(stream);
+                Task<TmdbMovieResult?> tmdbTask;
+                if (stream is SeriesStream)
+                {
+                     tmdbTask = TmdbHelper.SearchTvAsync(stream.Title);
+                }
+                else
+                {
+                     tmdbTask = TmdbHelper.SearchMovieAsync(stream.Title);
+                }
+                
+                // Probing only for LiveStream
+                Task probeTask = Task.CompletedTask;
+                if (stream is LiveStream live)
+                {
+                    probeTask = ProbeStreamInternal(live);
+                }
                 
                 await Task.WhenAll(tmdbTask, probeTask);
                 
@@ -301,28 +333,23 @@ namespace ModernIPTVPlayer.Controls
                 
                 if (tmdb != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] TMDB Match: {tmdb.Title} (ID: {tmdb.Id})");
+                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] TMDB Match: {tmdb.DisplayTitle} (ID: {tmdb.Id})");
                     _tmdbInfo = tmdb;
                     UpdateUiWithTmdb(tmdb);
                     
                     // Fetch and play trailer
-                    var trailerKey = await TmdbHelper.GetTrailerKeyAsync(tmdb.Id);
+                    var trailerKey = await TmdbHelper.GetTrailerKeyAsync(tmdb.Id, stream is SeriesStream);
                     if (!string.IsNullOrEmpty(trailerKey))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Playing Trailer: {trailerKey}");
-                        PlayTrailer(trailerKey);
-                    }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[ExpandedCard] No trailer key returned.");
+                         PlayTrailer(trailerKey);
                     }
                 }
                 else
                 {
-                    // Fallback UI - hide skeleton, show fallback text
+                    // Fallback UI
                     DescText.Text = "No additional details found.";
-                    DescSkeleton.Visibility = Visibility.Collapsed;
-                    DescText.Opacity = 1;
+                    FullSkeleton.Visibility = Visibility.Collapsed;
+                    RealContentPanel.Opacity = 1;
                     
                     YearText.Visibility = Visibility.Collapsed;
                     RatingText.Visibility = Visibility.Collapsed;
@@ -331,16 +358,19 @@ namespace ModernIPTVPlayer.Controls
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error: {ex.Message}");
-                
-                // Show error state
                 DescText.Text = "Error loading details.";
-                DescSkeleton.Visibility = Visibility.Collapsed;
-                DescText.Opacity = 1;
+                FullSkeleton.Visibility = Visibility.Collapsed;
+                RealContentPanel.Opacity = 1;
             }
             finally
             {
-                LoadingRing.IsActive = false;
-                LoadingRing.Visibility = Visibility.Collapsed;
+                // Simple hide - if a trailer is starting, it will handle hiding the ring later
+                // But for safety, if no trailer was found or it failed, we hide it here
+                if (_tmdbInfo == null || !(_tmdbInfo.Id > 0))
+                {
+                    LoadingRing.IsActive = false;
+                    LoadingRing.Visibility = Visibility.Collapsed;
+                }
             }
         }
         
@@ -358,10 +388,11 @@ namespace ModernIPTVPlayer.Controls
                 stream.Codec = result.Codec;
                 stream.Bitrate = result.Bitrate;
                 stream.IsOnline = result.Success;
+                stream.IsHdr = result.IsHdr;
                 
-                // Update Tooltip on UI thread (we are already on UI thread in this context usually, 
-                // but ProbeAsync might context switch).
+                // Update Tooltip on UI thread
                 UpdateTooltip(stream);
+                UpdatePlayButton(stream);
             }
             catch (Exception ex)
             {
@@ -373,45 +404,94 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void UpdateTooltip(LiveStream stream)
+        private void UpdateTooltip(ModernIPTVPlayer.Models.IMediaStream stream)
         {
-            // We now update VISIBLE badges instead of just a tooltip
             TechBadgesPanel.Children.Clear();
-
-            // 1. Resolution Badge
-            if (!string.IsNullOrEmpty(stream.Resolution))
+            
+            // SERIES RESUME BADGE
+            if (stream is SeriesStream series)
             {
-                AddBadge(stream.Resolution, Colors.Teal);
+                var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+                if (history != null)
+                {
+                    AddBadge($"S{history.SeasonNumber} E{history.EpisodeNumber}", Colors.Crimson);
+                    
+                    // Also guess 4K if series name says so, but give history priority
+                }
+            }
+            else if (stream is LiveStream live)
+            {
+                 var hist = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
+                 if (hist != null && !hist.IsFinished && hist.Duration > 0)
+                 {
+                     double pct = (hist.Position / hist.Duration) * 100;
+                     if (pct > 2) 
+                     {
+                         var remaining = TimeSpan.FromSeconds(hist.Duration - hist.Position);
+                         string timeLeft = remaining.TotalHours >= 1 
+                             ? $"{remaining.Hours}sa {remaining.Minutes}dk Kaldı"
+                             : $"{remaining.Minutes}dk Kaldı";
+                             
+                         AddBadge(timeLeft, Colors.Crimson);
+                     }
+                 }
+
+                 // Probing Results - Handled in Dedup sections below
+            }
+
+            // Fallback / Additional Guesses from Name
+            string name = stream.Title.ToUpperInvariant();
+
+            // 2. RESOLUTION & 4K (DEDUPLICATION)
+            bool is4K = name.Contains("4K") || name.Contains("UHD");
+            
+            if (stream is LiveStream l && !string.IsNullOrEmpty(l.Resolution))
+            {
+                if (l.Resolution.Contains("3840") || l.Resolution.Contains("4096")) is4K = true;
+                
+                if (is4K) AddBadge("4K UHD", Colors.Purple);
+                else AddBadge(l.Resolution, Colors.Teal);
             }
             else
             {
-                // Guess
-                if (stream.Name.Contains("4K") || stream.Name.Contains("UHD")) AddBadge("4K UHD", Colors.Purple);
-                else if (stream.Name.Contains("FHD") || stream.Name.Contains("1080")) AddBadge("1080p", Colors.Teal);
+                 if (is4K) AddBadge("4K UHD", Colors.Purple);
+                 else if (name.Contains("FHD") || name.Contains("1080P")) AddBadge("1080p", Colors.Teal);
+                 else if (name.Contains("HD") || name.Contains("720P")) AddBadge("720p", Colors.CornflowerBlue);
             }
 
-            // 2. Codec Badge
-            if (!string.IsNullOrEmpty(stream.Codec))
+            // Codec
+            if (stream is LiveStream lc && !string.IsNullOrEmpty(lc.Codec))
             {
-                AddBadge(stream.Codec.ToUpper(), Colors.Orange); // e.g. HEVC
+                 AddBadge(lc.Codec.ToUpper(), Colors.Orange);
             }
-            else if (stream.Name.Contains("HEVC") || stream.Name.Contains("H.265"))
+            else
             {
-                 AddBadge("HEVC", Colors.Orange);
+                 bool hasCodec = TechBadgesPanel.Children.OfType<Border>().Any(b => (b.Child as TextBlock)?.Text.Contains("HEVC") == true || (b.Child as TextBlock)?.Text.Contains("264") == true);
+                 if(!hasCodec)
+                 {
+                    if (name.Contains("HEVC") || name.Contains("H.265") || name.Contains("X265") || name.Contains("H265")) 
+                        AddBadge("HEVC", Colors.Orange);
+                    else if (name.Contains("H.264") || name.Contains("X264") || name.Contains("AVC")) 
+                        AddBadge("AVC", Colors.Gray);
+                 }
             }
-            
-            // 3. HDR / Audio (Future)
-            
-            // 4. Bitrate
-            if (stream.Bitrate > 0)
+
+            // 3. HDR / SDR
+            bool hdr = false;
+            if (stream is LiveStream lh && lh.HasMetadata) 
             {
-                double mbps = stream.Bitrate / 1_000_000.0;
-                AddBadge($"{mbps:F1} Mbps", Colors.Gray);
+                hdr = lh.IsHdr;
             }
+            else 
+            {
+                hdr = name.Contains("HDR") || name.Contains("DOLBY") || name.Contains("DV");
+            }
+
+            if (hdr) AddBadge("HDR", Colors.Gold);
+            else if (stream is LiveStream ls && ls.HasMetadata) AddBadge("SDR", Colors.DimGray);
             
-            // Also keep standard tooltip for Play Button
-             var techInfo = "Format: " + (stream.ContainerExtension?.ToUpper() ?? "MP4");
-             Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(PlayButton, techInfo);
+            // Standard Tooltip
+            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(PlayButton, stream.Title);
         }
 
         private void AddBadge(string text, Color color)
@@ -452,9 +532,16 @@ namespace ModernIPTVPlayer.Controls
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Loading video: {videoKey}");
                 await TrailerWebView.CoreWebView2.ExecuteScriptAsync($"loadVideo('{videoKey}')");
                 
-                // Show WebView, hide backdrop
+                // Hide Ambience during trailer
+                AmbienceGrid.Visibility = Visibility.Collapsed;
+                
+                // Show WebView, hide backdrop and loading IMMEDIATELY
+                // Waiting for message is too risky if API doesn't report it soon enough
                 BackdropContainer.Visibility = Visibility.Collapsed;
                 TrailerWebView.Visibility = Visibility.Visible;
+                LoadingRing.IsActive = false;
+                LoadingRing.Visibility = Visibility.Collapsed;
+
                 _isMuted = true;
                 UpdateMuteIcon();
             }
@@ -478,9 +565,14 @@ namespace ModernIPTVPlayer.Controls
                 }
                 else if (message == "VIDEO_PLAYING")
                 {
-                    // Video started playing - show mute button
+                    // Video started playing - show mute button and switch from backdrop to video
                     DispatcherQueue.TryEnqueue(() =>
                     {
+                        LoadingRing.IsActive = false;
+                        LoadingRing.Visibility = Visibility.Collapsed;
+                        
+                        BackdropContainer.Visibility = Visibility.Collapsed;
+                        TrailerWebView.Visibility = Visibility.Visible;
                         MuteButton.Visibility = Visibility.Visible;
                     });
                 }
@@ -530,13 +622,16 @@ namespace ModernIPTVPlayer.Controls
 
         private void UpdateUiWithTmdb(TmdbMovieResult tmdb)
         {
-            TitleText.Text = tmdb.Title;
+            TitleText.Text = tmdb.DisplayTitle;
             DescText.Text = tmdb.Overview;
+            GenresText.Text = tmdb.GetGenreNames();
             RatingText.Text = $"★ {tmdb.VoteAverage:F1}";
+            YearText.Text = tmdb.DisplayDate?.Split('-')[0] ?? "";
             
-            // Hide skeleton and show description
-            DescSkeleton.Visibility = Visibility.Collapsed;
-            DescText.Opacity = 1;
+            // Hide skeleton and reveal description with staggered reveal
+            FullSkeleton.Visibility = Visibility.Collapsed;
+            RealContentPanel.Opacity = 1; // Parent is opaque
+            StaggeredRevealContent();
             
             // High-res backdrop
             if (!string.IsNullOrEmpty(tmdb.FullBackdropUrl))
@@ -553,9 +648,93 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private void StaggeredRevealContent()
+        {
+            double delay = 0;
+            const double staggerIncrement = 0.08; 
+
+            foreach (var child in RealContentPanel.Children)
+            {
+                if (child is UIElement element)
+                {
+                    var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(element);
+                    
+                    // CRITICAL: Set Visual Opacity to 0 initially
+                    visual.Opacity = 0f;
+
+                    var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(1f, 1f);
+                    fadeIn.Duration = TimeSpan.FromMilliseconds(400);
+                    fadeIn.DelayTime = TimeSpan.FromSeconds(delay);
+
+                    // Add slight lift
+                    Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+                    var moveUp = _compositor.CreateVector3KeyFrameAnimation();
+                    moveUp.InsertKeyFrame(0f, new System.Numerics.Vector3(0, 8, 0));
+                    moveUp.InsertKeyFrame(1f, System.Numerics.Vector3.Zero);
+                    moveUp.Duration = TimeSpan.FromMilliseconds(500);
+                    moveUp.DelayTime = TimeSpan.FromSeconds(delay);
+
+                    visual.StartAnimation("Opacity", fadeIn);
+                    visual.StartAnimation("Translation", moveUp);
+
+                    delay += staggerIncrement;
+                }
+            }
+        }
+
+        private void UpdatePlayButton(IMediaStream stream)
+        {
+            if (stream == null) return;
+            
+            bool isResume = false;
+            if (stream is LiveStream live)
+            {
+                var hist = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
+                if (hist != null && !hist.IsFinished && (hist.Position / (double)hist.Duration) > 0.05) isResume = true;
+            }
+            else if (stream is SeriesStream series)
+            {
+                var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+                if (history != null && history.Duration > 0 && (history.Position / (double)history.Duration) > 0.05) isResume = true;
+            }
+
+            if (isResume)
+            {
+                PlayButtonText.Text = "Devam Et";
+            }
+            else
+            {
+                PlayButtonText.Text = "Play";
+            }
+        }
+
         private void PlayButton_Click(object sender, RoutedEventArgs e) => PlayClicked?.Invoke(this, EventArgs.Empty);
-        private void DetailsButton_Click(object sender, RoutedEventArgs e) => DetailsClicked?.Invoke(this, EventArgs.Empty);
-        private void DetailsArea_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e) => DetailsClicked?.Invoke(this, EventArgs.Empty);
+        
+        private void DetailsButton_Click(object sender, RoutedEventArgs e) 
+        {
+            PrepareConnectedAnimation();
+            DetailsClicked?.Invoke(this, _tmdbInfo);
+        }
+
+        private void DetailsArea_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e) 
+        {
+            PrepareConnectedAnimation();
+            DetailsClicked?.Invoke(this, _tmdbInfo);
+        }
+
+        private void TrailerArea_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        {
+            PrepareConnectedAnimation();
+            DetailsClicked?.Invoke(this, _tmdbInfo);
+        }
+
+        public void PrepareConnectedAnimation()
+        {
+            Microsoft.UI.Xaml.Media.Animation.ConnectedAnimationService.GetForCurrentView()
+                .PrepareToAnimate("ForwardConnectedAnimation", BackdropImage);
+        }
+
         private void FavButton_Click(object sender, RoutedEventArgs e) => AddListClicked?.Invoke(this, EventArgs.Empty);
     }
 }

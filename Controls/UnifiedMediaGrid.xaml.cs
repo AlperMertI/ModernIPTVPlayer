@@ -15,7 +15,7 @@ namespace ModernIPTVPlayer.Controls
         // Events exposed to parent pages
         public event EventHandler<IMediaStream> ItemClicked;
         public event EventHandler<IMediaStream> PlayAction;
-        public event EventHandler<IMediaStream> DetailsAction;
+        public event EventHandler<MediaNavigationArgs> DetailsAction;
         public event EventHandler<IMediaStream> AddListAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> ColorExtracted;
 
@@ -85,6 +85,13 @@ namespace ModernIPTVPlayer.Controls
         {
             if (e.ClickedItem is IMediaStream stream)
             {
+                // Find the PosterCard to prepare animation from grid
+                var container = MediaGridView.ContainerFromItem(e.ClickedItem) as GridViewItem;
+                if (container != null && container.ContentTemplateRoot is PosterCard poster)
+                {
+                    poster.PrepareConnectedAnimation();
+                }
+
                 ItemClicked?.Invoke(this, stream);
             }
         }
@@ -263,20 +270,7 @@ namespace ModernIPTVPlayer.Controls
                 }
                 else if (sourceCard.DataContext is SeriesStream series)
                 {
-                    // Adapter for Series to LiveStream (ExpandedCard currently expects LiveStream)
-                    // We might need to overload LoadDataAsync in ExpandedCard later.
-                    // For now, let's create a fake LiveStream wrapper or modify ExpandedCard.
-                    // Let's modify ExpandedCard to accept IMediaStream eventually.
-                    // For this refactor step, we'll map manually.
-                    var adapter = new LiveStream 
-                    { 
-                        Name = series.Name, 
-                        StreamId = series.SeriesId, 
-                        IconUrl = series.Cover,
-                        // Series specific logic is missing inside ExpandedCard for now, 
-                        // but this gets the UI working.
-                    };
-                    await ActiveExpandedCard.LoadDataAsync(adapter);
+                    await ActiveExpandedCard.LoadDataAsync(series);
                 }
             }
             catch (Exception ex)
@@ -331,8 +325,19 @@ namespace ModernIPTVPlayer.Controls
         // CARD EVENTS
         // ==========================================
         private void ExpandedCard_PlayClicked(object sender, EventArgs e) => TriggerEvent(PlayAction);
-        private void ExpandedCard_DetailsClicked(object sender, EventArgs e) => TriggerEvent(DetailsAction);
+        private void ExpandedCard_DetailsClicked(object sender, TmdbMovieResult tmdb) => TriggerDetailsEvent(tmdb);
         private void ExpandedCard_AddListClicked(object sender, EventArgs e) => TriggerEvent(AddListAction);
+
+        private void TriggerDetailsEvent(TmdbMovieResult tmdb)
+        {
+            if (ActiveExpandedCard.Visibility == Visibility.Visible)
+            {
+                if (_pendingHoverCard?.DataContext is IMediaStream item)
+                {
+                    DetailsAction?.Invoke(this, new MediaNavigationArgs(item, tmdb));
+                }
+            }
+        }
 
         private void TriggerEvent(EventHandler<IMediaStream> handler)
         {

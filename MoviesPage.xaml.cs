@@ -19,6 +19,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Linq;
 using ModernIPTVPlayer.Controls;
+using ModernIPTVPlayer.Models;
 using System.Numerics;
 
 namespace ModernIPTVPlayer
@@ -250,7 +251,7 @@ namespace ModernIPTVPlayer
 
         private void MediaGrid_ItemClicked(object sender, ModernIPTVPlayer.Models.IMediaStream e)
         {
-            Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
+            Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
         }
 
         private void MediaGrid_PlayAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
@@ -264,10 +265,10 @@ namespace ModernIPTVPlayer
              // For now just handle LiveStream or Log
         }
 
-        private void MediaGrid_DetailsAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
+        private void MediaGrid_DetailsAction(object sender, ModernIPTVPlayer.Models.MediaNavigationArgs e)
         {
              // Navigate to new MediaInfoPage with animation
-             Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
+             Frame.Navigate(typeof(MediaInfoPage), e, new SuppressNavigationTransitionInfo());
         }
 
         private void MediaGrid_AddListAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)

@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="using:ModernIPTVPlayer"
+    xmlns:controls="using:ModernIPTVPlayer.Controls"
     xmlns:mpv="using:MpvWinUI"
     mc:Ignorable="d"
     NavigationCacheMode="Enabled"
@@ -86,98 +87,101 @@
     </Page.Resources>
 
     <Grid>
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="AdaptiveStates">
+                <VisualState x:Name="Wide">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1200" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="MainSplitView.DisplayMode" Value="Inline"/>
+                        <Setter Target="MainSplitView.IsPaneOpen" Value="True"/>
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Narrow">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="MainSplitView.DisplayMode" Value="Overlay"/>
+                        <Setter Target="MainSplitView.IsPaneOpen" Value="False"/>
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
         <Grid.Background>
             <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
                 <GradientStop Color="#FF0F1115" Offset="0.0"/>
                 <GradientStop Color="#FF181B24" Offset="1.0"/>
             </LinearGradientBrush>
         </Grid.Background>
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="260"/> <!-- Slightly narrower Sidebar -->
-            <ColumnDefinition Width="*"/>   <!-- Content -->
-        </Grid.ColumnDefinitions>
+
 
         <!-- SIDEBAR -->
         <!-- Lighter background with acrylic-like tint -->
-        <Grid Grid.Column="0" Background="#99181818" BorderBrush="#1FFFFFFF" BorderThickness="0,0,1,0">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/> <!-- Search -->
-                <RowDefinition Height="*"/>    <!-- List -->
-            </Grid.RowDefinitions>
+        <SplitView x:Name="MainSplitView" 
+                   DisplayMode="Overlay" IsPaneOpen="False" CompactPaneLength="0" OpenPaneLength="260" 
+                   PaneBackground="#E6181818" LightDismissOverlayMode="On">
+            <SplitView.Pane>
+                <Grid Background="Transparent" BorderBrush="#1FFFFFFF" BorderThickness="0,0,1,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
 
-            <!-- Search Box -->
-            <Grid Grid.Row="0" Margin="12,20,12,12">
-                <TextBox x:Name="SearchBox"
-                         PlaceholderText="Ara..."
-                         TextChanged="SearchBox_TextChanged"
-                         CornerRadius="6"
-                         BorderThickness="0"
-                         Background="#1AFFFFFF"
-                         Foreground="White"
-                         Padding="10,8"
-                         PlaceholderForeground="#99FFFFFF"/>
-            </Grid>
+                    <Grid Grid.Row="0" Margin="12,20,12,12">
+                        <TextBox x:Name="SearchBox" PlaceholderText="Ara..." TextChanged="SearchBox_TextChanged" CornerRadius="6" BorderThickness="0" Background="#1AFFFFFF" Foreground="White" Padding="10,8" PlaceholderForeground="#99FFFFFF"/>
+                    </Grid>
 
-            <!-- Category List -->
-            <ListView x:Name="CategoryListView"
-                      Grid.Row="1"
-                      SelectionMode="Single"
-                      ItemClick="CategoryListView_ItemClick"
-                      IsItemClickEnabled="True"
-                      Padding="8,0"
-                      PreviewKeyDown="CategoryListView_PreviewKeyDown"
-                      ItemContainerStyle="{StaticResource CategoryItemStyle}">
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="local:LiveCategory">
-                        <Grid Padding="12,6"> <!-- Reduced Inner Padding -->
-                            <TextBlock Text="{x:Bind CategoryName}" 
-                                       FontSize="15" 
-                                       FontWeight="Medium" 
-                                       Foreground="#EFFFFFFF" 
-                                       TextTrimming="CharacterEllipsis"/>
-                        </Grid>
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-            </ListView>
+                    <ListView x:Name="CategoryListView" Grid.Row="1" SelectionMode="Single" ItemClick="CategoryListView_ItemClick" IsItemClickEnabled="True" Padding="8,0" ItemContainerStyle="{StaticResource CategoryItemStyle}">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="local:LiveCategory">
+                                <Grid Padding="12,6">
+                                    <TextBlock Text="{x:Bind CategoryName}" FontSize="15" FontWeight="Medium" Foreground="#EFFFFFFF" TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
 
-            <!-- Loading Ring (Sidebar) -->
-            <ProgressRing x:Name="SidebarLoadingRing" IsActive="False"
-                          Grid.RowSpan="2"
-                          Width="40" Height="40"
-                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
-        </Grid>
+                    <ProgressRing x:Name="SidebarLoadingRing" IsActive="False" Grid.RowSpan="2" Width="40" Height="40" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Grid>
+            </SplitView.Pane>
 
         <!-- CONTENT AREA (Right Side) -->
-        <Grid Grid.Column="1">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/> <!-- Action Header -->
-                <RowDefinition Height="Auto"/> <!-- Hero Area (Recently Watched) -->
-                <RowDefinition Height="*"/>    <!-- Channel Grid -->
-            </Grid.RowDefinitions>
+            <SplitView.Content>
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
 
-            <!-- 1. ACTION HEADER -->
-            <Grid Grid.Row="0" Height="60" Padding="32,0,32,0" Background="Transparent">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+                    <Grid Height="60" Padding="12,0,32,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
 
-                <!-- Left: Title -->
-                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-                    <FontIcon Glyph="&#xE7F4;" FontSize="20" Foreground="#FF00B7C3"/> <!-- Accent Color Icon -->
-                    <TextBlock Text="Canlı TV" FontSize="20" FontWeight="SemiBold" Foreground="White"/>
-                </StackPanel>
+                        <Button Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" VerticalAlignment="Center">
+                            <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
+                        </Button>
 
-                <!-- Right: Actions -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="24" VerticalAlignment="Center">
-                    <!-- Clock -->
-                    <TextBlock x:Name="ClockTextBlock" Text="00:00" 
-                               FontSize="16" FontWeight="Normal" Foreground="#99FFFFFF" 
-                               VerticalAlignment="Center" Margin="0,0,12,0"/>
-                    
-                    <AppBarButton Icon="Refresh" Width="40" Height="40" ToolTipService.ToolTip="Yenile" Click="RefreshButton_Click"/>
-                    <AppBarButton Icon="Sort" Width="40" Height="40" ToolTipService.ToolTip="Sırala" Click="SortButton_Click"/>
-                </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center" Margin="12,0,0,0">
+                            <FontIcon Glyph="&#xE7F4;" FontSize="20" Foreground="#FF00B7C3"/> <!-- Accent Color Icon -->
+                            <TextBlock Text="Canlı TV" FontSize="20" FontWeight="SemiBold" Foreground="White"/>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="24" VerticalAlignment="Center">
+                            <!-- Clock -->
+                            <TextBlock x:Name="ClockTextBlock" Text="00:00" 
+                                       FontSize="16" FontWeight="Normal" Foreground="#99FFFFFF" 
+                                       VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            
+                            <AppBarButton Icon="Refresh" Width="40" Height="40" ToolTipService.ToolTip="Yenile" Click="RefreshButton_Click"/>
+                            <AppBarButton Icon="Sort" Width="40" Height="40" ToolTipService.ToolTip="Sırala" Click="SortButton_Click"/>
+                            <controls:DownloadStatusButton />
+                        </StackPanel>
             </Grid>
 
             <!-- 2. HERO AREA (Recently Watched) -->
@@ -341,7 +345,7 @@
                 </GridView.ItemTemplate>
                 <GridView.ItemsPanel>
                     <ItemsPanelTemplate>
-                        <ItemsWrapGrid Orientation="Horizontal" Loaded="ItemsWrapGrid_Loaded" ItemHeight="80"/>
+                        <ItemsWrapGrid Orientation="Horizontal" Loaded="ItemsWrapGrid_Loaded" ItemHeight="80" HorizontalAlignment="Center"/>
                     </ItemsPanelTemplate>
                 </GridView.ItemsPanel>
             </GridView>
@@ -364,8 +368,8 @@
                 <TextBlock Text="Kanal bulunamadı." FontSize="18" Foreground="#FFDDDDDD" HorizontalAlignment="Center"/>
             </StackPanel>
         </Grid>
-        
-
-    </Grid>
+                </Grid>
+            </SplitView.Content>
+        </SplitView>
     </Grid>
 </Page>

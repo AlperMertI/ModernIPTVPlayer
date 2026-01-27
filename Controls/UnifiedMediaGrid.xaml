@@ -47,6 +47,12 @@
                 </TransitionCollection>
             </GridView.ItemContainerTransitions>
 
+            <GridView.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <ItemsWrapGrid Orientation="Horizontal" HorizontalAlignment="Center"/>
+                </ItemsPanelTemplate>
+            </GridView.ItemsPanel>
+
             <GridView.ItemTemplate>
                 <DataTemplate>
                     <local:PosterCard 

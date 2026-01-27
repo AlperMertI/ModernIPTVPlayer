@@ -122,5 +122,10 @@ namespace ModernIPTVPlayer.Controls
                 TiltProjection.RotationX = yDiff / 15.0;
             }
         }
+        public void PrepareConnectedAnimation()
+        {
+            ConnectedAnimationService.GetForCurrentView()
+                .PrepareToAnimate("ForwardConnectedAnimation", PosterImage);
+        }
     }
 }

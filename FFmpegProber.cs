@@ -14,19 +14,19 @@ namespace ModernIPTVPlayer
         // Path to the ffprobe executable found on the system
         private const string FfprobePath = @"C:\Users\mertg\Documents\Stremio\stremio-community-v5\dist\win-x64\ffprobe.exe";
 
-        public async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success)> ProbeAsync(string url)
+        public async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr)> ProbeAsync(string url)
         {
             if (!File.Exists(FfprobePath))
             {
-                return ("No ffprobe", "-", "-", 0, false);
+                return ("No ffprobe", "-", "-", 0, false, false);
             }
 
             try
             {
                 var sw = Stopwatch.StartNew();
                 
-                // ffprobe command - Extracting Stream AND Format info for Bitrate
-                string args = $"-v error -probesize 256000 -analyzeduration 200000 -select_streams v:0 -show_entries stream=width,height,avg_frame_rate,r_frame_rate,codec_name,bit_rate -show_entries format=bit_rate -of json \"{url}\"";
+                // ffprobe command - Extracting Stream AND Format info for Bitrate AND HDR info
+                string args = $"-v error -probesize 256000 -analyzeduration 200000 -select_streams v:0 -show_entries stream=width,height,avg_frame_rate,r_frame_rate,codec_name,bit_rate,color_primaries,color_transfer -show_entries format=bit_rate -of json \"{url}\"";
 
                 var startInfo = new ProcessStartInfo
                 {
@@ -56,7 +56,7 @@ namespace ModernIPTVPlayer
                 {
                     try { process.Kill(); } catch { }
                     Debug.WriteLine($"[FFmpegProber] TIMEOUT for {url} after {probeEndTime}ms");
-                    return ("Timeout", "-", "-", 0, false);
+                    return ("Timeout", "-", "-", 0L, false, false);
                 }
 
                 string output = await readTask;
@@ -67,11 +67,10 @@ namespace ModernIPTVPlayer
                 Debug.WriteLine($"  - Process Start: {startProcessTime - initTime}ms");
                 Debug.WriteLine($"  - Data Read (Network/Probe): {probeEndTime - startProcessTime}ms");
                 Debug.WriteLine($"  - Total: {totalTime}ms");
-                // The Bitrate will be logged after parsing.
 
                 if (string.IsNullOrWhiteSpace(output))
                 {
-                    return ("No Data", "-", "-", 0, false);
+                    return ("No Data", "-", "-", 0L, false, false);
                 }
 
                 // Parse JSON
@@ -88,7 +87,7 @@ namespace ModernIPTVPlayer
                     if (!string.IsNullOrEmpty(stream.BitRate) && long.TryParse(stream.BitRate, out long sbr)) br = sbr;
                     else if (result.Format != null && !string.IsNullOrEmpty(result.Format.BitRate) && long.TryParse(result.Format.BitRate, out long fbr)) br = fbr;
 
-                    // Parse FPS... (Keep existing logic)
+                    // Parse FPS
                     string fps = "- fps";
                     string rawFps = !string.IsNullOrEmpty(stream.AvgFrameRate) && stream.AvgFrameRate != "0/0" 
                         ? stream.AvgFrameRate 
@@ -118,16 +117,20 @@ namespace ModernIPTVPlayer
                     if (codec.Contains("H264")) codec = "H.264";
                     else if (codec.Contains("HEVC") || codec.Contains("H265")) codec = "HEVC";
 
-                    Debug.WriteLine($"  - Bitrate: {br} bps");
-                    return (res, fps, codec, br, true);
+                    // HDR Detection
+                    bool isHdr = false;
+                    if (!string.IsNullOrEmpty(stream.ColorPrimaries) && stream.ColorPrimaries.Contains("bt2020")) isHdr = true;
+                    if (!string.IsNullOrEmpty(stream.ColorTransfer) && (stream.ColorTransfer == "smpte2084" || stream.ColorTransfer == "arib-std-b67")) isHdr = true;
+
+                    return (res, fps, codec, br, true, isHdr);
                 }
 
-                return ("Unknown", "-", "-", 0, false);
+                return ("Unknown", "-", "-", 0L, false, false);
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"FFmpegProber Error: {ex.Message}");
-                return ("Error", "-", "-", 0, false);
+                return ("Error", "-", "-", 0L, false, false);
             }
         }
 
@@ -165,6 +168,12 @@ namespace ModernIPTVPlayer
 
             [JsonPropertyName("bit_rate")]
             public string BitRate { get; set; }
+
+            [JsonPropertyName("color_primaries")]
+            public string ColorPrimaries { get; set; }
+
+            [JsonPropertyName("color_transfer")]
+            public string ColorTransfer { get; set; }
         }
     }
 }

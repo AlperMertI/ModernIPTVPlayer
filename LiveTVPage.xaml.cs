@@ -525,6 +525,7 @@ namespace ModernIPTVPlayer
                             item.Codec = result.Codec;
                             item.Bitrate = result.Bitrate;
                             item.IsOnline = result.Success;
+                            item.IsHdr = result.IsHdr;
                             item.IsProbing = false;
                         });
 
@@ -600,6 +601,7 @@ namespace ModernIPTVPlayer
                     stream.Codec = result.Codec;
                     stream.Bitrate = result.Bitrate;
                     stream.IsOnline = result.Success;
+                    stream.IsHdr = result.IsHdr;
                 }
                 finally
                 {
@@ -612,6 +614,11 @@ namespace ModernIPTVPlayer
         {
             _isSortedAscending = !_isSortedAscending;
             UpdateChannelList();
+        }
+
+        private void ToggleSidebar_Click(object sender, RoutedEventArgs e)
+        {
+            MainSplitView.IsPaneOpen = !MainSplitView.IsPaneOpen;
         }
 
 

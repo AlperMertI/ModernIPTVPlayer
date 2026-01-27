@@ -35,6 +35,29 @@
     </Page.Resources>
 
     <Grid Background="#FF0D0D0D" PointerExited="RootGrid_PointerExited">
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="AdaptiveStates">
+                <VisualState x:Name="Wide">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="1100" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="MainSplitView.DisplayMode" Value="Inline"/>
+                        <Setter Target="MainSplitView.IsPaneOpen" Value="True"/>
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Narrow">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="MainSplitView.DisplayMode" Value="Overlay"/>
+                        <Setter Target="MainSplitView.IsPaneOpen" Value="False"/>
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
         <!-- Dynamic Backdrop - Original 3-Layer Radial Gradient System -->
         <!-- Dynamic Backdrop Control -->
         <controls:DynamicBackdrop x:Name="BackdropControl" />
@@ -218,6 +241,7 @@
                                      BorderThickness="0">
                                  <FontIcon Glyph="&#xE721;" FontSize="18" Foreground="White"/>
                              </Button>
+                             <controls:DownloadStatusButton />
                         </StackPanel>
                     </Grid>
 

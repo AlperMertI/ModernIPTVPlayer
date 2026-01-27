@@ -15,6 +15,10 @@ namespace ModernIPTVPlayer
         public int Id => StreamId;
         public string Title => Name;
         public string PosterUrl => IconUrl;
+        
+        // Custom
+        public string Year { get; set; } // Added for TMDB filtering
+
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -90,6 +94,13 @@ namespace ModernIPTVPlayer
         {
             get => _codec;
             set { _codec = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); }
+        }
+
+        private bool _isHdr = false;
+        public bool IsHdr
+        {
+            get => _isHdr;
+            set { _isHdr = value; OnPropertyChanged(); }
         }
 
         private bool _isProbing = false;

@@ -1,0 +1,25 @@
+<UserControl
+    x:Class="ModernIPTVPlayer.Controls.ShimmerControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    d:DesignHeight="20"
+    d:DesignWidth="200">
+
+    <Grid CornerRadius="4" Background="#1AFFFFFF">
+        <Rectangle x:Name="ShimmerRect" Width="400">
+            <Rectangle.Fill>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                    <GradientStop Color="Transparent" Offset="0"/>
+                    <GradientStop Color="#15FFFFFF" Offset="0.5"/>
+                    <GradientStop Color="Transparent" Offset="1"/>
+                </LinearGradientBrush>
+            </Rectangle.Fill>
+            <Rectangle.RenderTransform>
+                <TranslateTransform x:Name="ShimmerTransform" X="-400"/>
+            </Rectangle.RenderTransform>
+        </Rectangle>
+    </Grid>
+</UserControl>

@@ -10,6 +10,23 @@
                 <ResourceDictionary Source="ms-appx:///Mpv.UI/Themes/Generic.xaml"/>
 
             </ResourceDictionary.MergedDictionaries>
+            
+            <Style x:Key="GlassButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="#1AFFFFFF"/>
+                <Setter Property="BorderBrush" Value="#33FFFFFF"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="Foreground" Value="White"/>
+                <Setter Property="CornerRadius" Value="4"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Grid Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="{TemplateBinding CornerRadius}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

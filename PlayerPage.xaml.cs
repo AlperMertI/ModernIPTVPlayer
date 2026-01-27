@@ -24,13 +24,14 @@ using Microsoft.UI.Xaml.Input;
 
 namespace ModernIPTVPlayer
 {
-    public record PlayerNavigationArgs(string Url, string Title);
+    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0);
 
     public sealed partial class PlayerPage : Page
     {
         private MpvPlayer? _mpvPlayer;
         private bool _useMpvPlayer = true;
         private string _streamUrl = string.Empty;
+        private PlayerNavigationArgs _navArgs;
         private bool _isPageLoaded = false;
         private string? _navigationError = null;
         private DispatcherTimer? _statsTimer;
@@ -153,9 +154,17 @@ namespace ModernIPTVPlayer
                 bool isMpegTs = (fileFormat == "mpegts");
 
                 // Heuristic: Live if explicitly not seekable, 
+                // Heuristic: Live if explicitly not seekable, 
                 // OR mpegts (IPTV) with short duration (e.g. < 10 mins treated as rolling buffer).
                 bool isLikelyLive = (!isSeekable) 
                                     || (isMpegTs && duration > 0 && duration < 600); 
+
+                // Track Progress (VOD only)
+                if (!isLikelyLive && _navArgs != null && position > 1 && duration > 0)
+                {
+                     string id = !string.IsNullOrEmpty(_navArgs.Id) ? _navArgs.Id : _navArgs.Url;
+                     HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode);
+                }
 
                 if (!isLikelyLive)
                 {
@@ -386,11 +395,13 @@ namespace ModernIPTVPlayer
             {
                 _streamUrl = url;
                 VideoTitleText.Text = ""; // No title provided
+                _navArgs = new PlayerNavigationArgs(url, "");
             }
             else if (e.Parameter is PlayerNavigationArgs args)
             {
                 _streamUrl = args.Url;
                 VideoTitleText.Text = args.Title;
+                _navArgs = args;
             }
             else
             {
@@ -406,6 +417,9 @@ namespace ModernIPTVPlayer
             StopCursorTimer();
             _seekDebounceTimer?.Stop();
             _isPageLoaded = false;
+            
+            // Save Progress
+            _ = HistoryManager.Instance.SaveAsync();
 
             if (_isFullScreen)
             {

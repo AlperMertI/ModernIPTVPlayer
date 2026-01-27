@@ -16,6 +16,7 @@ using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Linq;
+using ModernIPTVPlayer.Models;
 
 namespace ModernIPTVPlayer
 {
@@ -37,20 +38,20 @@ namespace ModernIPTVPlayer
 
         private void MediaGrid_ItemClicked(object sender, ModernIPTVPlayer.Models.IMediaStream e)
         {
-             Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
+             Frame.Navigate(typeof(MediaInfoPage), new ModernIPTVPlayer.Models.MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
         }
 
         private void MediaGrid_PlayAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
         {
             // For Series, play intent usually means resume or play first.
             // Navigating to details allows user to pick.
-            Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
+            Frame.Navigate(typeof(MediaInfoPage), new ModernIPTVPlayer.Models.MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
         }
         
-        private void MediaGrid_DetailsAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
+        private void MediaGrid_DetailsAction(object sender, ModernIPTVPlayer.Models.MediaNavigationArgs e)
         {
              // Navigate to new MediaInfoPage with animation
-             Frame.Navigate(typeof(MediaInfoPage), e, new DrillInNavigationTransitionInfo());
+             Frame.Navigate(typeof(MediaInfoPage), e, new SuppressNavigationTransitionInfo());
         }
         
         private void MediaGrid_AddListAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
