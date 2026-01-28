@@ -18,6 +18,9 @@ namespace ModernIPTVPlayer
         
         // Custom
         public string Year { get; set; } // Added for TMDB filtering
+        
+        [JsonIgnore]
+        public TmdbMovieResult TmdbInfo { get; set; }
 
 
         public event PropertyChangedEventHandler? PropertyChanged;

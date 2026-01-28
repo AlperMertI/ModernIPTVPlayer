@@ -24,10 +24,11 @@ using Microsoft.UI.Xaml.Input;
 
 namespace ModernIPTVPlayer
 {
-    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0);
+    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1);
 
     public sealed partial class PlayerPage : Page
     {
+
         private MpvPlayer? _mpvPlayer;
         private bool _useMpvPlayer = true;
         private string _streamUrl = string.Empty;
@@ -67,6 +68,11 @@ namespace ModernIPTVPlayer
         public PlayerPage()
         {
             this.InitializeComponent();
+
+            // UI Audio Feedback Setup
+            this.ElementSoundMode = global::Microsoft.UI.Xaml.ElementSoundMode.Off;
+            BackButton.ElementSoundMode = global::Microsoft.UI.Xaml.ElementSoundMode.Default;
+
             this.Loaded += PlayerPage_Loaded;
             // Hide default back button since we have a custom one and pane is closed
             // But navigation service back requests still need handling in MainWindow
@@ -90,12 +96,21 @@ namespace ModernIPTVPlayer
             SpeedOverlay.AddHandler(PointerExitedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SpeedOverlay_PointerReleased), true);
             SpeedOverlay.AddHandler(PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SpeedOverlay_PointerReleased), true);
             SpeedOverlay.AddHandler(PointerCanceledEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SpeedOverlay_PointerReleased), true);
+
+            // [FIX] SeekSlider Pointer Events - Handle Handled Events too!
+            // The Slider control swallows PointerPressed (Handled=true) for its own logic.
+            // We must use AddHandler(..., true) to detect the start of a drag reliably.
+            SeekSlider.AddHandler(PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerPressed), true);
+            SeekSlider.AddHandler(PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerReleased), true);
+            SeekSlider.AddHandler(PointerCanceledEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerReleased), true);
+            SeekSlider.AddHandler(PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerCaptureLost), true);
         }
 
 
 
         private void BackButton_Click(object sender, RoutedEventArgs e)
         {
+            ElementSoundPlayer.Play(ElementSoundKind.GoBack);
             if (Frame.CanGoBack)
             {
                 Frame.GoBack();
@@ -175,7 +190,7 @@ namespace ModernIPTVPlayer
                     SeekSlider.IsEnabled = true;
 
                     // Only update slider if user is completely hands-off
-                    if (!_isDragging && (DateTime.Now - _lastSeekTime).TotalSeconds > 1.5)
+                    if (!_isDragging && (DateTime.Now - _lastSeekTime).TotalSeconds > 3.0)
                     {
                         SeekSlider.Maximum = duration;
                         SeekSlider.Value = position;
@@ -387,6 +402,27 @@ namespace ModernIPTVPlayer
             }
         }
 
+        protected override async void OnKeyDown(KeyRoutedEventArgs e)
+        {
+            base.OnKeyDown(e);
+            if (_mpvPlayer == null) return;
+
+            if (e.Key == Windows.System.VirtualKey.Left)
+            {
+                // Seek Backward 10s
+                ShowOsd("-10 SN");
+                await _mpvPlayer.ExecuteCommandAsync("seek", "-10", "relative");
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Right)
+            {
+                // Seek Forward 30s
+                ShowOsd("+30 SN");
+                await _mpvPlayer.ExecuteCommandAsync("seek", "30", "relative");
+                e.Handled = true;
+            }
+        }
+
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
             base.OnNavigatedTo(e);
@@ -568,8 +604,48 @@ namespace ModernIPTVPlayer
                     var checkCache = await _mpvPlayer.GetPropertyAsync("cache");
                     System.Diagnostics.Debug.WriteLine($"[HANDOFF_DIAG] Cache: {checkCache} | MaxBytes: {checkBytes} | Secs: {checkSecs}");
 
-                    // It is already playing or paused. Ensure playing.
-                    await _mpvPlayer.SetPropertyAsync("pause", "no");
+                    // RESTART / RESUME OVERRIDE with SEQUENCE
+                    // RESTART / RESUME OVERRIDE with ROBUST POLLING
+                    if (_navArgs != null && _navArgs.StartSeconds >= 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[HANDOFF] Enforcing Start Position: {_navArgs.StartSeconds} (While Paused)");
+                        
+                        bool seekSuccess = false;
+                        int retries = 0;
+                        while (retries < 20) // Try for up to 2 seconds
+                        {
+                            try 
+                            {
+                                // Check if seekable
+                                var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
+                                if (seekable == "yes")
+                                {
+                                    // 1. Force Seek (Player is PAUSED, so no bad frames shown)
+                                    await _mpvPlayer.ExecuteCommandAsync("seek", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
+                                    System.Diagnostics.Debug.WriteLine("[HANDOFF] Seek Command Accepted.");
+                                    seekSuccess = true;
+                                    break;
+                                }
+                            }
+                            catch (Exception ex) 
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[HANDOFF] Seek/Check Failed (Retry {retries}): {ex.Message}");
+                            }
+                            
+                            await Task.Delay(100);
+                            retries++;
+                        }
+                        
+                        if (!seekSuccess) System.Diagnostics.Debug.WriteLine("[HANDOFF] Gave up seeking after timeout.");
+
+                        // 2. Unpause ONLY after seek command is dispatched (or timeout)
+                        await _mpvPlayer.SetPropertyAsync("pause", "no");
+                    }
+                    else
+                    {
+                        // Standard Resume (Just unpause what was handed off)
+                        await _mpvPlayer.SetPropertyAsync("pause", "no");
+                    }
 
                     // Start Stats Timer
                     _statsTimer?.Start();
@@ -787,14 +863,24 @@ namespace ModernIPTVPlayer
             await _mpvPlayer.ExecuteCommandAsync("seek", val.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
         }
 
-        private void SeekSlider_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        private void SeekSlider_PointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            // Just reset the flag, don't trigger a seek if capture was lost involuntarily
+            _isDragging = false;
+        }
+
+        private async void SeekSlider_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
         {
              e.Handled = true;
              if (_mpvPlayer != null && SeekSlider.ActualWidth > 0)
              {
                  var pos = e.GetPosition(SeekSlider);
                  var ratio = pos.X / SeekSlider.ActualWidth;
-                 SeekSlider.Value = ratio * SeekSlider.Maximum;
+                 var newVal = ratio * SeekSlider.Maximum;
+                 SeekSlider.Value = newVal;
+
+                 _lastSeekTime = DateTime.Now;
+                 await _mpvPlayer.ExecuteCommandAsync("seek", newVal.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
              }
         }
 
@@ -912,6 +998,7 @@ namespace ModernIPTVPlayer
 
         private void ToggleFullScreen()
         {
+            System.Diagnostics.Debug.WriteLine($"[ToggleFullScreen] Toggling... Current State: {_isFullScreen}");
             _isFullScreen = !_isFullScreen;
             MainWindow.Current.SetFullScreen(_isFullScreen);
             FullScreenIcon.Glyph = _isFullScreen ? "\uE1D8" : "\uE1D9"; // E1D8=BackToWindow, E1D9=FullScreen
@@ -1488,7 +1575,9 @@ namespace ModernIPTVPlayer
                     }
                     
                     // Check by Name (Extra safety for specific controls)
-                    if (parent.Name == "VolumeSlider" || parent.Name == "SeekSlider" || parent.Name == "VolumeOverlay" || parent.Name == "TracksOverlay" || parent.Name == "SpeedOverlay")
+                    if (parent.Name == "VolumeSlider" || parent.Name == "SeekSlider" || parent.Name == "VolumeOverlay" || 
+                        parent.Name == "TracksOverlay" || parent.Name == "SpeedOverlay" || parent.Name == "FullScreenButton" || 
+                        parent.Name == "PlayPauseButton" || parent.Name == "StartButton" || parent.Name == "RewindButton" || parent.Name == "FastForwardButton")
                     {
                          _isGestureTarget = false;
                          return;
@@ -1522,6 +1611,9 @@ namespace ModernIPTVPlayer
 
         private void MainGrid_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {
+            // [FIX] Prevent gesture conflict: If we are scrubbing the seekbar, IGNORE any main grid gestures!
+            if (_isDragging) return;
+
             // ALWAYS reset timer on any movement to show controls
             ResetCursorTimer();
 
@@ -1613,6 +1705,9 @@ namespace ModernIPTVPlayer
 
         private void CursorTimer_Tick(object? sender, object e)
         {
+             // [FIX] Don't hide controls if user is interacting with the seekbar!
+             if (_isDragging) return;
+
              HideControls();
         }
 
@@ -1712,9 +1807,22 @@ namespace ModernIPTVPlayer
         }
 
         // ---------- DOUBLE TAP LOGIC ----------
+        // ---------- DOUBLE TAP LOGIC ----------
         private async void Page_DoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
         {
+            // [FIX] Ignore double taps if they originated from a control/button or if we were dragging
+            if (_isPointerDragging) return;
 
+            if (e.OriginalSource is FrameworkElement fe)
+            {
+               // Walk up to check for interactive parents
+               var parent = fe;
+               while (parent != null && parent != MainGrid)
+               {
+                   if (parent is Button || parent is Slider || parent is ToggleSwitch) return;
+                   parent = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetParent(parent) as FrameworkElement;
+               }
+            }
 
             var pos = e.GetPosition(MainGrid);
             double width = MainGrid.ActualWidth;

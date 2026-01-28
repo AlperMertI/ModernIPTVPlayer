@@ -115,10 +115,16 @@ namespace ModernIPTVPlayer
         }
         public void SetFullScreen(bool isFullScreen)
         {
-            var presenter = isFullScreen ? Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen : Microsoft.UI.Windowing.AppWindowPresenterKind.Default;
             if (this.AppWindow != null)
             {
-                this.AppWindow.SetPresenter(presenter);
+                if (isFullScreen)
+                {
+                    this.AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen);
+                }
+                else
+                {
+                    this.AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Default);
+                }
             }
         }
 

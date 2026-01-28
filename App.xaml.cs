@@ -149,6 +149,11 @@ Stack Trace:
         protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
         {
             MainWindow = new MainWindow();
+            
+            // Enable System-Wide Premium Audio (Cinematic Clicks)
+            ElementSoundPlayer.State = ElementSoundPlayerState.On;
+            ElementSoundPlayer.SpatialAudioMode = ElementSpatialAudioMode.On;
+
             MainWindow.Activate();
         }
     }

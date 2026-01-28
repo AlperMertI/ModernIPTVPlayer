@@ -6,12 +6,43 @@ using ModernIPTVPlayer.Models;
 
 namespace ModernIPTVPlayer
 {
-    public class SeriesStream : IMediaStream
+    public class SeriesStream : IMediaStream, System.ComponentModel.INotifyPropertyChanged
     {
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        private void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null) => 
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+
+        // Metadata for the currently active/probed episode
+        private string _resolution = "";
+        public string Resolution { get => _resolution; set { _resolution = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); } }
+
+        private string _fps = "";
+        public string Fps { get => _fps; set { _fps = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); } }
+
+        private string _codec = "";
+        public string Codec { get => _codec; set { _codec = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); } }
+
+        private bool _isHdr = false;
+        public bool IsHdr { get => _isHdr; set { _isHdr = value; OnPropertyChanged(); } }
+
+        private bool _isProbing = false;
+        public bool IsProbing { get => _isProbing; set { _isProbing = value; OnPropertyChanged(); } }
+
+        public bool HasMetadata => !string.IsNullOrEmpty(Resolution);
+        
+        private long _bitrate;
+        public long Bitrate { get => _bitrate; set { _bitrate = value; OnPropertyChanged(); } }
+
+        private bool? _isOnline;
+        public bool? IsOnline { get => _isOnline; set { _isOnline = value; OnPropertyChanged(); } }
+
         // IMediaStream Implementation
         public int Id => SeriesId;
         public string Title => Name;
         public string PosterUrl => Cover;
+        
+        [JsonIgnore]
+        public TmdbMovieResult TmdbInfo { get; set; }
 
         [JsonPropertyName("num")]
         public object Num { get; set; } // Sometimes int, sometimes string

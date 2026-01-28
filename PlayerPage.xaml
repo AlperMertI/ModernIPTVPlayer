@@ -7,11 +7,14 @@
     
     xmlns:mpv="using:MpvWinUI"
     xmlns:Media="using:Microsoft.UI.Xaml.Media"
+    xmlns:local="using:ModernIPTVPlayer"
 
     mc:Ignorable="d"
     Background="Black">
 
     <Page.Resources>
+        <local:TickToTimeConverter x:Key="TickToTimeConverter"/>
+
         <!-- Animations for Tracks Overlay -->
         <Storyboard x:Name="ShowTracksOverlayAnim">
             <DoubleAnimation Storyboard.TargetName="TracksOverlay" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.2"/>
@@ -51,7 +54,7 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Padding="{TemplateBinding Padding}"/>
                             <VisualStateManager.VisualStateGroups>
                                 <VisualStateGroup x:Name="CommonStates">
                                     <VisualState x:Name="Normal"/>
@@ -117,7 +120,7 @@
                                 </Style>
                             </Grid.Resources>
                             <!-- Horizontal Template -->
-                            <Grid x:Name="HorizontalTemplate" MinHeight="32">
+                            <Grid x:Name="HorizontalTemplate" MinHeight="32" Background="Transparent">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="Auto"/>
@@ -200,9 +203,13 @@
                         VerticalAlignment="Stretch"
                         IsHitTestVisible="False"/>
 
+        <!-- Safety Blackout Layer - Prevents Desktop Flicker during MPV Resize -->
+        <Grid Background="Black" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+
         <Grid x:Name="PlayerContainer" 
               HorizontalAlignment="Stretch" 
-              VerticalAlignment="Stretch"/>
+              VerticalAlignment="Stretch"
+              Background="Black"/>
 
         <!-- 2. Brightness Overlay (Simulated Dimming) -->
         <Rectangle x:Name="BrightnessOverlay"
@@ -442,10 +449,9 @@
                             Grid.Row="1"
                             VerticalAlignment="Center"
                             IsThumbToolTipEnabled="True"
+                            ThumbToolTipValueConverter="{StaticResource TickToTimeConverter}"
                             IsEnabled="True"
                             Style="{StaticResource PremiumHorizontalSliderStyle}"
-                            PointerPressed="SeekSlider_PointerPressed"
-                            PointerReleased="SeekSlider_PointerReleased"
                             Tapped="SeekSlider_Tapped"
                             Visibility="Visible"/>
                 </Grid>

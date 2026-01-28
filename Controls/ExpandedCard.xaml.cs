@@ -311,21 +311,19 @@ namespace ModernIPTVPlayer.Controls
                 
                 // Parallel Execution: TMDB + Probing
                 Task<TmdbMovieResult?> tmdbTask;
+                string extractedYear = TmdbHelper.ExtractYear(stream.Title);
+                
                 if (stream is SeriesStream)
                 {
-                     tmdbTask = TmdbHelper.SearchTvAsync(stream.Title);
+                     tmdbTask = TmdbHelper.SearchTvAsync(stream.Title, extractedYear);
                 }
                 else
                 {
-                     tmdbTask = TmdbHelper.SearchMovieAsync(stream.Title);
+                     tmdbTask = TmdbHelper.SearchMovieAsync(stream.Title, extractedYear);
                 }
                 
-                // Probing only for LiveStream
-                Task probeTask = Task.CompletedTask;
-                if (stream is LiveStream live)
-                {
-                    probeTask = ProbeStreamInternal(live);
-                }
+                // Probing for everything (if applicable)
+                Task probeTask = ProbeStreamInternal(stream);
                 
                 await Task.WhenAll(tmdbTask, probeTask);
                 
@@ -335,6 +333,7 @@ namespace ModernIPTVPlayer.Controls
                 {
                     System.Diagnostics.Debug.WriteLine($"[ExpandedCard] TMDB Match: {tmdb.DisplayTitle} (ID: {tmdb.Id})");
                     _tmdbInfo = tmdb;
+                    if (stream != null) stream.TmdbInfo = tmdb; // Save to stream for later navigation
                     UpdateUiWithTmdb(tmdb);
                     
                     // Fetch and play trailer
@@ -374,25 +373,50 @@ namespace ModernIPTVPlayer.Controls
             }
         }
         
-        private async Task ProbeStreamInternal(LiveStream stream)
+        private async Task ProbeStreamInternal(IMediaStream stream)
         {
-            if (stream.HasMetadata || stream.IsProbing) return;
+            if (stream == null) return;
             
+            string url = null;
+            if (stream is LiveStream live)
+            {
+                if (live.HasMetadata || live.IsProbing) return;
+                url = live.StreamUrl;
+            }
+            else if (stream is SeriesStream series)
+            {
+                if (series.HasMetadata || series.IsProbing) return;
+                // For series, probe the last watched episode if any
+                var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+                if (history != null) url = history.StreamUrl;
+            }
+
+            if (string.IsNullOrEmpty(url)) return;
+
             try
             {
-                stream.IsProbing = true;
-                var result = await _prober.ProbeAsync(stream.StreamUrl);
+                // Check Cache FIRST
+                if (ProbeCacheManager.TryGet(url, out var cached))
+                {
+                    ApplyProbeResult(stream, cached);
+                    return;
+                }
+
+                SetProbing(stream, true);
+                var result = await _prober.ProbeAsync(url);
                 
-                stream.Resolution = result.Res;
-                stream.Fps = result.Fps;
-                stream.Codec = result.Codec;
-                stream.Bitrate = result.Bitrate;
-                stream.IsOnline = result.Success;
-                stream.IsHdr = result.IsHdr;
-                
-                // Update Tooltip on UI thread
-                UpdateTooltip(stream);
-                UpdatePlayButton(stream);
+                var probeResult = new ProbeResult
+                {
+                    Res = result.Res,
+                    Fps = result.Fps,
+                    Codec = result.Codec,
+                    Bitrate = result.Bitrate,
+                    Success = result.Success,
+                    IsHdr = result.IsHdr
+                };
+
+                ProbeCacheManager.Cache(url, probeResult);
+                ApplyProbeResult(stream, probeResult);
             }
             catch (Exception ex)
             {
@@ -400,8 +424,42 @@ namespace ModernIPTVPlayer.Controls
             }
             finally
             {
-                stream.IsProbing = false;
+                SetProbing(stream, false);
             }
+        }
+
+        private void SetProbing(IMediaStream stream, bool isProbing)
+        {
+            if (stream is LiveStream live) live.IsProbing = isProbing;
+            else if (stream is SeriesStream series) series.IsProbing = isProbing;
+        }
+
+        private void ApplyProbeResult(IMediaStream stream, ProbeResult result)
+        {
+            if (stream is LiveStream live)
+            {
+                live.Resolution = result.Res;
+                live.Fps = result.Fps;
+                live.Codec = result.Codec;
+                live.Bitrate = result.Bitrate;
+                live.IsOnline = result.Success;
+                live.IsHdr = result.IsHdr;
+            }
+            else if (stream is SeriesStream series)
+            {
+                series.Resolution = result.Res;
+                series.Fps = result.Fps;
+                series.Codec = result.Codec;
+                series.Bitrate = result.Bitrate;
+                series.IsOnline = result.Success;
+                series.IsHdr = result.IsHdr;
+            }
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                UpdateTooltip(stream);
+                UpdatePlayButton(stream);
+            });
         }
 
         private void UpdateTooltip(ModernIPTVPlayer.Models.IMediaStream stream)
@@ -442,15 +500,35 @@ namespace ModernIPTVPlayer.Controls
             // Fallback / Additional Guesses from Name
             string name = stream.Title.ToUpperInvariant();
 
+            // 2. Metadata Extraction (Unified)
+            string res = null;
+            string codecLabel = null;
+            bool? isHdrMetadata = null;
+            bool hasMetadata = false;
+
+            if (stream is LiveStream l)
+            {
+                res = l.Resolution;
+                codecLabel = l.Codec;
+                isHdrMetadata = l.IsHdr;
+                hasMetadata = l.HasMetadata;
+            }
+            else if (stream is SeriesStream s)
+            {
+                res = s.Resolution;
+                codecLabel = s.Codec;
+                isHdrMetadata = s.IsHdr;
+                hasMetadata = s.HasMetadata;
+            }
+
             // 2. RESOLUTION & 4K (DEDUPLICATION)
             bool is4K = name.Contains("4K") || name.Contains("UHD");
-            
-            if (stream is LiveStream l && !string.IsNullOrEmpty(l.Resolution))
+            if (!string.IsNullOrEmpty(res))
             {
-                if (l.Resolution.Contains("3840") || l.Resolution.Contains("4096")) is4K = true;
+                if (res.Contains("3840") || res.Contains("4096") || res.Contains("4K")) is4K = true;
                 
                 if (is4K) AddBadge("4K UHD", Colors.Purple);
-                else AddBadge(l.Resolution, Colors.Teal);
+                else AddBadge(res, Colors.Teal);
             }
             else
             {
@@ -460,14 +538,14 @@ namespace ModernIPTVPlayer.Controls
             }
 
             // Codec
-            if (stream is LiveStream lc && !string.IsNullOrEmpty(lc.Codec))
+            if (!string.IsNullOrEmpty(codecLabel))
             {
-                 AddBadge(lc.Codec.ToUpper(), Colors.Orange);
+                 AddBadge(codecLabel.ToUpper(), Colors.Orange);
             }
             else
             {
-                 bool hasCodec = TechBadgesPanel.Children.OfType<Border>().Any(b => (b.Child as TextBlock)?.Text.Contains("HEVC") == true || (b.Child as TextBlock)?.Text.Contains("264") == true);
-                 if(!hasCodec)
+                 bool hasCodecText = TechBadgesPanel.Children.OfType<Border>().Any(b => (b.Child as TextBlock)?.Text.Contains("HEVC") == true || (b.Child as TextBlock)?.Text.Contains("264") == true);
+                 if(!hasCodecText)
                  {
                     if (name.Contains("HEVC") || name.Contains("H.265") || name.Contains("X265") || name.Contains("H265")) 
                         AddBadge("HEVC", Colors.Orange);
@@ -477,18 +555,18 @@ namespace ModernIPTVPlayer.Controls
             }
 
             // 3. HDR / SDR
-            bool hdr = false;
-            if (stream is LiveStream lh && lh.HasMetadata) 
+            bool isHdrVisible = false;
+            if (hasMetadata) 
             {
-                hdr = lh.IsHdr;
+                isHdrVisible = isHdrMetadata ?? false;
             }
             else 
             {
-                hdr = name.Contains("HDR") || name.Contains("DOLBY") || name.Contains("DV");
+                isHdrVisible = name.Contains("HDR") || name.Contains("DOLBY") || name.Contains("DV");
             }
 
-            if (hdr) AddBadge("HDR", Colors.Gold);
-            else if (stream is LiveStream ls && ls.HasMetadata) AddBadge("SDR", Colors.DimGray);
+            if (isHdrVisible) AddBadge("HDR", Colors.Gold);
+            else if (hasMetadata) AddBadge("SDR", Colors.DimGray);
             
             // Standard Tooltip
             Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(PlayButton, stream.Title);

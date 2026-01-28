@@ -8,6 +8,7 @@ namespace ModernIPTVPlayer.Models
         string Title { get; }
         string PosterUrl { get; }
         string Rating { get; }
+        TmdbMovieResult TmdbInfo { get; set; }
         // We can add more common properties as needed for the Details Page
     }
 
@@ -19,7 +20,7 @@ namespace ModernIPTVPlayer.Models
         public MediaNavigationArgs(IMediaStream stream, TmdbMovieResult tmdbInfo = null)
         {
             Stream = stream;
-            TmdbInfo = tmdbInfo;
+            TmdbInfo = tmdbInfo ?? stream.TmdbInfo;
         }
     }
 }

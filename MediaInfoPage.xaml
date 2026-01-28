@@ -12,27 +12,27 @@
 
     <Page.Resources>
         <local:BooleanToVisibilityConverter x:Key="BoolToVis"/>
-        <!-- Glass Button Style -->
+        <!-- Premium Glass Button Style -->
         <Style x:Key="GlassButtonStyle" TargetType="Button">
-            <Setter Property="Background" Value="#22FFFFFF"/>
+            <Setter Property="Background" Value="#25FFFFFF"/>
             <Setter Property="Foreground" Value="White"/>
             <Setter Property="CornerRadius" Value="24"/>
             <Setter Property="Padding" Value="16,10"/>
             <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#44FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#40FFFFFF"/>
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Grid x:Name="RootGrid" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                        <Grid x:Name="RootGrid" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}" 
+                              BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
                             <VisualStateManager.VisualStateGroups>
                                 <VisualStateGroup x:Name="CommonStates">
                                     <VisualState x:Name="Normal"/>
                                     <VisualState x:Name="PointerOver">
                                         <Storyboard>
-                                            <ColorAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#44FFFFFF" Duration="0:0:0.2"/>
-                                            <ColorAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(Grid.BorderBrush).(SolidColorBrush.Color)" To="#88FFFFFF" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.12" Duration="0:0:0.15"/>
                                         </Storyboard>
                                     </VisualState>
                                     <VisualState x:Name="Pressed">
@@ -42,12 +42,18 @@
                                     </VisualState>
                                 </VisualStateGroup>
                             </VisualStateManager.VisualStateGroups>
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+                            <!-- Premium Hover Brilliance (Border supports CornerRadius) -->
+                            <Border x:Name="HoverOverlay" Background="White" Opacity="0" CornerRadius="{TemplateBinding CornerRadius}" IsHitTestVisible="False"/>
+                            
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Padding="{TemplateBinding Padding}"/>
                         </Grid>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
         </Style>
+
+
 
         <!-- Tech Badge Styles -->
         <LinearGradientBrush x:Key="GoldGradient" StartPoint="0,0" EndPoint="1,1">
@@ -68,359 +74,516 @@
     </Page.Resources>
 
     <Grid x:Name="RootGrid">
+
+        
+        <!-- 1. CINEMATIC BACKGROUND -->
+        <Grid x:Name="HeroContainer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="1"/>
+            
+            <!-- 2. AMBIENT BLOOM (Dynamic Ambilight) -->
+            <Rectangle x:Name="AmbientBloom" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Opacity="0" IsHitTestVisible="False">
+                <Rectangle.Fill>
+                    <RadialGradientBrush Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="1.0" RadiusY="1.0">
+                        <GradientStop Color="#00000000" Offset="0.3"/>
+                        <GradientStop x:Name="BloomColorStop" Color="#00000000" Offset="1"/>
+                    </RadialGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+
+
+            <!-- Readability Scrim (Ultra-Soft Radial Corner Fade) -->
+            <Rectangle x:Name="LocalInfoGradient" VerticalAlignment="Stretch" HorizontalAlignment="Left" Width="1400" 
+                       Opacity="0" IsHitTestVisible="False" Margin="-50,0,0,-50">
+                <Rectangle.Fill>
+                    <RadialGradientBrush Center="0,1" GradientOrigin="0,1" RadiusX="1.2" RadiusY="1.2">
+                        <GradientStop Color="#CC000000" Offset="0"/> 
+                        <GradientStop Color="#66000000" Offset="0.35"/>
+                        <GradientStop Color="#1A000000" Offset="0.7"/>
+                        <GradientStop Color="#00000000" Offset="1"/>
+                    </RadialGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+        </Grid>
+
+        
+
+
+        <!-- 2. MAIN CONTENT -->
+        <!-- Fixed root container, scrolling behavior handled via VSM -->
+        <Grid x:Name="LayoutRoot" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
+            <ScrollViewer x:Name="RootScrollViewer" 
+                          VerticalScrollBarVisibility="Disabled" 
+                          VerticalScrollMode="Disabled" 
+                          HorizontalScrollMode="Disabled" 
+                          VerticalContentAlignment="Stretch">
+            
+        <Grid x:Name="ContentGrid" Padding="60,0,20,60" VerticalAlignment="Stretch">
         <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup x:Name="WindowStates">
+            <VisualStateGroup>
                 <VisualState x:Name="WideState">
                     <VisualState.StateTriggers>
-                        <AdaptiveTrigger MinWindowWidth="1100"/>
+                        <!-- Sync threshold with C# logic (900px) -->
+                        <AdaptiveTrigger MinWindowWidth="900"/>
                     </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <!-- Aggressively lock the root scroller -->
+                        <Setter Target="RootScrollViewer.VerticalScrollBarVisibility" Value="Disabled"/>
+                        <Setter Target="RootScrollViewer.VerticalScrollMode" Value="Disabled"/>
+                        <Setter Target="RootScrollViewer.HorizontalScrollMode" Value="Disabled"/>
+                        <Setter Target="RootScrollViewer.IsVerticalScrollChainingEnabled" Value="False"/>
+                        
+                        <!-- Force content to stay within viewport bounds -->
+                        <Setter Target="Row0.Height" Value="*"/>
+                        <Setter Target="ContentGrid.RowDefinitions[1].Height" Value="0"/>
+                        <Setter Target="ContentGrid.RowDefinitions[2].Height" Value="0"/>
+                        <Setter Target="ContentGrid.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="ContentGrid.Padding" Value="60,0,20,0"/>
+                        <Setter Target="TitleText.FontSize" Value="48"/>
+                        
+                        <Setter Target="InfoContainer.VerticalAlignment" Value="Bottom"/>
+                        <Setter Target="InfoContainer.(Grid.RowSpan)" Value="1"/>
+                        <Setter Target="InfoColumn.Margin" Value="0,0,40,40"/>
+                        
+                        <Setter Target="EpisodesPanel.VerticalAlignment" Value="Center"/>
+                        <Setter Target="EpisodesPanel.(Grid.RowSpan)" Value="1"/>
+                        <Setter Target="EpisodesPanel.HorizontalAlignment" Value="Right"/>
+                    </VisualState.Setters>
                 </VisualState>
                 <VisualState x:Name="NarrowState">
                     <VisualState.StateTriggers>
                         <AdaptiveTrigger MinWindowWidth="0"/>
                     </VisualState.StateTriggers>
                     <VisualState.Setters>
-                        <!-- Stack Vertically -->
-                        <Setter Target="InfoColumn.Width" Value="*"/>
-                        <Setter Target="InfoColumn.MaxWidth" Value="Infinity"/>
-                        <Setter Target="EpisodesColumn.Width" Value="0"/>
+                        <!-- Enable scrolling only for Narrow mode -->
+                        <Setter Target="RootScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+                        <Setter Target="RootScrollViewer.VerticalScrollMode" Value="Auto"/>
                         
-                        <Setter Target="EpisodesPanel.(Grid.Row)" Value="1"/>
-                        <Setter Target="EpisodesPanel.(Grid.Column)" Value="0"/>
-                        <Setter Target="EpisodesPanel.Margin" Value="0,40,0,0"/>
+                        <Setter Target="Row0.Height" Value="Auto"/>
+                        <Setter Target="ContentGrid.Padding" Value="20,120,20,40"/>
+                        <Setter Target="TitleText.FontSize" Value="28"/>
                         
-                        <!-- Adjust ScrollViewer to not lock height -->
-                         <Setter Target="InfoScrollViewer.VerticalScrollBarVisibility" Value="Disabled"/>
+                        <Setter Target="InfoContainer.VerticalAlignment" Value="Top"/>
+                        <Setter Target="InfoContainer.(Grid.ColumnSpan)" Value="2"/>
+                        <Setter Target="InfoContainer.(Grid.RowSpan)" Value="1"/>
+                        <Setter Target="InfoColumn.Margin" Value="0,0,0,20"/>
+                        
+                        <Setter Target="EpisodesPanel.Visibility" Value="Collapsed"/>
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
+
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
         
-        <!-- 1. CINEMATIC BACKGROUND -->
-        <Grid x:Name="HeroContainer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
-            <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="1"/>
-            
-            <!-- Vignette Gradient -->
-            <Rectangle x:Name="VignetteEffect" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Opacity="0">
-                <Rectangle.Fill>
-                    <RadialGradientBrush Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.8" RadiusY="0.8">
-                        <GradientStop Color="#00000000" Offset="0"/>
-                        <GradientStop Color="#DD0D0D0D" Offset="1"/>
-                    </RadialGradientBrush>
-                </Rectangle.Fill>
-            </Rectangle>
-            
-            <!-- Vertical Gradient for Text Readability -->
-            <Rectangle x:Name="VerticalEffect" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Opacity="0">
-                <Rectangle.Fill>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                        <GradientStop Color="#00000000" Offset="0"/>
-                        <GradientStop Color="#CC0D0D0D" Offset="0.6"/>
-                        <GradientStop Color="#FF0D0D0D" Offset="1"/>
-                    </LinearGradientBrush>
-                </Rectangle.Fill>
-            </Rectangle>
-        </Grid>
-
+        <Grid.RowDefinitions>
+            <RowDefinition x:Name="Row0" Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
         
+        <!-- LEFT: INFO PANEL -->
+        <!-- SKELETON LOADER -->
+        <!-- LEFT: INFO PANEL -->
+        <!-- LEFT: INFO PANEL -->
+        <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Padding="0">
+            
 
+            <StackPanel x:Name="InfoColumn" Spacing="8" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,40"> 
+                 
+                 <!-- BADGES & METADATA -->
+                  <!-- BADGES & METADATA -->
+                  <!-- BADGES & METADATA -->
+                  <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="0,0,0,8">
+                      <!-- 1. Technical Section (Dynamic: Shimmer or Badges) -->
+                      <Grid>
+                          <StackPanel x:Name="TechBadgesContent" Orientation="Horizontal" Spacing="8" Opacity="0">
+                             <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
+                                 <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
+                             </Border>
+                             <Border x:Name="BadgeRes" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                 <TextBlock x:Name="BadgeResText" Text="1080P" FontSize="11" Foreground="#CCC"/>
+                             </Border>
+                             <Border x:Name="BadgeHDR" Visibility="Collapsed" BorderBrush="{StaticResource SilverGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
+                                 <TextBlock Text="HDR" FontSize="11" FontWeight="Bold" Foreground="{StaticResource SilverGradient}"/>
+                             </Border>
+                             <Border x:Name="BadgeSDR" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                 <TextBlock Text="SDR" FontSize="11" Foreground="#CCC"/>
+                             </Border>
+                             <Border x:Name="BadgeCodecContainer" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                 <TextBlock x:Name="BadgeCodec" Text="HEVC" FontSize="11" Foreground="#CCC"/>
+                             </Border>
+                          </StackPanel>
 
-        <!-- 2. SPLIT LAYOUT CONTENT -->
-        <Grid x:Name="ContentGrid" Padding="60,40,40,40">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="InfoColumn" Width="60*" MaxWidth="1200"/> <!-- Info Side -->
-                <ColumnDefinition x:Name="EpisodesColumn" Width="40*"/> <!-- Series Side -->
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="*"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+                          <StackPanel x:Name="MetadataShimmer" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                              <ctl:ShimmerControl Width="50" Height="22" CornerRadius="4"/>
+                              <ctl:ShimmerControl Width="35" Height="22" CornerRadius="4"/>
+                              <ctl:ShimmerControl Width="40" Height="22" CornerRadius="4"/>
+                          </StackPanel>
+                      </Grid>
 
-            <!-- LEFT: INFO PANEL -->
-            <ScrollViewer x:Name="InfoScrollViewer" Grid.Column="0" VerticalScrollBarVisibility="Hidden" HorizontalScrollMode="Disabled">
-                <StackPanel Spacing="24" VerticalAlignment="Bottom" Padding="0,200,40,40">
+                      <!-- 2. Steady Section (Year, Runtime) -->
+                      <StackPanel x:Name="MetadataPanel" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center" Opacity="0">
+                         <TextBlock x:Name="RuntimeText" Text="" Foreground="#BBB" FontSize="14"/>
+                         <TextBlock x:Name="YearText" Text="" Foreground="#BBB" FontSize="14"/>
+                      </StackPanel>
+                  </StackPanel>
+
+                 <!-- TITLE -->
+                 <Grid>
+                     <StackPanel x:Name="TitlePanel" Opacity="0">
+                         <TextBlock x:Name="SuperTitleText" Text="" FontSize="16" FontWeight="SemiBold" 
+                                    Foreground="{StaticResource GoldGradient}" Opacity="0.8" Margin="2,0,0,-4"
+                                    CharacterSpacing="100"/>
+                         <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Bold" 
+                                    TextWrapping="Wrap" Foreground="White" LineHeight="56">
+                            <TextBlock.Shadow>
+                                <ThemeShadow/>
+                            </TextBlock.Shadow>
+                        </TextBlock>
+                     </StackPanel>
                     
-                    <!-- Title & Meta -->
-                    <StackPanel Spacing="16">
-                        <!-- Tech Jewelry Row -->
-                        <!-- Technical Metadata Row moved into the content switch -->
+                    <ctl:ShimmerControl x:Name="TitleShimmer" Width="500" Height="56" CornerRadius="8" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                 </Grid>
 
-
-                        <!-- SKELETON LOADER (Initially Visible) -->
-                        <StackPanel x:Name="FullSkeleton" Spacing="16" HorizontalAlignment="Left">
-                            <!-- Tech Shimmer (Badges) -->
-                            <StackPanel Orientation="Horizontal" Spacing="12">
-                                <ctl:ShimmerControl Width="65" Height="22" CornerRadius="4" HorizontalAlignment="Left"/>
-                                <ctl:ShimmerControl Width="45" Height="22" CornerRadius="4" HorizontalAlignment="Left"/>
-                                <ctl:ShimmerControl Width="80" Height="22" CornerRadius="4" HorizontalAlignment="Left"/>
-                                <ctl:ShimmerControl Width="100" Height="22" CornerRadius="4" HorizontalAlignment="Left"/>
-                            </StackPanel>
-
-                            <!-- Title Shimmer (FontSize 42 -> Height 48) -->
-                            <ctl:ShimmerControl Width="500" Height="48" HorizontalAlignment="Left" CornerRadius="8"/>
-
-                            <!-- Action Bar Shimmer (Button Height 52) -->
-                            <StackPanel Orientation="Horizontal" Spacing="16">
-                                <ctl:ShimmerControl Width="140" Height="52" CornerRadius="26" HorizontalAlignment="Left"/> <!-- Play Button -->
-                                <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>  <!-- Icon Button -->
-                                <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>  <!-- Icon Button -->
-                                <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>  <!-- Icon Button -->
-                            </StackPanel>
-
-                            <!-- Genres & Overview Shimmer -->
-                            <ctl:ShimmerControl Width="250" Height="22" CornerRadius="4" HorizontalAlignment="Left"/>
-                            <StackPanel Spacing="6" HorizontalAlignment="Left"> <!-- 20px shimmer + 6px spacing = 26px line height sync -->
-                                <ctl:ShimmerControl Width="650" Height="20" CornerRadius="4" HorizontalAlignment="Left"/>
-                                <ctl:ShimmerControl Width="620" Height="20" CornerRadius="4" HorizontalAlignment="Left"/>
-                                <ctl:ShimmerControl Width="580" Height="20" CornerRadius="4" HorizontalAlignment="Left"/>
-                            </StackPanel>
-
-                            <!-- Cast Shimmer (Mirrors the cast list below) -->
-                            <StackPanel Spacing="12" Margin="0,16,0,0" HorizontalAlignment="Left"> 
-                                <ctl:ShimmerControl Width="120" Height="24" CornerRadius="4" HorizontalAlignment="Left"/>
-                                <StackPanel Orientation="Horizontal" Spacing="16">
-                                    <StackPanel Spacing="8">
-                                        <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
-                                        <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
-                                    </StackPanel>
-                                    <StackPanel Spacing="8">
-                                        <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
-                                        <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
-                                    </StackPanel>
-                                    <StackPanel Spacing="8">
-                                        <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
-                                        <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
-                                    </StackPanel>
-                                    <StackPanel Spacing="8">
-                                        <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
-                                        <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </StackPanel>
-                        </StackPanel>
-
-                        <!-- REAL CONTENT (Initially Hidden) -->
-                        <StackPanel x:Name="RealContentPanel" Spacing="16" Visibility="Collapsed">
+                <!-- ACTION BAR -->
+                <Grid>
+                    <StackPanel x:Name="ActionBarPanel" Orientation="Horizontal" Spacing="16" Opacity="0">
+                         <Button x:Name="PlayButton" Click="PlayButton_Click" Height="52" CornerRadius="26" Style="{StaticResource GlassButtonStyle}"
+                                 Background="#33FFFFFF" Foreground="White" Padding="32,0">
                              <StackPanel Orientation="Horizontal" Spacing="12">
-                                <!-- 4K Badge -->
-                                <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
-                                    <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
-                                </Border>
-                                <!-- HDR Badge -->
-                                <Border x:Name="BadgeHDR" Visibility="Collapsed" BorderBrush="{StaticResource SilverGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
-                                    <TextBlock Text="HDR" FontSize="11" FontWeight="Bold" Foreground="{StaticResource SilverGradient}"/>
-                                </Border>
-                                <!-- SDR Badge -->
-                                <Border x:Name="BadgeSDR" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
-                                    <TextBlock Text="SDR" FontSize="11" Foreground="#CCC"/>
-                                </Border>
-                                <!-- Codec -->
-                                <Border BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
-                                    <TextBlock x:Name="BadgeCodec" Text="HEVC" FontSize="11" Foreground="#CCC"/>
-                                </Border>
-                                 <!-- Runtime -->
-                                <TextBlock x:Name="RuntimeText" Text="" Foreground="#BBB" VerticalAlignment="Center" FontSize="14"/>
-                                 <!-- Year -->
-                                <TextBlock x:Name="YearText" Text="" Foreground="#BBB" VerticalAlignment="Center" FontSize="14"/>
+                                 <FontIcon Glyph="&#xE768;" FontSize="18"/>
+                                 <StackPanel>
+                                     <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold" FontSize="16"/>
+                                     <TextBlock x:Name="PlayButtonSubtext" Text="" FontSize="11" Opacity="0.6" Visibility="Collapsed"/>
+                                 </StackPanel>
+                             </StackPanel>
+                         </Button>
+
+                         <Button x:Name="RestartButton" Click="RestartButton_Click" Visibility="Collapsed"
+                                 Style="{StaticResource GlassButtonStyle}" Height="52" CornerRadius="26" Padding="32,0">
+                             <StackPanel Orientation="Horizontal" Spacing="8">
+                                 <FontIcon Glyph="&#xE777;" FontSize="16"/>
+                                 <TextBlock Text="Baştan Başla" FontSize="14" FontWeight="SemiBold"/>
+                             </StackPanel>
+                         </Button>
+    
+                         <Button x:Name="TrailerButton" Click="TrailerButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0">
+                             <FontIcon Glyph="&#xE714;" FontSize="20"/>
+                         </Button>
+                         <Button x:Name="DownloadButton" Click="DownloadButton_Click" Style="{StaticResource GlassButtonStyle}" Height="52" Width="52" Padding="0" ToolTipService.ToolTip="İndir">
+                             <FontIcon Glyph="&#xE896;" FontSize="20"/>
+                         </Button>
+                         <Button x:Name="CopyLinkButton" Click="CopyLinkButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0">
+                             <FontIcon Glyph="&#xE8C8;" FontSize="18"/>
+                         </Button>
+                    </StackPanel>
+                    
+                    <!-- Shimmer -->
+                    <StackPanel x:Name="ActionBarShimmer" Orientation="Horizontal" Spacing="16">
+                        <ctl:ShimmerControl Width="140" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
+                        <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
+                        <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
+                        <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
+                    </StackPanel>
+                </Grid>
+
+                 <!-- GENRES & OVERVIEW -->
+                 <Grid>
+                     <StackPanel x:Name="OverviewPanel" Spacing="0" Opacity="0">
+                         <TextBlock x:Name="GenresText" Text="" Foreground="#AAA" FontSize="16" Margin="0,0,0,4"/>
+                         <TextBlock x:Name="OverviewText" Text="" FontSize="16" Foreground="#E0E0E0" 
+                                   TextWrapping="Wrap" MaxLines="6" TextTrimming="CharacterEllipsis" LineHeight="26"/>
+                     </StackPanel>
+                     
+                     <StackPanel x:Name="OverviewShimmer" Spacing="6" HorizontalAlignment="Left">
+                        <ctl:ShimmerControl Width="250" Height="22" CornerRadius="4" HorizontalAlignment="Left" Margin="0,0,0,4"/>
+                        <ctl:ShimmerControl Width="650" Height="20" CornerRadius="4" HorizontalAlignment="Left"/>
+                        <ctl:ShimmerControl Width="620" Height="20" CornerRadius="4" HorizontalAlignment="Left"/>
+                        <ctl:ShimmerControl Width="580" Height="20" CornerRadius="4" HorizontalAlignment="Left"/>
+                     </StackPanel>
+                 </Grid>
+            
+                <!-- CAST SECTION -->
+                <Grid>
+                    <StackPanel x:Name="CastSection" Spacing="12" Visibility="Collapsed" Margin="0,8,0,0" Opacity="0">
+                        <TextBlock Text="Oyuncular" FontSize="18" FontWeight="SemiBold" Foreground="#DDD"/>
+                        <ListView x:Name="CastListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                                  ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None">
+                            <ListView.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="16"/>
+                                </ItemsPanelTemplate>
+                            </ListView.ItemsPanel>
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Width="110">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="140"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <Border CornerRadius="8" Height="140" Width="110">
+                                            <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
+                                        </Border>
+                                        <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
+                                        <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="11" Foreground="#AAA" TextTrimming="CharacterEllipsis"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </StackPanel>
+                    
+                    <!-- Cast Shimmer -->
+                    <StackPanel x:Name="CastShimmer" Spacing="12" Margin="0,8,0,0" HorizontalAlignment="Left"> 
+                        <ctl:ShimmerControl Width="120" Height="24" CornerRadius="4" HorizontalAlignment="Left"/>
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <StackPanel Spacing="8">
+                                <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
+                                <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
                             </StackPanel>
-                             <TextBlock x:Name="TitleText" Text="Loading..." FontSize="42" FontWeight="Bold" 
-                                       TextWrapping="Wrap" Foreground="White" LineHeight="48">
-                                <TextBlock.Shadow>
-                                    <ThemeShadow/>
-                                </TextBlock.Shadow>
-                            </TextBlock>
-
-                            <!-- ACTION BAR (Glass) -->
-                            <StackPanel Orientation="Horizontal" Spacing="16">
-                                <!-- Play / Resume Button -->
-                                 <Button x:Name="PlayButton" Click="PlayButton_Click" Height="52" CornerRadius="26" 
-                                         Background="White" Foreground="Black" Padding="32,0" BorderThickness="0">
-                                     <StackPanel Orientation="Horizontal" Spacing="12">
-                                         <FontIcon Glyph="&#xE768;" FontSize="18"/>
-                                     <StackPanel>
-                                         <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold" FontSize="16"/>
-                                         <TextBlock x:Name="PlayButtonSubtext" Text="23dk Kaldı" FontSize="11" Opacity="0.6" Visibility="Collapsed" HorizontalAlignment="Left"/>
-                                     </StackPanel>
-                                     </StackPanel>
-                                 </Button>
-
-                                 <!-- Restart Button -->
-                                 <Button x:Name="RestartButton" Click="RestartButton_Click" Visibility="Collapsed"
-                                         Style="{StaticResource GlassButtonStyle}" Height="52" CornerRadius="26" Padding="32,0" ToolTipService.ToolTip="Baştan Başla">
-                                     <StackPanel Orientation="Horizontal" Spacing="8" Margin="12,0">
-                                         <FontIcon Glyph="&#xE777;" FontSize="16" VerticalAlignment="Center"/>
-                                         <TextBlock Text="Baştan Başla" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,-2,0,0"/>
-                                     </StackPanel>
-                                 </Button>
-        
-                                 <!-- Secondary Actions -->
-                                 <Button x:Name="TrailerButton" Click="TrailerButton_Click" Style="{StaticResource GlassButtonStyle}" Height="52" Width="52" Padding="0" ToolTipService.ToolTip="Fragman İzle">
-                                     <FontIcon Glyph="&#xE714;" FontSize="20"/>
-                                 </Button>
-                                 
-                                 <Button x:Name="DownloadButton" Click="DownloadButton_Click" Style="{StaticResource GlassButtonStyle}" Height="52" Width="52" Padding="0" ToolTipService.ToolTip="İndir">
-                                     <FontIcon Glyph="&#xE896;" FontSize="20"/>
-                                 </Button>
-                                 
-                                 <Button x:Name="CopyLinkButton" Click="CopyLinkButton_Click" Style="{StaticResource GlassButtonStyle}" Height="52" Width="52" Padding="0" ToolTipService.ToolTip="Linki Kopyala">
-                                     <FontIcon Glyph="&#xE8C8;" FontSize="18"/>
-                                 </Button>
+                            <StackPanel Spacing="8">
+                                <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
+                                <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
                             </StackPanel>
-
-                            <!-- Genres -->
-                             <TextBlock x:Name="GenresText" Text="" Foreground="#AAA" FontSize="16"/>
-                             
-                             <!-- Overview -->
-                             <TextBlock x:Name="OverviewText" Text="" FontSize="16" Foreground="#E0E0E0" 
-                                       TextWrapping="Wrap" MaxLines="6" TextTrimming="CharacterEllipsis" LineHeight="26"/>
-                        
-                            <!-- CAST LIST (Moved inside to sync with Skeleton switch) -->
-                            <StackPanel x:Name="CastSection" Spacing="12" Visibility="Collapsed" Margin="0,16,0,0">
-                                <TextBlock Text="Oyuncular" FontSize="18" FontWeight="SemiBold" Foreground="#DDD"/>
-                                <ListView x:Name="CastListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
-                                          ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None">
-                                    <ListView.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <StackPanel Orientation="Horizontal" Spacing="16"/>
-                                        </ItemsPanelTemplate>
-                                    </ListView.ItemsPanel>
-                                    <ListView.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid Width="110">
-                                                <Grid.RowDefinitions>
-                                                    <RowDefinition Height="140"/>
-                                                    <RowDefinition Height="Auto"/>
-                                                    <RowDefinition Height="Auto"/>
-                                                </Grid.RowDefinitions>
-                                                <Border CornerRadius="8" Height="140" Width="110">
-                                                    <Border.Background>
-                                                        <ImageBrush ImageSource="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
-                                                    </Border.Background>
-                                                </Border>
-                                                <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
-                                                <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="11" Foreground="#AAA" TextTrimming="CharacterEllipsis"/>
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ListView.ItemTemplate>
-                                </ListView>
+                            <StackPanel Spacing="8">
+                                <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
+                                <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                            <StackPanel Spacing="8">
+                                <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
+                                <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
                             </StackPanel>
                         </StackPanel>
                     </StackPanel>
+                </Grid>
 
-                </StackPanel>
-            </ScrollViewer>
-
-            <!-- RIGHT: SERIES EPISODES (Vertical Split) -->
-            <!-- RIGHT: SERIES EPISODES (Vertical Split) -->
-            <Grid x:Name="EpisodesPanel" Grid.Column="1" Margin="40,0,0,0" Visibility="Collapsed" CornerRadius="16">
-                 <Grid.Background>
-                     <SolidColorBrush Color="Black" Opacity="0.4"/>
-                 </Grid.Background>
-                 <Grid.RowDefinitions>
-                     <RowDefinition Height="Auto"/> <!-- Header / Season Selector -->
-                     <RowDefinition Height="*"/> <!-- List -->
-                 </Grid.RowDefinitions>
-                 
-                 <!-- Premium Header -->
-                 <Grid Padding="24,20" Background="Transparent">
-                     <Grid.ColumnDefinitions>
-                         <ColumnDefinition Width="*"/>
-                         <ColumnDefinition Width="Auto"/>
-                     </Grid.ColumnDefinitions>
-                     <StackPanel Spacing="4">
-                         <TextBlock Text="Bölümler" FontSize="22" FontWeight="Bold" Foreground="White"/>
-                         <TextBlock Text="Sezon Seçimi" FontSize="12" Foreground="#AAA" FontWeight="Normal"/>
-                     </StackPanel>
-                     
-                     <!-- Premium Season Selector -->
-                     <ComboBox x:Name="SeasonComboBox" Grid.Column="1" SelectionChanged="SeasonComboBox_SelectionChanged" MinWidth="140"
-                               BorderThickness="1" BorderBrush="#33FFFFFF" Background="#22FFFFFF" CornerRadius="20" Padding="12,8"
-                               DisplayMemberPath="Name" Foreground="White" PlaceholderText="Sezon Seç"/>
-                 </Grid>
-
-                 <!-- Episode List -->
-                 <ListView x:Name="EpisodesListView" Grid.Row="1" SelectionMode="Single" 
-                           SelectionChanged="EpisodesListView_SelectionChanged" Padding="16,0,16,20">
-                     <ListView.ItemContainerStyle>
-                         <Style TargetType="ListViewItem">
-                             <Setter Property="Padding" Value="0"/>
-                             <Setter Property="Margin" Value="0,6"/>
-                             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                             <Setter Property="CornerRadius" Value="8"/>
-                         </Style>
-                     </ListView.ItemContainerStyle>
-                     <ListView.ItemTemplate>
-                         <DataTemplate>
-                             <Grid Height="90" CornerRadius="10" Background="#1AFFFFFF" Padding="0">
-                                 <Grid.ColumnDefinitions>
-                                     <ColumnDefinition Width="140"/>
-                                     <ColumnDefinition Width="*"/>
-                                 </Grid.ColumnDefinitions>
+            </StackPanel>
+        </Grid>
+    
+                    <!-- RIGHT: SERIES EPISODES -->
+                    <Grid x:Name="EpisodesPanel" Grid.Column="1" Grid.Row="0" Width="450" MaxWidth="600" Visibility="Collapsed" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Center">
+                         <!-- Premium Glass Background -->
+                         <Border CornerRadius="20" BorderBrush="#1AFFFFFF" BorderThickness="1">
+                             <Border.Background>
+                                 <SolidColorBrush Color="Black" Opacity="0.5"/>
+                             </Border.Background>
+                             <Grid>
+                                 <Grid.RowDefinitions>
+                                     <RowDefinition Height="Auto"/>
+                                     <RowDefinition Height="*"/>
+                                 </Grid.RowDefinitions>
                                  
-                                 <!-- Thumbnail -->
-                                 <Grid CornerRadius="10,0,0,10">
-                                     <Image Source="{Binding ImageUrl}" Stretch="UniformToFill"/>
-                                     
-                                     <!-- Dark Gradient Overlay for text readability on thumb if needed, or play icon contrast -->
-                                     <Grid Background="#33000000"/>
-
-                                     <!-- Play Overlay ON HOVER / SELECTED -->
-                                     <!-- Play Overlay ON HOVER / SELECTED -->
-                                     <Button Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}" 
-                                             Style="{StaticResource GlassButtonStyle}" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                             Width="48" Height="48" CornerRadius="24"
-                                             Padding="0" BorderThickness="0" Background="#CC000000" Click="EpisodePlayButton_Click" Tag="{Binding}">
-                                          <FontIcon Glyph="&#xE768;" Foreground="White" FontSize="20" Margin="2,0,0,0"/>
-                                     </Button>
-                                     
-                                     <!-- Premium Progress Bar (Bottom Strip) -->
-                                     <ProgressBar Value="{Binding ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
-                                                  Visibility="{Binding HasProgress, Converter={StaticResource BoolToVis}}" 
-                                                  Foreground="#E50914" Background="#44000000" BorderThickness="0" Margin="0"/>
+                                 <Grid Padding="24,20">
+                                     <Grid.ColumnDefinitions>
+                                         <ColumnDefinition Width="*"/>
+                                         <ColumnDefinition Width="Auto"/>
+                                     </Grid.ColumnDefinitions>
+                                     <TextBlock Text="Bölümler" FontSize="22" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                                     <ComboBox x:Name="SeasonComboBox" Grid.Column="1" SelectionChanged="SeasonComboBox_SelectionChanged" MinWidth="140"
+                                               CornerRadius="18" Background="#22FFFFFF" DisplayMemberPath="Name" Foreground="White"/>
                                  </Grid>
-                                 
-                                 <!-- Info -->
-                                 <Grid Grid.Column="1" Padding="16,10" VerticalAlignment="Center">
-                                     <Grid.RowDefinitions>
-                                         <RowDefinition Height="Auto"/>
-                                         <RowDefinition Height="Auto"/>
-                                         <RowDefinition Height="Auto"/>
-                                     </Grid.RowDefinitions>
-                                     
-                                     <!-- Top Row: Episode Number & Duration -->
-                                     <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.7">
-                                          <!-- Ideally we bind Episode Number if avail, else just duration -->
-                                          <TextBlock Text="{Binding Duration}" FontSize="11" Foreground="#DDD"/>
-                                     </StackPanel>
-
-                                     <!-- Title -->
-                                     <TextBlock Grid.Row="1" Text="{Binding Title}" FontWeight="Bold" FontSize="15" 
-                                                TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Foreground="White" Margin="0,4"/>
-                                     
-                                     <!-- Progress Text (if watched) -->
-                                     <TextBlock Grid.Row="2" Text="{Binding ProgressText}" FontSize="12" Foreground="#AAA" 
-                                                Visibility="{Binding HasProgress, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
-                                 </Grid>
-                                 
-                                 <!-- Right Edge Action Icon (Optional) -->
-                                 <FontIcon Grid.Column="1" Glyph="&#xE76C;" FontSize="14" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="16" Opacity="0.3"/>
+                
+                                 <ListView x:Name="EpisodesListView" Grid.Row="1" SelectionMode="Single" 
+                                           ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                           ScrollViewer.VerticalScrollMode="Enabled"
+                                           SelectionChanged="EpisodesListView_SelectionChanged" Padding="16,0,16,20">
+                                     <ListView.ItemContainerStyle>
+                                         <Style TargetType="ListViewItem">
+                                             <Setter Property="Padding" Value="0"/>
+                                             <Setter Property="Margin" Value="0,6"/>
+                                             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                             <Setter Property="CornerRadius" Value="8"/>
+                                         </Style>
+                                     </ListView.ItemContainerStyle>
+                                     <ListView.ItemTemplate>
+                                         <DataTemplate x:DataType="local:EpisodeItem">
+                                             <Grid Height="90" CornerRadius="10" Background="#1AFFFFFF" Padding="0">
+                                                 <Grid.ColumnDefinitions>
+                                                     <ColumnDefinition Width="140"/>
+                                                     <ColumnDefinition Width="*"/>
+                                                 </Grid.ColumnDefinitions>
+                                                 
+                                                 <!-- Thumbnail -->
+                                                 <Grid CornerRadius="10,0,0,10">
+                                                     <Image Source="{x:Bind ImageUrl}" Stretch="UniformToFill"/>
+                                                     
+                                                     <!-- Dark Gradient Overlay -->
+                                                     <Grid Background="#33000000"/>
+ 
+                                                     <!-- Play Overlay ON SELECTED -->
+                                                     <Button Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                                                             Style="{StaticResource GlassButtonStyle}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                             Width="48" Height="48" CornerRadius="24"
+                                                             Padding="0" BorderThickness="0" Background="#CC000000" Click="EpisodePlayButton_Click" Tag="{x:Bind}">
+                                                          <FontIcon Glyph="&#xE768;" Foreground="White" FontSize="20" Margin="2,0,0,0"/>
+                                                     </Button>
+                                                     
+                                                     <!-- Premium Progress Bar -->
+                                                     <ProgressBar Value="{x:Bind ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
+                                                                  Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                                                                  Foreground="#E50914" Background="#44000000" BorderThickness="0" Margin="0"/>
+                                                 </Grid>
+                                                 
+                                                 <!-- Info -->
+                                                 <Grid Grid.Column="1" Padding="16,10" VerticalAlignment="Center">
+                                                     <Grid.RowDefinitions>
+                                                         <RowDefinition Height="Auto"/>
+                                                         <RowDefinition Height="Auto"/>
+                                                         <RowDefinition Height="Auto"/>
+                                                     </Grid.RowDefinitions>
+                                                     
+                                                     <!-- Top Row -->
+                                                     <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.7">
+                                                          <TextBlock Text="{x:Bind Duration}" FontSize="11" Foreground="#DDD"/>
+                                                     </StackPanel>
+ 
+                                                     <!-- Title -->
+                                                     <TextBlock Grid.Row="1" Text="{x:Bind Title}" FontWeight="Bold" FontSize="15" 
+                                                                TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Foreground="White" Margin="0,4"/>
+                                                     
+                                                     <!-- Progress Text -->
+                                                     <TextBlock Grid.Row="2" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA" 
+                                                                Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
+                                                 </Grid>
+                                             </Grid>
+                                         </DataTemplate>
+                                     </ListView.ItemTemplate>
+                                 </ListView>
                              </Grid>
-                         </DataTemplate>
-                     </ListView.ItemTemplate>
-                 </ListView>
+                         </Border>
+                    </Grid>
+                
+
+                
+                <StackPanel x:Name="NarrowEpisodesSection" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" 
+                             Visibility="Collapsed" Spacing="16" Margin="0,4,0,0">
+                    <TextBlock Text="Bölümler" FontSize="20" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>
+                    <ListView x:Name="NarrowEpisodesListView" Height="170"
+                              ScrollViewer.HorizontalScrollMode="Enabled" 
+                              ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                              ScrollViewer.VerticalScrollMode="Disabled" 
+                              SelectionMode="Single"
+                              SelectionChanged="NarrowEpisodesListView_SelectionChanged">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsStackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Width="260" Height="150" CornerRadius="12" Background="#1AFFFFFF" Margin="0,0,16,0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="90"/>
+                                        <RowDefinition Height="*"/>
+                                    </Grid.RowDefinitions>
+                                    <!-- Thumbnail -->
+                                    <Border CornerRadius="12,12,0,0">
+                                        <Border.Background>
+                                            <ImageBrush ImageSource="{Binding ImageUrl}" Stretch="UniformToFill"/>
+                                        </Border.Background>
+                                    </Border>
+                                    <!-- Dark Overlay -->
+                                    <Grid Background="#44000000" CornerRadius="12,12,0,0"/>
+                                    <!-- Play Icon -->
+                                    <FontIcon Glyph="&#xE768;" FontSize="24" Foreground="White" 
+                                              HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.9"/>
+                                    <!-- Progress Bar -->
+                                    <ProgressBar Value="{Binding ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
+                                                 Visibility="{Binding HasProgress, Converter={StaticResource BoolToVis}}" 
+                                                 Foreground="#E50914" Background="#44000000" BorderThickness="0"/>
+                                    <!-- Info -->
+                                    <StackPanel Grid.Row="1" Padding="12,0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" 
+                                                   TextTrimming="CharacterEllipsis" Foreground="White" MaxLines="1"/>
+                                        <TextBlock Text="{Binding Duration}" FontSize="11" Foreground="#AAA" Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+                
+                <StackPanel x:Name="NarrowCastSection" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" 
+                             Visibility="Collapsed" Spacing="12" Margin="0,4,0,0">
+                    <TextBlock Text="Oyuncular" FontSize="20" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>
+                    <ListView x:Name="NarrowCastListView" 
+                              Height="150"
+                              ScrollViewer.HorizontalScrollMode="Enabled" 
+                              ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                              ScrollViewer.VerticalScrollMode="Disabled" 
+                              SelectionMode="None">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsStackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Width="90" Margin="0,0,16,0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="110"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Border CornerRadius="8" Height="110" Width="90">
+                                        <Border.Background>
+                                            <ImageBrush ImageSource="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
+                                        </Border.Background>
+                                    </Border>
+                                    <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="10" FontWeight="SemiBold" 
+                                               Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
+                                    <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="9" 
+                                               Foreground="#AAA" TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+                
             </Grid>
+        </ScrollViewer>
         </Grid>
 
         <!-- 3. INSTANT PLAYER OVERLAY -->
+        <!-- 3. INSTANT PLAYER OVERLAY -->
         <Grid x:Name="PlayerOverlayContainer" Visibility="Collapsed" Background="Black" IsHitTestVisible="False">
-             <mpv:MpvPlayer x:Name="MediaInfoPlayer" 
-                           Opacity="0"
-                           IsHitTestVisible="False"
-                           HorizontalAlignment="Stretch" 
-                           VerticalAlignment="Stretch"/>
+             <ContentControl HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                 <mpv:MpvPlayer x:Name="MediaInfoPlayer" 
+                               Opacity="0"
+                               IsHitTestVisible="False"
+                               HorizontalAlignment="Stretch" 
+                               VerticalAlignment="Stretch"/>
+             </ContentControl>
         </Grid>
 
-        <!-- Back Button -->
+        <!-- 3. STICKY GLASS HEADER -->
+        <Grid x:Name="StickyHeader" VerticalAlignment="Top" HorizontalAlignment="Stretch" Height="80" 
+              Opacity="0" IsHitTestVisible="False" Canvas.ZIndex="100">
+            <Grid.RenderTransform>
+                <TranslateTransform x:Name="StickyHeaderTranslate" Y="-80"/>
+            </Grid.RenderTransform>
+            
+            <!-- Glass Effect -->
+            <Border Background="#CC0D0D0D" BorderBrush="#1AFFFFFF" BorderThickness="0,0,0,1">
+                <Grid Margin="100,0,40,0">
+                    <TextBlock x:Name="StickyTitle" Text="" 
+                               VerticalAlignment="Center" Margin="0,0,200,0"
+                               FontSize="18" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis"/>
+                     
+                     <Button x:Name="StickyPlayButton" Click="PlayButton_Click" HorizontalAlignment="Right" VerticalAlignment="Center"
+                             Style="{StaticResource GlassButtonStyle}" Height="40" Padding="24,0" CornerRadius="20" BorderBrush="#40FFFFFF">
+                         <StackPanel Orientation="Horizontal" Spacing="8">
+                             <FontIcon Glyph="&#xE768;" FontSize="14"/>
+                             <TextBlock x:Name="StickyPlayButtonText" Text="Oynat" FontSize="13" FontWeight="SemiBold"/>
+                         </StackPanel>
+                     </Button>
+                </Grid>
+            </Border>
+        </Grid>
+
         <!-- Back Button -->
         <Button x:Name="BackButton" Click="BackButton_Click" 
                 VerticalAlignment="Top" HorizontalAlignment="Left" Margin="40,40,0,0"
