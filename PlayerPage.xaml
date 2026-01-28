@@ -553,7 +553,16 @@
                             </Grid>
                         </Canvas>
                     </Grid>
-                    
+
+                    <Button x:Name="MultiViewButton"
+                            Click="MultiViewButton_Click"
+                            Width="48" Height="48" CornerRadius="24"
+                            Background="#99000000" Foreground="White"
+                            BorderThickness="0"
+                            ToolTipService.ToolTip="Çoklu Ekran">
+                        <FontIcon Glyph="&#xE740;" FontSize="20"/>
+                    </Button>
+
                     <!-- Speed Button Wrapper -->
                     <Grid Width="48">
                          <!-- Speed Overlay -->

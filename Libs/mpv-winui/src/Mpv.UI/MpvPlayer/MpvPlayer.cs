@@ -39,6 +39,9 @@ public sealed partial class MpvPlayer : Control
 
         if (!Player.Client.IsInitialized)
         {
+            EnsureTemplateApplied();
+            if (_renderControl == null) return;
+            
             Player.PlaybackPositionChanged += OnPositionChanged;
             Player.PlaybackStateChanged += OnStateChanged;
             _renderControl.Initialize();
@@ -75,6 +78,9 @@ public sealed partial class MpvPlayer : Control
 
         if (!Player.Client.IsInitialized)
         {
+            EnsureTemplateApplied();
+            if (_renderControl == null) return;
+
             Player.PlaybackPositionChanged += OnPositionChanged;
             Player.PlaybackStateChanged += OnStateChanged;
             _renderControl.Initialize();
@@ -268,6 +274,19 @@ public sealed partial class MpvPlayer : Control
         if (_renderControl != null)
         {
             _renderControl.PreserveStateOnUnload = false;
+        }
+    }
+
+    private void EnsureTemplateApplied()
+    {
+        if (_renderControl == null)
+        {
+            ApplyTemplate();
+        }
+        
+        if (_renderControl == null)
+        {
+            Debug.WriteLine("[MpvPlayer] CRITICAL: RenderControl not found in template!");
         }
     }
 }

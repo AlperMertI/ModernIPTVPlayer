@@ -40,7 +40,8 @@ namespace ModernIPTVPlayer
                     "LoginPage" => typeof(LoginPage),
                     "LiveTVPage" => typeof(LiveTVPage),
                     "MoviesPage" => typeof(MoviesPage), 
-                    "SeriesPage" => typeof(SeriesPage), 
+                    "SeriesPage" => typeof(SeriesPage),
+                    "MultiPlayerPage" => typeof(MultiPlayerPage),
                     _ => null
                 };
 
@@ -120,10 +121,23 @@ namespace ModernIPTVPlayer
                 if (isFullScreen)
                 {
                     this.AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen);
+                    
+                    // Immersive mode adjustments
+                    NavView.IsPaneVisible = false;
+                    AppTitleBar.Visibility = Visibility.Collapsed;
+                    ContentFrame.Margin = new Thickness(0);
                 }
                 else
                 {
                     this.AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Default);
+                    
+                    // Restore navigation & UI (Based on current page logic)
+                    if (ContentFrame.SourcePageType != typeof(PlayerPage))
+                    {
+                        NavView.IsPaneVisible = true;
+                        AppTitleBar.Visibility = Visibility.Visible;
+                        ContentFrame.Margin = new Thickness(0, 4, 0, 0);
+                    }
                 }
             }
         }

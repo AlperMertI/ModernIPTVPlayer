@@ -108,6 +108,9 @@ namespace ModernIPTVPlayer
 
 
 
+        
+
+
         private void BackButton_Click(object sender, RoutedEventArgs e)
         {
             ElementSoundPlayer.Play(ElementSoundKind.GoBack);
@@ -512,31 +515,8 @@ namespace ModernIPTVPlayer
         }
 
         // Helper to extract ALL cookies from a CookieContainer (ignoring Domain restrictions)
-        private static System.Net.CookieCollection GetAllCookies(System.Net.CookieContainer container)
-        {
-            var allCookies = new System.Net.CookieCollection();
-            var domainTableField = container.GetType().GetRuntimeFields().FirstOrDefault(x => x.Name == "m_domainTable" || x.Name == "_domainTable");
-            var domains = domainTableField?.GetValue(container) as System.Collections.IDictionary;
+        // MOVED TO MpvSetupHelper
 
-            if (domains != null)
-            {
-                foreach (var val in domains.Values)
-                {
-                    var type = val.GetType();
-                    var flagsField = type.GetRuntimeFields().FirstOrDefault(x => x.Name == "m_list" || x.Name == "_list");
-                    var cookieList = flagsField?.GetValue(val) as System.Collections.IDictionary;
-
-                    if (cookieList != null)
-                    {
-                        foreach (System.Net.CookieCollection col in cookieList.Values)
-                        {
-                            allCookies.Add(col);
-                        }
-                    }
-                }
-            }
-            return allCookies;
-        }
 
         private async void PlayerPage_Loaded(object sender, RoutedEventArgs e)
         {
@@ -675,82 +655,21 @@ namespace ModernIPTVPlayer
                         // Update URL with the cleaned version (e.g. port 80 removed)
                         _streamUrl = checkResult.Url;
 
-                        // 1. MUST INITIALIZE PLAYER before setting any properties!
-                        await _mpvPlayer.InitializePlayerAsync();
-
-                        // Standard Browser User-Agent
-                        string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-                        
-                        // COOKIE SHARING FROM HTTPCLIENT TO MPV
-                        string cookieHeader = "";
-                        try
-                        {
-                            var targetUri = new Uri(_streamUrl);
-                            // 1. Try strict URI matching first
-                            var cookies = HttpHelper.CookieContainer.GetCookies(targetUri);
-                            
-                            // 2. If valid cookies found, use them. If not, Dump ALL cookies.
-                            if (cookies.Count == 0)
-                            {
-                                System.Diagnostics.Debug.WriteLine("[MPV] GetCookies(uri) returned 0. Trying Reflection...");
-                                cookies = GetAllCookies(HttpHelper.CookieContainer);
-                            }
-
-                            System.Diagnostics.Debug.WriteLine($"[MPV] Found {cookies.Count} cookies in container.");
-
-                            foreach (System.Net.Cookie c in cookies)
-                            {
-                                // Filter logic: If we have many cookies (unlikely in this app), maybe filter?
-                                // For now, send key ones.
-                                cookieHeader += $"{c.Name}={c.Value}; ";
-                            }
-                        } 
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[MPV] Cookie Error: {ex.Message}");
-                        }
-
-                        // Headers
-                        string headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n"; 
-                        
-                        if (!string.IsNullOrEmpty(cookieHeader))
-                        {
-                             headers += $"Cookie: {cookieHeader}\n";
-                             System.Diagnostics.Debug.WriteLine($"[MPV] Added Cookies: {cookieHeader}");
-                        }
-                        else
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[MPV] No Cookies found for {_streamUrl}");
-                        }
-
-                        // Apply Properties
-                        await _mpvPlayer.SetPropertyAsync("user-agent", userAgent);
-                        await _mpvPlayer.SetPropertyAsync("http-header-fields", headers);
+                        // 1. Configure MPV using Shared Helper
+                        await MpvSetupHelper.ConfigurePlayerAsync(_mpvPlayer, _streamUrl, isSecondary: false);
 
                         // ----------------------------------------------------------------------------------
-                        // PERFORMANCE TUNING: HARDWARE ACCELERATION
+                        // OPTİMİZASYONLAR: Ses ve Altyazı Takılmalarını Önleme & Akıllı RAM Yönetimi
+                        // (MpvSetupHelper içinde yapıldı ama varsa sayfa özel override buraya gelebilir)
                         // ----------------------------------------------------------------------------------
-                        await _mpvPlayer.SetPropertyAsync("hwdec", "auto-safe");   // Hardware decoding priority
                         
                         // CRITICAL: Ensure we actually LOAD the file now that headers are set.
+                        // Wait a bit? No, open directly.
                         await _mpvPlayer.OpenAsync(_streamUrl);
-                        
-                         // ----------------------------------------------------------------------------------
-                        // OPTİMİZASYONLAR: Ses ve Altyazı Takılmalarını Önleme & Akıllı RAM Yönetimi
-                        // ----------------------------------------------------------------------------------
-                        
-                        await _mpvPlayer.SetPropertyAsync("cache", "yes");
-                        await _mpvPlayer.SetPropertyAsync("cache-pause", "no"); // Don't pause on low cache
-                        await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "150M");
-                        await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "50M");
 
-                        // 3. Genel Performans Profili (Low Latency)
-                        await _mpvPlayer.SetPropertyAsync("profile", "fast");
-
-                        // 4. Subtitle Preroll Fix
-                        await _mpvPlayer.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "no");
-
-                        // ----------------------------------------------------------------------------------
+                        // DIAGNOSTICS LOG
+                        // var checkBytes = await _mpvPlayer.GetPropertyAsync("demuxer-max-bytes");
+                        // System.Diagnostics.Debug.WriteLine($"[PlayerPage] Configured. MaxBytes: {checkBytes}");
                         
                         // Altyazı gecikmesi ve stil sorunları için ek ayarlar
                         await _mpvPlayer.SetPropertyAsync("sub-scale-with-window", "yes");
@@ -2131,6 +2050,23 @@ namespace ModernIPTVPlayer
                 // If checking fails entirely, we might still let MPV try as a last resort, 
                 // but usually it's better to fail gracefully.
                 return (false, url, $"Bilinmeyen Hata: {ex.Message}");
+            }
+        }
+        private void MultiViewButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_mpvPlayer != null)
+            {
+                // 1. HANDOFF: Assign to global static
+                App.HandoffPlayer = _mpvPlayer;
+                
+                // 2. DETACH: Remove from visual tree immediately
+                PlayerContainer.Children.Remove(_mpvPlayer);
+                
+                // 3. NULLIFY: Prevent local Dispose in OnNavigatedFrom
+                _mpvPlayer = null;
+                
+                // 4. NAVIGATE
+                Frame.Navigate(typeof(MultiPlayerPage), _navArgs);
             }
         }
     }
