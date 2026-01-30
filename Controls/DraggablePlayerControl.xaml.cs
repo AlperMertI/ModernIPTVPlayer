@@ -6,6 +6,7 @@ using MpvWinUI;
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
+using ModernIPTVPlayer.Services.Streaming;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -13,6 +14,9 @@ namespace ModernIPTVPlayer.Controls
     {
         public MpvPlayer Player { get; private set; }
         public string StreamUrl { get; private set; }
+        public string StreamId { get; set; }
+
+        private DispatcherTimer _diagTimer;
         
         // Events to let the parent Canvas know what to do
         public event EventHandler<Action> RequestClose;
@@ -63,6 +67,8 @@ namespace ModernIPTVPlayer.Controls
                     }
                 }
                 
+                StartDiagTimer();
+                
                 LoadingRing.IsActive = false;
                 LoadingRing.Visibility = Visibility.Collapsed;
             }
@@ -75,6 +81,7 @@ namespace ModernIPTVPlayer.Controls
 
         public async Task DisposeAsync()
         {
+             _diagTimer?.Stop();
              // Cleanup MPV
              if (Player != null)
              {
@@ -84,6 +91,28 @@ namespace ModernIPTVPlayer.Controls
                  } catch { }
                  Player = null;
              }
+        }
+
+        private void StartDiagTimer()
+        {
+            _diagTimer = new DispatcherTimer();
+            _diagTimer.Interval = TimeSpan.FromSeconds(2);
+            _diagTimer.Tick += async (s, e) =>
+            {
+                if (Player != null && !string.IsNullOrEmpty(StreamId))
+                {
+                    try
+                    {
+                        var durationStr = await Player.GetPropertyAsync("demuxer-cache-duration");
+                        if (double.TryParse(durationStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double duration))
+                        {
+                            StreamDiagnostics.Instance.UpdateStat(StreamId, h => h.MpvBufferSeconds = duration);
+                        }
+                    }
+                    catch { }
+                }
+            };
+            _diagTimer.Start();
         }
 
         // ==============================================================================

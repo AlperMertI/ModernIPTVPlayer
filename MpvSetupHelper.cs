@@ -24,18 +24,26 @@ namespace ModernIPTVPlayer
                 await player.InitializePlayerAsync();
 
                 // 2. Network & Headers
-                string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-                string cookieHeader = ExtractCookiesForUrl(streamUrl);
-                string headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
-
-                if (!string.IsNullOrEmpty(cookieHeader))
+                // Bypass headers for local bridge to avoid 400 Bad Request
+                if (streamUrl.Contains("127.0.0.1"))
                 {
-                    headers += $"Cookie: {cookieHeader}\n";
-                    Debug.WriteLine($"[MpvSetupHelper] Cookies applied for {streamUrl}");
+                    Debug.WriteLine("[MpvSetupHelper] Local Bridge URL detected. Skipping external headers.");
                 }
+                else
+                {
+                    string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+                    string cookieHeader = ExtractCookiesForUrl(streamUrl);
+                    string headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
 
-                await player.SetPropertyAsync("user-agent", userAgent);
-                await player.SetPropertyAsync("http-header-fields", headers);
+                    if (!string.IsNullOrEmpty(cookieHeader))
+                    {
+                        headers += $"Cookie: {cookieHeader}\n";
+                        Debug.WriteLine($"[MpvSetupHelper] Cookies applied for {streamUrl}");
+                    }
+
+                    await player.SetPropertyAsync("user-agent", userAgent);
+                    await player.SetPropertyAsync("http-header-fields", headers);
+                }
 
                 // 3. Hardware Acceleration
                 // Prioritize 'auto-safe' which usually maps to d3d11va (Zero-Copy) on Windows
@@ -50,18 +58,18 @@ namespace ModernIPTVPlayer
 
                 if (isSecondary)
                 {
-                    // Aggressive RAM saving for secondary windows
-                    // 15MB max buffer, low readahead
-                    await player.SetPropertyAsync("demuxer-max-bytes", "15MiB");
-                    await player.SetPropertyAsync("demuxer-max-back-bytes", "5MiB");
-                    await player.SetPropertyAsync("demuxer-readahead-secs", "10");
+                    // Aggressive RAM saving but still enough for 4K streams
+                    // 64MB max buffer (increased from 15MB to prevent demuxer overflow in 4K)
+                    await player.SetPropertyAsync("demuxer-max-bytes", "64MiB");
+                    await player.SetPropertyAsync("demuxer-max-back-bytes", "16MiB");
+                    await player.SetPropertyAsync("demuxer-readahead-secs", "20");
                 }
                 else
                 {
                     // Standard High Performance for Main Player
-                    // 150MB buffer
-                    await player.SetPropertyAsync("demuxer-max-bytes", "150MiB");
-                    await player.SetPropertyAsync("demuxer-max-back-bytes", "50MiB");
+                    // 250MB buffer
+                    await player.SetPropertyAsync("demuxer-max-bytes", "250MiB");
+                    await player.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
                     await player.SetPropertyAsync("demuxer-readahead-secs", "120");
                 }
 
@@ -69,10 +77,23 @@ namespace ModernIPTVPlayer
                 await player.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "no");
                 await player.SetPropertyAsync("sub-scale-with-window", "yes");
                 
+                // Network Stability & Performance
+                await SetPropertySafeAsync(player, "network-timeout", "20"); 
+                await SetPropertySafeAsync(player, "stream-buffer-size", "512KiB");
+                
+                // HTTP Reconnect Logic (Crucial for unstable IPTV servers)
+                // The correct property name is 'demuxer-lavf-o'
+                await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5");
+
+                await SetPropertySafeAsync(player, "vd-lavc-fast", "yes"); // Speed up hardware decoding
+                await SetPropertySafeAsync(player, "vd-lavc-dr", "yes");   // Direct rendering
+
                 // 7. Audio (If secondary, maybe mute by default? Let caller handle that.)
                 // But we can ensure correct audio output driver
                 await player.SetPropertyAsync("ao", "wasapi"); 
-
+                // Allow some audio/video desync instead of freezing
+                await SetPropertySafeAsync(player, "video-sync", "audio"); 
+                await SetPropertySafeAsync(player, "audio-pitch-correction", "yes");
                 Debug.WriteLine($"[MpvSetupHelper] Configuration Complete. Secondary Mode: {isSecondary}");
             }
             catch (Exception ex)
@@ -108,6 +129,18 @@ namespace ModernIPTVPlayer
                 Debug.WriteLine($"[MpvSetupHelper] Cookie Extraction Error: {ex.Message}");
             }
             return cookieHeader;
+        }
+
+        private static async Task SetPropertySafeAsync(MpvPlayer player, string name, string value)
+        {
+            try
+            {
+                await player.SetPropertyAsync(name, value);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[MpvSetupHelper] Optional property '{name}' could not be set: {ex.Message}");
+            }
         }
 
         // Helper to extract ALL cookies from a CookieContainer (ignoring Domain restrictions)

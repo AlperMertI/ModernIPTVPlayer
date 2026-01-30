@@ -4,6 +4,8 @@ using Microsoft.UI.Xaml.Navigation;
 using System;
 using System.Net.Http;
 using System.Threading.Tasks;
+using ModernIPTVPlayer.Models;
+using System.Text.Json;
 
 namespace ModernIPTVPlayer
 {
@@ -188,12 +190,26 @@ namespace ModernIPTVPlayer
                     AppSettings.LastLoginType = loginType;
                     AppSettings.LastPlaylistId = p.Id; // Persist the successful ID
 
+                    string authJson = await response.Content.ReadAsStringAsync();
+                    int maxCons = 1;
+                    try
+                    {
+                        var authData = JsonSerializer.Deserialize<XtreamAuthResponse>(authJson);
+                        if (authData?.UserInfo != null)
+                        {
+                            maxCons = authData.UserInfo.MaxConnections;
+                            System.Diagnostics.Debug.WriteLine($"[Login] Max Connections: {maxCons}");
+                        }
+                    }
+                    catch { /* Fallback to 1 */ }
+
                     App.CurrentLogin = new LoginParams 
                     { 
                         PlaylistUrl = targetUrl,
                         Host = (loginType == 1) ? manualHost : null,
                         Username = (loginType == 1) ? p.Username : null,
-                        Password = (loginType == 1) ? p.Password : null
+                        Password = (loginType == 1) ? p.Password : null,
+                        MaxConnections = maxCons
                     };
 
                     Frame.Navigate(typeof(LiveTVPage), App.CurrentLogin);

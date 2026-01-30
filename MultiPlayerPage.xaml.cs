@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Threading.Tasks;
+using ModernIPTVPlayer.Services.Streaming;
 
 namespace ModernIPTVPlayer
 {
@@ -30,6 +31,13 @@ namespace ModernIPTVPlayer
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
             base.OnNavigatedTo(e);
+
+            // Initialize Slot Simulator with server limits
+            if (App.CurrentLogin != null)
+            {
+                StreamSlotSimulator.Instance.Initialize(App.CurrentLogin.MaxConnections);
+                Debug.WriteLine($"[MultiView] Initialized StreamSlotSimulator with {App.CurrentLogin.MaxConnections} connections.");
+            }
 
             // HANDOFF CHECK
             if (App.HandoffPlayer != null)
@@ -234,7 +242,18 @@ namespace ModernIPTVPlayer
             PlayerCanvas.Children.Add(control);
             _activePlayers.Add(control);
 
-            await control.InitializeAsync(existingPlayer, title, url);
+            string effectiveUrl = url;
+            if (!string.IsNullOrEmpty(url))
+            {
+                // Register with Slot Simulator
+                string streamId = Guid.NewGuid().ToString().Substring(0, 8);
+                control.StreamId = streamId; // SET THIS BEFORE INIT
+                StreamSlotSimulator.Instance.RegisterStream(streamId, url);
+                effectiveUrl = StreamSlotSimulator.Instance.GetVirtualUrl(streamId);
+                Debug.WriteLine($"[MultiView] Routing {title} via SlotSimulator Virtual URL: {effectiveUrl}");
+            }
+
+            await control.InitializeAsync(existingPlayer, title, effectiveUrl);
             UpdateAudioFocus(control);
             ReflowLayout();
         }
