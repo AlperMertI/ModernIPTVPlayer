@@ -128,6 +128,9 @@ namespace ModernIPTVPlayer
             SearchPillBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(31, 255, 255, 255));
         }
 
+        // Global list of all movies for search/filter
+        private List<LiveStream> _allMovies = new();
+
         private async Task LoadVodCategoriesAsync()
         {
             try
@@ -136,47 +139,128 @@ namespace ModernIPTVPlayer
                 CategoryListView.ItemsSource = null;
                 MediaGrid.ItemsSource = null;
                 _allCategories.Clear();
+                _allMovies.Clear();
 
+                // -------------------------------------------------------------
+                // 1. DATA FETCHING (Cache First -> Network Fallback)
+                // -------------------------------------------------------------
+                string username = _loginInfo.Username;
+                string password = _loginInfo.Password;
                 string baseUrl = _loginInfo.Host.TrimEnd('/');
-                string api = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_categories";
+                string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
 
-                string json = await _httpClient.GetStringAsync(api);
-                
-                if (string.IsNullOrEmpty(json))
+                // A. Load Categories
+                var cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, "vod_cats");
+                if (cachedCats != null)
                 {
-                    ShowMessageDialog("Hata", "API'den boş cevap döndü.");
-                    return;
-                }
-
-                var options = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
-                };
-
-                var categories = JsonSerializer.Deserialize<List<LiveCategory>>(json, options);
-
-                if (categories != null)
-                {
-                    _allCategories = categories;
-                    CategoryListView.ItemsSource = _allCategories;
-                    
-                    // Auto-select first category
-                    if (_allCategories.Count > 0)
-                    {
-                        CategoryListView.SelectedIndex = 0;
-                        await LoadVodStreamsAsync(_allCategories[0]);
-                    }
+                     _allCategories = cachedCats;
+                     System.Diagnostics.Debug.WriteLine("[MoviesPage] Loaded Categories from Cache");
                 }
                 else
                 {
-                    ShowMessageDialog("Hata", "JSON parse edildi ama kategori listesi boş (null).");
+                    // Network Fetch Categories
+                    string api = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_vod_categories";
+                    string json = await _httpClient.GetStringAsync(api);
+                    
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
+                    _allCategories = JsonSerializer.Deserialize<List<LiveCategory>>(json, options) ?? new List<LiveCategory>();
+                    
+                    // Save
+                    _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "vod_cats", _allCategories);
+                }
+
+                CategoryListView.ItemsSource = _allCategories;
+
+                // B. Load All Streams (Global Movie List)
+                // This enables instant category switching and global search
+                var cachedStreams = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "vod_streams");
+                if (cachedStreams != null && cachedStreams.Count > 0)
+                {
+                    _allMovies = cachedStreams;
+
+                    // Wait for Probe Cache to be ready (Race Condition fix)
+                    await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
+
+                    // Hydrate Metadata from ProbeCache
+                    foreach (var m in _allMovies)
+                    {
+                        if (Services.ProbeCacheService.Instance.Get(m.StreamUrl) is Services.ProbeData pd)
+                        {
+                            m.Resolution = pd.Resolution;
+                            m.Codec = pd.Codec;
+                            m.Bitrate = pd.Bitrate;
+                            m.Fps = pd.Fps;
+                            m.IsHdr = pd.IsHdr;
+                            m.IsOnline = true; 
+                        }
+                    }
+                    System.Diagnostics.Debug.WriteLine($"[MoviesPage] Loaded {_allMovies.Count} Movies from Cache");
+                }
+                else
+                {
+                    // Fetch ALL Streams
+                    // Note: 'get_vod_streams' without category_id usually returns ALL
+                    string streamApi = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_vod_streams";
+                    string streamJson = await _httpClient.GetStringAsync(streamApi);
+                    
+                     var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
+                     var streams = JsonSerializer.Deserialize<List<LiveStream>>(streamJson, options);
+                     
+                     if (streams != null)
+                     {
+                         // Fix URLs
+                         foreach (var s in streams)
+                         {
+                             string extension = !string.IsNullOrEmpty(s.ContainerExtension) ? s.ContainerExtension : "mp4";
+                             s.StreamUrl = $"{baseUrl}/movie/{username}/{password}/{s.StreamId}.{extension}"; 
+                         }
+                          _allMovies = streams;
+                          
+                          // Wait for Probe Cache (Race Condition fix)
+                          await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
+
+                          // Hydrate Metadata from ProbeCache (Network Path)
+                          foreach (var m in _allMovies)
+                          {
+                              if (Services.ProbeCacheService.Instance.Get(m.StreamUrl) is Services.ProbeData pd)
+                              {
+                                  m.Resolution = pd.Resolution;
+                                  m.Codec = pd.Codec;
+                                  m.Bitrate = pd.Bitrate;
+                                  m.Fps = pd.Fps;
+                                  m.IsHdr = pd.IsHdr;
+                                  m.IsOnline = true; 
+                              }
+                          }
+
+                          // Save
+                          _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "vod_streams", _allMovies);
+                     }
+                }
+
+                // -------------------------------------------------------------
+                // 2. UI INITIALIZATION
+                // -------------------------------------------------------------
+                
+                // Pre-populate category relationships (Optional, but good for local filtering if we want to assign 'Channels' prop)
+                // For now, we'll just filter on demand in LoadVodStreamsAsync logic
+                
+                // Select First
+                if (_allCategories.Count > 0)
+                {
+                    // Restoration Logic
+                    var lastId = AppSettings.LastVodCategoryId;
+                    var targetCat = _allCategories.FirstOrDefault(c => c.CategoryId == lastId) ?? _allCategories[0];
+                    
+                    CategoryListView.SelectedItem = targetCat;
+                    CategoryListView.ScrollIntoView(targetCat);
+                    await LoadVodStreamsAsync(targetCat);
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error loading movie categories: {ex.Message}");
-                // ShowMessageDialog("Kritik Hata", $"Veri çekilirken hata oluştu:\n{ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Error loading movies: {ex.Message}");
+                await ShowMessageDialog("Hata", $"Film listesi yüklenemedi: {ex.Message}");
             }
             finally
             {
@@ -187,53 +271,34 @@ namespace ModernIPTVPlayer
         private async Task LoadVodStreamsAsync(LiveCategory category)
         {
             SelectedCategoryTitle.Text = category.CategoryName;
-
-            if (category.Channels != null && category.Channels.Count > 0)
-            {
-                // Note: LiveStream implements IMediaStream due to our changes :)
-                MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Channels);
-                return;
-            }
-
+            
+            // Save selection
+            AppSettings.LastVodCategoryId = category?.CategoryId;
+            
+            // Logic: Filter from _allMovies
             try
             {
-                // SHOW SKELETON
                 MediaGrid.IsLoading = true;
                 
-                string baseUrl = _loginInfo.Host.TrimEnd('/');
-                string api = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams&category_id={category.CategoryId}";
-
-                string json = await _httpClient.GetStringAsync(api);
-                
-                var options = new JsonSerializerOptions
+                // Run on thread pool if list is huge
+                var filtered = await Task.Run(() => 
                 {
-                    PropertyNameCaseInsensitive = true,
-                    NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
-                };
+                    if (_allMovies == null || _allMovies.Count == 0) return new List<LiveStream>();
+                    
+                    // Filter matching CategoryId
+                    return _allMovies.Where(m => m.CategoryId == category.CategoryId).ToList();
+                });
 
-                var streams = JsonSerializer.Deserialize<List<LiveStream>>(json, options);
-
-                if (streams != null)
-                {
-                    foreach (var s in streams)
-                    {
-                        string extension = !string.IsNullOrEmpty(s.ContainerExtension) ? s.ContainerExtension : "mp4";
-                        s.StreamUrl = $"{baseUrl}/movie/{_loginInfo.Username}/{_loginInfo.Password}/{s.StreamId}.{extension}"; 
-                    }
-
-                    category.Channels = streams;
-                    MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Channels);
-                }
+                category.Channels = filtered;
+                MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(filtered);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error loading movies: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"Filter error: {ex.Message}");
             }
             finally
             {
-                // HIDE SKELETON (Handled by setter if ItemsSource is not null, but explicit is fine)
-                // If error, maybe empty list?
-                if (MediaGrid.ItemsSource == null) MediaGrid.IsLoading = false; 
+                MediaGrid.IsLoading = false;
             }
         }
         
@@ -293,7 +358,7 @@ namespace ModernIPTVPlayer
             await searchDialog.ShowAsync();
         }
 
-        private async void ShowMessageDialog(string title, string content)
+        private async Task ShowMessageDialog(string title, string content)
         {
             if (this.XamlRoot == null) return;
             ContentDialog dialog = new ContentDialog 

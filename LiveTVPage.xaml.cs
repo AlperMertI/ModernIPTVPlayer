@@ -122,54 +122,140 @@ namespace ModernIPTVPlayer
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
 
                 string baseUrl = _loginInfo.Host.TrimEnd('/');
-                string api = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_live_categories";
+                string username = _loginInfo.Username;
+                string password = _loginInfo.Password;
+                string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
 
-                string json = await _httpClient.GetStringAsync(api);
-                var categories = JsonSerializer.Deserialize<List<LiveCategory>>(json) ?? new List<LiveCategory>();
+                // -------------------------------------------------------------
+                // 1. CACHE STRATEGY: Try Load from Disk First
+                // -------------------------------------------------------------
+                var cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, "live_cats");
+                var cachedStreams = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "live_streams");
 
-                // 1. Create "All Channels" Virtual Category
-                var allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
-                
-                // 2. Prepare Source
-                _allCategories = new List<LiveCategory> { allCat };
-                _allCategories.AddRange(categories);
-                
-                // 3. UI Update (Sidebar)
-                CategoryListView.ItemsSource = _allCategories;
-                CategoryListView.SelectedIndex = 0; // Select "All" by default
+                bool cacheLoaded = (cachedCats != null && cachedStreams != null && cachedCats.Count > 0);
 
-                // 4. Load ALL Streams for "All Channels" mode (Parallel or Batched recommended, but simple for now)
-                // For "All Channels" to work immediately, we need to fetch streams. 
-                // In Xtream, streams are per category usually, OR we can fetch "get_live_streams" without cat ID to get ALL.
-                // Let's try fetching ALL streams once.
-                
-                string streamApi = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_live_streams";
-                string streamJson = await _httpClient.GetStringAsync(streamApi);
-                var streams = JsonSerializer.Deserialize<List<LiveStream>>(streamJson);
-
-                if (streams != null)
+                if (cacheLoaded)
                 {
-                    // URL Construction
-                    foreach (var s in streams)
+                    System.Diagnostics.Debug.WriteLine("[LiveTVPage] Loaded from Cache!");
+                    _allCategories = cachedCats;
+                    _allChannels = cachedStreams; // Raw list, but we need to re-link
+
+                    // Hydrate Metadata from ProbeCache
+                    foreach (var s in _allChannels)
                     {
-                        s.StreamUrl = $"{baseUrl}/live/{_loginInfo.Username}/{_loginInfo.Password}/{s.StreamId}.ts";
+                        if (Services.ProbeCacheService.Instance.Get(s.StreamUrl) is Services.ProbeData pd)
+                        {
+                            s.Resolution = pd.Resolution;
+                            s.Codec = pd.Codec;
+                            s.Bitrate = pd.Bitrate;
+                            s.Fps = pd.Fps;
+                            s.IsHdr = pd.IsHdr;
+                            s.IsOnline = true; // Cached implies it was online recently
+                        }
                     }
 
-                    _allChannels = streams;
-                    allCat.Channels = _allChannels; // "All" category holds everything
+                    // Re-link logic (same as fetch)
+                     var allCat = _allCategories.FirstOrDefault(c => c.CategoryId == "-1");
+                     if (allCat == null)
+                     {
+                         allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
+                         _allCategories.Insert(0, allCat);
+                     }
+                     allCat.Channels = _allChannels;
+
+                     foreach (var cat in _allCategories)
+                     {
+                         if (cat.CategoryId != "-1")
+                            cat.Channels = _allChannels.Where(s => s.CategoryId == cat.CategoryId).ToList();
+                     }
+
+                    CategoryListView.ItemsSource = _allCategories;
+                    CategoryListView.ItemsSource = _allCategories;
                     
-                    // Distribute streams to their categories
-                    foreach (var cat in categories)
+                    // Restoration Logic
+                    var lastId = AppSettings.LastLiveCategoryId;
+                    var targetCat = _allCategories.FirstOrDefault(c => c.CategoryId == lastId) ?? allCat;
+
+                    CategoryListView.SelectedItem = targetCat;
+                    CategoryListView.ScrollIntoView(targetCat);
+                    SelectCategory(targetCat);
+                    
+                    LoadDummyRecents();
+
+                    SidebarLoadingRing.IsActive = false;
+                    MainLoadingRing.IsActive = false;
+                    
+                    // Optional: Background Refresh check could happen here
+                }
+
+                // 2. NETWORK STRATEGY: If Cache Missing (or forced refresh needed)
+                if (!cacheLoaded)
+                {
+                    string api = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_live_categories";
+                    string json = await _httpClient.GetStringAsync(api);
+                    var categories = JsonSerializer.Deserialize<List<LiveCategory>>(json) ?? new List<LiveCategory>();
+
+                    // Channel Fetch
+                    string streamApi = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_live_streams";
+                    string streamJson = await _httpClient.GetStringAsync(streamApi);
+                    var streams = JsonSerializer.Deserialize<List<LiveStream>>(streamJson);
+
+                    if (streams != null)
                     {
-                        cat.Channels = _allChannels.Where(s => s.CategoryId == cat.CategoryId).ToList();
+                        // URL Construction
+                        foreach (var s in streams)
+                        {
+                            s.StreamUrl = $"{baseUrl}/live/{username}/{password}/{s.StreamId}.ts";
+                        }
+                        
+                        // 3. CACHE SAVE (Background)
+                        // We save RAW lists. Re-linking happens on load.
+                        _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_cats", categories);
+                        _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_streams", streams);
+
+                        // 4. UI Update
+                        var allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
+                        _allCategories = new List<LiveCategory> { allCat };
+                        _allCategories.AddRange(categories);
+                        _allChannels = streams;
+                    
+                        // Wait for Probe Cache to be ready (Race Condition fix)
+                        await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
+                        
+                        // Hydrate Metadata from ProbeCache (Network Path)
+                        foreach (var s in _allChannels)
+                        {
+                            if (Services.ProbeCacheService.Instance.Get(s.StreamUrl) is Services.ProbeData pd)
+                            {
+                                s.Resolution = pd.Resolution;
+                                s.Codec = pd.Codec;
+                                s.Bitrate = pd.Bitrate;
+                                s.Fps = pd.Fps;
+                                s.IsHdr = pd.IsHdr;
+                                s.IsOnline = true; 
+                            }
+                        }
+                        
+                        allCat.Channels = _allChannels;
+                        foreach (var cat in categories)
+                        {
+                            cat.Channels = _allChannels.Where(s => s.CategoryId == cat.CategoryId).ToList();
+                        }
+
+                        CategoryListView.ItemsSource = _allCategories;
+                        CategoryListView.ItemsSource = _allCategories;
+
+                        // Restoration Logic
+                        var lastId = AppSettings.LastLiveCategoryId;
+                        var targetCat = _allCategories.FirstOrDefault(c => c.CategoryId == lastId) ?? allCat;
+                        
+                        CategoryListView.SelectedItem = targetCat;
+                        CategoryListView.ScrollIntoView(targetCat);
+                        SelectCategory(targetCat);
+
+                        LoadDummyRecents();
                     }
                 }
-                
-                // 5. Select Initial Category (triggers update)
-                 SelectCategory(allCat);
-                 
-                 // Load Recents (Dummy for specific User Request "Hadi bakalım")
-                 LoadDummyRecents();
             }
             catch (Exception ex)
             {
@@ -276,8 +362,28 @@ namespace ModernIPTVPlayer
         // UI LOGIC & FILTERING
         // ==========================================
         
+        // Search Debounce
+        private DispatcherTimer _searchDebounceTimer;
+
         private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
         {
+            if (_searchDebounceTimer == null)
+            {
+                _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+                _searchDebounceTimer.Tick += (s, args) => 
+                {
+                    _searchDebounceTimer.Stop();
+                    PerformSearch();
+                };
+            }
+
+            _searchDebounceTimer.Stop();
+            _searchDebounceTimer.Start();
+        }
+
+        private void PerformSearch()
+        {
+            if (SearchBox == null) return;
             _searchQuery = SearchBox.Text.ToLowerInvariant();
             UpdateSidebar();
             UpdateChannelList();
@@ -356,6 +462,7 @@ namespace ModernIPTVPlayer
         private void SelectCategory(LiveCategory category)
         {
             _selectedCategory = category;
+            AppSettings.LastLiveCategoryId = category?.CategoryId; // Save selection
             UpdateChannelList();
         }
 
@@ -515,6 +622,22 @@ namespace ModernIPTVPlayer
                     {
                         DispatcherQueue.TryEnqueue(() => item.IsProbing = true);
 
+                        // OPTIMIZATION: Check Cache explicitly to skip throttle
+                        if (Services.ProbeCacheService.Instance.Get(item.StreamUrl) is Services.ProbeData cached)
+                        {
+                            DispatcherQueue.TryEnqueue(() => 
+                            {
+                                item.Resolution = cached.Resolution;
+                                item.Fps = cached.Fps;
+                                item.Codec = cached.Codec;
+                                item.Bitrate = cached.Bitrate;
+                                item.IsOnline = true; // Cached implies success
+                                item.IsHdr = cached.IsHdr;
+                                item.IsProbing = false;
+                            });
+                            continue; // Valid cache hit: Process next item IMMEDIATELY (No Delay)
+                        }
+
                         // Process (This takes ~0.5s - 1.5s)
                         var result = await _prober.ProbeAsync(item.StreamUrl, ct);
 
@@ -529,7 +652,7 @@ namespace ModernIPTVPlayer
                             item.IsProbing = false;
                         });
 
-                        // Small delay to prevent CPU choking if queue is huge
+                        // Small delay only for REAL probes to prevent CPU choking
                         await Task.Delay(250, ct); 
                     }
                     catch

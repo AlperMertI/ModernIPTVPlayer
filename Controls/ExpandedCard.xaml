@@ -43,7 +43,7 @@
               Tapped="TrailerArea_Tapped">
             <Grid x:Name="BackdropContainer">
                 <Image x:Name="BackdropImage" Stretch="UniformToFill" Opacity="0.7"/>
-                <Rectangle>
+                <Rectangle x:Name="BackdropOverlay">
                     <Rectangle.Fill>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                             <GradientStop Color="Transparent" Offset="0"/>
@@ -81,7 +81,17 @@
                                Style="{StaticResource TitleTextBlockStyle}" 
                                FontSize="19" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,0,2"/>
 
-                    <StackPanel x:Name="TechBadgesPanel" Orientation="Horizontal" Spacing="6" Height="22"/>
+                    <Grid>
+                        <!-- Badge Skeleton (Visible during Probe) -->
+                        <StackPanel x:Name="BadgeSkeleton" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center">
+                             <Grid Width="36" Height="16"><local:ShimmerControl/></Grid>
+                             <Grid Width="42" Height="16"><local:ShimmerControl/></Grid>
+                             <Grid Width="32" Height="16"><local:ShimmerControl/></Grid>
+                        </StackPanel>
+
+                        <!-- Real Badges (Visible after Probe) -->
+                        <StackPanel x:Name="TechBadgesPanel" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center"/>
+                    </Grid>
 
                     <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
                         <Border x:Name="MoodTag" Background="#FF009900" CornerRadius="4" Padding="6,2" Visibility="Collapsed">
@@ -103,17 +113,18 @@
             </ScrollViewer>
 
             <!-- Advanced Per-Item Skeleton Loader -->
-            <StackPanel x:Name="FullSkeleton" Padding="16,10,16,0" Spacing="12">
+            <!-- Main Content Skeleton (Title, Desc, etc.) -->
+            <StackPanel x:Name="MainSkeleton" Padding="16,10,16,0" Spacing="12">
                 <!-- Title Skeleton -->
                 <Grid Width="200" Height="24" HorizontalAlignment="Left">
                      <local:ShimmerControl/>
                 </Grid>
                 
-                <!-- Badges Skeleton -->
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Grid Width="50" Height="18"><local:ShimmerControl/></Grid>
-                    <Grid Width="70" Height="18"><local:ShimmerControl/></Grid>
-                </StackPanel>
+                <!-- Spacer for Badge Area is no longer needed in skeleton as it's part of content flow now 
+                     Actually we need it to push the Info/Desc down if we want MainSkeleton to match content shape
+                     But since we moved BadgeSkeleton out of MainSkeleton logic, MainSkeleton represents the 'rest' 
+                     Let's keep a small spacer or better yet, make MainSkeleton less tall at top -->
+                <Grid Height="0"/>
                 
                 <!-- Info Skeleton -->
                 <Grid Width="120" Height="14" HorizontalAlignment="Left"><local:ShimmerControl/></Grid>
@@ -126,15 +137,20 @@
                     <Grid Height="10" Width="220"><local:ShimmerControl/></Grid>
                 </StackPanel>
             </StackPanel>
+
+
         </Grid>
 
         <!-- 3. ACTION BUTTONS -->
         <Grid Grid.Row="2" Padding="16" Background="#161616">
             <StackPanel Spacing="8" Orientation="Horizontal">
-                <Button x:Name="PlayButton" Click="PlayButton_Click" Background="White" Foreground="Black" CornerRadius="6" Padding="18,8">
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <FontIcon x:Name="PlayButtonIcon" Glyph="&#xE768;" FontSize="14"/>
-                        <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold"/>
+                <Button x:Name="PlayButton" Click="PlayButton_Click" Background="White" Foreground="Black" CornerRadius="6" Padding="14,6">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <FontIcon x:Name="PlayButtonIcon" Glyph="&#xE768;" FontSize="16" VerticalAlignment="Center"/>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold" FontSize="14" LineHeight="14"/>
+                            <TextBlock x:Name="PlayButtonSubtext" Text="" FontSize="10" Opacity="0.75" FontWeight="SemiBold" Visibility="Collapsed" Margin="0,0,0,0"/>
+                        </StackPanel>
                     </StackPanel>
                 </Button>
                 <Button x:Name="DetailsButton" Click="DetailsButton_Click" Background="#22FFFFFF" Foreground="White" CornerRadius="6" Padding="12,8">

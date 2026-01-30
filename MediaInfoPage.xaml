@@ -12,6 +12,7 @@
 
     <Page.Resources>
         <local:BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <local:StringToImageSourceConverter x:Key="StringToImage"/>
         <!-- Premium Glass Button Style -->
         <Style x:Key="GlassButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="#25FFFFFF"/>
@@ -78,6 +79,7 @@
         
         <!-- 1. CINEMATIC BACKGROUND -->
         <Grid x:Name="HeroContainer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            <Image x:Name="HeroImage2" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
             <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="1"/>
             
             <!-- 2. AMBIENT BLOOM (Dynamic Ambilight) -->
@@ -408,7 +410,7 @@
                                                  
                                                  <!-- Thumbnail -->
                                                  <Grid CornerRadius="10,0,0,10">
-                                                     <Image Source="{x:Bind ImageUrl}" Stretch="UniformToFill"/>
+                                                     <Image Source="{x:Bind ImageUrl, Converter={StaticResource StringToImage}}" Stretch="UniformToFill"/>
                                                      
                                                      <!-- Dark Gradient Overlay -->
                                                      <Grid Background="#33000000"/>
@@ -482,7 +484,7 @@
                                     <!-- Thumbnail -->
                                     <Border CornerRadius="12,12,0,0">
                                         <Border.Background>
-                                            <ImageBrush ImageSource="{Binding ImageUrl}" Stretch="UniformToFill"/>
+                                            <ImageBrush ImageSource="{Binding ImageUrl, Converter={StaticResource StringToImage}}" Stretch="UniformToFill"/>
                                         </Border.Background>
                                     </Border>
                                     <!-- Dark Overlay -->
@@ -573,13 +575,16 @@
                                VerticalAlignment="Center" Margin="0,0,200,0"
                                FontSize="18" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis"/>
                      
-                     <Button x:Name="StickyPlayButton" Click="PlayButton_Click" HorizontalAlignment="Right" VerticalAlignment="Center"
-                             Style="{StaticResource GlassButtonStyle}" Height="40" Padding="24,0" CornerRadius="20" BorderBrush="#40FFFFFF">
-                         <StackPanel Orientation="Horizontal" Spacing="8">
-                             <FontIcon Glyph="&#xE768;" FontSize="14"/>
-                             <TextBlock x:Name="StickyPlayButtonText" Text="Oynat" FontSize="13" FontWeight="SemiBold"/>
-                         </StackPanel>
-                     </Button>
+                      <Button x:Name="StickyPlayButton" Click="PlayButton_Click" HorizontalAlignment="Right" VerticalAlignment="Center"
+                              Style="{StaticResource GlassButtonStyle}" Height="40" Padding="20,0" CornerRadius="20" BorderBrush="#40FFFFFF">
+                          <StackPanel Orientation="Horizontal" Spacing="8">
+                              <FontIcon Glyph="&#xE768;" FontSize="14" VerticalAlignment="Center"/>
+                              <StackPanel VerticalAlignment="Center">
+                                  <TextBlock x:Name="StickyPlayButtonText" Text="Oynat" FontSize="13" FontWeight="SemiBold"/>
+                                  <TextBlock x:Name="StickyPlayButtonSubtext" Text="" FontSize="9" Opacity="0.6" Visibility="Collapsed" Margin="0,-2,0,0"/>
+                              </StackPanel>
+                          </StackPanel>
+                      </Button>
                 </Grid>
             </Border>
         </Grid>

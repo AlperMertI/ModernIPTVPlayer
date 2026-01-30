@@ -292,6 +292,26 @@ namespace ModernIPTVPlayer
                         
                         // Show Info Pills (Once)
                         ShowInfoPills();
+
+                        // [CACHE UPDATE] Capture playback metadata for Global Cache
+                        // This allows LiveTVPage badges to appear automatically after watching a channel
+                        try 
+                        {
+                            bool isHdr = _cachedHdr.Contains("HDR");
+                            string simpleFps = _cachedFps.Split(' ')[0] + " fps"; // Extract "50.00 fps" from complex string
+                            
+                            // Try to get bitrate metadata, default to 0 if unavailable
+                            long bitrate = 0;
+                            /* Bitrate metadata is notoriously unreliable in live streams via MPV properties. 
+                               We'll skip it for now or assume 0, as Res/Codec are the important ones. */
+
+                            Services.ProbeCacheService.Instance.Update(_streamUrl, _cachedResolution, simpleFps, _cachedCodec, bitrate, isHdr);
+                            System.Diagnostics.Debug.WriteLine($"[PlayerPage] Updated ProbeCache for {_streamUrl}");
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[PlayerPage] Failed to update ProbeCache: {ex.Message}");
+                        }
                     }
                 }
 

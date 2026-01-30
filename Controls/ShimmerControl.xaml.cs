@@ -13,6 +13,7 @@ namespace ModernIPTVPlayer.Controls
         {
             this.InitializeComponent();
             this.Loaded += ShimmerControl_Loaded;
+            this.Unloaded += ShimmerControl_Unloaded;
             
             SetupAnimation();
         }
@@ -41,6 +42,11 @@ namespace ModernIPTVPlayer.Controls
         private void ShimmerControl_Loaded(object sender, RoutedEventArgs e)
         {
             _storyboard.Begin();
+        }
+
+        private void ShimmerControl_Unloaded(object sender, RoutedEventArgs e)
+        {
+            _storyboard.Stop();
         }
         
         public void Stop() => _storyboard.Stop();

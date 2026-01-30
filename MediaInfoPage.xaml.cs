@@ -98,6 +98,8 @@ namespace ModernIPTVPlayer
             }
         }
 
+
+
         private void SyncWideHeights()
         {
             if (LayoutRoot == null || ContentGrid == null) return;
@@ -213,24 +215,31 @@ namespace ModernIPTVPlayer
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
-            base.OnNavigatedTo(e);
-            SetupParallax();
-
-            // Load History
-            await HistoryManager.Instance.InitializeAsync();
-
-            if (e.Parameter is MediaNavigationArgs args)
+            try
             {
-                _item = args.Stream;
-                await LoadDetailsAsync(args.Stream, args.TmdbInfo);
+                base.OnNavigatedTo(e);
+                SetupParallax();
+
+                // Load History
+                await HistoryManager.Instance.InitializeAsync();
+
+                if (e.Parameter is MediaNavigationArgs args)
+                {
+                    _item = args.Stream;
+                    await LoadDetailsAsync(args.Stream, args.TmdbInfo);
+                }
+                else if (e.Parameter is IMediaStream item)
+                {
+                    _item = item;
+                    await LoadDetailsAsync(item);
+                }
+                
+                StartHeroConnectedAnimation();
             }
-            else if (e.Parameter is IMediaStream item)
+            catch (Exception ex)
             {
-                _item = item;
-                await LoadDetailsAsync(item);
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] CRITICAL ERROR in OnNavigatedTo: {ex}");
             }
-            
-            StartHeroConnectedAnimation();
         }
 
         private void SetupParallax()
@@ -262,8 +271,9 @@ namespace ModernIPTVPlayer
             // Setup Sticky Header Scroll Logic
             SetupStickyScroller();
 
-            // Start 500ms timer in parallel with initial populating
-            var aestheticDelayTask = Task.Delay(500);
+            // Start timer in parallel (Short delay if cached, longer if new to allow layout settlement)
+            // Start timer in parallel (Short delay if cached, longer if new to allow layout settlement)
+            // var aestheticDelayTask = Task.Delay(hasBasicData ? 50 : 400); // REMOVED: Unused and unnecessary blocking feeling
 
             TitleText.Text = item.Title;
             StickyTitle.Text = item.Title; 
@@ -469,7 +479,80 @@ namespace ModernIPTVPlayer
                 // SERIES MODE
                 EpisodesPanel.Visibility = Visibility.Visible;
                 PlayButtonText.Text = "Oynat";
-                // MaxLines already set earlier for layout sync
+
+                // --- SERIES EPISODE RESUME LOGIC ---
+                var lastWatched = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+                if (lastWatched != null)
+                {
+                    string resumeText = "Devam Et";
+                    int displayEp = lastWatched.EpisodeNumber == 0 ? 1 : lastWatched.EpisodeNumber;
+                    string subtext = $"S{lastWatched.SeasonNumber:D2}E{displayEp:D2}";
+
+                    PlayButtonText.Text = resumeText;
+                    PlayButtonSubtext.Text = subtext;
+                    PlayButtonSubtext.Visibility = Visibility.Visible;
+
+                    StickyPlayButtonText.Text = resumeText;
+                    StickyPlayButtonSubtext.Text = subtext;
+                    StickyPlayButtonSubtext.Visibility = Visibility.Visible;
+                    
+                    RestartButton.Visibility = Visibility.Visible;
+
+                    // Update Top Header with Episode Info if TMDB is available
+                    if (_cachedTmdb != null)
+                    {
+                        var seasonDetail = await TmdbHelper.GetSeasonDetailsAsync(_cachedTmdb.Id, lastWatched.SeasonNumber);
+                        if (seasonDetail?.Episodes != null)
+                        {
+                            var ep = seasonDetail.Episodes.FirstOrDefault(e => e.EpisodeNumber == lastWatched.EpisodeNumber);
+                            // Fallback for 0-based indexing
+                            if (ep == null && lastWatched.EpisodeNumber == 0)
+                                ep = seasonDetail.Episodes.FirstOrDefault(e => e.EpisodeNumber == 1);
+
+                            if (ep != null)
+                            {
+                                // Determine best title (TMDB name vs IPTV title from history)
+                                string epName = ep.Name;
+                                string cleanIptv = TmdbHelper.CleanEpisodeTitle(lastWatched.Title);
+                                bool isGeneric = string.IsNullOrEmpty(epName) || epName.Contains("Bölüm") || epName.Contains("Episode") || epName == ep.EpisodeNumber.ToString();
+
+                                if (isGeneric && !string.IsNullOrEmpty(cleanIptv) && cleanIptv.Length > 2)
+                                {
+                                    epName = cleanIptv;
+                                }
+                                else if (string.IsNullOrEmpty(epName))
+                                {
+                                    epName = $"Bölüm {ep.EpisodeNumber}";
+                                }
+
+                                TitleText.Text = epName;
+                                // Series name as sub-title
+                                
+                                if (!string.IsNullOrEmpty(ep.Overview))
+                                {
+                                    OverviewText.Text = ep.Overview;
+                                    AdjustOverviewShimmer(ep.Overview);
+                                }
+                                
+                                // Update Hero Image to episode still if available
+                                // REMOVED: User prefers Series Backdrop/Slideshow over low-res episode stills
+                                // if (!string.IsNullOrEmpty(ep.StillUrl))
+                                // {
+                                //    HeroImage.Source = new BitmapImage(new Uri(TmdbHelper.GetImageUrl(ep.StillUrl)));
+                                // }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    PlayButtonText.Text = "Oynat";
+                    PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                    StickyPlayButtonText.Text = "Oynat";
+                    StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
+                    RestartButton.Visibility = Visibility.Collapsed;
+                }
+                // ------------------------------------
                 
                 await LoadSeriesDataAsync(series);
             }
@@ -478,7 +561,6 @@ namespace ModernIPTVPlayer
                 // MOVIE / LIVE MODE
                 _streamUrl = live.StreamUrl;
                 EpisodesPanel.Visibility = Visibility.Collapsed;
-                PlayButtonText.Text = "Oynat";
                 
                 // History Check (Resuming Movie?)
                 var history = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
@@ -487,31 +569,73 @@ namespace ModernIPTVPlayer
                     double percent = (history.Position / history.Duration) * 100;
                     if (percent > 5 && percent < 95)
                     {
-                        PlayButtonText.Text = "Devam Et";
-                        PlayButtonText.Text = "Devam Et";
-                        PlayButtonSubtext.Visibility = Visibility.Visible;
-                        RestartButton.Visibility = Visibility.Visible;
-                        
+                        string resumeText = "Devam Et";
                         var remaining = TimeSpan.FromSeconds(history.Duration - history.Position);
-                        // Format: "23dk Kaldı" or "1sa 12dk Kaldı"
-                        PlayButtonSubtext.Text = remaining.TotalHours >= 1 
+                        string subtext = remaining.TotalHours >= 1 
                             ? $"{remaining.Hours}sa {remaining.Minutes}dk Kaldı"
                             : $"{remaining.Minutes}dk Kaldı";
+
+                        PlayButtonText.Text = resumeText;
+                        PlayButtonSubtext.Text = subtext;
+                        PlayButtonSubtext.Visibility = Visibility.Visible;
+
+                        StickyPlayButtonText.Text = resumeText;
+                        StickyPlayButtonSubtext.Text = subtext;
+                        StickyPlayButtonSubtext.Visibility = Visibility.Visible;
+
+                        RestartButton.Visibility = Visibility.Visible;
+                    }
+                    else
+                    {
+                        PlayButtonText.Text = "Oynat";
+                        PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                        StickyPlayButtonText.Text = "Oynat";
+                        StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
+                        RestartButton.Visibility = Visibility.Collapsed;
                     }
                 }
                 else
                 {
-                     PlayButtonText.Text = "Oynat";
-                     PlayButtonText.Text = "Oynat";
-                     PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                     RestartButton.Visibility = Visibility.Collapsed;
+                    PlayButtonText.Text = "Oynat";
+                    PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                    StickyPlayButtonText.Text = "Oynat";
+                    StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
+                    RestartButton.Visibility = Visibility.Collapsed;
+                }
+
+                // SLIDESHOW (MOVIE)
+                bool startedSlideshow = false;
+                System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Checking availability...");
+                
+                if (_cachedTmdb != null && _cachedTmdb.Images?.Backdrops != null && _cachedTmdb.Images.Backdrops.Count > 0)
+                {
+                    // Extract URLs
+                    var backdrops = _cachedTmdb.Images.Backdrops.Select(i => TmdbHelper.GetImageUrl(i.FilePath, "original")).Take(10).ToList();
+                    if (backdrops.Count > 0)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Starting with {backdrops.Count} TMDB backdrops.");
+                        StartBackgroundSlideshow(backdrops);
+                        startedSlideshow = true;
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("[SLIDESHOW] No TMDB Backdrops found.");
+                }
+                
+                if (!startedSlideshow && _item is LiveStream ls && !string.IsNullOrEmpty(ls.IconUrl))
+                {
+                    // Single Image fallback (IPTV Cover)
+                    // Only if we haven't started a TMDB slideshow
+                    System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Falling back to Series Cover.");
+                    StartBackgroundSlideshow(new List<string> { ls.IconUrl });
                 }
 
                 InitializePrebufferPlayer(_streamUrl, history?.Position ?? 0);
             }
 
             // Wait for at least 500ms aesthetic delay to pass before reveal
-            await aestheticDelayTask;
+            // await aestheticDelayTask; // REMOVED
 
             // 3. Final Step: Smooth Staggered Crossfade (Skeleton -> Real UI)
             StaggeredRevealContent();
@@ -730,31 +854,44 @@ namespace ModernIPTVPlayer
                 }
             }
         }
+
+
+
+
         private void StartHeroConnectedAnimation()
         {
-            // Prepare smooth fade-in for all background effects
-            var localBgVisual = ElementCompositionPreview.GetElementVisual(LocalInfoGradient);
-            
-            var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
-            fadeIn.InsertKeyFrame(1f, 1f);
-            fadeIn.Duration = TimeSpan.FromSeconds(1); // Cinematic fade
-            
-            // Execute Fade In (Always)
-            localBgVisual.StartAnimation("Opacity", fadeIn);
+            try
+            {
+                // Prepare smooth fade-in for all background effects
+                var localBgVisual = ElementCompositionPreview.GetElementVisual(LocalInfoGradient);
+                if (localBgVisual != null)
+                {
+                    var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(1f, 1f);
+                    fadeIn.Duration = TimeSpan.FromSeconds(1); // Cinematic fade
+                    localBgVisual.StartAnimation("Opacity", fadeIn);
+                }
 
-            var anim = ConnectedAnimationService.GetForCurrentView().GetAnimation("ForwardConnectedAnimation");
-            if (anim != null)
-            {
-                // We target the Container to make sure Image + Effects fly together
-                anim.Configuration = new DirectConnectedAnimationConfiguration();
-                
-                // Start the morph
-                anim.Completed += (s, e) => StartKenBurnsEffect();
-                anim.TryStart(HeroContainer);
+                var anim = ConnectedAnimationService.GetForCurrentView().GetAnimation("ForwardConnectedAnimation");
+                if (anim != null)
+                {
+                    // We target the Container to make sure Image + Effects fly together
+                    anim.Configuration = new DirectConnectedAnimationConfiguration();
+                    
+                    // Start the morph
+                    anim.Completed += (s, e) => StartKenBurnsEffect();
+                    anim.TryStart(HeroContainer);
+                }
+                else
+                {
+                    // No connected animation - just start Ken Burns immediately
+                    StartKenBurnsEffect();
+                }
             }
-            else
+            catch (Exception ex)
             {
-                // No connected animation - just start Ken Burns immediately
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Connected Animation Failed: {ex.Message}");
+                // Ensure Ken Burns starts even if connected animation fails
                 StartKenBurnsEffect();
             }
         }
@@ -858,196 +995,319 @@ namespace ModernIPTVPlayer
 
         private async Task LoadSeriesDataAsync(SeriesStream series)
         {
-             // 1. Fetch JSON from API
-             try
-             {
-                 var playlistsJson = AppSettings.PlaylistsJson;
-                 var lastId = AppSettings.LastPlaylistId;
-                 if (string.IsNullOrEmpty(playlistsJson) || lastId == null) return;
+            try
+            {
+                var playlistsJson = AppSettings.PlaylistsJson;
+                var lastId = AppSettings.LastPlaylistId;
+                if (string.IsNullOrEmpty(playlistsJson) || lastId == null) return;
 
-                 var playlists = System.Text.Json.JsonSerializer.Deserialize<List<Playlist>>(playlistsJson);
-                 var activePlaylist = playlists?.Find(p => p.Id == lastId);
-                 if (activePlaylist == null) return;
+                var playlists = System.Text.Json.JsonSerializer.Deserialize<List<Playlist>>(playlistsJson);
+                var activePlaylist = playlists?.Find(p => p.Id == lastId);
+                if (activePlaylist == null) return;
 
-                 string baseUrl = activePlaylist.Host.TrimEnd('/');
-                 string api = $"{baseUrl}/player_api.php?username={activePlaylist.Username}&password={activePlaylist.Password}&action=get_series_info&series_id={series.SeriesId}";
-                 
-                 var httpClient = HttpHelper.Client;
-                 string json = await httpClient.GetStringAsync(api);
-                 if (string.IsNullOrEmpty(json)) return;
+                // 1. USE CACHE SERVICE (Fastest)
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                System.Diagnostics.Debug.WriteLine($"[PERF] Starting LoadSeriesDataAsync for {series.SeriesId}...");
 
-                 // 2. Parse Seasons
-                 Seasons.Clear();
-                 CurrentEpisodes.Clear();
-                 
-                 using (var doc = System.Text.Json.JsonDocument.Parse(json))
-                 {
-                     var root = doc.RootElement;
-                     
-                     // 2. Accurate TMDB Identification (Highest Priority)
-                     System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] Loading info for series: {series.Name} (ID: {series.SeriesId})");
-                     if (root.TryGetProperty("info", out var infoNode))
+                var result = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, new Services.LoginParams 
+                {
+                    Host = activePlaylist.Host,
+                    Username = activePlaylist.Username,
+                    Password = activePlaylist.Password,
+                    PlaylistUrl = activePlaylist.Id.ToString(),
+                });
+                
+                sw.Stop();
+                System.Diagnostics.Debug.WriteLine($"[PERF] Cache Service returned in {sw.ElapsedMilliseconds}ms. Result Null? {result == null}");
+
+                if (result == null || result.Episodes == null) 
+                {
+                    System.Diagnostics.Debug.WriteLine($"[PERF] ABORT: Result is null or has no episodes.");
+                    return;
+                }
+
+                // 2. Clear UI Lists
+                Seasons.Clear();
+                CurrentEpisodes.Clear();
+
+                // 3. Accurate TMDB Identification (Highest Priority)
+                System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] Loading info for series: {series.Name} (ID: {series.SeriesId})");
+                
+                sw.Restart();
+                if (result.Info != null && result.Info.TmdbId != null)
+                {
+                    string tidStr = result.Info.TmdbId.ToString();
+                    if (result.Info.TmdbId is System.Text.Json.JsonElement je)
+                    {
+                        tidStr = je.GetRawText().Trim('"');
+                    }
+
+                    if (int.TryParse(tidStr, out int tid) && tid > 0)
+                    {
+                        if (_cachedTmdb == null || _cachedTmdb.Id != tid)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[PERF] Fetching TMDB TV Show Info for ID: {tid}...");
+                            _cachedTmdb = await TmdbHelper.GetTvByIdAsync(tid);
+                        }
+                    }
+                }
+
+                // FIX: Check for stale cache (Missing Images) - MOVED OUTSIDE to ensure it runs
+                if (_cachedTmdb != null && _cachedTmdb.Images == null)
+                {
+                     System.Diagnostics.Debug.WriteLine($"[TMDB] Stale cache detected (No Images). Force refreshing ID: {_cachedTmdb.Id}");
+                     Services.TmdbCacheService.Instance.Remove($"tv_id_{_cachedTmdb.Id}");
+                     _cachedTmdb = await TmdbHelper.GetTvByIdAsync(_cachedTmdb.Id);
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"[PERF] TMDB Identification took {sw.ElapsedMilliseconds}ms. CachedTMDB Null? {_cachedTmdb == null}");
+                if (_cachedTmdb != null)
+                {
+                     System.Diagnostics.Debug.WriteLine($"[TMDB_DEBUG] CachedTMDB ID: {_cachedTmdb.Id}, Name: {_cachedTmdb.Name}");
+                     System.Diagnostics.Debug.WriteLine($"[TMDB_DEBUG] Images Object Null? {_cachedTmdb.Images == null}");
+                     if (_cachedTmdb.Images != null)
                      {
-                         if (infoNode.TryGetProperty("tmdb_id", out var tProp))
-                         {
-                             string tidStr = tProp.ValueKind == System.Text.Json.JsonValueKind.String ? tProp.GetString() : tProp.GetRawText();
-                             System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] IPTV Provider TMDB_ID: {tidStr}");
-                             if (int.TryParse(tidStr, out int tid) && tid > 0)
-                             {
-                                 if (_cachedTmdb == null || _cachedTmdb.Id != tid)
-                                 {
-                                     System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] Fetching TMDB details for ID: {tid}");
-                                     _cachedTmdb = await TmdbHelper.GetTvByIdAsync(tid);
-                                     if (_cachedTmdb != null) System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] TMDB Found: {_cachedTmdb.DisplayTitle}");
-                                 }
-                             }
-                         }
-                         else { System.Diagnostics.Debug.WriteLine("[SERIES_DEBUG] No tmdb_id property in 'info' node."); }
+                         System.Diagnostics.Debug.WriteLine($"[TMDB_DEBUG] Backdrops Count: {_cachedTmdb.Images.Backdrops?.Count ?? 0}");
                      }
-                     else { System.Diagnostics.Debug.WriteLine("[SERIES_DEBUG] No 'info' node found in series JSON."); }
+                }
+                
+                // 4. Process Episodes
+                sw.Restart();
+                int totalEpisodes = 0;
+                foreach (var seasonKvp in result.Episodes)
+                {
+                    if (int.TryParse(seasonKvp.Key, out int seasonNum))
+                    {
+                        var seasonEpisodes = new List<EpisodeItem>();
+                        
+                        bool seasonCacheInvalidated = false;
 
-                     if (root.TryGetProperty("episodes", out var episodesNode))
-                     {
-                         // Properties "1", "2" are seasons
-                         foreach (var seasonProp in episodesNode.EnumerateObject())
-                         {
-                             if (int.TryParse(seasonProp.Name, out int seasonNum))
-                             {
-                                 var seasonEpisodes = new List<EpisodeItem>();
-                                 
-                                 // Fetch TMDB Season Info (if available) - Do this once per season
-                                 TmdbSeasonDetails tmdbSeason = null;
-                                 if (_cachedTmdb != null)
-                                 {
-                                     System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] Fetching TMDB Season {seasonNum} for {_cachedTmdb.DisplayTitle}");
+                        // Fetch TMDB Season Info (if available) - Do this once per season
+                        TmdbSeasonDetails tmdbSeason = null;
+                        if (_cachedTmdb != null)
+                        {
+                            long tSeason = System.Diagnostics.Stopwatch.GetTimestamp();
+                            tmdbSeason = await TmdbHelper.GetSeasonDetailsAsync(_cachedTmdb.Id, seasonNum);
+                            
+                            // Check for likely stale season cache (e.g. valid result but NO stills at all in first 3 episodes?)
+                            if (tmdbSeason != null && tmdbSeason.Episodes != null && tmdbSeason.Episodes.Count > 0)
+                            {
+                                int missingStills = tmdbSeason.Episodes.Take(5).Count(e => string.IsNullOrEmpty(e.StillPath));
+                                if (missingStills > 3) // If most of the first few are missing
+                                {
+                                     System.Diagnostics.Debug.WriteLine($"[TMDB] Suspicious Season Cache (Many missing stills) for S{seasonNum}. Invalidating...");
+                                     Services.TmdbCacheService.Instance.Remove($"season_{_cachedTmdb.Id}_s{seasonNum}");
                                      tmdbSeason = await TmdbHelper.GetSeasonDetailsAsync(_cachedTmdb.Id, seasonNum);
-                                     if (tmdbSeason != null) System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] Found TMDB Season {seasonNum} with {tmdbSeason.Episodes?.Count ?? 0} episodes.");
-                                 }
+                                     seasonCacheInvalidated = true;
+                                }
+                            }
 
-                                 foreach(var ep in seasonProp.Value.EnumerateArray())
-                                 {
-                                     string id = ep.GetProperty("id").GetString();
-                                     string container = ep.GetProperty("container_extension").GetString();
-                                     string title = ep.GetProperty("title").GetString();
-                                     // Try to get Episode Number from JSON to match with TMDB
-                                     int epNum = 0;
-                                     if (ep.TryGetProperty("episode_num", out var en)) 
-                                     {
-                                         if (en.ValueKind == System.Text.Json.JsonValueKind.Number) epNum = en.GetInt32();
-                                         else int.TryParse(en.GetString(), out epNum);
-                                     }
-                                     
-                                     // Match TMDB
-                                     if (tmdbSeason != null && tmdbSeason.Episodes != null)
-                                     {
-                                         var match = tmdbSeason.Episodes.FirstOrDefault(x => x.EpisodeNumber == epNum);
-                                         if (match != null)
-                                         {
-                                             System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] MATCH SUCCESS: S{seasonNum}E{epNum} -> {match.Name}");
-                                                                                          // Determine best title (TMDB name vs IPTV cleaned name)
-                                             string cleanIptv = TmdbHelper.CleanEpisodeTitle(title);
-                                             bool isGeneric = string.IsNullOrEmpty(match.Name) || match.Name.Contains("Bölüm") || match.Name.Contains("Episode") || match.Name == epNum.ToString();
-                                             
-                                             if (isGeneric && !string.IsNullOrEmpty(cleanIptv) && cleanIptv.Length > 2)
-                                             {
-                                                 title = cleanIptv;
-                                                 System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] MATCH (GENERIC TMDB): Using IPTV name: {title}");
-                                             }
-                                             else
-                                             {
-                                                 title = match.Name;
-                                                 System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] MATCH SUCCESS: {title}");
-                                             }
+                            long tEndSeason = System.Diagnostics.Stopwatch.GetTimestamp();
+                            // Only log if it takes significant time (>50ms)
+                             var dMs = (tEndSeason - tSeason) / (double)System.Diagnostics.Stopwatch.Frequency * 1000;
+                             if (dMs > 50) System.Diagnostics.Debug.WriteLine($"[PERF] Slow TMDB Season Fetch for S{seasonNum}: {dMs:F1}ms. Refreshed? {seasonCacheInvalidated}");
+                        }
 
-                                         }
-                                         else 
-                                         {
-                                                                                          title = TmdbHelper.CleanEpisodeTitle(title);
-                                             System.Diagnostics.Debug.WriteLine($"[SERIES_DEBUG] MATCH FAIL: Using Cleaned IPTV Title -> {title}");
+                        foreach(var epDef in seasonKvp.Value)
+                        {
+                            totalEpisodes++;
+                            string id = epDef.Id;
+                            string container = epDef.ContainerExtension;
+                            string title = epDef.Title;
+                            
+                            // Try to get Episode Number
+                            int epNum = 0;
+                            if (epDef.EpisodeNum != null)
+                            {
+                                string enStr = epDef.EpisodeNum.ToString();
+                                if (epDef.EpisodeNum is System.Text.Json.JsonElement je) enStr = je.ToString();
+                                int.TryParse(enStr, out epNum);
+                            }
+                            
+                            // Match TMDB
+                            if (tmdbSeason != null && tmdbSeason.Episodes != null)
+                            {
+                                var match = tmdbSeason.Episodes.FirstOrDefault(x => x.EpisodeNumber == epNum);
+                                if (match != null)
+                                {
+                                    string cleanIptv = TmdbHelper.CleanEpisodeTitle(title);
+                                    bool isGeneric = string.IsNullOrEmpty(match.Name) || match.Name.Contains("Bölüm") || match.Name.Contains("Episode") || match.Name == epNum.ToString();
+                                    
+                                    if (isGeneric && !string.IsNullOrEmpty(cleanIptv) && cleanIptv.Length > 2)
+                                    {
+                                        title = cleanIptv;
+                                    }
+                                    else
+                                    {
+                                        title = match.Name;
+                                    }
+                                }
+                                else 
+                                {
+                                     title = TmdbHelper.CleanEpisodeTitle(title);
+                                }
+                            }
 
-                                         }
-                                     }
+                            string finalUrl = $"{activePlaylist.Host.TrimEnd('/')}/series/{activePlaylist.Username}/{activePlaylist.Password}/{id}.{container}";
+                            
+                            // Metadata
+                            string thumb = epDef.Info?.MovieImage;
+                            string plot = epDef.Info?.Plot;
+                            
+                            // Prefer TMDB Still
+                            if (tmdbSeason != null)
+                            {
+                                var match = tmdbSeason.Episodes.FirstOrDefault(x => x.EpisodeNumber == epNum);
+                                if (match != null)
+                                {
+                                    // Use TMDB Still IF:
+                                    // 1. IPTV image is missing/empty
+                                    // 2. OR IPTV image is likely generic (often provider returns icon.png or logo.png)
+                                    // 3. AND we have a valid still
+                                    
+                                    // bool useTmdb = string.IsNullOrEmpty(thumb);
+                                    // if (!useTmdb && (thumb.Contains("icon") || thumb.Contains("logo"))) useTmdb = true;
+                                    
+                                    // FORCE PREFER TMDB if available (User preference inferred from issues)
+                                    // Check if IPTV thumb is just an IP/generic link or actually useful? 
+                                    // For now, if we have a TMDB match with an image, let's use it.
+                                    
+                                    bool hasTmdbImg = !string.IsNullOrEmpty(match.StillUrl);
+                                    
+                                    if (hasTmdbImg)
+                                    {
+                                        var newThumb = TmdbHelper.GetImageUrl(match.StillUrl, "original");
+                                        System.Diagnostics.Debug.WriteLine($"[EP_IMG] Swapping IPTV thumb ('{thumb}') with TMDB ('{newThumb}')");
+                                        thumb = newThumb;
+                                    }
+                                    else
+                                    {
+                                         System.Diagnostics.Debug.WriteLine($"[EP_IMG] No TMDB Image for S{seasonNum}E{epNum}. Keeping IPTV: '{thumb}'");
+                                    }
+                                }
+                                else
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[EP_IMG] No TMDB match for S{seasonNum}E{epNum}");
+                                }
+                            }
 
-                                     string finalUrl = $"{baseUrl}/series/{activePlaylist.Username}/{activePlaylist.Password}/{id}.{container}";
-                                     
-                                     // Metadata
-                                     string thumb = null;
-                                     if (ep.TryGetProperty("info", out var info) && info.TryGetProperty("movie_image", out var img))
-                                         thumb = img.GetString();
-                                     if (string.IsNullOrEmpty(thumb)) thumb = series.Cover;
+                            // FALLBACK: If thumb is still empty, use Series Backdrop or Cover
+                            if (string.IsNullOrEmpty(thumb))
+                            {
+                                if (tmdbSeason != null && !string.IsNullOrEmpty(tmdbSeason.PosterPath))
+                                     thumb = TmdbHelper.GetImageUrl(tmdbSeason.PosterPath, "w300"); // Season Poster
+                                else if (_cachedTmdb != null && !string.IsNullOrEmpty(_cachedTmdb.BackdropPath))
+                                     thumb = TmdbHelper.GetImageUrl(_cachedTmdb.BackdropPath, "w300"); // Series Backdrop
+                                else if (_cachedTmdb != null && !string.IsNullOrEmpty(_cachedTmdb.PosterPath))
+                                     thumb = TmdbHelper.GetImageUrl(_cachedTmdb.PosterPath, "w300"); // Series Poster
+                                else
+                                     thumb = series.Cover; // Original IPTV Cover
+                            }
 
-                                     // History Check
-                                     var hist = HistoryManager.Instance.GetProgress(id); // Using ID as key
-                                     string progText = "";
-                                     bool hasProg = false;
-                                     double pct = 0;
-                                     if (hist != null && hist.Duration > 0)
-                                     {
-                                         pct = (hist.Position / hist.Duration) * 100;
-                                         hasProg = pct > 1; // 1%
-                                         progText = $"{TimeSpan.FromSeconds(hist.Duration - hist.Position).TotalMinutes:F0}dk Kaldı";
-                                     }
 
-                                     seasonEpisodes.Add(new EpisodeItem 
-                                     {
-                                         Id = id,
-                                         Title = title,
-                                         Container = container,
-                                         StreamUrl = finalUrl,
-                                         ImageUrl = thumb,
-                                         HasProgress = hasProg,
-                                         ProgressPercent = pct,
-                                         ProgressText = progText,
-                                         Duration = "24m", // Placeholder
-                                         SeasonNumber = seasonNum
-                                     });
-                                 }
-                                 
-                                 Seasons.Add(new SeasonItem 
-                                 { 
-                                     SeasonNumber = seasonNum, 
-                                     Name = $"Sezon {seasonNum}",
-                                     Episodes = seasonEpisodes 
-                                 });
-                             }
-                         }
-                     }
-                 }
 
-                 // 3. Select Initial Season (Logic: Continue Watching)
-                 // Check history for LAST watched episode of this series
-                 var lastWatched = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
-                 
-                 SeasonItem targetSeason = Seasons.FirstOrDefault();
-                 EpisodeItem targetEpisode = null;
+                            // History Check
+                            var hist = HistoryManager.Instance.GetProgress(id); 
+                            string progText = "";
+                            bool hasProg = false;
+                            double pct = 0;
+                            if (hist != null && hist.Duration > 0)
+                            {
+                                pct = (hist.Position / hist.Duration) * 100;
+                                hasProg = pct > 1; 
+                                progText = $"{TimeSpan.FromSeconds(hist.Duration - hist.Position).TotalMinutes:F0}dk Kaldı";
+                            }
 
-                 if (lastWatched != null)
-                 {
-                     // Find season containing this episode
-                     targetSeason = Seasons.FirstOrDefault(s => s.Episodes.Any(e => e.Id == lastWatched.Id));
-                     if (targetSeason != null)
-                     {
-                         targetEpisode = targetSeason.Episodes.FirstOrDefault(e => e.Id == lastWatched.Id);
-                     }
-                 }
+                            seasonEpisodes.Add(new EpisodeItem 
+                            { 
+                                Id = id,
+                                EpisodeNumber = epNum, // Assign as int
+                                Name = title,
+                                Title = title,
+                                Container = container,
+                                StreamUrl = finalUrl,
+                                ImageUrl = thumb,
+                                Overview = plot,
+                                Duration = epDef.Info?.Duration,
+                                HasProgress = hasProg,
+                                ProgressPercent = pct,
+                                ProgressText = progText,
+                                SeasonNumber = seasonNum
+                            });
+                        }
+                        
+                        if (seasonEpisodes.Count > 0)
+                        {
+                            Seasons.Add(new SeasonItem 
+                            { 
+                                Name = $"Sezon {seasonNum}", 
+                                SeasonName = $"Sezon {seasonNum}", // Set both for binding compat
+                                SeasonNumber = seasonNum,
+                                Episodes = seasonEpisodes.OrderBy(x => x.EpisodeNumber).ToList()
+                            });
+                        }
+                    }
+                }
 
-                 SeasonComboBox.ItemsSource = Seasons;
-                 if (targetSeason != null)
-                 {
-                     SeasonComboBox.SelectedItem = targetSeason;
-                     // UI binding handles the list update via SelectionChanged
-                     // But we want to auto-select the episode too for "Next Up" logic
-                     
-                     // If finished, maybe next episode?
-                     // For now, simpler: Just select the resume point.
+                sw.Stop();
+                System.Diagnostics.Debug.WriteLine($"[PERF] Episode Processing took {sw.ElapsedMilliseconds}ms for {totalEpisodes} episodes.");
+
+                // Sort Seasons
+                var sortedSeasons = Seasons.OrderBy(x => x.SeasonNumber).ToList();
+                Seasons.Clear();
+                foreach(var s in sortedSeasons) Seasons.Add(s);
+
+                // FIX: Ensure UI Binding
+                SeasonComboBox.ItemsSource = Seasons;
+
+                // 5. Auto Select Season (History Logic)
+                if (Seasons.Count > 0)
+                {
+                    SeasonComboBox.SelectedIndex = 0;
+                }
+
+                var lastWatched = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+                SeasonItem targetSeason = null;
+                EpisodeItem targetEpisode = null;
+                
+                if (lastWatched != null)
+                {
+                    targetSeason = Seasons.FirstOrDefault(s => s.Episodes.Any(e => e.Id == lastWatched.Id)) 
+                                   ?? Seasons.FirstOrDefault(s => s.SeasonNumber == lastWatched.SeasonNumber);
+                    
+                    if (targetSeason != null)
+                    {
+                        targetEpisode = targetSeason.Episodes.FirstOrDefault(e => e.Id == lastWatched.Id);
+                    }
+                }
+
                      if (targetEpisode != null)
-                     {
-                         // We defer this selection until list is populated in SelectionChanged
+                    {
                          _pendingAutoSelectEpisode = targetEpisode;
-                     }
-                 }
-             }
-             catch { }
+                    }
+
+                if (targetSeason != null)
+                {
+                    SeasonComboBox.SelectedItem = targetSeason;
+                }
+                
+                // 6. Start Slideshow (Using TMDB Backdrops if available)
+                var backdrops = _cachedTmdb?.Images?.Backdrops?.Select(b => TmdbHelper.GetImageUrl(b.FilePath, "original")).Take(10).ToList();
+                if (backdrops != null && backdrops.Count > 0)
+                {
+                    StartBackgroundSlideshow(backdrops);
+                }
+                else if (!string.IsNullOrEmpty(series.Cover))
+                {
+                    StartBackgroundSlideshow(new List<string> { series.Cover });
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Error loading Series Details: {ex.Message}");
+                // Ensure shimmer is hidden on error
+                DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
+            }
         }
 
         private EpisodeItem _pendingAutoSelectEpisode;
@@ -1320,8 +1580,36 @@ namespace ModernIPTVPlayer
              });
         }
         
-        private async Task ExtractTechInfoAsync()
+        private async Task ExtractTechInfoAsync(string overrideUrl = null)
         {
+             // 0. Resolve URL
+             string streamUrl = overrideUrl;
+             if (string.IsNullOrEmpty(streamUrl)) streamUrl = _streamUrl;
+             // Rename 'ls' to 'lsCheck' to avoid conflict with downstream 'ls'
+             if (string.IsNullOrEmpty(streamUrl) && _item is LiveStream lsCheck) streamUrl = lsCheck.StreamUrl;
+             
+             if (string.IsNullOrEmpty(streamUrl))
+             {
+                 // No URL available to probe (yet) -> Stop Shimmer
+                 DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
+                 return;
+             }
+
+             if (!string.IsNullOrEmpty(streamUrl))
+             {
+                 // Fix Method Name: GetProbeData -> Get
+                 var cachedProbe = Services.ProbeCacheService.Instance.Get(streamUrl);
+                 if (cachedProbe != null)
+                 {
+                     System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Badge Cache HIT for {streamUrl}");
+                     ApplyMetadataToUi(cachedProbe);
+                     // Success - Ensure shimmer off
+                     DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
+                     return;
+                 }
+             }
+
+
             // 1. Check if we already have metadata from ExpandedPage (or previous probe)
              if (_item is LiveStream live && live.HasMetadata)
              {
@@ -1340,14 +1628,16 @@ namespace ModernIPTVPlayer
                  return;
              }
              
-             // 2. Check Cache before Probing (Prevent Duplicate Probes)
-             if (ProbeCacheManager.TryGet(_streamUrl, out var cached))
-             {
-                 System.Diagnostics.Debug.WriteLine($"[MediaInfo] Pre-buffer Probe Cache Hit: {_streamUrl}");
-                 // Apply Cached Result
-                 ApplyMetadataToUi(cached); 
-                 return;
-             }
+              // 2. Check Cache before Probing (Prevent Duplicate Probes)
+               // 2. Check Cache before Probing (Prevent Duplicate Probes)
+               await Services.ProbeCacheService.Instance.EnsureLoadedAsync(); // Fix Race Condition
+               if (Services.ProbeCacheService.Instance.Get(_streamUrl) is Services.ProbeData cached)
+               {
+                   Services.CacheLogger.Success(Services.CacheLogger.Category.MediaInfo, "Pre-buffer Probe Cache Hit", _streamUrl);
+                   // Apply Cached Result
+                   ApplyMetadataToUi(cached); 
+                   return;
+               }
              
              // 3. Perform Probe if Cache Miss
             // Use FFmpegProber for faster metadata extraction
@@ -1359,16 +1649,8 @@ namespace ModernIPTVPlayer
                 if (result.Success)
                 {
                     // Cache the result for UI usage
-                    var probeResult = new ProbeResult
-                    {
-                        Res = result.Res,
-                        Fps = result.Fps,
-                        Codec = result.Codec,
-                        Bitrate = result.Bitrate,
-                        Success = result.Success,
-                        IsHdr = result.IsHdr
-                    };
-                    ProbeCacheManager.Cache(_streamUrl, probeResult);
+
+                    Services.ProbeCacheService.Instance.Update(_streamUrl, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
 
                     // Update the model so we don't probe again next time
                     if (_item is LiveStream ls)
@@ -1455,6 +1737,9 @@ namespace ModernIPTVPlayer
                 }
             }
             catch { }
+            
+            // Critical: Ensure Shimmer stops in all cases (Probe success, fail, or fallback)
+            DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
         }
 
 
@@ -1728,11 +2013,28 @@ namespace ModernIPTVPlayer
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
             base.OnNavigatedFrom(e);
+            
+            // Cancel any active probe
+            try { 
+                _probeCts?.Cancel(); 
+                _probeCts?.Dispose(); 
+            } catch { }
+            _probeCts = null; // Added null assignment for CTS
+
+            // Stop Slideshow
+            if (_slideshowTimer != null)
+            {
+                _slideshowTimer.Stop();
+                _slideshowTimer = null;
+            }
+
             if (MediaInfoPlayer != null && App.HandoffPlayer != MediaInfoPlayer) 
             {
                  _ = MediaInfoPlayer.ExecuteCommandAsync("stop");
                  MediaInfoPlayer.DisableHandoffMode();
                  _ = MediaInfoPlayer.CleanupAsync();
+                 // Added Dispose call for MediaInfoPlayer
+                 // MediaInfoPlayer.Dispose(); // REMOVED: MpvPlayer does not support Dispose
             }
         }
 
@@ -1835,8 +2137,16 @@ namespace ModernIPTVPlayer
         {
             if (string.IsNullOrEmpty(url)) return;
 
+            if (string.IsNullOrEmpty(url)) return;
+
             // Cancel previous probe
-            _probeCts?.Cancel();
+            try
+            {
+                _probeCts?.Cancel();
+                _probeCts?.Dispose(); // Dispose old CTS
+            }
+            catch { } // Ignore cancellation/dispose errors
+
             _probeCts = new CancellationTokenSource();
             var token = _probeCts.Token;
 
@@ -1850,83 +2160,83 @@ namespace ModernIPTVPlayer
                 BadgeCodecContainer.Visibility = Visibility.Collapsed;
 
                 // 1. Check Cache
-                // 1. Check Cache
-                if (ProbeCacheManager.TryGet(url, out var cached))
+                if (Services.ProbeCacheService.Instance.Get(url) is Services.ProbeData cached)
                 {
-                    // Aesthetic Sync: Behave like the rest of the page (500ms delay)
+                    // SMART SHIMMER: Fast Fade-In if cached
+                    Services.CacheLogger.Success(Services.CacheLogger.Category.MediaInfo, "TechBadges Cache Hit", url);
+
                     DispatcherQueue.TryEnqueue(async () =>
                     {
-                        SetBadgeLoadingState(true); // Show Shimmer
-                        
-                        // Prepare Content (Visible but Transparent)
+                        // Even if cached, we do a very quick fade for smoothness (50ms), not 500ms
+                        TechBadgesContent.Opacity = 0;
                         TechBadgesContent.Visibility = Visibility.Visible;
                         ApplyMetadataToUi(cached);
-                        this.UpdateLayout();
-                        
-                        // Wait for sync with other elements
-                        await Task.Delay(500);
 
-                        // Capture Shimmer Width
-                        double shimmerWidth = MetadataShimmer.ActualWidth;
+                        // Quick Fade In
+                        var visContent = ElementCompositionPreview.GetElementVisual(TechBadgesContent);
+                        var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                        fadeIn.InsertKeyFrame(0f, 0f);
+                        fadeIn.InsertKeyFrame(1f, 1f);
+                        fadeIn.Duration = TimeSpan.FromMilliseconds(50); // Fast!
+                        visContent.StartAnimation("Opacity", fadeIn);
+                        TechBadgesContent.Opacity = 1;
 
-                        // Prevent Layout Shift logic
-                        if (shimmerWidth > 0 && TechBadgesContent.ActualWidth < shimmerWidth)
-                        {
-                            TechBadgesContent.MinWidth = shimmerWidth;
-                        }
-                        else
-                        {
-                            TechBadgesContent.MinWidth = 0;
-                        }
-                        
-                        SetBadgeLoadingState(false); // Reveal
+                        // Ensure shimmer is hidden
+                        SetBadgeLoadingState(false);
                     });
                     return;
                 }
 
                 // 2. Show Shimmer (Reset state to Shimmer)
+                Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "TechBadges Cache Miss - Probing...", url);
                 SetBadgeLoadingState(true);
 
                 // 3. Perform Probe
-                System.Diagnostics.Debug.WriteLine($"[TechBadges] Starting Probe for: {url}");
                 var result = await _ffprober.ProbeAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TechBadges] Probe Result: Success={result.Success}, Res={result.Res}, Codec={result.Codec}");
                 
                 if (token.IsCancellationRequested) 
                 {
-                    System.Diagnostics.Debug.WriteLine("[TechBadges] Probe Cancelled.");
+                    Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "Probe Cancelled");
                     return;
                 }
 
-                var probeResult = new ProbeResult
+                Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "Probe Result", $"Success: {result.Success} | {result.Res}");
+
+                // Probe returns tuple: (Res, Fps, Codec, Bitrate, Success, IsHdr)
+                // Cache update is already handled inside FFmpegProber.ProbeAsync -> WAIT, it wasn't. It was handled in ExpandedCard but here it seems missing?
+                // Checking previous code... 
+                // In ExpandedCard: Services.ProbeCacheService.Instance.Update(...) was called.
+                // In MediaInfoPage (lines 2063+ in original): It just calls _ffprober.ProbeAsync.
+                // Let's look at line 1533 in Pre-buffer logic: It DOES call Update.
+                // But specifically inside UpdateTechnicalBadgesAsync it seems it DID NOT call Update in previous version?
+                // No, I need to check if _ffprober internally updates cache? No, it doesn't.
+                // So I SHOULD add cache update here too for consistency!
+                
+                if (result.Success)
                 {
-                    Res = result.Res,
+                     Services.ProbeCacheService.Instance.Update(url, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
+                }
+
+                var probeData = new Services.ProbeData
+                {
+                    Resolution = result.Res,
                     Fps = result.Fps,
                     Codec = result.Codec,
                     Bitrate = result.Bitrate,
-                    Success = result.Success,
                     IsHdr = result.IsHdr
                 };
-
-                ProbeCacheManager.Cache(url, probeResult);
 
                 // 4. Update UI
                 if (!token.IsCancellationRequested)
                 {
                     DispatcherQueue.TryEnqueue(() =>
                     {
-                        System.Diagnostics.Debug.WriteLine("[TechBadges] Applying Probe Results on UI Thread...");
-
                         // 1. Capture Shimmer Width for Stability (Prevent Left Shift)
                         double shimmerWidth = MetadataShimmer.ActualWidth;
 
                         // 2. Prepare Content
                         TechBadgesContent.Visibility = Visibility.Visible;
-                        ApplyMetadataToUi(probeResult);
-                        
-                        // 3. Force Layout
-                        this.UpdateLayout();
-                        System.Diagnostics.Debug.WriteLine($"[TechBadges] Widths - Shimmer: {shimmerWidth}, Content: {TechBadgesContent.ActualWidth}");
+                        ApplyMetadataToUi(probeData);
                         
                         // 4. PREVENT LAYOUT SHIFT: 
                         // If Content is smaller than Shimmer, keep the container at Shimmer's width.
@@ -1954,24 +2264,24 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[MediaInfo] Technical Probe Failed: {ex}");
-                // Ensure we exit loading state so text/layout doesn't stay hidden/ghosted if we decide to show fallback
-                DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
+               Services.CacheLogger.Error(Services.CacheLogger.Category.MediaInfo, "Technical Probe Failed", ex.Message);
+               // Ensure we exit loading state so text/layout doesn't stay hidden/ghosted if we decide to show fallback
+               DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
             }
         }
 
-        private void ApplyMetadataToUi(ProbeResult result)
+        private void ApplyMetadataToUi(Services.ProbeData result)
         {
             if (result == null) return;
 
             // Resolution / 4K
-            bool is4K = result.Res.Contains("3840") || result.Res.Contains("4096") || result.Res.ToUpperInvariant().Contains("4K");
+            bool is4K = result.Resolution.Contains("3840") || result.Resolution.Contains("4096") || result.Resolution.ToUpperInvariant().Contains("4K");
             Badge4K.Visibility = is4K ? Visibility.Visible : Visibility.Collapsed;
 
-            if (!is4K && !string.IsNullOrEmpty(result.Res) && result.Res != "Unknown" && result.Res != "Error")
+            if (!is4K && !string.IsNullOrEmpty(result.Resolution) && result.Resolution != "Unknown" && result.Resolution != "Error")
             {
                 // Show resolution badge (e.g. 1080P)
-                string displayRes = result.Res;
+                string displayRes = result.Resolution;
                 if (displayRes.Contains("x"))
                 {
                     var h = displayRes.Split('x').LastOrDefault();
@@ -2009,11 +2319,127 @@ namespace ModernIPTVPlayer
                 MetadataShimmer.Width = TechBadgesContent.ActualWidth;
             }*/
         }
+
+
+
+
+
+        private DispatcherTimer _slideshowTimer;
+        private List<string> _slideshowImages;
+        private int _slideshowIndex = 0;
+
+        private void StartBackgroundSlideshow(List<string> images)
+        {
+            if (images == null || images.Count == 0 || HeroImage == null) return;
+
+            // Stop existing timer
+            if (_slideshowTimer != null)
+            {
+                _slideshowTimer.Stop();
+                _slideshowTimer = null;
+            }
+
+            _slideshowImages = images;
+            _slideshowIndex = 0;
+
+            System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Starting with {images.Count} images. Interval: 8s");
+
+            // INITIALIZATION LOGIC
+            // Check if we already have an image (e.g. Poster from navigation)
+            bool hasExistingImage = HeroImage.Source != null && HeroImage.Opacity > 0.1;
+
+            if (!hasExistingImage)
+            {
+                // No existing image, just set the first one directly
+                try
+                {
+                    HeroImage.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(images[0]));
+                    HeroImage.Opacity = 1;
+                    if (HeroImage2 != null) HeroImage2.Opacity = 0;
+                }
+                catch { }
+            }
+            else
+            {
+                // We have an existing image (Poster).
+                // Do NOT crossfade immediately. Let the poster linger.
+                // The timer will handle the transition to the first backdrop.
+                
+                // IMPORTANT: Since we want the FIRST backdrop (index 0) to be the first one shown 
+                // when the timer ticks, we need to set the index so that (index + 1) % count == 0.
+                // Thus, set index to -1.
+                _slideshowIndex = -1;
+            }
+
+            // If only 1 image, don't run timer
+            if (images.Count <= 1) return;
+
+            // 2. Setup Timer for cycling
+            _slideshowTimer = new DispatcherTimer();
+            _slideshowTimer.Interval = TimeSpan.FromSeconds(8);
+            _slideshowTimer.Tick += (s, e) =>
+            {
+                if (HeroImage == null || HeroImage2 == null || _slideshowImages == null || _slideshowImages.Count == 0)
+                {
+                    _slideshowTimer?.Stop();
+                    return;
+                }
+
+                _slideshowIndex = (_slideshowIndex + 1) % _slideshowImages.Count;
+                string nextImg = _slideshowImages[_slideshowIndex];
+
+                // Crossfade Logic:
+                // 1. Load Next Image into HeroImage2 (which is Opacity 0)
+                try { HeroImage2.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(nextImg)); } catch { return; }
+
+                // 2. Animate Crossfade
+                var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                fadeIn.InsertKeyFrame(0f, 0f);
+                fadeIn.InsertKeyFrame(1f, 1f);
+                fadeIn.Duration = TimeSpan.FromSeconds(1.2);
+
+                var fadeOut = _compositor.CreateScalarKeyFrameAnimation();
+                fadeOut.InsertKeyFrame(0f, 1f);
+                fadeOut.InsertKeyFrame(1f, 0f);
+                fadeOut.Duration = TimeSpan.FromSeconds(1.2);
+
+                var visual1 = ElementCompositionPreview.GetElementVisual(HeroImage);  // Current Visible
+                var visual2 = ElementCompositionPreview.GetElementVisual(HeroImage2); // New Incoming
+
+                // Ensure XAML Opacity is 1 so Composition works
+                HeroImage.Opacity = 1; 
+                HeroImage2.Opacity = 1; 
+                // We control actual visibility via Composition Opacity
+                
+                // Start Animations
+                visual2.Opacity = 0; 
+                visual2.StartAnimation("Opacity", fadeIn); // Fade In New
+                visual1.StartAnimation("Opacity", fadeOut); // Fade Out Old
+
+                // 3. Cleanup after animation (Swap sources to keep HeroImage as primary)
+                DispatcherQueue.TryEnqueue(async () => 
+                {
+                    await Task.Delay(1300); // Wait for animation
+                    if (HeroImage != null && HeroImage2 != null)
+                    {
+                        // Set Primary to New Image
+                        HeroImage.Source = HeroImage2.Source;
+                        
+                        // Reset Opacities (Visual layer)
+                        visual1.Opacity = 1; // Primary Visible
+                        visual2.Opacity = 0; // Secondary Hidden
+                    }
+                });
+            };
+            _slideshowTimer.Start();
+        }
+
     }
 
     public class SeasonItem
     {
         public string Name { get; set; }
+        public string SeasonName { get; set; } // Alias for binding
         public int SeasonNumber { get; set; }
         public List<EpisodeItem> Episodes { get; set; }
     }
@@ -2022,11 +2448,16 @@ namespace ModernIPTVPlayer
     {
         public string Id { get; set; }
         public string Title { get; set; }
+        public string Name { get; set; } // Alias
+        public string Overview { get; set; }
         public string Duration { get; set; }
+        
         public string ImageUrl { get; set; }
+        
         public string StreamUrl { get; set; }
         public string Container { get; set; }
         public int SeasonNumber { get; set; }
+        public int EpisodeNumber { get; set; }
         
         // Progress UI
         public bool HasProgress { get; set; }
@@ -2058,6 +2489,11 @@ namespace ModernIPTVPlayer
         public string Name { get; set; }
         public string Character { get; set; }
         public string FullProfileUrl { get; set; }
+
+
+
     }
+
+
 }
 namespace System.Runtime.CompilerServices { internal static class IsExternalInit { } }

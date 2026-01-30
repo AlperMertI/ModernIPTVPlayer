@@ -80,5 +80,64 @@ namespace ModernIPTVPlayer
             get => (Settings.Values[LoginTypeKey] as int?) ?? 0;
             set => Settings.Values[LoginTypeKey] = value;
         }
+
+        // Cache Settings
+        private const string CacheIntervalKey = "CacheIntervalMinutes";
+        private const string AutoCacheKey = "IsAutoCacheEnabled";
+        private const string LastLiveKey = "LastLiveCacheTime";
+        private const string LastVodKey = "LastVodCacheTime";
+        private const string LastSeriesKey = "LastSeriesCacheTime";
+
+        public static int CacheIntervalMinutes
+        {
+            get => (Settings.Values[CacheIntervalKey] as int?) ?? 1440; // Default 24 Hours
+            set => Settings.Values[CacheIntervalKey] = value;
+        }
+
+        public static bool IsAutoCacheEnabled
+        {
+            get => (Settings.Values[AutoCacheKey] as bool?) ?? true;
+            set => Settings.Values[AutoCacheKey] = value;
+        }
+
+        public static DateTime LastLiveCacheTime
+        {
+            get => DateTime.FromBinary((Settings.Values[LastLiveKey] as long?) ?? 0);
+            set => Settings.Values[LastLiveKey] = value.ToBinary();
+        }
+
+        public static DateTime LastVodCacheTime
+        {
+            get => DateTime.FromBinary((Settings.Values[LastVodKey] as long?) ?? 0);
+            set => Settings.Values[LastVodKey] = value.ToBinary();
+        }
+
+        public static DateTime LastSeriesCacheTime
+        {
+            get => DateTime.FromBinary((Settings.Values[LastSeriesKey] as long?) ?? 0);
+            set => Settings.Values[LastSeriesKey] = value.ToBinary();
+        }
+
+        private const string LastLiveCategoryKey = "LastLiveCategoryId";
+        public static string LastLiveCategoryId
+        {
+            get => (Settings.Values[LastLiveCategoryKey] as string);
+            set => Settings.Values[LastLiveCategoryKey] = value;
+        }
+
+        private const string LastVodCategoryKey = "LastVodCategoryId";
+        public static string LastVodCategoryId
+        {
+            get => (Settings.Values[LastVodCategoryKey] as string);
+            set => Settings.Values[LastVodCategoryKey] = value;
+        }
+
+        private const string LastSeriesCategoryKey = "LastSeriesCategoryId";
+        public static string LastSeriesCategoryId
+        {
+            get => (Settings.Values[LastSeriesCategoryKey] as string);
+            set => Settings.Values[LastSeriesCategoryKey] = value;
+        }
+
     }
 }

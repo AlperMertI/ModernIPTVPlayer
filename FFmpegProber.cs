@@ -17,6 +17,13 @@ namespace ModernIPTVPlayer
 
         public async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr)> ProbeAsync(string url, CancellationToken ct = default)
         {
+            // 1. Check Cache
+            var cached = Services.ProbeCacheService.Instance.Get(url);
+            if (cached != null)
+            {
+                return (cached.Resolution, cached.Fps, cached.Codec, cached.Bitrate, true, cached.IsHdr);
+            }
+
             if (!File.Exists(FfprobePath))
             {
                 return ("No ffprobe", "-", "-", 0, false, false);
@@ -134,6 +141,9 @@ namespace ModernIPTVPlayer
                     bool isHdr = false;
                     if (!string.IsNullOrEmpty(stream.ColorPrimaries) && stream.ColorPrimaries.Contains("bt2020")) isHdr = true;
                     if (!string.IsNullOrEmpty(stream.ColorTransfer) && (stream.ColorTransfer == "smpte2084" || stream.ColorTransfer == "arib-std-b67")) isHdr = true;
+
+                    // 2. Save to Cache
+                    Services.ProbeCacheService.Instance.Update(url, res, fps, codec, br, isHdr);
 
                     return (res, fps, codec, br, true, isHdr);
                 }

@@ -266,11 +266,11 @@ namespace ModernIPTVPlayer.Controls
 
                 if (sourceCard.DataContext is LiveStream stream)
                 {
-                    await ActiveExpandedCard.LoadDataAsync(stream);
+                    await ActiveExpandedCard.LoadDataAsync(stream, isMorph);
                 }
                 else if (sourceCard.DataContext is SeriesStream series)
                 {
-                    await ActiveExpandedCard.LoadDataAsync(series);
+                    await ActiveExpandedCard.LoadDataAsync(series, isMorph);
                 }
             }
             catch (Exception ex)

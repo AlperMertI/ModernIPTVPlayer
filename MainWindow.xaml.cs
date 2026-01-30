@@ -29,7 +29,7 @@ namespace ModernIPTVPlayer
         {
             if (args.IsSettingsInvoked)
             {
-                // Settings Page logic here
+                ContentFrame.Navigate(typeof(SettingsPage));
                 return;
             }
 

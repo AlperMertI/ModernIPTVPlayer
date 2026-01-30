@@ -6,6 +6,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Linq;
 
+using ModernIPTVPlayer.Services;
+
 namespace ModernIPTVPlayer
 {
     public class TmdbHelper
@@ -14,12 +16,7 @@ namespace ModernIPTVPlayer
         private const string BASE_URL = "https://api.themoviedb.org/3";
         private static HttpClient _client = new HttpClient();
         
-        // Simple Memory Cache
-        private static Dictionary<string, TmdbMovieResult> _searchCache = new();
-        private static Dictionary<string, TmdbMovieDetails> _detailsCache = new();
-        private static Dictionary<string, TmdbCreditsResponse> _creditsCache = new();
-        private static Dictionary<string, TmdbSeasonDetails> _seasonCache = new();
-        private static Dictionary<int, TmdbMovieResult> _tvByIdCache = new();
+        // Caching is now handled by TmdbCacheService (Persistent)
 
         public static async Task<TmdbMovieResult?> SearchMovieAsync(string title, string year = null)
         {
@@ -36,9 +33,9 @@ namespace ModernIPTVPlayer
                     System.Diagnostics.Debug.WriteLine($"[TMDB] Cleaning resulted in empty string. Reverted to: '{cleanTitle}'");
                 }
 
-                var cacheKey = $"movie_{cleanTitle}_{year}";
+                var cacheKey = $"search_movie_{cleanTitle}_{year}";
                 
-                if (_searchCache.TryGetValue(cacheKey, out var cached)) return cached;
+                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
 
                 var query = Uri.EscapeDataString(cleanTitle);
                 var url = $"{BASE_URL}/search/movie?api_key={API_KEY}&query={query}&language=tr-TR";
@@ -56,7 +53,7 @@ namespace ModernIPTVPlayer
                 if (result?.Results != null && result.Results.Count > 0)
                 {
                     var match = result.Results[0];
-                    _searchCache[cacheKey] = match;
+                    TmdbCacheService.Instance.Set(cacheKey, match);
                     return match;
                 }
                 
@@ -74,7 +71,7 @@ namespace ModernIPTVPlayer
                         System.Diagnostics.Debug.WriteLine($"[TMDB] Fallback Search Found: {result.Results.Count} results");
                         var match = result.Results[0];
                         // Cache it under the original key too to save future lookups
-                        _searchCache[cacheKey] = match;
+                        TmdbCacheService.Instance.Set(cacheKey, match);
                         return match;
                      }
                 }
@@ -102,9 +99,9 @@ namespace ModernIPTVPlayer
                     System.Diagnostics.Debug.WriteLine($"[TMDB] Cleaning resulted in empty string. Reverted to: '{cleanTitle}'");
                 }
 
-                var cacheKey = $"tv_{cleanTitle}_{year}";
+                var cacheKey = $"search_tv_{cleanTitle}_{year}";
 
-                if (_searchCache.TryGetValue(cacheKey, out var cached)) return cached;
+                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
 
                 var query = Uri.EscapeDataString(cleanTitle);
                 var url = $"{BASE_URL}/search/tv?api_key={API_KEY}&query={query}&language=tr-TR";
@@ -122,7 +119,7 @@ namespace ModernIPTVPlayer
                 if (result?.Results != null && result.Results.Count > 0)
                 {
                     var match = result.Results[0];
-                    _searchCache[cacheKey] = match;
+                    TmdbCacheService.Instance.Set(cacheKey, match);
                     return match;
                 }
                 
@@ -139,7 +136,7 @@ namespace ModernIPTVPlayer
                      {
                         System.Diagnostics.Debug.WriteLine($"[TMDB] Fallback Search Found: {result.Results.Count} results");
                         var match = result.Results[0];
-                        _searchCache[cacheKey] = match;
+                        TmdbCacheService.Instance.Set(cacheKey, match);
                         return match;
                      }
                 }
@@ -153,14 +150,13 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private static Dictionary<string, string> _trailerCache = new();
         public static async Task<string?> GetTrailerKeyAsync(int tmdbId, bool isTv = false)
         {
             try
             {
                 string type = isTv ? "tv" : "movie";
-                var cacheKey = $"{type}_{tmdbId}";
-                if (_trailerCache.TryGetValue(cacheKey, out var cached)) return cached;
+                var cacheKey = $"trailer_{type}_{tmdbId}";
+                if (TmdbCacheService.Instance.Get<string>(cacheKey) is string cached) return cached;
 
                 // Get all videos without language filter to find English trailers as fallback
                 var url = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}";
@@ -181,7 +177,7 @@ namespace ModernIPTVPlayer
                     if (trailer != null) System.Diagnostics.Debug.WriteLine($"[TMDB] Trailer/Video Found: {trailer.Key}");
                     else System.Diagnostics.Debug.WriteLine("[TMDB] No suitable YouTube video found.");
                     
-                    if (trailer?.Key != null) _trailerCache[cacheKey] = trailer.Key;
+                    if (trailer?.Key != null) TmdbCacheService.Instance.Set(cacheKey, trailer.Key);
                     return trailer?.Key; 
                 }
                 return null;
@@ -197,13 +193,13 @@ namespace ModernIPTVPlayer
             try
             {
                 string type = isTv ? "tv" : "movie";
-                var cacheKey = $"{type}_{id}";
-                if (_creditsCache.TryGetValue(cacheKey, out var cached)) return cached;
+                var cacheKey = $"credits_{type}_{id}";
+                if (TmdbCacheService.Instance.Get<TmdbCreditsResponse>(cacheKey) is TmdbCreditsResponse cached) return cached;
 
                 var url = $"{BASE_URL}/{type}/{id}/credits?api_key={API_KEY}&language=tr-TR";
                 var json = await _client.GetStringAsync(url);
                 var result = JsonSerializer.Deserialize<TmdbCreditsResponse>(json);
-                if (result != null) _creditsCache[cacheKey] = result;
+                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
                 return result;
             }
             catch { return null; }
@@ -214,8 +210,8 @@ namespace ModernIPTVPlayer
             try
             {
                 string type = isTv ? "tv" : "movie";
-                var cacheKey = $"{type}_{id}";
-                if (_detailsCache.TryGetValue(cacheKey, out var cached)) return cached;
+                var cacheKey = $"details_{type}_{id}";
+                if (TmdbCacheService.Instance.Get<TmdbMovieDetails>(cacheKey) is TmdbMovieDetails cached) return cached;
 
                 var url = $"{BASE_URL}/{type}/{id}?api_key={API_KEY}&language=tr-TR";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Details Request: {url}");
@@ -228,7 +224,7 @@ namespace ModernIPTVPlayer
                 if (result != null)
                 {
                      System.Diagnostics.Debug.WriteLine($"[TMDB] Details Parsed. Overview Length: {result.Overview?.Length ?? 0}, Overview Content: '{result.Overview}'");
-                     _detailsCache[cacheKey] = result;
+                     TmdbCacheService.Instance.Set(cacheKey, result);
                 }
                 else
                 {
@@ -248,13 +244,19 @@ namespace ModernIPTVPlayer
         {
             try
             {
-                var cacheKey = $"{tvId}_s{seasonNumber}";
-                if (_seasonCache.TryGetValue(cacheKey, out var cached)) return cached;
+                var cacheKey = $"season_{tvId}_s{seasonNumber}";
+                if (TmdbCacheService.Instance.Get<TmdbSeasonDetails>(cacheKey) is TmdbSeasonDetails cached) return cached;
 
-                var url = $"{BASE_URL}/tv/{tvId}/season/{seasonNumber}?api_key={API_KEY}&language=tr-TR";
+                var url = $"{BASE_URL}/tv/{tvId}/season/{seasonNumber}?api_key={API_KEY}&language=tr-TR&include_image_language=tr,en,null";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Season Details Request: {url}");
                 var json = await _client.GetStringAsync(url);
                 var result = JsonSerializer.Deserialize<TmdbSeasonDetails>(json);
-                if (result != null) _seasonCache[cacheKey] = result;
+                if (result?.Episodes != null)
+                {
+                     int withImg = result.Episodes.Count(e => !string.IsNullOrEmpty(e.StillPath));
+                     System.Diagnostics.Debug.WriteLine($"[TMDB] Season {seasonNumber} loaded. Episodes: {result.Episodes.Count}, With Images: {withImg}");
+                }
+                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
                 return result;
             }
             catch 
@@ -267,11 +269,16 @@ namespace ModernIPTVPlayer
         {
             try
             {
-                if (_tvByIdCache.TryGetValue(tvId, out var cached)) return cached;
-                var url = $"{BASE_URL}/tv/{tvId}?api_key={API_KEY}&language=tr-TR";
+                if (TmdbCacheService.Instance.Get<TmdbMovieResult>($"tv_id_{tvId}") is TmdbMovieResult cached) return cached;
+                var url = $"{BASE_URL}/tv/{tvId}?api_key={API_KEY}&language=tr-TR&append_to_response=images&include_image_language=tr,en,null";
                 var json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Raw JSON Length: {json.Length}");
                 var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
-                if (result != null) _tvByIdCache[tvId] = result;
+                if (result != null) 
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Parsed. BackdropPath: {result.BackdropPath}, Images in Result: {result.Images?.Backdrops?.Count ?? 0}");
+                    TmdbCacheService.Instance.Set($"tv_id_{tvId}", result);
+                }
                 return result;
             }
             catch { return null; }
@@ -293,7 +300,6 @@ namespace ModernIPTVPlayer
             if (string.IsNullOrEmpty(input)) return "";
 
             // 1. Remove common IPTV prefixes and Season/Episode markers
-            // Pattern: Matches anything up to SxxExx or "Episode X" followed by separators
             var clean = System.Text.RegularExpressions.Regex.Replace(input, @"(?i).*?(s\d{1,2}e\d{1,2}|episode\s*\d{1,2}|sezon\s*\d{1,2})\s*[-:]?\s*", "");
             
             // 2. Extra cleaning for any remaining common tags at the start
@@ -311,7 +317,7 @@ namespace ModernIPTVPlayer
             
             string clean = input;
 
-            // 1. Remove quality tags and common IPTV noise first (case insensitive)
+            // 1. Remove quality tags and common IPTV noise first
             string[] noise = { "4K", "FHD", "HD", "SD", "HEVC", "H265", "X264", "WEB-DL", "BLURAY", "HDTV", "TOP", "VIP", "DUAL", "MULTI", "TR", "EN" };
             foreach (var tag in noise)
             {
@@ -322,7 +328,6 @@ namespace ModernIPTVPlayer
             clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\s*[\(\[]?(19|20)\d{2}[\)\]]?", "");
 
             // 3. Handle specific IPTV prefix patterns like "Something - Title" or "Something | Title"
-            // We look for the LAST separator if there are multiple, assuming the title is at the end
             int lastIndex = Math.Max(clean.LastIndexOf(" - "), clean.LastIndexOf(" | "));
             if (lastIndex != -1)
             {
@@ -338,14 +343,20 @@ namespace ModernIPTVPlayer
             
             string final = clean.Trim();
 
-            // If we've over-cleaned and produced a very short string, fallback to a simpler cleanup of the original
+            // Fallback
             if (final.Length < 3)
             {
-                // Simple fallback: remove brackets and year from original
                 final = System.Text.RegularExpressions.Regex.Replace(input, @"\s*[\(\[].*?[\)\]]", "").Trim();
             }
 
             return final;
+        }
+
+        public static string GetImageUrl(string path, string size = "original")
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+            if (!path.StartsWith("/")) path = "/" + path;
+            return $"https://image.tmdb.org/t/p/{size}{path}";
         }
     }
 
@@ -365,7 +376,7 @@ namespace ModernIPTVPlayer
         public string Title { get; set; }
         
         [JsonPropertyName("name")]
-        public string Name { get; set; } // For TV Shows
+        public string Name { get; set; } 
 
         [JsonIgnore]
         public string DisplayTitle => !string.IsNullOrEmpty(Title) ? Title : Name;
@@ -393,6 +404,9 @@ namespace ModernIPTVPlayer
 
         [JsonPropertyName("genre_ids")]
         public List<int> GenreIds { get; set; }
+
+        [JsonPropertyName("images")]
+        public TmdbImages Images { get; set; }
 
         public string GetGenreNames()
         {
@@ -430,7 +444,7 @@ namespace ModernIPTVPlayer
     public class TmdbVideo
     {
         [JsonPropertyName("key")]
-        public string Key { get; set; } // Youtube ID
+        public string Key { get; set; } 
         
         [JsonPropertyName("site")]
         public string Site { get; set; }
@@ -443,6 +457,18 @@ namespace ModernIPTVPlayer
     {
         [JsonPropertyName("cast")]
         public List<TmdbCast> Cast { get; set; }
+    }
+
+    public class TmdbImages
+    {
+        [JsonPropertyName("backdrops")]
+        public List<TmdbImage> Backdrops { get; set; }
+    }
+
+    public class TmdbImage
+    {
+        [JsonPropertyName("file_path")]
+        public string FilePath { get; set; }
     }
 
     public class TmdbCast
@@ -462,7 +488,7 @@ namespace ModernIPTVPlayer
     public class TmdbMovieDetails
     {
         [JsonPropertyName("runtime")]
-        public int Runtime { get; set; } // Minutes
+        public int Runtime { get; set; } 
 
         [JsonPropertyName("overview")]
         public string Overview { get; set; }
@@ -479,6 +505,9 @@ namespace ModernIPTVPlayer
 
     public class TmdbSeasonDetails
     {
+        [JsonPropertyName("poster_path")]
+        public string PosterPath { get; set; }
+
         [JsonPropertyName("episodes")]
         public List<TmdbEpisode> Episodes { get; set; }
     }

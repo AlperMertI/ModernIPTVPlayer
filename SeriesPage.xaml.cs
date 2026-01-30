@@ -146,6 +146,9 @@ namespace ModernIPTVPlayer
             SearchPillBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(31, 255, 255, 255));
         }
 
+        // Global list of all series
+        private List<SeriesStream> _allSeries = new();
+
         private async Task LoadSeriesCategoriesAsync()
         {
             string api = "";
@@ -155,46 +158,84 @@ namespace ModernIPTVPlayer
                 CategoryListView.ItemsSource = null;
                 MediaGrid.ItemsSource = null;
                 _allCategories.Clear();
-
-                string baseUrl = _loginInfo.Host.TrimEnd('/');
-                api = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series_categories";
-
-                string json = await _httpClient.GetStringAsync(api);
+                _allSeries.Clear();
                 
-                if (string.IsNullOrEmpty(json))
+                string username = _loginInfo.Username;
+                string password = _loginInfo.Password;
+                string baseUrl = _loginInfo.Host.TrimEnd('/');
+                string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
+
+                // -------------------------------------------------------------
+                // 1. DATA FETCHING (Cache First -> Network Fallback)
+                // -------------------------------------------------------------
+                
+                // A. Categories
+                var cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<SeriesCategory>(playlistId, "series_cats");
+                if (cachedCats != null)
                 {
-                    ShowMessageDialog("Hata", "Dizi kategorileri API'den boş cevap döndü.");
-                    return;
-                }
-
-                var options = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true,
-                    NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
-                };
-
-                var categories = JsonSerializer.Deserialize<List<SeriesCategory>>(json, options);
-
-                if (categories != null)
-                {
-                    _allCategories = categories;
-                    CategoryListView.ItemsSource = _allCategories;
-
-                    // Auto-select first category
-                    if (_allCategories.Count > 0)
-                    {
-                        CategoryListView.SelectedIndex = 0;
-                        await LoadSeriesAsync(_allCategories[0]);
-                    }
+                    _allCategories = cachedCats;
+                     System.Diagnostics.Debug.WriteLine("[SeriesPage] Loaded Categories from Cache");
                 }
                 else
                 {
-                    ShowMessageDialog("Hata", "Dizi kategorileri JSON parse edilemedi.");
+                    api = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_series_categories";
+                    string json = await _httpClient.GetStringAsync(api);
+                    
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
+                    _allCategories = JsonSerializer.Deserialize<List<SeriesCategory>>(json, options) ?? new List<SeriesCategory>();
+                    
+                    // Save
+                    _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "series_cats", _allCategories);
+                }
+                
+                CategoryListView.ItemsSource = _allCategories;
+
+                // B. Global Series List
+                var cachedSeries = await Services.ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series_list");
+                if (cachedSeries != null && cachedSeries.Count > 0)
+                {
+                    _allSeries = cachedSeries;
+                    System.Diagnostics.Debug.WriteLine($"[SeriesPage] Loaded {_allSeries.Count} Series from Cache");
+                }
+                else
+                {
+                    // Fetch ALL Series
+                    // Usually 'get_series' returns all
+                    string seriesApi = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_series";
+                    string seriesJson = await _httpClient.GetStringAsync(seriesApi);
+
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
+                    var seriesList = JsonSerializer.Deserialize<List<SeriesStream>>(seriesJson, options);
+
+                    if (seriesList != null)
+                    {
+                        // Fix Covers URLs if needed? usually they come with full path or partial.
+                        // Assuming they are fine or we fix in binding. 
+                        _allSeries = seriesList;
+                        
+                        // Save
+                        _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "series_list", _allSeries);
+                    }
+                }
+
+                // -------------------------------------------------------------
+                // 2. UI INITIALIZATION
+                // -------------------------------------------------------------
+                
+                if (_allCategories.Count > 0)
+                {
+                    // Restoration Logic
+                    var lastId = AppSettings.LastSeriesCategoryId;
+                    var targetCat = _allCategories.FirstOrDefault(c => c.CategoryId == lastId) ?? _allCategories[0];
+
+                    CategoryListView.SelectedItem = targetCat;
+                    CategoryListView.ScrollIntoView(targetCat);
+                    await LoadSeriesAsync(targetCat);
                 }
             }
             catch (Exception ex)
             {
-                ShowMessageDialog("Kritik Hata (Dizi Kategori)", $"Hata: {ex.Message}\nURL: {api}");
+                await ShowMessageDialog("Kritik Hata (Dizi Kategori)", $"Hata: {ex.Message}");
             }
             finally
             {
@@ -206,43 +247,30 @@ namespace ModernIPTVPlayer
         {
             SelectedCategoryTitle.Text = category.CategoryName;
 
-            if (category.Series != null && category.Series.Count > 0)
-            {
-                MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Series);
-                return;
-            }
+            // Save selection
+            AppSettings.LastSeriesCategoryId = category?.CategoryId;
 
             try
             {
-                // SHOW SKELETON
                 MediaGrid.IsLoading = true;
                 
-                string baseUrl = _loginInfo.Host.TrimEnd('/');
-                string api = $"{baseUrl}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series&category_id={category.CategoryId}";
-
-                string json = await _httpClient.GetStringAsync(api);
-                
-                var options = new JsonSerializerOptions
+                // Filter locally on thread pool
+                var filtered = await Task.Run(() => 
                 {
-                    PropertyNameCaseInsensitive = true,
-                    NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString
-                };
+                    if (_allSeries == null || _allSeries.Count == 0) return new List<SeriesStream>();
+                    return _allSeries.Where(s => s.CategoryId == category.CategoryId).ToList();
+                });
 
-                var seriesList = JsonSerializer.Deserialize<List<SeriesStream>>(json, options);
-
-                if (seriesList != null)
-                {
-                    category.Series = seriesList;
-                    MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Series);
-                }
+                category.Series = filtered;
+                MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Series);
             }
             catch (Exception ex)
             {
-                // Log
+                 System.Diagnostics.Debug.WriteLine($"Error filtering series: {ex.Message}");
             }
             finally
             {
-                if (MediaGrid.ItemsSource == null) MediaGrid.IsLoading = false;
+                MediaGrid.IsLoading = false;
             }
         }
 
@@ -274,7 +302,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private async void ShowMessageDialog(string title, string content)
+        private async Task ShowMessageDialog(string title, string content)
         {
             if (this.XamlRoot == null) return;
             ContentDialog dialog = new ContentDialog 

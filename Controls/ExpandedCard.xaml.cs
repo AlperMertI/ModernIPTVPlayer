@@ -224,13 +224,13 @@ namespace ModernIPTVPlayer.Controls
         /// </summary>
         public void StopTrailer()
         {
-            ResetState(isStopping: true);
+            ResetState(isMorphing: false, isStopping: true);
         }
 
         /// <summary>
         /// Resets the card to initial state before loading new data
         /// </summary>
-        private void ResetState(bool isStopping = false)
+        private void ResetState(bool isMorphing = false, bool isStopping = false)
         {
             // Reset trailer/WebView - stop video via JavaScript (preserve pre-initialized player)
             TrailerWebView.Visibility = Visibility.Collapsed;
@@ -244,24 +244,73 @@ namespace ModernIPTVPlayer.Controls
             // Show backdrop container again
             BackdropContainer.Visibility = Visibility.Visible;
             
-            // Reset content visibility
-            RealContentPanel.Opacity = 0;
-            FullSkeleton.Visibility = Visibility.Visible;
-            
+            // Content Visibility Logic
+            if (!isStopping) 
+            {
+                BackdropImage.Opacity = 0.7;
+                BackdropOverlay.Visibility = Visibility.Visible;
+
+                if (isMorphing)
+                {
+                    // Crossfade: Fade Out Old Content, Fade In Skeleton
+                    var visualContent = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(RealContentPanel);
+                    var visualSkeleton = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(MainSkeleton);
+                    
+                    // Ensure Skeleton is visible and ready to fade in
+                    MainSkeleton.Visibility = Visibility.Visible;
+                    BadgeSkeleton.Visibility = Visibility.Visible;
+                    
+                    visualSkeleton.Opacity = 0f;
+
+                    try
+                    {
+                        var animOut = _compositor.CreateScalarKeyFrameAnimation();
+                        animOut.InsertKeyFrame(1.0f, 0f);
+                        animOut.Duration = TimeSpan.FromMilliseconds(200);
+                        
+                        var animIn = _compositor.CreateScalarKeyFrameAnimation();
+                        animIn.InsertKeyFrame(1.0f, 1f);
+                        animIn.Duration = TimeSpan.FromMilliseconds(200);
+                        
+                        visualContent.StartAnimation("Opacity", animOut);
+                        visualSkeleton.StartAnimation("Opacity", animIn);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Morph Animation Failed: {ex.Message}");
+                        // Fallback to instant
+                        RealContentPanel.Opacity = 0;
+                        if (visualSkeleton != null) visualSkeleton.Opacity = 1f;
+                    }
+                }
+                else
+                {
+                    // Instant Reset
+                    RealContentPanel.Opacity = 0;
+                    MainSkeleton.Visibility = Visibility.Visible;
+                    BadgeSkeleton.Visibility = Visibility.Visible;
+                    Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(MainSkeleton).Opacity = 1f;
+                }
+                
             // Reset badges
             TechBadgesPanel.Children.Clear();
             
-            // Reset mood tag
-            MoodTag.Visibility = Visibility.Collapsed;
-            
-            // Reset ratings
-            YearText.Visibility = Visibility.Visible;
-            RatingText.Visibility = Visibility.Visible;
-            RatingText.Text = "";
-            YearText.Text = "";
-            
-            // Reset Ambience
-            AmbienceGrid.Visibility = Visibility.Visible;
+            // Reset Play Button Subtext
+            PlayButtonSubtext.Visibility = Visibility.Collapsed;
+            PlayButtonSubtext.Text = "";
+                
+                // Reset mood tag
+                MoodTag.Visibility = Visibility.Collapsed;
+                
+                // Reset ratings
+                YearText.Visibility = Visibility.Visible;
+                RatingText.Visibility = Visibility.Visible;
+                RatingText.Text = "";
+                YearText.Text = "";
+                
+                // Reset Ambience
+                AmbienceGrid.Visibility = Visibility.Visible;
+            }
             
             // Reset loading ring
             if (!isStopping)
@@ -269,21 +318,23 @@ namespace ModernIPTVPlayer.Controls
                 LoadingRing.IsActive = true;
                 LoadingRing.Visibility = Visibility.Visible;
             }
-            else
+            // Start Shimmers explicitly (Loaded event doesn't fire on Visibility toggle)
+            // UPDATE: Moved logic to ShimmerControl.cs (Loaded/Unloaded) for cleaner approach.
+            // if (!isStopping)
+            // {
+            //    RestartShimmers(FullSkeleton);
+            // }
+            if (isStopping)
             {
                 LoadingRing.IsActive = false;
                 LoadingRing.Visibility = Visibility.Collapsed;
             }
-            
-            // CRITICAL: DO NOT clear BackdropImage.Source here!
-            // If we are morphing, we want to show the OLD image flying until the NEW image loads.
-            // Clearing it causes a "blink" or invisible (black) animation.
         }
 
-        public async Task LoadDataAsync(ModernIPTVPlayer.Models.IMediaStream stream)
+        public async Task LoadDataAsync(ModernIPTVPlayer.Models.IMediaStream stream, bool isMorphing = false)
         {
             // Reset all state first (except image)
-            ResetState();
+            ResetState(isMorphing);
             
             _stream = stream;
             TitleText.Text = stream.Title;
@@ -298,8 +349,12 @@ namespace ModernIPTVPlayer.Controls
                 BackdropImage.Source = null;
             }
             
-            // Ensure History is Ready
+            // Ensure History & ProbeCache are Ready
             await HistoryManager.Instance.InitializeAsync();
+             // Wait for Probe Cache to be ready (Race Condition fix)
+            await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
+            // await Services.TmdbCacheService.Instance.EnsureLoadedAsync(); // Implied by EnsureLoadedAsync logic if updated, or not strictly needed if lazy
+
             
             // Initial Tooltip (Static parse)
             UpdateTooltip(stream);
@@ -309,68 +364,102 @@ namespace ModernIPTVPlayer.Controls
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Searching TMDB for: {stream.Title}");
                 
-                // Parallel Execution: TMDB + Probing
-                Task<TmdbMovieResult?> tmdbTask;
                 string extractedYear = TmdbHelper.ExtractYear(stream.Title);
+                Task<TmdbMovieResult?> tmdbTask = (stream is SeriesStream) 
+                    ? TmdbHelper.SearchTvAsync(stream.Title, extractedYear)
+                    : TmdbHelper.SearchMovieAsync(stream.Title, extractedYear);
                 
-                if (stream is SeriesStream)
-                {
-                     tmdbTask = TmdbHelper.SearchTvAsync(stream.Title, extractedYear);
-                }
-                else
-                {
-                     tmdbTask = TmdbHelper.SearchMovieAsync(stream.Title, extractedYear);
-                }
+                // Fire and forget probing (or await it later) BUT don't block TMDB UI update
+                // Current issue: The user waits for 5s probe before seeing ANY text.
+                // Fix: Await TMDB, Update UI, THEN await Probe.
                 
-                // Probing for everything (if applicable)
-                Task probeTask = ProbeStreamInternal(stream);
-                
-                await Task.WhenAll(tmdbTask, probeTask);
-                
-                var tmdb = tmdbTask.Result;
+                var tmdb = await tmdbTask;
                 
                 if (tmdb != null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] TMDB Match: {tmdb.DisplayTitle} (ID: {tmdb.Id})");
                     _tmdbInfo = tmdb;
-                    if (stream != null) stream.TmdbInfo = tmdb; // Save to stream for later navigation
-                    UpdateUiWithTmdb(tmdb);
-                    
-                    // Fetch and play trailer
+                    if (stream != null) stream.TmdbInfo = tmdb;
+
+                    string displayTitle = tmdb.DisplayTitle;
+                    string displaySubtitle = tmdb.GetGenreNames();
+                    string displayOverview = tmdb.Overview;
+                    string displayBackdrop = tmdb.FullBackdropUrl;
+
+                    // --- EPISODE RESUME LOGIC (Might interact with cache, but usually fast) ---
+                    // If this logic is slow, it should also be separated, but HistoryManager is usually memory/fast disk.
+                    if (stream is SeriesStream series)
+                    {
+                        var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+                        if (history != null)
+                        {
+                            var season = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, history.SeasonNumber);
+                            if (season?.Episodes != null)
+                            {
+                                var ep = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == history.EpisodeNumber);
+                                if (ep == null && history.EpisodeNumber == 0)
+                                    ep = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == 1);
+
+                                if (ep != null)
+                                {
+                                    string epName = ep.Name;
+                                    string cleanIptv = TmdbHelper.CleanEpisodeTitle(history.Title);
+                                    bool isGeneric = string.IsNullOrEmpty(epName) || epName.Contains("Bölüm") || epName.Contains("Episode") || epName == ep.EpisodeNumber.ToString();
+
+                                    if (isGeneric && !string.IsNullOrEmpty(cleanIptv) && cleanIptv.Length > 2)
+                                        displayTitle = cleanIptv;
+                                    else
+                                        displayTitle = !string.IsNullOrEmpty(epName) ? epName : $"Bölüm {ep.EpisodeNumber}";
+
+                                    if (!string.IsNullOrEmpty(ep.Overview)) displayOverview = ep.Overview;
+                                    if (!string.IsNullOrEmpty(ep.StillUrl)) displayBackdrop = ep.StillUrl;
+                                }
+                            }
+                        }
+                    }
+
+                    // Update UI IMMEDIATELY with TMDB info
+                    UpdateUiWithTmdb(tmdb, displayTitle, displaySubtitle, displayOverview, displayBackdrop);
+
+                    // NOW Fetch Trailer (Async)
                     var trailerKey = await TmdbHelper.GetTrailerKeyAsync(tmdb.Id, stream is SeriesStream);
                     if (!string.IsNullOrEmpty(trailerKey))
                     {
                          PlayTrailer(trailerKey);
                     }
+                    else
+                    {
+                        LoadingRing.IsActive = false;
+                        LoadingRing.Visibility = Visibility.Collapsed;
+                        BackdropImage.Opacity = 1.0;
+                        BackdropOverlay.Visibility = Visibility.Collapsed;
+                    }
                 }
                 else
                 {
-                    // Fallback UI
                     DescText.Text = "No additional details found.";
-                    FullSkeleton.Visibility = Visibility.Collapsed;
+                    MainSkeleton.Visibility = Visibility.Collapsed;
                     RealContentPanel.Opacity = 1;
-                    
                     YearText.Visibility = Visibility.Collapsed;
                     RatingText.Visibility = Visibility.Collapsed;
+                    
+                    LoadingRing.IsActive = false; 
+                    LoadingRing.Visibility = Visibility.Collapsed;
                 }
+                
+                // Run Probe in Background - Do NOT await it to block the UI interaction
+                // BadgeSkeleton remains Visible until this finishes
+                _ = ProbeStreamInternal(stream);
+
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error: {ex.Message}");
                 DescText.Text = "Error loading details.";
-                FullSkeleton.Visibility = Visibility.Collapsed;
+                MainSkeleton.Visibility = Visibility.Collapsed;
+                BadgeSkeleton.Visibility = Visibility.Collapsed;
                 RealContentPanel.Opacity = 1;
             }
-            finally
-            {
-                // Simple hide - if a trailer is starting, it will handle hiding the ring later
-                // But for safety, if no trailer was found or it failed, we hide it here
-                if (_tmdbInfo == null || !(_tmdbInfo.Id > 0))
-                {
-                    LoadingRing.IsActive = false;
-                    LoadingRing.Visibility = Visibility.Collapsed;
-                }
-            }
+            // Finally logic moved to inside success/fail blocks to avoid premature hiding
         }
         
         private async Task ProbeStreamInternal(IMediaStream stream)
@@ -388,39 +477,97 @@ namespace ModernIPTVPlayer.Controls
                 if (series.HasMetadata || series.IsProbing) return;
                 // For series, probe the last watched episode if any
                 var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
-                if (history != null) url = history.StreamUrl;
+                if (history != null) 
+                {
+                    url = history.StreamUrl;
+                }
+                else if (App.CurrentLogin != null)
+                {
+                    try
+                    {
+                        var loginParams = new Services.LoginParams
+                        {
+                            Host = App.CurrentLogin.Host,
+                            Username = App.CurrentLogin.Username,
+                            Password = App.CurrentLogin.Password,
+                            PlaylistUrl = App.CurrentLogin.PlaylistUrl
+                        };
+                        var info = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, loginParams);
+                        if (info != null && info.Episodes != null && info.Episodes.Count > 0)
+                        {
+                             // Find First Season
+                             var firstSeasonKey = info.Episodes.Keys.OrderBy(k => 
+                             {
+                                 if (int.TryParse(k, out int s)) return s;
+                                 return 9999;
+                             }).FirstOrDefault();
+                             
+                             if (firstSeasonKey != null && info.Episodes.TryGetValue(firstSeasonKey, out var eps) && eps != null)
+                             {
+                                 var firstEp = eps.OrderBy(e => 
+                                 {
+                                     if (int.TryParse(e.EpisodeNum?.ToString(), out int en)) return en;
+                                     return 9999;
+                                 }).FirstOrDefault();
+                                 
+                                 if (firstEp != null)
+                                 {
+                                     // Construct URL: /series/{user}/{pass}/{id}.{ext}
+                                     var host = App.CurrentLogin.Host.TrimEnd('/');
+                                     url = $"{host}/series/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{firstEp.Id}.{firstEp.ContainerExtension}";
+                                 }
+                             }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Services.CacheLogger.Error(Services.CacheLogger.Category.Probe, "Failed fetching Series Info", ex.Message);
+                    }
+                }
             }
 
             if (string.IsNullOrEmpty(url)) return;
 
             try
             {
-                // Check Cache FIRST
-                if (ProbeCacheManager.TryGet(url, out var cached))
+                // 1. Check Cache
+                if (Services.ProbeCacheService.Instance.Get(url) is Services.ProbeData cached)
                 {
+                    Services.CacheLogger.Success(Services.CacheLogger.Category.Probe, "ExpandedCard Cache Hit", url);
+                    BadgeSkeleton.Visibility = Visibility.Collapsed;
                     ApplyProbeResult(stream, cached);
                     return;
                 }
 
+                // 2. Probe Network
                 SetProbing(stream, true);
+                Services.CacheLogger.Info(Services.CacheLogger.Category.Probe, "Probing Network (ExpandedCard)", url);
+                
                 var result = await _prober.ProbeAsync(url);
                 
-                var probeResult = new ProbeResult
+                if (result.Success)
                 {
-                    Res = result.Res,
-                    Fps = result.Fps,
-                    Codec = result.Codec,
-                    Bitrate = result.Bitrate,
-                    Success = result.Success,
-                    IsHdr = result.IsHdr
-                };
-
-                ProbeCacheManager.Cache(url, probeResult);
-                ApplyProbeResult(stream, probeResult);
+                    Services.ProbeCacheService.Instance.Update(url, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
+                    
+                    // Direct apply (no need to fetch back from cache immediately)
+                    var data = new Services.ProbeData 
+                    { 
+                        Resolution = result.Res, 
+                        Fps = result.Fps, 
+                        Codec = result.Codec, 
+                        Bitrate = result.Bitrate, 
+                        IsHdr = result.IsHdr 
+                    };
+                    ApplyProbeResult(stream, data);
+                }
+                else
+                {
+                    Services.CacheLogger.Warning(Services.CacheLogger.Category.Probe, "Probing Failed (Results empty)", url);
+                }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Probing Failed: {ex.Message}");
+                Services.CacheLogger.Error(Services.CacheLogger.Category.Probe, "ExpandedCard Probe Error", ex.Message);
             }
             finally
             {
@@ -434,29 +581,30 @@ namespace ModernIPTVPlayer.Controls
             else if (stream is SeriesStream series) series.IsProbing = isProbing;
         }
 
-        private void ApplyProbeResult(IMediaStream stream, ProbeResult result)
+        private void ApplyProbeResult(IMediaStream stream, Services.ProbeData result)
         {
             if (stream is LiveStream live)
             {
-                live.Resolution = result.Res;
+                live.Resolution = result.Resolution;
                 live.Fps = result.Fps;
                 live.Codec = result.Codec;
                 live.Bitrate = result.Bitrate;
-                live.IsOnline = result.Success;
+                live.IsOnline = true; // Cached implies success
                 live.IsHdr = result.IsHdr;
             }
             else if (stream is SeriesStream series)
             {
-                series.Resolution = result.Res;
+                series.Resolution = result.Resolution;
                 series.Fps = result.Fps;
                 series.Codec = result.Codec;
                 series.Bitrate = result.Bitrate;
-                series.IsOnline = result.Success;
+                series.IsOnline = true;
                 series.IsHdr = result.IsHdr;
             }
 
             DispatcherQueue.TryEnqueue(() =>
             {
+                BadgeSkeleton.Visibility = Visibility.Collapsed;
                 UpdateTooltip(stream);
                 UpdatePlayButton(stream);
             });
@@ -466,18 +614,8 @@ namespace ModernIPTVPlayer.Controls
         {
             TechBadgesPanel.Children.Clear();
             
-            // SERIES RESUME BADGE
-            if (stream is SeriesStream series)
-            {
-                var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
-                if (history != null)
-                {
-                    AddBadge($"S{history.SeasonNumber} E{history.EpisodeNumber}", Colors.Crimson);
-                    
-                    // Also guess 4K if series name says so, but give history priority
-                }
-            }
-            else if (stream is LiveStream live)
+            // 1. Logic moved to Play Button subtext for premium look
+            if (stream is LiveStream live)
             {
                  var hist = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
                  if (hist != null && !hist.IsFinished && hist.Duration > 0)
@@ -698,23 +836,32 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void UpdateUiWithTmdb(TmdbMovieResult tmdb)
+        private void UpdateUiWithTmdb(TmdbMovieResult tmdb, string? overrideTitle = null, string? overrideSubtitle = null, string? overrideOverview = null, string? overrideBackdrop = null)
         {
-            TitleText.Text = tmdb.DisplayTitle;
-            DescText.Text = tmdb.Overview;
-            GenresText.Text = tmdb.GetGenreNames();
+            if (tmdb == null) return;
+            
+            TitleText.Text = overrideTitle ?? tmdb.DisplayTitle;
+            GenresText.Text = overrideSubtitle ?? tmdb.GetGenreNames();
+            DescText.Text = overrideOverview ?? tmdb.Overview;
+
             RatingText.Text = $"★ {tmdb.VoteAverage:F1}";
             YearText.Text = tmdb.DisplayDate?.Split('-')[0] ?? "";
             
             // Hide skeleton and reveal description with staggered reveal
-            FullSkeleton.Visibility = Visibility.Collapsed;
-            RealContentPanel.Opacity = 1; // Parent is opaque
+            MainSkeleton.Visibility = Visibility.Collapsed;
+            // Note: BadgeSkeleton remains visible until Probe finishes (in UpdateTooltip)
+            
+            RealContentPanel.Opacity = 1; 
+            
+            var visualPanel = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(RealContentPanel);
+            visualPanel.Opacity = 1f;
+
             StaggeredRevealContent();
             
-            // High-res backdrop
-            if (!string.IsNullOrEmpty(tmdb.FullBackdropUrl))
+            string backdropUrl = overrideBackdrop ?? tmdb.FullBackdropUrl;
+            if (!string.IsNullOrEmpty(backdropUrl))
             {
-                BackdropImage.Source = new BitmapImage(new Uri(tmdb.FullBackdropUrl));
+                BackdropImage.Source = new BitmapImage(new Uri(backdropUrl));
             }
 
             // Mood Tag Logic (Mock)
@@ -740,21 +887,30 @@ namespace ModernIPTVPlayer.Controls
                     // CRITICAL: Set Visual Opacity to 0 initially
                     visual.Opacity = 0f;
 
-                    var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
-                    fadeIn.InsertKeyFrame(1f, 1f);
-                    fadeIn.Duration = TimeSpan.FromMilliseconds(400);
-                    fadeIn.DelayTime = TimeSpan.FromSeconds(delay);
+                    try 
+                    {
+                        var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                        fadeIn.InsertKeyFrame(1f, 1f);
+                        fadeIn.Duration = TimeSpan.FromMilliseconds(400);
+                        fadeIn.DelayTime = TimeSpan.FromSeconds(delay);
 
-                    // Add slight lift
-                    Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.SetIsTranslationEnabled(element, true);
-                    var moveUp = _compositor.CreateVector3KeyFrameAnimation();
-                    moveUp.InsertKeyFrame(0f, new System.Numerics.Vector3(0, 8, 0));
-                    moveUp.InsertKeyFrame(1f, System.Numerics.Vector3.Zero);
-                    moveUp.Duration = TimeSpan.FromMilliseconds(500);
-                    moveUp.DelayTime = TimeSpan.FromSeconds(delay);
+                        // Define MoveUp Animation
+                        var moveUp = _compositor.CreateVector3KeyFrameAnimation();
+                        moveUp.InsertKeyFrame(0f, new System.Numerics.Vector3(0, 8, 0));
+                        moveUp.InsertKeyFrame(1f, System.Numerics.Vector3.Zero);
+                        moveUp.Duration = TimeSpan.FromMilliseconds(500);
+                        moveUp.DelayTime = TimeSpan.FromSeconds(delay);
 
-                    visual.StartAnimation("Opacity", fadeIn);
-                    visual.StartAnimation("Translation", moveUp);
+                        Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+                        
+                        visual.StartAnimation("Opacity", fadeIn);
+                        visual.StartAnimation("Translation", moveUp);
+                    }
+                    catch (Exception ex)
+                    {
+                         System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Staggered Animation Error: {ex.Message}");
+                         visual.Opacity = 1f; // Ensure visible if animation fails
+                    }
 
                     delay += staggerIncrement;
                 }
@@ -766,6 +922,8 @@ namespace ModernIPTVPlayer.Controls
             if (stream == null) return;
             
             bool isResume = false;
+            string subtext = null;
+
             if (stream is LiveStream live)
             {
                 var hist = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
@@ -774,16 +932,37 @@ namespace ModernIPTVPlayer.Controls
             else if (stream is SeriesStream series)
             {
                 var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
-                if (history != null && history.Duration > 0 && (history.Position / (double)history.Duration) > 0.05) isResume = true;
+                if (history != null) 
+                {
+                    isResume = true;
+                    // Fix: If it's 0, display as 01 for the label (or keep 00 if provider really has 0)
+                    // But usually 0 means "start". Let's use D2 and if 0, maybe shift.
+                    // Actually, let's keep it raw but if it was 0, and we show it as episode 1 in title, 
+                    // maybe we should be consistent.
+                    int displayEp = history.EpisodeNumber;
+                    if (displayEp == 0) displayEp = 1; // User said "Bölüm 1'deyim" but it showed 0.
+                    
+                    subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
+                }
             }
 
             if (isResume)
             {
                 PlayButtonText.Text = "Devam Et";
+                if (!string.IsNullOrEmpty(subtext))
+                {
+                    PlayButtonSubtext.Text = subtext;
+                    PlayButtonSubtext.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                }
             }
             else
             {
-                PlayButtonText.Text = "Play";
+                PlayButtonText.Text = "Oynat";
+                PlayButtonSubtext.Visibility = Visibility.Collapsed;
             }
         }
 
@@ -803,6 +982,17 @@ namespace ModernIPTVPlayer.Controls
 
         private void TrailerArea_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
         {
+            // Ignore if clicked on MuteButton or its children
+            if (e.OriginalSource is DependencyObject obj)
+            {
+                var parent = obj;
+                while (parent != null && parent != TrailerArea)
+                {
+                    if (parent == MuteButton) return;
+                    parent = VisualTreeHelper.GetParent(parent);
+                }
+            }
+
             PrepareConnectedAnimation();
             DetailsClicked?.Invoke(this, _tmdbInfo);
         }
