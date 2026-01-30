@@ -24,6 +24,8 @@ namespace ModernIPTVPlayer
                 await player.InitializePlayerAsync();
 
                 // 2. Network & Headers
+                string headers = ""; // Scope Fix for Logging at line 87
+
                 // Bypass headers for local bridge to avoid 400 Bad Request
                 if (streamUrl.Contains("127.0.0.1"))
                 {
@@ -33,7 +35,7 @@ namespace ModernIPTVPlayer
                 {
                     string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
                     string cookieHeader = ExtractCookiesForUrl(streamUrl);
-                    string headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
+                    headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
 
                     if (!string.IsNullOrEmpty(cookieHeader))
                     {
@@ -83,7 +85,9 @@ namespace ModernIPTVPlayer
                 
                 // HTTP Reconnect Logic (Crucial for unstable IPTV servers)
                 // The correct property name is 'demuxer-lavf-o'
-                await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=5");
+                // Added reconnect_on_network_error and increased robustness
+                Debug.WriteLine($"[MpvSetupHelper] Applied Headers: {headers.Replace("\n", " | ")}");
+                await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=30,reconnect_on_network_error=1");
 
                 await SetPropertySafeAsync(player, "vd-lavc-fast", "yes"); // Speed up hardware decoding
                 await SetPropertySafeAsync(player, "vd-lavc-dr", "yes");   // Direct rendering

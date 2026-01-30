@@ -32,7 +32,7 @@ namespace ModernIPTVPlayer.Services.Streaming
         private StreamSlotSimulator()
         {
             _slotSemaphore = new SemaphoreSlim(_maxConnections);
-            StartLocalBridge();
+            // StartLocalBridge(); // REMOVED: Lazy start in RegisterStream only!
         }
 
         private void StartLocalBridge()
@@ -190,6 +190,13 @@ namespace ModernIPTVPlayer.Services.Streaming
 
         public MultiStreamBuffer RegisterStream(string streamId, string url)
         {
+            // [RESTORE BRIDGE] If we stopped the bridge for Single Player, we must restart it now.
+            if (!_isListenerRunning)
+            {
+                Debug.WriteLine("[SlotSimulator] Restarting Local Bridge for Multi-Stream...");
+                StartLocalBridge();
+            }
+
             var buffer = _activeStreams.GetOrAdd(streamId, id => new MultiStreamBuffer(id));
             _ = ManageStreamingLoop(streamId, url, buffer);
             return buffer;
@@ -210,6 +217,34 @@ namespace ModernIPTVPlayer.Services.Streaming
                     try { cts.Cancel(); } catch { }
                     Debug.WriteLine($"[SlotSimulator:{streamId}] Cancellation Token Triggered.");
                 }
+            }
+        }
+
+        public void StopAll()
+        {
+            Debug.WriteLine("[SlotSimulator] Stopping ALL streams & Bridge (Single Player Enforcement)...");
+            foreach (var key in _activeStreams.Keys.ToList())
+            {
+                StopStream(key);
+            }
+
+            // Also stop the Bridge Listener to clear logs/ports
+            try
+            {
+                if (_listener != null && _listener.IsListening)
+                {
+                    _isListenerRunning = false;
+                    _listener.Stop();
+                    // Don't dispose, we might need it later? 
+                    // Actually, if we stop it, we need to re-init to start again.
+                    // But for Single Player stability, stopping is safer.
+                    // We'll let lazy re-init handle it or manual Start if needed.
+                    Debug.WriteLine("[SlotSimulator] Local Bridge Stopped.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[SlotSimulator] Error stopping bridge: {ex.Message}");
             }
         }
 
@@ -271,12 +306,15 @@ namespace ModernIPTVPlayer.Services.Streaming
             }
         }
 
-        private async Task RequestSlotAndFillBuffer(string streamId, string url, MultiStreamBuffer buffer)
+        // Returns TRUE if yielded voluntarily, FALSE if error/shutdown
+        private async Task<bool> RequestSlotAndFillBuffer(string streamId, string url, MultiStreamBuffer buffer)
         {
-            if (_connectionTasks.ContainsKey(streamId)) return;
+            if (_connectionTasks.ContainsKey(streamId)) return false;
 
             var cts = new CancellationTokenSource();
-            if (!_connectionTasks.TryAdd(streamId, cts)) return;
+            if (!_connectionTasks.TryAdd(streamId, cts)) return false;
+            
+            bool voluntaryYield = false;
 
             try
             {
@@ -394,6 +432,7 @@ namespace ModernIPTVPlayer.Services.Streaming
                                                 // Reduced logging
                                                 Debug.WriteLine($"[SlotSimulator] Yielding slot for {streamId} (Peak: {peakBuffer:F1}s).");
                                                 shouldYield = true;
+                                                voluntaryYield = true;
                                                 break;
                                             }
                                         }
@@ -440,6 +479,7 @@ namespace ModernIPTVPlayer.Services.Streaming
                 _connectionTasks.TryRemove(streamId, out _);
                 Debug.WriteLine($"[SlotSimulator] Slot released for {streamId}.");
             }
+            return voluntaryYield;
         }
 
         private double GetCombinedBuffer(string streamId, MultiStreamBuffer buffer)
@@ -479,13 +519,13 @@ namespace ModernIPTVPlayer.Services.Streaming
 
         // Greedy Buffer Rotation Constants
         private const double SURVIVAL_THRESHOLD_SECONDS = 12.0;  // Minimum buffer before yielding (Increased for safety)
-        private const double STARVATION_THRESHOLD_SECONDS = 5.0; // Another stream is starving below this
+        private const double STARVATION_THRESHOLD_SECONDS = 8.0; // Another stream is starving below this (Increased from 5s for early rescue)
         private const double TARGET_BUFFER_SECONDS = 30.0;       // Target buffer for "Fortress" (Was 15.0)
         private const double MAX_BUFFER_SECONDS = 300.0;         // Maximum buffer (Effectively Uncapped)
         private const double SURVIVAL_DWELL_MAX = 60.0;         // Max dwell time in survival mode
         private const double EMERGENCY_YIELD_DWELL = 25.0;      // Emergency yield after this dwell time
         private const double REGULAR_YIELD_DWELL = 30.0;        // Regular yield after this dwell time
-        private const double REGULAR_YIELD_BUFFER = 25.0;       // Regular yield if buffer exceeds this
+        private const double REGULAR_YIELD_BUFFER = 20.0;       // Regular yield if buffer exceeds this (Increased to 20s for 3-stream safety)
         private const double HARD_MAX_DWELL = 300.0;            // Hard max (align with max buffer)
 
         private bool ShouldYieldSlot(MultiStreamBuffer buffer, long bytesFetched, DateTime startTime)
@@ -538,8 +578,9 @@ namespace ModernIPTVPlayer.Services.Streaming
             var health = StreamDiagnostics.Instance.GetHealth(buffer.StreamId);
             bool isSourceLimited = health != null && health.DebugInfo != null && health.DebugInfo.Contains("LIVE-EDGE");
 
-            // Adaptive Target: 30s for Bandwidth Limited (Bursty), 12s for Source Limited (Trickle)
-            double dynamicTarget = isSourceLimited ? 12.0 : TARGET_BUFFER_SECONDS;
+            // Adaptive Target: 30s for Bandwidth Limited (Bursty), 20s for Source Limited (Trickle)
+            // Increased Source Limited target from 12s to 20s to survive 3-stream rotation
+            double dynamicTarget = isSourceLimited ? 20.0 : TARGET_BUFFER_SECONDS;
 
             // 2. GREEDY HOLD: Do not yield until we hit our TARGET, 
             //    UNLESS it's a desperate emergency (someone else < 5s).
@@ -547,9 +588,19 @@ namespace ModernIPTVPlayer.Services.Streaming
 
             // FAST START OPTIMIZATION: If another stream has 0 buffer and we're healthy, yield immediately
             // FIXED: Only yield if we are significantly above our dynamic target
+            // FAST START OPTIMIZATION: If another stream has 0 buffer and we're healthy, yield immediately
+            // FIXED: Only yield if we are significantly above our dynamic target
             if (anyoneStarving && combinedBuffer > dynamicTarget && dwellTime > 5.0)
             {
                 Debug.WriteLine($"[SlotSimulator:{buffer.StreamId}] Fast-Yielding for starved peer (Buffer: {combinedBuffer:F1}s > Target).");
+                return true;
+            }
+
+            // [CRITICAL RESCUE] If someone is dying (<8s) and we are safe (>10s), yield IMMEDIATELY.
+            // Ignore Start Dwell or Target dwell. Saving a life is priority.
+            if (anyoneStarving && combinedBuffer > 10.0 && dwellTime > 2.0)
+            {
+                Debug.WriteLine($"[SlotSimulator:{buffer.StreamId}] CRITICAL RESCUE Yield (Buffer: {combinedBuffer:F1}s).");
                 return true;
             }
 
@@ -574,7 +625,17 @@ namespace ModernIPTVPlayer.Services.Streaming
             // Only if someone else actually exists/needs it.
             if (combinedBuffer > REGULAR_YIELD_BUFFER && (anyoneElseWaiting || anyoneStarving))
             {
+                Debug.WriteLine($"[SlotSimulator:{buffer.StreamId}] Regular Yield Triggered (Buffer: {combinedBuffer:F1}s > {REGULAR_YIELD_BUFFER}).");
                 return true;
+            }
+
+            // [DEBUG] Log rejection causes for high buffers
+            if (combinedBuffer > 10.0 && anyoneStarving)
+            {
+                 // Trace WHY we are not yielding if we are rich and others are poor
+                 // Reasons: Dedupe?
+                 if (buffer.IsDeduplicating) Debug.WriteLine($"[SlotSimulator:{buffer.StreamId}] NOT Yielding (Rich but Deduplicating). Gap: {combinedBuffer:F1}s");
+                 // else Debug.WriteLine($"[SlotSimulator:{buffer.StreamId}] NOT Yielding (Rich but unknown reason?). Target: {dynamicTarget}");
             }
 
             // HARD LIMIT: If we've held the slot too long AND someone else is waiting

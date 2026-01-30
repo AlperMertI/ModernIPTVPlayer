@@ -516,7 +516,7 @@ namespace ModernIPTVPlayer
                         DispatcherQueue.TryEnqueue(() => item.IsProbing = true);
 
                         // Process (This takes ~0.5s - 1.5s)
-                        var result = await _prober.ProbeAsync(item.StreamUrl);
+                        var result = await _prober.ProbeAsync(item.StreamUrl, ct);
 
                         DispatcherQueue.TryEnqueue(() => 
                         {

@@ -541,6 +541,24 @@ namespace ModernIPTVPlayer
         {
             System.Diagnostics.Debug.WriteLine($"PlayerPage_Loaded Triggered for {_streamUrl}");
             if (_isPageLoaded) return;
+            
+            // [SINGLE PLAYER ENFORCEMENT]
+            // Ensure any background simulator streams (from MultiView) are killed
+            // to free up the provider slot for this direct connection.
+            Services.Streaming.StreamSlotSimulator.Instance.StopAll();
+            
+            // [Guard Time] Wait for sockets/probes to fully disconnect before starting new stream
+            // Critical for providers with "Max Connection: 1" policy.
+            // Increased to 1500ms to allow full TCP teardown (TIME_WAIT).
+            await Task.Delay(1500);
+
+            // Enable Verbose Logging for debugging (OUTPUT TO CONSOLE)
+            if (_mpvPlayer != null)
+            {
+                await _mpvPlayer.SetPropertyAsync("msg-level", "all=trace");
+            }
+            // File logging removed per user request (and fixes CS0103)
+            
             _isPageLoaded = true;
             _isStaticMetadataFetched = false; // Reset cache for new video
             _cachedResolution = "-";
@@ -676,6 +694,8 @@ namespace ModernIPTVPlayer
 
                         // 1. Configure MPV using Shared Helper
                         await MpvSetupHelper.ConfigurePlayerAsync(_mpvPlayer, _streamUrl, isSecondary: false);
+
+
 
                         // ----------------------------------------------------------------------------------
                         // OPTİMİZASYONLAR: Ses ve Altyazı Takılmalarını Önleme & Akıllı RAM Yönetimi

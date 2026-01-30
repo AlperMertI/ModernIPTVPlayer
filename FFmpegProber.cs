@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace ModernIPTVPlayer
 {
@@ -14,7 +15,7 @@ namespace ModernIPTVPlayer
         // Path to the ffprobe executable found on the system
         private const string FfprobePath = @"C:\Users\mertg\Documents\Stremio\stremio-community-v5\dist\win-x64\ffprobe.exe";
 
-        public async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr)> ProbeAsync(string url)
+        public async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr)> ProbeAsync(string url, CancellationToken ct = default)
         {
             if (!File.Exists(FfprobePath))
             {
@@ -25,7 +26,7 @@ namespace ModernIPTVPlayer
             {
                 var sw = Stopwatch.StartNew();
                 
-                // ffprobe command - Extracting Stream AND Format info for Bitrate AND HDR info
+                // ffprobe command
                 string args = $"-v error -probesize 256000 -analyzeduration 200000 -select_streams v:0 -show_entries stream=width,height,avg_frame_rate,r_frame_rate,codec_name,bit_rate,color_primaries,color_transfer -show_entries format=bit_rate -of json \"{url}\"";
 
                 var startInfo = new ProcessStartInfo
@@ -44,22 +45,34 @@ namespace ModernIPTVPlayer
                 process.Start();
                 long startProcessTime = sw.ElapsedMilliseconds;
 
-                var readTask = process.StandardOutput.ReadToEndAsync();
-                
-                // 5 second timeout for probing
-                var timeoutTask = Task.Delay(5000);
-                var completedTask = await Task.WhenAny(readTask, timeoutTask);
 
-                long probeEndTime = sw.ElapsedMilliseconds;
+                    // Wait for exit with cancellation support
+                    var readTask = process.StandardOutput.ReadToEndAsync();
+                    var waitForExit = process.WaitForExitAsync(ct);
 
-                if (completedTask == timeoutTask)
-                {
-                    try { process.Kill(); } catch { }
-                    Debug.WriteLine($"[FFmpegProber] TIMEOUT for {url} after {probeEndTime}ms");
-                    return ("Timeout", "-", "-", 0L, false, false);
-                }
+                    // Combine tasks: Read output + Wait for Exit + Timeout + External Cancellation
+                    var timeoutTask = Task.Delay(5000, ct); 
+                    
+                    var completedTask = await Task.WhenAny(readTask, timeoutTask);
 
-                string output = await readTask;
+                    // Handle Cancellation or Timeout by forcefully killing
+                    if (completedTask == timeoutTask || ct.IsCancellationRequested)
+                    {
+                        try 
+                        { 
+                            process.Kill(); 
+                            Debug.WriteLine($"[FFmpegProber] KILLED process for {url} (Reason: {(ct.IsCancellationRequested ? "Cancel" : "Timeout")})");
+                        } 
+                        catch (Exception kEx)
+                        {
+                            Debug.WriteLine($"[FFmpegProber] Failed to KILL process: {kEx.Message}");
+                        }
+                        
+                        return ("Aborted", "-", "-", 0L, false, false);
+                    }
+
+                    string output = await readTask;
+                    long probeEndTime = sw.ElapsedMilliseconds;
                 long totalTime = sw.ElapsedMilliseconds;
 
                 Debug.WriteLine($"[FFmpegProber] Performance for {url}:");
