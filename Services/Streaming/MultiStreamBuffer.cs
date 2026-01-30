@@ -43,6 +43,23 @@ namespace ModernIPTVPlayer.Services.Streaming
         public long CurrentBitrate { get; set; }
         public bool IsDeduplicating => _isDeduplicating;
 
+        // Subscriber Tracking (Ref Count)
+        private int _subscriberCount = 0;
+        private DateTime _lastSubscriberExit = DateTime.Now;
+        public int SubscriberCount => _subscriberCount;
+        public DateTime LastSubscriberExit => _lastSubscriberExit;
+
+        public void AddSubscriber()
+        {
+            Interlocked.Increment(ref _subscriberCount);
+        }
+
+        public void RemoveSubscriber()
+        {
+            Interlocked.Decrement(ref _subscriberCount);
+            _lastSubscriberExit = DateTime.Now;
+        }
+
         private bool _discontinuityRequested = true;
         private FilterState _filterState = FilterState.WaitForKey;
         private bool _isInsideUndecodableFrame = false;

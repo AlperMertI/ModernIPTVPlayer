@@ -77,6 +77,10 @@ namespace ModernIPTVPlayer
              // Unless... we want to handoff BACK? For now, destroy.
              foreach (var ctrl in _activePlayers)
              {
+                 if (!string.IsNullOrEmpty(ctrl.StreamId))
+                 {
+                     StreamSlotSimulator.Instance.StopStream(ctrl.StreamId);
+                 }
                  await ctrl.DisposeAsync();
              }
              _activePlayers.Clear();
@@ -201,6 +205,13 @@ namespace ModernIPTVPlayer
                await control.DisposeAsync();
                PlayerCanvas.Children.Remove(control);
                _activePlayers.Remove(control);
+               
+               // EXPLICIT STOP: Kill the stream immediately (skip 10s idle wait)
+               if (!string.IsNullOrEmpty(control.StreamId))
+               {
+                   StreamSlotSimulator.Instance.StopStream(control.StreamId);
+               }
+
                if (_activePlayers.Count == 0) EmptyMessage.Visibility = Visibility.Visible;
                ReflowLayout();
             };

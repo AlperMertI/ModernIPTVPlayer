@@ -30,6 +30,11 @@ namespace ModernIPTVPlayer.Services.Streaming
             }
         }
 
+        public void RemoveStat(string streamId)
+        {
+            _stats.TryRemove(streamId, out _);
+        }
+
         public StreamHealth GetHealth(string streamId)
         {
             _stats.TryGetValue(streamId, out var health);
@@ -58,7 +63,8 @@ namespace ModernIPTVPlayer.Services.Streaming
                                     $"| Buffer: {health.BufferSeconds:F1}s | Mpv: {health.MpvBufferSeconds:F1}s " +
                                     $"| Window: {health.ServerWindowSize:F1}s " +
                                     $"| In: {health.TotalBytesDownloaded / 1024 / 1024}MB | Out: {health.TotalBytesSent / 1024 / 1024}MB " +
-                                    $"| Speed: {health.DownloadSpeedMbps:F2} Mbps | Errors: {health.SyncLossCount}");
+                                    $"| Speed: {health.DownloadSpeedMbps:F2} Mbps | Errors: {health.SyncLossCount} " +
+                                    $"| {health.DebugInfo}");
                 }
             }
             Debug.WriteLine("---------------------------\n");
@@ -76,5 +82,6 @@ namespace ModernIPTVPlayer.Services.Streaming
         public int SyncLossCount { get; set; }
         public long TotalBytesDownloaded { get; set; }
         public long TotalBytesSent { get; set; }
+        public string DebugInfo { get; set; } // Added for bottleneck diagnostics
     }
 }

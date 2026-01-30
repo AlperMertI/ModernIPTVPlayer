@@ -95,9 +95,12 @@ namespace ModernIPTVPlayer.Services.Streaming
 
                     using (var output = context.Response.OutputStream)
                     {
-                        byte[] chunk = ArrayPool<byte>.Shared.Rent(65536);
+                        buffer.AddSubscriber();
                         try
                         {
+                            byte[] chunk = ArrayPool<byte>.Shared.Rent(65536);
+                            try
+                            {
                             bool isFirstByte = true;
                             while (_isListenerRunning)
                             {
@@ -151,6 +154,11 @@ namespace ModernIPTVPlayer.Services.Streaming
                         {
                             ArrayPool<byte>.Shared.Return(chunk);
                         }
+                        }
+                        finally
+                        {
+                            buffer.RemoveSubscriber();
+                        }
                     }
                 }
                 else
@@ -187,28 +195,79 @@ namespace ModernIPTVPlayer.Services.Streaming
             return buffer;
         }
 
+        public void StopStream(string streamId)
+        {
+            if (_activeStreams.ContainsKey(streamId))
+            {
+                Debug.WriteLine($"[SlotSimulator:{streamId}] Explicit Stop Requested.");
+                
+                // 1. Remove from Active List (Stops new loops)
+                _activeStreams.TryRemove(streamId, out _);
+
+                // 2. CANCEL ACTIVE DOWNLOAD (Stops current loop)
+                if (_connectionTasks.TryGetValue(streamId, out var cts))
+                {
+                    try { cts.Cancel(); } catch { }
+                    Debug.WriteLine($"[SlotSimulator:{streamId}] Cancellation Token Triggered.");
+                }
+            }
+        }
+
         private async Task ManageStreamingLoop(string streamId, string url, MultiStreamBuffer buffer)
         {
-            while (true)
+            try
             {
-                // Priority Check: Should we grab a slot now?
-                double priority = CalculatePriority(buffer);
-                
-                // Adaptive: Request slot if priority is high OR (buffer is empty AND MPV is also starving)
-                if (priority > 0.7 || (buffer.BufferLength == 0 && GetCombinedBuffer(streamId, buffer) < TARGET_BUFFER_SECONDS))
+                while (true)
                 {
-                    // Protection: If stream just started, give it at least 3s to stabilize
-                    var age = (DateTime.Now - buffer.CreatedAt).TotalSeconds;
-                    if (age < 3 && buffer.BufferSeconds > TARGET_BUFFER_SECONDS) 
+                    // EXPLICIT CHECK: If stream was removed via StopStream(), exit immediately.
+                    if (!_activeStreams.ContainsKey(streamId))
                     {
-                         await Task.Delay(500);
-                         continue;
+                        Debug.WriteLine($"[SlotSimulator:{streamId}] Stream removed from active list. Stopping Loop.");
+                        break;
                     }
 
-                    await RequestSlotAndFillBuffer(streamId, url, buffer);
-                }
+                    // Priority Check: Should we grab a slot now?
+                    double priority = CalculatePriority(buffer);
+                    
+                    // Adaptive: Request slot if priority is high OR (buffer is empty AND MPV is also starving)
+                    if (priority > 0.7 || (buffer.BufferLength == 0 && GetCombinedBuffer(streamId, buffer) < TARGET_BUFFER_SECONDS))
+                    {
+                        // Protection: If stream just started, give it at least 3s to stabilize
+                        var age = (DateTime.Now - buffer.CreatedAt).TotalSeconds;
+                        if (age < 3 && buffer.BufferSeconds > TARGET_BUFFER_SECONDS) 
+                        {
+                             await Task.Delay(500);
+                             continue;
+                        }
 
-                await Task.Delay(100); // Check 10 times per second for more responsive rotation
+                        await RequestSlotAndFillBuffer(streamId, url, buffer);
+                    }
+
+                    // IDLE CHECK: If no subscribers for 10 seconds, kill the stream loop.
+                    if (buffer.SubscriberCount == 0)
+                    {
+                        double secondsIdle = (DateTime.Now - buffer.LastSubscriberExit).TotalSeconds;
+                        // Give newly created streams a grace period of 10s too
+                        if (secondsIdle > 10.0 && (DateTime.Now - buffer.CreatedAt).TotalSeconds > 10.0)
+                        {
+                            Debug.WriteLine($"[SlotSimulator:{streamId}] Idle Timeout (No Subscribers for {secondsIdle:F1}s). Stopping Download Loop.");
+                            break; // Exit Loop -> Finally Clean Up
+                        }
+                    }
+
+                    await Task.Delay(100); // Check 10 times per second for more responsive rotation
+                }
+            }
+            catch (Exception ex)
+            {
+                 Debug.WriteLine($"[SlotSimulator] Manager Loop Crashed for {streamId}: {ex.Message}");
+            }
+            finally
+            {
+                 // CLEANUP: Remove stats when stream is properly dead
+                 StreamDiagnostics.Instance.RemoveStat(streamId);
+                 _activeStreams.TryRemove(streamId, out _);
+                 Debug.WriteLine($"[SlotSimulator] Manager Loop Ended for {streamId}");
             }
         }
 
@@ -241,86 +300,108 @@ namespace ModernIPTVPlayer.Services.Streaming
                                 Debug.WriteLine($"[SlotSimulator] Connected to {streamId} (200 OK)");
                                 using (var stream = await response.Content.ReadAsStreamAsync(cts.Token))
                                 {
-                                byte[] chunk = ArrayPool<byte>.Shared.Rent(64 * 1024); // 64KB chunks
-                                try
-                                {
-                                    long bytesFetchedInSession = 0;
-                                    var startTime = DateTime.Now;
-                                    double peakBuffer = 0;
-                                    int zeroReadStrikes = 0; // STRIKE SYSTEM
-
-                                    while (!cts.Token.IsCancellationRequested)
+                                    // NETWORK TUNING: Use 256KB buffer (4x standard) to "trick" throttled servers into sending more data.
+                                    byte[] chunk = ArrayPool<byte>.Shared.Rent(256 * 1024); 
+                                    try
                                     {
-                                        // TIMEOUT PROTECTION:
-                                        // Adaptive: If starving (<5s buffer), timeout quickly (4s) to retry.
-                                        // EXCEPTION: If we are DEDUPLICATING, we expect 0 buffer while catching up.
-                                        // In that case, give full timeout (8s) to avoid killing the stream during recovery.
-                                        int currentTimeout = (buffer.BufferSeconds < 5.0 && !buffer.IsDeduplicating) ? 4000 : READ_TIMEOUT_MS;
-                                        int read = 0;
-                                        using (var readCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token))
-                                        {
-                                            readCts.CancelAfter(currentTimeout);
-                                            try
-                                            {
-                                                read = await stream.ReadAsync(chunk, 0, chunk.Length, readCts.Token);
-                                            }
-                                            catch (OperationCanceledException ex)
-                                            {
-                                                if (cts.Token.IsCancellationRequested) throw; // Manual Cancel
-                                                
-                                                Debug.WriteLine($"[SlotSimulator] Read Timeout on {streamId} - Forcing Reconnect inside Slot. Source: {ex.Source}");
-                                                break; // Break inner loop -> Retry Loop will reconnect
-                                            }
-                                        }
+                                        long bytesFetchedInSession = 0;
+                                        var startTime = DateTime.Now;
+                                        double peakBuffer = 0;
+                                        int zeroReadStrikes = 0; // STRIKE SYSTEM
 
-                                        if (read == 0) 
+                                        // Diagnostics
+                                        long totalReadTimeMs = 0;
+                                        int readCount = 0;
+
+                                        while (!cts.Token.IsCancellationRequested)
                                         {
-                                            zeroReadStrikes++;
-                                            Debug.WriteLine($"[SlotSimulator] Server closed connection for {streamId} (Read 0) - Strike {zeroReadStrikes}/3");
+                                            // TIMEOUT PROTECTION:
+                                            // Adaptive: If starving (<5s buffer), timeout quickly (4s) to retry.
+                                            // EXCEPTION: If we are DEDUPLICATING, we expect 0 buffer while catching up.
+                                            // In that case, give full timeout (8s) to avoid killing the stream during recovery.
+                                            int currentTimeout = (buffer.BufferSeconds < 5.0 && !buffer.IsDeduplicating) ? 4000 : READ_TIMEOUT_MS;
+                                            int read = 0;
                                             
-                                            if (zeroReadStrikes >= 3)
+                                            var sw = Stopwatch.StartNew();
+                                            using (var readCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token))
                                             {
-                                                Debug.WriteLine($"[SlotSimulator] {streamId} failed 3 times. Yielding slot to reset.");
-                                                shouldYield = true;
+                                                readCts.CancelAfter(currentTimeout);
+                                                try
+                                                {
+                                                    read = await stream.ReadAsync(chunk, 0, chunk.Length, readCts.Token);
+                                                }
+                                                catch (OperationCanceledException ex)
+                                                {
+                                                    if (cts.Token.IsCancellationRequested) throw; // Manual Cancel
+                                                    
+                                                    Debug.WriteLine($"[SlotSimulator] Read Timeout on {streamId} - Forcing Reconnect inside Slot. Source: {ex.Source}");
+                                                    break; // Break inner loop -> Retry Loop will reconnect
+                                                }
                                             }
-                                            break; // Retry
-                                        }
-                                        zeroReadStrikes = 0; // Reset on success
+                                            sw.Stop();
+                                            totalReadTimeMs += sw.ElapsedMilliseconds;
+                                            readCount++;
 
-                                        // if (read < 188) Debug.WriteLine($"[SlotSimulator:{streamId}] Fragmented Read: {read} bytes");
+                                            if (read == 0) 
+                                            {
+                                                zeroReadStrikes++;
+                                                Debug.WriteLine($"[SlotSimulator] Server closed connection for {streamId} (Read 0) - Strike {zeroReadStrikes}/3");
+                                                
+                                                if (zeroReadStrikes >= 3)
+                                                {
+                                                    Debug.WriteLine($"[SlotSimulator] {streamId} failed 3 times. Yielding slot to reset.");
+                                                    shouldYield = true;
+                                                }
+                                                break; // Retry
+                                            }
+                                            zeroReadStrikes = 0; // Reset on success
 
-                                        buffer.AppendData(new ReadOnlySpan<byte>(chunk, 0, read));
-                                        bytesFetchedInSession += read;
+                                            buffer.AppendData(new ReadOnlySpan<byte>(chunk, 0, read));
+                                            bytesFetchedInSession += read;
 
-                                        // Track Peak for "Server Window Size" reporting
-                                        if (buffer.BufferSeconds > peakBuffer)
-                                        {
-                                            peakBuffer = buffer.BufferSeconds;
-                                            StreamDiagnostics.Instance.UpdateStat(streamId, h => h.ServerWindowSize = peakBuffer);
-                                        }
+                                            // Track Peak for "Server Window Size" reporting
+                                            if (buffer.BufferSeconds > peakBuffer)
+                                            {
+                                                peakBuffer = buffer.BufferSeconds;
+                                                StreamDiagnostics.Instance.UpdateStat(streamId, h => h.ServerWindowSize = peakBuffer);
+                                            }
 
-                                        // Update Speed in Diagnostics
-                                        var elapsed = (DateTime.Now - startTime).TotalSeconds;
-                                        if (elapsed > 0.5)
-                                        {
-                                            double mbps = (bytesFetchedInSession * 8.0) / (elapsed * 1_000_000.0);
-                                            StreamDiagnostics.Instance.UpdateStat(streamId, h => h.DownloadSpeedMbps = mbps);
-                                        }
+                                            // Update Speed & Diagnostics
+                                            var elapsed = (DateTime.Now - startTime).TotalSeconds;
+                                            if (elapsed > 0.5)
+                                            {
+                                                double mbps = (bytesFetchedInSession * 8.0) / (elapsed * 1_000_000.0);
+                                                
+                                                // BOTTLENECK HEURISTICS
+                                                // Avg Chunk Size
+                                                double avgChunk = (double)bytesFetchedInSession / readCount;
+                                                double utilization = avgChunk / (double)chunk.Length;
+                                                
+                                                // If we are reading tiny chunks (Utilization < 20%), we are waiting for data creation (Live Edge).
+                                                // If we are reading big chunks (Utilization > 50%), we are limited by transfer speed (Network/Server).
+                                                string bottleneck = utilization < 0.2 ? "LIVE-EDGE (Source Latency)" : "BANDWIDTH (Network/Server)";
 
-                                        // Check if we should release slot for a higher priority stream
-                                        if (ShouldYieldSlot(buffer, bytesFetchedInSession, startTime))
-                                        {
-                                            // Reduced logging
-                                            Debug.WriteLine($"[SlotSimulator] Yielding slot for {streamId} (Peak: {peakBuffer:F1}s).");
-                                            shouldYield = true;
-                                            break;
+                                                StreamDiagnostics.Instance.UpdateStat(streamId, h => 
+                                                {
+                                                    h.DownloadSpeedMbps = mbps;
+                                                    h.DebugInfo = $"Limit: {bottleneck} | Fill: {utilization*100:F0}%";
+                                                });
+                                            }
+
+                                            // Check if we should release slot for a higher priority stream
+                                            if (ShouldYieldSlot(buffer, bytesFetchedInSession, startTime))
+                                            {
+                                                // Reduced logging
+                                                Debug.WriteLine($"[SlotSimulator] Yielding slot for {streamId} (Peak: {peakBuffer:F1}s).");
+                                                shouldYield = true;
+                                                break;
+                                            }
                                         }
                                     }
-                                }
-                                finally
-                                {
-                                    ArrayPool<byte>.Shared.Return(chunk);
-                                }
+                                    finally
+                                    {
+                                        ArrayPool<byte>.Shared.Return(chunk);
+                                    }
                             }
                         }
                         else
@@ -396,16 +477,16 @@ namespace ModernIPTVPlayer.Services.Streaming
             return Math.Min(1.0, score);
         }
 
-        // Adaptive Buffer Rotation Constants
-        private const double SURVIVAL_THRESHOLD_SECONDS = 8.0;  // Minimum buffer before yielding (Increased from 5.0)
+        // Greedy Buffer Rotation Constants
+        private const double SURVIVAL_THRESHOLD_SECONDS = 12.0;  // Minimum buffer before yielding (Increased for safety)
         private const double STARVATION_THRESHOLD_SECONDS = 5.0; // Another stream is starving below this
-        private const double TARGET_BUFFER_SECONDS = 15.0;       // Target buffer for fast starts (Was 3.0)
-        private const double MAX_BUFFER_SECONDS = 40.0;          // Maximum buffer before yielding (Was 5.0)
-        private const double SURVIVAL_DWELL_MAX = 60.0;         // Max dwell time in survival mode (Was 45)
-        private const double EMERGENCY_YIELD_DWELL = 25.0;      // Emergency yield after this dwell time (Was 8.0)
-        private const double REGULAR_YIELD_DWELL = 30.0;        // Regular yield after this dwell time (Was 10.0)
+        private const double TARGET_BUFFER_SECONDS = 30.0;       // Target buffer for "Fortress" (Was 15.0)
+        private const double MAX_BUFFER_SECONDS = 300.0;         // Maximum buffer (Effectively Uncapped)
+        private const double SURVIVAL_DWELL_MAX = 60.0;         // Max dwell time in survival mode
+        private const double EMERGENCY_YIELD_DWELL = 25.0;      // Emergency yield after this dwell time
+        private const double REGULAR_YIELD_DWELL = 30.0;        // Regular yield after this dwell time
         private const double REGULAR_YIELD_BUFFER = 25.0;       // Regular yield if buffer exceeds this
-        private const double HARD_MAX_DWELL = 60.0;             // Hard max dwell time (Was 15.0)
+        private const double HARD_MAX_DWELL = 300.0;            // Hard max (align with max buffer)
 
         private bool ShouldYieldSlot(MultiStreamBuffer buffer, long bytesFetched, DateTime startTime)
         {
@@ -445,9 +526,28 @@ namespace ModernIPTVPlayer.Services.Streaming
                  return false;
             }
 
+            // YIELD PROTECTION:
+            // 1. NEVER yield if we are catching up (Deduplicating). We need to finish the job.
+            if (buffer.IsDeduplicating) return false;
+
+            // DYNAMIC TARGET: If we are Source Limited (Live Edge), we cannot build 30s buffer quickly.
+            // If we try to hold for 30s, we will starve the other stream.
+            // DETECTED: If fill rate is low (Source Limit), lower the target to 12s to allow rotation.
+            // NOTE: We rely on the caller passing 'isSourceLimited' or we infer it from recent stats?
+            // Actually, let's look up the stats.
+            var health = StreamDiagnostics.Instance.GetHealth(buffer.StreamId);
+            bool isSourceLimited = health != null && health.DebugInfo != null && health.DebugInfo.Contains("LIVE-EDGE");
+
+            // Adaptive Target: 30s for Bandwidth Limited (Bursty), 12s for Source Limited (Trickle)
+            double dynamicTarget = isSourceLimited ? 12.0 : TARGET_BUFFER_SECONDS;
+
+            // 2. GREEDY HOLD: Do not yield until we hit our TARGET, 
+            //    UNLESS it's a desperate emergency (someone else < 5s).
+            if (combinedBuffer < dynamicTarget && !anyoneStarving) return false;
+
             // FAST START OPTIMIZATION: If another stream has 0 buffer and we're healthy, yield immediately
-            // FIXED: Increased dwell requirement to 5.0s (was 2.0s) to allow meaningful buffer build-up
-            if (anyoneStarving && combinedBuffer > TARGET_BUFFER_SECONDS && dwellTime > 5.0)
+            // FIXED: Only yield if we are significantly above our dynamic target
+            if (anyoneStarving && combinedBuffer > dynamicTarget && dwellTime > 5.0)
             {
                 Debug.WriteLine($"[SlotSimulator:{buffer.StreamId}] Fast-Yielding for starved peer (Buffer: {combinedBuffer:F1}s > Target).");
                 return true;
