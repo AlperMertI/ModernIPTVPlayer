@@ -360,9 +360,28 @@ namespace ModernIPTVPlayer
 
         private async Task<long> GetPropertyLongSafe(string name)
         {
+            if (_mpvPlayer == null) return -1;
+            
             try
             {
-                return await _mpvPlayer.GetPropertyLongAsync(name);
+                // [FIX] Use String-based retrieval to avoid "MpvException: property unavailable" 
+                // which seems to crash GetPropertyToLong even with try-catch blocks in some environments.
+                string valStr = await _mpvPlayer.GetPropertyAsync(name);
+                
+                if (string.IsNullOrEmpty(valStr) || valStr == "N/A") return -1;
+
+                if (long.TryParse(valStr, NumberStyles.Any, CultureInfo.InvariantCulture, out long lVal))
+                {
+                    return lVal;
+                }
+                
+                // Fallback for floating point values returned as strings (e.g. "123.45")
+                if (double.TryParse(valStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double dVal))
+                {
+                    return (long)dVal;
+                }
+
+                return -1;
             }
             catch
             {
@@ -1893,12 +1912,19 @@ namespace ModernIPTVPlayer
 
             try
             {
-                long trackCount = await _mpvPlayer.GetPropertyLongAsync("track-list/count");
+                // Avoid direct GetPropertyLongAsync which crashes if property is ready
+                long trackCount = 0;
+                string sCount = await _mpvPlayer.GetPropertyAsync("track-list/count");
+                if (long.TryParse(sCount, out long tc)) trackCount = tc;
 
                 for (int i = 0; i < (int)trackCount; i++)
                 {
                     string type = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/type");
-                    long id = await _mpvPlayer.GetPropertyLongAsync($"track-list/{i}/id");
+                    
+                    // Safe ID retrieval
+                    long id = 0;
+                    string sId = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/id");
+                    if (long.TryParse(sId, out long pid)) id = pid;
                     bool selected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected");
                     string title = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/title");
                     string lang = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/lang");
