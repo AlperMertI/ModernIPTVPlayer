@@ -82,7 +82,7 @@ namespace ModernIPTVPlayer
         public string Resolution
         {
             get => _resolution;
-            set { _resolution = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); }
+            set { _resolution = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); OnPropertyChanged(nameof(ShowTechnicalBadges)); OnPropertyChanged(nameof(StatusToolTip)); }
         }
 
         private string _fps = "";
@@ -123,6 +123,9 @@ namespace ModernIPTVPlayer
                 OnPropertyChanged(nameof(IsOnline));
                 OnPropertyChanged(nameof(StatusColor));
                 OnPropertyChanged(nameof(IsOffline));
+                OnPropertyChanged(nameof(StatusToolTip));
+                OnPropertyChanged(nameof(ShowTechnicalBadges));
+                OnPropertyChanged(nameof(ShowStatusDot));
             }
         }
 
@@ -136,6 +139,7 @@ namespace ModernIPTVPlayer
                 OnPropertyChanged(nameof(Bitrate));
                 OnPropertyChanged(nameof(StatusColor));
                 OnPropertyChanged(nameof(IsUnstable));
+                OnPropertyChanged(nameof(StatusToolTip));
             }
         }
 
@@ -146,9 +150,9 @@ namespace ModernIPTVPlayer
                 if (IsOnline == false) return "#FF0000"; // Red
                 if (IsOnline == true)
                 {
-                    // Bitrate < 100kbps is extremely likely to be a black screen or static image (FAKE/STALE)
+                    // Bitrate < 200kbps is extremely likely to be a black screen or static image (FAKE/STALE)
                     // If Bitrate is 0, we assume it's a Live Stream where bitrate couldn't be calculated yet (GREEN)
-                    if (Bitrate > 0 && Bitrate < 100000) return "#FFCC00"; // Orange/Yellow
+                    if (Bitrate > 0 && Bitrate < 200000) return "#FFCC00"; // Orange/Yellow
                     return "#00FF00"; // Green
                 }
                 return "#888888"; // Gray
@@ -156,9 +160,31 @@ namespace ModernIPTVPlayer
         }
 
         public bool IsOffline => IsOnline == false;
-        public bool IsUnstable => IsOnline == true && Bitrate > 0 && Bitrate < 100000;
+        public bool IsUnstable => IsOnline == true && Bitrate > 0 && Bitrate < 200000;
 
-        public bool HasMetadata => !string.IsNullOrEmpty(Resolution);
+        public bool HasMetadata => !string.IsNullOrEmpty(Resolution) && 
+                                   Resolution != "Aborted" && 
+                                   Resolution != "Error" && 
+                                   Resolution != "No Data" && 
+                                   Resolution != "Unknown" && 
+                                   Resolution != "No ffprobe";
+
+        public bool ShowTechnicalBadges => IsOnline == true && HasMetadata;
+        public bool ShowStatusDot => IsOnline != null;
+
+        public string StatusToolTip
+        {
+            get
+            {
+                if (IsOnline == false) return "Kanal Çevrimdışı (Hata)";
+                if (IsOnline == true)
+                {
+                    if (IsUnstable) return $"Düşük Akış / Siyah Ekran Şüphesi ({Bitrate / 1000} kbps)";
+                    return $"Yayın Aktif (Çözünürlük: {Resolution}, Bitrate: {Bitrate / 1000} kbps)";
+                }
+                return "Durum Bilinmiyor (Analiz Bekleniyor)";
+            }
+        }
 
         public Visibility BoolToVis(bool val) => val ? Visibility.Visible : Visibility.Collapsed;
     }

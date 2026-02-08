@@ -15,6 +15,12 @@ namespace ModernIPTVPlayer
                 get => AppSettings.IsAutoCacheEnabled;
                 set => AppSettings.IsAutoCacheEnabled = value;
             }
+
+            public bool IsAutoProbeEnabled
+            {
+                get => AppSettings.IsAutoProbeEnabled;
+                set => AppSettings.IsAutoProbeEnabled = value;
+            }
         }
 
         public SettingsViewModel ViewModel { get; } = new();
@@ -37,6 +43,11 @@ namespace ModernIPTVPlayer
                     break;
                 }
             }
+
+            // Set AutoProbe Toggle
+            AutoProbeToggle.IsOn = AppSettings.IsAutoProbeEnabled;
+            // Set AutoCache Toggle (x:Bind handles two-way, but let's ensure initial state)
+            AutoCacheToggle.IsOn = AppSettings.IsAutoCacheEnabled;
         }
 
         private void IntervalCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -51,9 +62,14 @@ namespace ModernIPTVPlayer
             }
         }
 
+        private void AutoProbeToggle_Toggled(object sender, RoutedEventArgs e)
+        {
+            AppSettings.IsAutoProbeEnabled = AutoProbeToggle.IsOn;
+            ShowStatus(AutoProbeToggle.IsOn ? "Otomatik analiz açıldı." : "Otomatik analiz kapatıldı.");
+        }
+
         private void AutoCacheToggle_Toggled(object sender, RoutedEventArgs e)
         {
-            // Binding handles value update, we just show status
             ShowStatus(AutoCacheToggle.IsOn ? "Otomatik güncelleme açıldı." : "Otomatik güncelleme kapatıldı.");
         }
 

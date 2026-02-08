@@ -179,6 +179,63 @@
                                        VerticalAlignment="Center" Margin="0,0,12,0"/>
                             
                             <AppBarButton Icon="Refresh" Width="40" Height="40" ToolTipService.ToolTip="Yenile" Click="RefreshButton_Click"/>
+                            
+                            <AppBarButton Icon="Filter" Width="40" Height="40" ToolTipService.ToolTip="Filtrele">
+                                <AppBarButton.Flyout>
+                                    <Flyout>
+                                        <StackPanel Width="280" Spacing="20" Padding="8">
+                                            <TextBlock Text="Gelişmiş Filtreleme" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4"/>
+
+                                            <!-- Kalite Grubu -->
+                                            <StackPanel Spacing="10">
+                                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+                                                    <FontIcon Glyph="&#xE9D9;" FontSize="14" Foreground="#99FFFFFF"/>
+                                                    <TextBlock Text="Kanal Kalitesi" Foreground="#99FFFFFF" FontSize="12" FontWeight="Bold" CharacterSpacing="100"/>
+                                                </StackPanel>
+                                                <Grid ColumnDefinitions="*,*">
+                                                    <CheckBox x:Name="Filter4K" Content="4K / UHD" Click="FilterItem_Click" Grid.Column="0"/>
+                                                    <CheckBox x:Name="FilterFHD" Content="1080p (FHD)" Click="FilterItem_Click" Grid.Column="1"/>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="*,*">
+                                                    <CheckBox x:Name="FilterHD" Content="720p (HD)" Click="FilterItem_Click" Grid.Column="0"/>
+                                                    <CheckBox x:Name="FilterSD" Content="SD (Düşük)" Click="FilterItem_Click" Grid.Column="1"/>
+                                                </Grid>
+                                            </StackPanel>
+
+                                            <!-- Sağlık Grubu -->
+                                            <StackPanel Spacing="10">
+                                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+                                                    <FontIcon Glyph="&#xE9F5;" FontSize="14" Foreground="#99FFFFFF"/>
+                                                    <TextBlock Text="Yayın Sağlığı" Foreground="#99FFFFFF" FontSize="12" FontWeight="Bold" CharacterSpacing="100"/>
+                                                </StackPanel>
+                                                <CheckBox x:Name="FilterOnline" Content="Sadece Çevrimiçi Kanallar" Click="FilterItem_Click"/>
+                                                <CheckBox x:Name="FilterNoFakes" Content="Sorunsuz Yayınlar (Fakesiz)" Click="FilterItem_Click"/>
+                                            </StackPanel>
+
+                                            <!-- Teknik Grup -->
+                                            <StackPanel Spacing="10">
+                                                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+                                                    <FontIcon Glyph="&#xE772;" FontSize="14" Foreground="#99FFFFFF"/>
+                                                    <TextBlock Text="Teknik Özellikler" Foreground="#99FFFFFF" FontSize="12" FontWeight="Bold" CharacterSpacing="100"/>
+                                                </StackPanel>
+                                                <CheckBox x:Name="FilterHEVC" Content="HEVC (H.265) Codec" Click="FilterItem_Click"/>
+                                                <CheckBox x:Name="FilterHDR" Content="HDR Desteği" Click="FilterItem_Click"/>
+                                                <CheckBox x:Name="FilterHighFPS" Content="50+ FPS (Akıcı)" Click="FilterItem_Click"/>
+                                            </StackPanel>
+
+                                            <Border Height="1" Background="#1FFFFFFF" Margin="0,5,0,5"/>
+                                            
+                                            <Button Click="ResetFilters_Click" HorizontalAlignment="Stretch" Padding="8">
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <FontIcon Glyph="&#xE894;" FontSize="14"/>
+                                                    <TextBlock Text="Tüm Filtreleri Temizle"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </StackPanel>
+                                    </Flyout>
+                                </AppBarButton.Flyout>
+                            </AppBarButton>
+
                             <AppBarButton Icon="Sort" Width="40" Height="40" ToolTipService.ToolTip="Sırala" Click="SortButton_Click"/>
                             <controls:DownloadStatusButton />
                         </StackPanel>
@@ -240,8 +297,22 @@
 
                 <!-- Section Header (e.g. "Sports (54)") -->
                 <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="12" Margin="32,0,32,16">
-                    <TextBlock x:Name="HeaderTitle" Text="Tüm Kanallar" FontSize="18" FontWeight="SemiBold" Foreground="#F0F0F0"/>
-                    <TextBlock x:Name="HeaderCount" Text="(0)" FontSize="18" FontWeight="Normal" Foreground="#99FFFFFF"/>
+                    <TextBlock x:Name="HeaderTitle" Text="Tüm Kanallar" FontSize="18" FontWeight="SemiBold" Foreground="#F0F0F0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="HeaderCount" Text="(0)" FontSize="18" FontWeight="Normal" Foreground="#99FFFFFF" VerticalAlignment="Center"/>
+                    
+                    <Button x:Name="ScanCategoryButton" 
+                            Click="ScanCategory_Click"
+                            Background="Transparent" 
+                            BorderThickness="0" 
+                            Padding="8,4"
+                            Margin="4,0,0,0"
+                            CornerRadius="4"
+                            ToolTipService.ToolTip="Bu Kategorideki Tüm Kanalları Tara / Analiz Et">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <FontIcon Glyph="&#xE9F5;" FontSize="16" Foreground="#99FFFFFF"/>
+                            <TextBlock Text="Analiz Et" FontSize="13" Foreground="#99FFFFFF" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
 
                 <!-- Channels Grid (Dense Tiles) -->
@@ -252,6 +323,7 @@
                           ItemClick="ChannelGridView_ItemClick"
                           Padding="24,4,24,32"
                           SizeChanged="ChannelGridView_SizeChanged"
+                          Loaded="ChannelGridView_Loaded"
                           ContainerContentChanging="ChannelGridView_ContainerContentChanging"
                           ItemContainerStyle="{StaticResource ChannelTileStyle}">
                 <GridView.ItemTemplate>
@@ -280,8 +352,9 @@
                                              Fill="{x:Bind StatusColor, Mode=OneWay}" 
                                              Stroke="#222222" StrokeThickness="1"
                                              HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                             Margin="0,0,1,1"
-                                             Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}"/>
+                                             Margin="0,0,4,4"
+                                             Visibility="{x:Bind BoolToVis(ShowStatusDot), Mode=OneWay}"
+                                             ToolTipService.ToolTip="{x:Bind StatusToolTip, Mode=OneWay}"/>
                                 </Grid>
                             </Border>
 
@@ -311,15 +384,15 @@
                                               Visibility="{x:Bind BoolToVis(IsProbing), Mode=OneWay}"/>
                                 
                                 <!-- Resolution Badge -->
-                                <Border Background="#CC00B7C3" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}">
+                                <Border Background="#CC00B7C3" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(ShowTechnicalBadges), Mode=OneWay}">
                                     <TextBlock Text="{x:Bind Resolution, Mode=OneWay}" FontSize="10" FontWeight="Bold" Foreground="White"/>
                                 </Border>
                                 <!-- FPS Badge -->
-                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}">
+                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(ShowTechnicalBadges), Mode=OneWay}">
                                     <TextBlock Text="{x:Bind Fps, Mode=OneWay}" FontSize="10" Foreground="#DDDDDD"/>
                                 </Border>
                                 <!-- Codec Badge -->
-                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}">
+                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind BoolToVis(ShowTechnicalBadges), Mode=OneWay}">
                                     <TextBlock Text="{x:Bind Codec, Mode=OneWay}" FontSize="10" Foreground="#DDDDDD"/>
                                 </Border>
 

@@ -31,6 +31,8 @@ namespace ModernIPTVPlayer.Services
         private DateTime _lastSaveTime = DateTime.MinValue;
         private System.Threading.Timer _saveTimer;
         
+        public event EventHandler CacheCleared;
+
         // Initialization
         private TaskCompletionSource<bool> _initTcs = new TaskCompletionSource<bool>();
         private bool _isLoaded = false;
@@ -183,6 +185,15 @@ namespace ModernIPTVPlayer.Services
         // Manual Flush
         public async Task FlushAsync() => await SaveIfDirtyAsync();
 
+        public void Remove(string url)
+        {
+            if (_cache.TryRemove(url, out _))
+            {
+                _isDirty = true;
+                _saveTimer.Change(5000, -1);
+            }
+        }
+
         public void PruneOrphans(HashSet<string> validUrls)
         {
             var keys = _cache.Keys;
@@ -209,6 +220,7 @@ namespace ModernIPTVPlayer.Services
             _cache.Clear();
             _isDirty = true;
             await SaveIfDirtyAsync();
+            CacheCleared?.Invoke(this, EventArgs.Empty);
             CacheLogger.Info(CacheLogger.Category.Probe, "Cache Cleared");
         }
     }

@@ -44,6 +44,9 @@ namespace ModernIPTVPlayer
         private bool _isWorkerRunning = false;
         private bool _canAutoProbe = false;
 
+        // SCROLL-BASED PROBING
+        private ScrollViewer? _channelScrollViewer;
+
         public LiveTVPage()
         {
             this.InitializeComponent();
@@ -54,6 +57,108 @@ namespace ModernIPTVPlayer
             
             // Start Worker
             _ = StartProbingWorker();
+
+
+            // Subscribe to Cache clearing
+            Services.ProbeCacheService.Instance.CacheCleared += OnCacheCleared;
+        }
+
+        // ==========================================
+        // SCROLL-BASED VISIBILITY DETECTION
+        // ==========================================
+
+        private T? FindChildOfType<T>(DependencyObject parent) where T : DependencyObject
+        {
+            for (int i = 0; i < Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(parent, i);
+                if (child is T result) return result;
+                var nested = FindChildOfType<T>(child);
+                if (nested != null) return nested;
+            }
+            return null;
+        }
+
+        private void ChannelGridView_Loaded(object sender, RoutedEventArgs e)
+        {
+            _channelScrollViewer = FindChildOfType<ScrollViewer>(ChannelGridView);
+            if (_channelScrollViewer != null)
+            {
+                _channelScrollViewer.ViewChanged += ChannelScrollViewer_ViewChanged;
+            }
+            // Initial probe for items visible on first load
+            QueueVisibleItems();
+        }
+
+        private void ChannelScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+        {
+            // Only act when scrolling STOPS (natural debounce)
+            if (!e.IsIntermediate)
+            {
+                QueueVisibleItems();
+            }
+        }
+
+        private void QueueVisibleItems()
+        {
+            if (!_canAutoProbe || _channelScrollViewer == null) return;
+            if (ChannelGridView.ItemsSource is not List<LiveStream> list || list.Count == 0) return;
+
+            double offset = _channelScrollViewer.VerticalOffset;
+            double viewportHeight = _channelScrollViewer.ViewportHeight;
+
+            // Get dimensions
+            double itemHeight = 80; // Template Height (68) + margins
+            double itemWidth = _itemsWrapGrid?.ItemWidth ?? 300;
+            double gridWidth = Math.Max(1, ChannelGridView.ActualWidth - 48); // minus padding
+
+            int itemsPerRow = Math.Max(1, (int)(gridWidth / itemWidth));
+
+            // Calculate visible row range
+            int firstRow = (int)(offset / itemHeight);
+            int lastRow = (int)((offset + viewportHeight) / itemHeight) + 1; // +1 for partial
+
+            // Calculate item index range
+            int firstIndex = Math.Max(0, firstRow * itemsPerRow);
+            int lastIndex = Math.Min(list.Count, (lastRow + 1) * itemsPerRow);
+
+            // Queue items in visible range
+            lock (_probingQueue)
+            {
+                for (int i = firstIndex; i < lastIndex; i++)
+                {
+                    var stream = list[i];
+                    if (stream.IsOnline == null && !stream.IsProbing && !_queuedUrls.Contains(stream.StreamUrl))
+                    {
+                        _probingQueue.Enqueue(stream);
+                        _queuedUrls.Add(stream.StreamUrl);
+                    }
+                }
+            }
+        }
+
+
+        private void OnCacheCleared(object? sender, EventArgs e)
+        {
+            // Reset metadata for all loaded channels so UI updates immediately
+            DispatcherQueue.TryEnqueue(() => 
+            {
+                _probingQueue.Clear();
+                _queuedUrls.Clear();
+
+                foreach (var s in _allChannels)
+                {
+                    s.Resolution = "";
+                    s.Fps = "";
+                    s.Codec = "";
+                    s.Bitrate = 0;
+                    s.IsHdr = false;
+                    s.IsOnline = null; 
+                }
+                
+                // Re-trigger probing for the current view
+                QueueVisibleItems();
+            });
         }
 
         private void StartClock()
@@ -88,7 +193,22 @@ namespace ModernIPTVPlayer
 
             if (_loginInfo != null)
             {
-                if (_allCategories.Count > 0) return; // Already loaded same playlist
+                // Reset CTS if it was cancelled by previous navigation
+                if (_workerCts.IsCancellationRequested)
+                {
+                    _workerCts.Dispose();
+                    _workerCts = new CancellationTokenSource();
+                }
+
+                // Ensure worker is running
+                _ = StartProbingWorker();
+
+                if (_allCategories.Count > 0) 
+                {
+                    // Re-trigger probing for visible items when coming back
+                    // TriggerVisibleProbe(); // REMOVED: Managed by view updates
+                    return; 
+                }
 
                 if (!string.IsNullOrEmpty(_loginInfo.Host) && 
                     !string.IsNullOrEmpty(_loginInfo.Username) && 
@@ -399,10 +519,24 @@ namespace ModernIPTVPlayer
             {
                 // Filter categories matching query
                 var filteredCats = _allCategories.Where(c => c.CategoryName.ToLowerInvariant().Contains(_searchQuery)).ToList();
-                // Ensure "All Channels" is always visible or integrated?
-                // Logic: If I type "Spor", I want to see "Spor" category.
                 CategoryListView.ItemsSource = filteredCats;
             }
+        }
+
+        private void FilterItem_Click(object sender, RoutedEventArgs e) => UpdateChannelList();
+
+        private void ResetFilters_Click(object sender, RoutedEventArgs e)
+        {
+            Filter4K.IsChecked = false;
+            FilterFHD.IsChecked = false;
+            FilterHD.IsChecked = false;
+            FilterSD.IsChecked = false;
+            FilterOnline.IsChecked = false;
+            FilterNoFakes.IsChecked = false;
+            FilterHEVC.IsChecked = false;
+            FilterHDR.IsChecked = false;
+            FilterHighFPS.IsChecked = false;
+            UpdateChannelList();
         }
 
         private void UpdateChannelList()
@@ -435,6 +569,57 @@ namespace ModernIPTVPlayer
                 source = source.Where(c => c.Name != null && c.Name.ToLowerInvariant().Contains(_searchQuery));
             }
 
+            // ==========================================
+            // APPLY ADVANCED FILTERS
+            // ==========================================
+            
+            // 1. Quality Filters
+            bool q4k = Filter4K.IsChecked ?? false;
+            bool qfhd = FilterFHD.IsChecked ?? false;
+            bool qhd = FilterHD.IsChecked ?? false;
+            bool qsd = FilterSD.IsChecked ?? false;
+
+            if (q4k || qfhd || qhd || qsd)
+            {
+                source = source.Where(c => 
+                    (q4k && (c.Resolution.Contains("4K") || c.Resolution.Contains("2160") || c.Resolution.Contains("3840"))) ||
+                    (qfhd && c.Resolution.Contains("1080")) ||
+                    (qhd && c.Resolution.Contains("720")) ||
+                    (qsd && (c.Resolution.Contains("576") || c.Resolution.Contains("480") || c.Resolution.Contains("SD")))
+                );
+            }
+
+            // 2. Health Filters
+            if (FilterOnline.IsChecked ?? false)
+            {
+                source = source.Where(c => c.IsOnline == true);
+            }
+            if (FilterNoFakes.IsChecked ?? false)
+            {
+                source = source.Where(c => c.IsOnline == true && !c.IsUnstable);
+            }
+
+            // 3. Technical Filters
+            if (FilterHEVC.IsChecked ?? false)
+            {
+                source = source.Where(c => c.Codec.ToLower().Contains("hevc") || c.Codec.ToLower().Contains("h265"));
+            }
+            if (FilterHDR.IsChecked ?? false)
+            {
+                source = source.Where(c => c.IsHdr);
+            }
+            if (FilterHighFPS.IsChecked ?? false)
+            {
+                source = source.Where(c => {
+                    if (string.IsNullOrEmpty(c.Fps)) return false;
+                    // Remove " fps" suffix and parse safely
+                    string cleanFps = c.Fps.Replace(" fps", "", StringComparison.OrdinalIgnoreCase).Trim();
+                    if (double.TryParse(cleanFps, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fpsValue)) 
+                        return fpsValue >= 49.0;
+                    return false;
+                });
+            }
+
             var resultList = source.ToList();
 
             // Apply Sorting
@@ -452,9 +637,12 @@ namespace ModernIPTVPlayer
 
             ChannelGridView.ItemsSource = resultList;
             
-            // Auto-Probe Threshold (User rule: disabled if > 50 items)
-            _canAutoProbe = resultList.Count > 0 && resultList.Count <= 50;
+            // Auto-Probe is now always enabled (Viewport based)
+            _canAutoProbe = AppSettings.IsAutoProbeEnabled;
 
+            // Empty State
+            EmptyStatePanel.Visibility = resultList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            
             // Empty State
             EmptyStatePanel.Visibility = resultList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -536,6 +724,9 @@ namespace ModernIPTVPlayer
             _itemsWrapGrid.ItemWidth = newItemWidth;
             
             // ItemHeight is fixed at 80 in XAML.
+            
+            // Re-queue visible items after resize
+            QueueVisibleItems();
         }
 
         private void LoadDummyRecents()
@@ -565,19 +756,39 @@ namespace ModernIPTVPlayer
         
         private void ChannelGridView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
         {
-            if (!_canAutoProbe) return; // Automatic scanning disabled for large categories
+            // Now handled by ScrollViewer.ViewChanged + QueueVisibleItems
+            // This event is no longer used for probing but kept for potential future use
+        }
+    
 
-            if (args.Item is LiveStream stream)
+        private void ScanCategory_Click(object sender, RoutedEventArgs e)
+        {
+            if (ChannelGridView.ItemsSource is IEnumerable<LiveStream> currentList)
             {
-                // Only queue if: 
-                // 1. No metadata yet
-                // 2. Not currently probing
-                // 3. Not already in queue (dedup)
-                if (!stream.HasMetadata && !stream.IsProbing && !_queuedUrls.Contains(stream.StreamUrl))
+                // Clear existing metadata and physical cache for these specific URLs to force a fresh scan
+                foreach (var stream in currentList)
                 {
-                    _probingQueue.Enqueue(stream);
-                    _queuedUrls.Add(stream.StreamUrl);
+                    // Remove from Physical Cache
+                    Services.ProbeCacheService.Instance.Remove(stream.StreamUrl);
+
+                    // Reset UI State
+                    stream.Resolution = "";
+                    stream.Fps = "";
+                    stream.Codec = "";
+                    stream.Bitrate = 0;
+                    stream.IsHdr = false;
+                    stream.IsOnline = null; 
+
+                    // Queue for analysis (Worker will now pick them up)
+                    if (!_queuedUrls.Contains(stream.StreamUrl))
+                    {
+                        _probingQueue.Enqueue(stream);
+                        _queuedUrls.Add(stream.StreamUrl);
+                    }
                 }
+
+                // Ensure worker is running
+                _ = StartProbingWorker();
             }
         }
 
@@ -585,6 +796,13 @@ namespace ModernIPTVPlayer
         {
             if (_isWorkerRunning) return;
             _isWorkerRunning = true;
+
+            // Reset CTS if it was cancelled by previous navigation
+            if (_workerCts.IsCancellationRequested)
+            {
+                _workerCts.Dispose();
+                _workerCts = new CancellationTokenSource();
+            }
 
             if (_prober == null) _prober = new FFmpegProber();
 
@@ -604,17 +822,39 @@ namespace ModernIPTVPlayer
         {
             while (!ct.IsCancellationRequested)
             {
-                // Dequeue Item
-                if (_probingQueue.TryDequeue(out LiveStream item))
+                LiveStream? item = null;
+                bool hasItem = false;
+
+                lock (_probingQueue)
+                {
+                    hasItem = _probingQueue.TryDequeue(out item);
+                }
+
+                if (hasItem && item != null)
                 {
                     _queuedUrls.Remove(item.StreamUrl); 
 
+                    // Check if auto-probing is globally disabled 
+                    // (BUT we allow it if the queue was manually filled via ScanCategory)
+                    // Actually, if it's in the queue, we generally process it.
+                    // Let's just check the setting if we are NOT in a ScanCategory context? 
+                    // No, usually if user toggles it OFF, they want it to stop.
+                    if (!AppSettings.IsAutoProbeEnabled) 
+                    {
+                        // Minor hack: if the item was just reset (IsOnline == null), 
+                        // it might be a manual ScanCategory request, so we let it through.
+                        if (item.IsOnline != null) 
+                        {
+                            await Task.Delay(500, ct); 
+                            continue;
+                        }
+                    }
+
                     // Double check before processing:
-                    // 1. Manual check (HasMetadata/IsProbing)
-                    // 2. Threshold check (In case context changed)
-                    // 3. Relevancy check (Still in current view?)
-                    if (item.HasMetadata || item.IsProbing || !_canAutoProbe) continue;
-                    
+                    // 2. CHECK: Basic validation
+                    // If metadata arrived while queued, skip.
+                    if (item.HasMetadata || item.IsProbing) continue;
+
                     var currentList = ChannelGridView.ItemsSource as List<LiveStream>;
                     if (currentList == null || !currentList.Contains(item)) continue;
 
@@ -743,7 +983,5 @@ namespace ModernIPTVPlayer
         {
             MainSplitView.IsPaneOpen = !MainSplitView.IsPaneOpen;
         }
-
-
     }
 }

@@ -139,5 +139,11 @@ namespace ModernIPTVPlayer
             set => Settings.Values[LastSeriesCategoryKey] = value;
         }
 
+        private const string IsAutoProbeEnabledKey = "IsAutoProbeEnabled";
+        public static bool IsAutoProbeEnabled
+        {
+            get => (Settings.Values[IsAutoProbeEnabledKey] as bool?) ?? true;
+            set => Settings.Values[IsAutoProbeEnabledKey] = value;
+        }
     }
 }
