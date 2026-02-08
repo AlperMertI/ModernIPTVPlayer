@@ -717,7 +717,7 @@ namespace ModernIPTVPlayer
                 try
                 {
                     stream.IsProbing = true;
-                    var result = await _prober.ProbeAsync(stream.StreamUrl);
+                    var result = await _prober.ProbeAsync(stream.StreamUrl, force: true);
                     
                     stream.Resolution = result.Res;
                     stream.Fps = result.Fps;

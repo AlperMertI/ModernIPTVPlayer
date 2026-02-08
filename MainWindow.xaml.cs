@@ -3,6 +3,9 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using System;
 using System.Linq;
+using System.Numerics;
+using Microsoft.UI.Composition;
+using Microsoft.UI.Xaml.Hosting;
 
 namespace ModernIPTVPlayer
 {
@@ -23,6 +26,45 @@ namespace ModernIPTVPlayer
             // Default navigation
             NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>().First();
             ContentFrame.Navigate(typeof(LoginPage));
+
+            NavView.Loaded += (s, e) => AnimateSidebarWaterfall();
+        }
+
+        private void AnimateSidebarWaterfall()
+        {
+            var compositor = ElementCompositionPreview.GetElementVisual(NavView).Compositor;
+            var items = NavView.MenuItems.OfType<NavigationViewItem>().ToList();
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                var item = items[i];
+                var visual = ElementCompositionPreview.GetElementVisual(item);
+                ElementCompositionPreview.SetIsTranslationEnabled(item, true);
+
+                // Initial State
+                visual.Opacity = 0;
+                visual.Properties.InsertVector3("Translation", new Vector3(-20, 0, 0));
+
+                // Slide Animation
+                var slide = compositor.CreateVector3KeyFrameAnimation();
+                slide.InsertKeyFrame(1f, new Vector3(0, 0, 0));
+                slide.Duration = TimeSpan.FromMilliseconds(800);
+                slide.DelayTime = TimeSpan.FromMilliseconds(i * 80);
+                
+                // Spring-like easing
+                var cubic = compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1f));
+                slide.IterationBehavior = AnimationIterationBehavior.Count;
+                slide.IterationCount = 1;
+
+                // Fade Animation
+                var fade = compositor.CreateScalarKeyFrameAnimation();
+                fade.InsertKeyFrame(1f, 1f);
+                fade.Duration = TimeSpan.FromMilliseconds(600);
+                fade.DelayTime = TimeSpan.FromMilliseconds(i * 80);
+
+                visual.StartAnimation("Translation", slide);
+                visual.StartAnimation("Opacity", fade);
+            }
         }
 
         private void NavView_ItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)

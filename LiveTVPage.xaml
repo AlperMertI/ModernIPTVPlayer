@@ -280,7 +280,7 @@
                                              Fill="{x:Bind StatusColor, Mode=OneWay}" 
                                              Stroke="#222222" StrokeThickness="1"
                                              HorizontalAlignment="Right" VerticalAlignment="Bottom"
-                                             Margin="0,0,-2,-2"
+                                             Margin="0,0,1,1"
                                              Visibility="{x:Bind BoolToVis(HasMetadata), Mode=OneWay}"/>
                                 </Grid>
                             </Border>

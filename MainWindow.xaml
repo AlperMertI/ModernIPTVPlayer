@@ -42,19 +42,19 @@
 
                 <NavigationViewItem Content="Canlı TV" Tag="LiveTVPage">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE7F4;"/> <!-- TV Monitor -->
+                        <FontIcon Glyph="&#xE714;"/> <!-- TV (Klasik) -->
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <NavigationViewItem Content="Filmler" Tag="MoviesPage">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE8B2;"/> <!-- Movies -->
+                        <FontIcon Glyph="&#xE8B2;"/> <!-- Movies / Film Strip -->
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
                 <NavigationViewItem Content="Diziler" Tag="SeriesPage">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE8F1;"/> <!-- Library -->
+                        <FontIcon Glyph="&#xE8DA;"/> <!-- TV Show / Series -->
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
 
@@ -62,7 +62,7 @@
 
                 <NavigationViewItem Content="Çoklu Ekran" Tag="MultiPlayerPage">
                     <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE740;"/> <!-- Window/Grid View (Using Resize icon for now or Tiles) -->
+                        <FontIcon Glyph="&#xF164;"/> <!-- Multi Window -->
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>

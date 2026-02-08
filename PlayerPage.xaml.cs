@@ -30,6 +30,7 @@ namespace ModernIPTVPlayer
     {
 
         private MpvPlayer? _mpvPlayer;
+        private Compositor _compositor;
         private bool _useMpvPlayer = true;
         private string _streamUrl = string.Empty;
         private PlayerNavigationArgs _navArgs;
@@ -68,6 +69,7 @@ namespace ModernIPTVPlayer
         public PlayerPage()
         {
             this.InitializeComponent();
+            _compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
 
             // UI Audio Feedback Setup
             this.ElementSoundMode = global::Microsoft.UI.Xaml.ElementSoundMode.Off;
@@ -227,90 +229,90 @@ namespace ModernIPTVPlayer
                 // ---------- STATS UPDATES (Conditional & Cached) ----------
                 // ---------- STATS UPDATES (Conditional & Cached) ----------
                 
-                // 1. Static Metadata (Fetched once automatically on start)
-                if (!_isStaticMetadataFetched)
+                // 1. Static Metadata (Fetched once automatically on start, then refreshed occasionally)
+                int metadataRefreshTicks = 20; // Every 10 seconds (20 * 500ms)
+                bool shouldRefreshMetadata = !_isStaticMetadataFetched || (DateTime.Now.Second % 10 == 0 && _isPageLoaded);
+
+                if (shouldRefreshMetadata)
                 {
                     // Resolution consolidation
                     var wSize = await _mpvPlayer.GetPropertyAsync("video-params/w");
                     var hSize = await _mpvPlayer.GetPropertyAsync("video-params/h");
-                    // Only proceed if we actually have valid metadata (wSize not empty)
-                    if (!string.IsNullOrEmpty(wSize) && wSize != "N/A")
+                    
+                    if (!string.IsNullOrEmpty(wSize) && wSize != "N/A" && wSize != "0")
                     {
-                        if (string.IsNullOrEmpty(wSize) || wSize == "N/A") {
-                            wSize = await _mpvPlayer.GetPropertyAsync("width");
-                            hSize = await _mpvPlayer.GetPropertyAsync("height");
-                        }
-                        _cachedResolution = (!string.IsNullOrEmpty(wSize) && wSize != "N/A") ? $"{wSize}x{hSize}" : "-";
-
+                        string newRes = $"{wSize}x{hSize}";
+                        
                         // FPS consolidation
                         var fpsValStr = await _mpvPlayer.GetPropertyAsync("estimated-fps");
                         if (string.IsNullOrEmpty(fpsValStr) || fpsValStr == "N/A") fpsValStr = await _mpvPlayer.GetPropertyAsync("container-fps");
+                        
+                        string newFps = "- fps";
                         if (double.TryParse(fpsValStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double fv))
                         {
-                            _cachedFps = $"{fv:F2} fps";
-                            if (_nativeMonitorFps > 0)
-                            {
-                                 _cachedFps += $" / {_nativeMonitorFps}Hz";
-                            }
-                        }
-                        else
-                        {
-                            _cachedFps = "- fps";
+                            newFps = $"{fv:F2} fps";
                         }
 
-                        // Codec (Video & Audio)
-                        string rawCodec = await _mpvPlayer.GetPropertyAsync("video-codec");
-                        _cachedCodec = GetShortCodecName(rawCodec);
-
-                        string audioCodec = await _mpvPlayer.GetPropertyAsync("audio-codec");
-                        string audioChannels = await _mpvPlayer.GetPropertyAsync("audio-params/hr-channels");
-                        if (string.IsNullOrEmpty(audioChannels) || audioChannels == "N/A")
-                            audioChannels = await _mpvPlayer.GetPropertyAsync("audio-out-params/channels");
-                        
-                        _cachedAudio = $"{GetShortCodecName(audioCodec).ToUpper()} ({audioChannels})";
-                        
-                        _cachedColorspace = await _mpvPlayer.GetPropertyAsync("video-params/colormatrix");
-                        if (string.IsNullOrEmpty(_cachedColorspace) || _cachedColorspace == "N/A") _cachedColorspace = "-";
-
-                        // HDR / Tone Mapping
-                        string hdrStatus = await _mpvPlayer.GetPropertyAsync("video-out-params/sig-peak");
-                        string gamma = await _mpvPlayer.GetPropertyAsync("video-out-params/gamma");
-                        if (!string.IsNullOrEmpty(hdrStatus) && hdrStatus != "N/A" && double.TryParse(hdrStatus, NumberStyles.Any, CultureInfo.InvariantCulture, out double peak) && peak > 1.0)
-                            _cachedHdr = $"HDR ({peak:F1} nits)";
-                        else
-                            _cachedHdr = $"SDR ({gamma})";
-
-                        // Update Stats Overlay Texts (even if hidden, ready for show)
-                        TxtResolution.Text = _cachedResolution;
-                        TxtFps.Text = _cachedFps;
-                        TxtCodec.Text = _cachedCodec.ToUpper();
-                        TxtAudioCodec.Text = _cachedAudio;
-                        TxtColorspace.Text = _cachedColorspace;
-                        TxtHdr.Text = _cachedHdr;
-
-                        _isStaticMetadataFetched = true;
-                        
-                        // Show Info Pills (Once)
-                        ShowInfoPills();
-
-                        // [CACHE UPDATE] Capture playback metadata for Global Cache
-                        // This allows LiveTVPage badges to appear automatically after watching a channel
-                        try 
+                        // If something meaningful changed or it's the first fetch, update UI and CACHE
+                        if (newRes != _cachedResolution || newFps != _cachedFps || !_isStaticMetadataFetched)
                         {
-                            bool isHdr = _cachedHdr.Contains("HDR");
-                            string simpleFps = _cachedFps.Split(' ')[0] + " fps"; // Extract "50.00 fps" from complex string
+                            _cachedResolution = newRes;
+                            _cachedFps = newFps;
+                            if (_nativeMonitorFps > 0) _cachedFps += $" / {_nativeMonitorFps}Hz";
+
+                            // Codec (Video & Audio)
+                            string rawCodec = await _mpvPlayer.GetPropertyAsync("video-codec");
+                            _cachedCodec = GetShortCodecName(rawCodec);
+
+                            string audioCodec = await _mpvPlayer.GetPropertyAsync("audio-codec");
+                            string audioChannels = await _mpvPlayer.GetPropertyAsync("audio-params/hr-channels");
+                            if (string.IsNullOrEmpty(audioChannels) || audioChannels == "N/A")
+                                audioChannels = await _mpvPlayer.GetPropertyAsync("audio-out-params/channels");
                             
-                            // Try to get bitrate metadata, default to 0 if unavailable
-                            long bitrate = 0;
-                            /* Bitrate metadata is notoriously unreliable in live streams via MPV properties. 
-                               We'll skip it for now or assume 0, as Res/Codec are the important ones. */
+                            _cachedAudio = $"{GetShortCodecName(audioCodec).ToUpper()} ({audioChannels})";
+                            
+                            _cachedColorspace = await _mpvPlayer.GetPropertyAsync("video-params/colormatrix");
+                            if (string.IsNullOrEmpty(_cachedColorspace) || _cachedColorspace == "N/A") _cachedColorspace = "-";
 
-                            Services.ProbeCacheService.Instance.Update(_streamUrl, _cachedResolution, simpleFps, _cachedCodec, bitrate, isHdr);
-                            System.Diagnostics.Debug.WriteLine($"[PlayerPage] Updated ProbeCache for {_streamUrl}");
-                        }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[PlayerPage] Failed to update ProbeCache: {ex.Message}");
+                            // HDR / Tone Mapping
+                            string hdrStatus = await _mpvPlayer.GetPropertyAsync("video-out-params/sig-peak");
+                            string gamma = await _mpvPlayer.GetPropertyAsync("video-out-params/gamma");
+                            if (!string.IsNullOrEmpty(hdrStatus) && hdrStatus != "N/A" && double.TryParse(hdrStatus, NumberStyles.Any, CultureInfo.InvariantCulture, out double peak) && peak > 1.0)
+                                _cachedHdr = $"HDR ({peak:F1} nits)";
+                            else
+                                _cachedHdr = $"SDR ({gamma})";
+
+                            // Update UI
+                            TxtResolution.Text = _cachedResolution;
+                            TxtFps.Text = _cachedFps;
+                            TxtCodec.Text = _cachedCodec.ToUpper();
+                            TxtAudioCodec.Text = _cachedAudio;
+                            TxtColorspace.Text = _cachedColorspace;
+                            TxtHdr.Text = _cachedHdr;
+                            
+                            PillResolution.Text = _cachedResolution;
+                            PillFps.Text = _cachedFps;
+                            PillCodec.Text = _cachedCodec;
+
+                            _isStaticMetadataFetched = true;
+                            ShowInfoPills();
+
+                            // [CACHE UPDATE] Update global cache with real playback data
+                            try 
+                            {
+                                bool isHdr = _cachedHdr.Contains("HDR");
+                                string simpleFps = _cachedFps.Split(' ')[0] + " fps";
+                                
+                                // Fetch real-time bitrate from demuxer if possible, or use current video-bitrate
+                                string brStr = await _mpvPlayer.GetPropertyAsync("video-bitrate");
+                                long bitrate = 0;
+                                if (double.TryParse(brStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double brVal)) 
+                                    bitrate = (long)brVal;
+
+                                Services.ProbeCacheService.Instance.Update(_streamUrl, _cachedResolution, simpleFps, _cachedCodec, bitrate, isHdr);
+                                Debug.WriteLine($"[PlayerPage] Metadata Updated in Global Cache for {_streamUrl} ({_cachedResolution})");
+                            }
+                            catch (Exception ex) { Debug.WriteLine($"[PlayerPage] Global Cache Update Failed: {ex.Message}"); }
                         }
                     }
                 }
@@ -757,6 +759,7 @@ namespace ModernIPTVPlayer
                         }
 
                         _statsTimer?.Start();
+                        SetupProfessionalAnimations();
                     }
                     catch (Exception ex)
                     {
@@ -866,11 +869,13 @@ namespace ModernIPTVPlayer
         {
             e.Handled = true;
             _isGestureTarget = false;
+            ResetCursorTimer();
         }
 
         private void InteractiveControl_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {
             e.Handled = true;
+            ResetCursorTimer();
         }
 
         private async void LiveButton_Click(object sender, RoutedEventArgs e)
@@ -1080,11 +1085,13 @@ namespace ModernIPTVPlayer
             _isDraggingSpeedActive = false;
             _dragStartPoint = e.GetCurrentPoint(SpeedOverlay).Position;
             _dragStartOffset = SpeedScrollViewer.VerticalOffset;
+            ResetCursorTimer();
         }
 
         private void SpeedOverlay_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {
             if (SpeedOverlay.Visibility != Visibility.Visible) return;
+            ResetCursorTimer();
 
             var ptr = e.GetCurrentPoint(SpeedOverlay);
             var currentPoint = ptr.Position;
@@ -1449,15 +1456,15 @@ namespace ModernIPTVPlayer
             }
             else if (volume < 33)
             {
-                VolumeIcon.Glyph = "\uE993"; // Low
+                VolumeIcon.Glyph = "\uE993"; // Volume1 (Thin waves)
             }
             else if (volume < 66)
             {
-                VolumeIcon.Glyph = "\uE994"; // Mid
+                VolumeIcon.Glyph = "\uE994"; // Volume2 (Semi-waves)
             }
             else
             {
-                VolumeIcon.Glyph = "\uE995"; // High
+                VolumeIcon.Glyph = "\uE995"; // Volume3 (Full waves)
             }
 
             // Overlay Mute Button: Action Indicator (What will happen when clicked?)
@@ -1503,7 +1510,7 @@ namespace ModernIPTVPlayer
                 await _mpvPlayer.SetPropertyAsync("pause", newState ? "yes" : "no");
                 
                 // Update Icon: If paused(true) -> Show Play Icon, If playing(false) -> Show Pause Icon
-                PlayPauseIcon.Glyph = newState ? "\uE768" : "\uE769";
+                PlayPauseIcon.Glyph = newState ? "\uF5B0" : "\uF8AE"; // PlaySolid / PauseSolid
             }
             catch { }
         }
@@ -1683,8 +1690,14 @@ namespace ModernIPTVPlayer
 
         private void CursorTimer_Tick(object? sender, object e)
         {
-             // [FIX] Don't hide controls if user is interacting with the seekbar!
+             // [FIX] Don't hide controls if user is interacting with the seekbar or if a panel is open!
              if (_isDragging) return;
+             if (TracksOverlay.Visibility == Visibility.Visible || 
+                 VolumeOverlay.Visibility == Visibility.Visible || 
+                 SpeedOverlay.Visibility == Visibility.Visible)
+             {
+                 return;
+             }
 
              HideControls();
         }
@@ -2134,6 +2147,209 @@ namespace ModernIPTVPlayer
                 // 4. NAVIGATE
                 Frame.Navigate(typeof(MultiPlayerPage), _navArgs);
             }
+        }
+        private void SetupProfessionalAnimations()
+        {
+            // 1. Ghosting Trails for Rewind/FF
+            SetupHighFidelityGhosting(RewindButton, RewindIconVisual, RewindGhost1, RewindGhost2, -15f);
+            SetupHighFidelityGhosting(FastForwardButton, FastForwardIconVisual, FFGhost1, FFGhost2, 15f);
+
+            // 2. Anticipation Pulse for Play/Pause
+            SetupAnticipationPulse(PlayPauseButton, PlayPauseIcon);
+            
+            // 3. Alive System: Segmented Waves for Volume
+            SetupSegmentedWaveEffect(VolumeButton, VolumeWave1, VolumeWave2);
+            
+            // 4. Alive System: Magnetic Glow
+            SetupMagneticGlow(PlayPauseButton, PlayPauseGlow);
+
+            // 5. Magnetic Hover for Main Buttons
+            var mainButtons = new Button[] { VolumeButton, MultiViewButton, TracksButton, AspectRatioButton, InfoButton };
+            foreach (var btn in mainButtons)
+            {
+                if (btn != null) SetupAnticipationPulse(btn, (FrameworkElement)btn.Content);
+            }
+
+            // 6. Global Organic Breathing
+            ApplyOrganicBreathing(PlayPauseIcon);
+            ApplyOrganicBreathing(VolumeIcon);
+        }
+
+        private void SetupHighFidelityGhosting(Button btn, FrameworkElement mainIcon, FrameworkElement ghost1, FrameworkElement ghost2, float offset)
+        {
+            var compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
+            var mainVisual = ElementCompositionPreview.GetElementVisual(mainIcon);
+            var g1Visual = ElementCompositionPreview.GetElementVisual(ghost1);
+            var g2Visual = ElementCompositionPreview.GetElementVisual(ghost2);
+
+            mainIcon.SizeChanged += (s, e) => {
+                var center = new Vector3((float)mainIcon.ActualWidth / 2, (float)mainIcon.ActualHeight / 2, 0);
+                mainVisual.CenterPoint = center;
+                g1Visual.CenterPoint = center;
+                g2Visual.CenterPoint = center;
+            };
+
+            btn.PointerEntered += (s, e) => {
+                // Main Icon: Slight Overshoot
+                var mainPop = compositor.CreateVector3KeyFrameAnimation();
+                mainPop.InsertKeyFrame(0.5f, new Vector3(1.2f, 1.2f, 1f));
+                mainPop.InsertKeyFrame(1f, new Vector3(1.1f, 1.1f, 1f));
+                mainPop.Duration = TimeSpan.FromMilliseconds(400);
+                mainVisual.StartAnimation("Scale", mainPop);
+
+                // Ghost 1: Staggered Trail
+                var trail1 = compositor.CreateVector3KeyFrameAnimation();
+                trail1.InsertKeyFrame(0.5f, new Vector3(offset, 0, 0));
+                trail1.InsertKeyFrame(1f, new Vector3(0, 0, 0));
+                trail1.Duration = TimeSpan.FromMilliseconds(500);
+                g1Visual.StartAnimation("Offset", trail1);
+                
+                var opac1 = compositor.CreateScalarKeyFrameAnimation();
+                opac1.InsertKeyFrame(0.3f, 0.5f);
+                opac1.InsertKeyFrame(1f, 0f);
+                opac1.Duration = TimeSpan.FromMilliseconds(500);
+                g1Visual.StartAnimation("Opacity", opac1);
+
+                // Ghost 2: Deeper Stagger
+                var trail2 = compositor.CreateVector3KeyFrameAnimation();
+                trail2.InsertKeyFrame(0.7f, new Vector3(offset * 2, 0, 0));
+                trail2.InsertKeyFrame(1f, new Vector3(0, 0, 0));
+                trail2.Duration = TimeSpan.FromMilliseconds(700);
+                g2Visual.StartAnimation("Offset", trail2);
+
+                var opac2 = compositor.CreateScalarKeyFrameAnimation();
+                opac2.InsertKeyFrame(0.3f, 0.3f);
+                opac2.InsertKeyFrame(1f, 0f);
+                opac2.Duration = TimeSpan.FromMilliseconds(700);
+                g2Visual.StartAnimation("Opacity", opac2);
+            };
+
+            btn.PointerExited += (s, e) => {
+                var reset = compositor.CreateSpringVector3Animation();
+                reset.FinalValue = new Vector3(1f, 1f, 1f);
+                reset.DampingRatio = 0.6f;
+                mainVisual.StartAnimation("Scale", reset);
+            };
+        }
+
+        private void SetupAnticipationPulse(Button btn, FrameworkElement content)
+        {
+            var compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
+            var visual = ElementCompositionPreview.GetElementVisual(content);
+
+            content.SizeChanged += (s, e) => {
+                visual.CenterPoint = new Vector3((float)content.ActualWidth / 2, (float)content.ActualHeight / 2, 0);
+            };
+
+            btn.PointerEntered += (s, e) => {
+                var pulse = compositor.CreateVector3KeyFrameAnimation();
+                // Anticipation: Squash down first
+                pulse.InsertKeyFrame(0.2f, new Vector3(0.85f, 0.85f, 1f));
+                // Stretch up
+                pulse.InsertKeyFrame(0.6f, new Vector3(1.25f, 1.25f, 1f));
+                // Settle
+                pulse.InsertKeyFrame(1f, new Vector3(1.15f, 1.15f, 1f));
+                pulse.Duration = TimeSpan.FromMilliseconds(500);
+                visual.StartAnimation("Scale", pulse);
+            };
+
+            btn.PointerExited += (s, e) => {
+                var reset = compositor.CreateSpringVector3Animation();
+                reset.FinalValue = new Vector3(1f, 1f, 1f);
+                reset.DampingRatio = 0.5f;
+                reset.Period = TimeSpan.FromMilliseconds(40);
+                visual.StartAnimation("Scale", reset);
+            };
+        }
+
+        private void SetupSegmentedWaveEffect(Button btn, FrameworkElement wave1, FrameworkElement wave2)
+        {
+            if (btn == null || wave1 == null || wave2 == null) return;
+            var compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
+            var w1Visual = ElementCompositionPreview.GetElementVisual(wave1);
+            var w2Visual = ElementCompositionPreview.GetElementVisual(wave2);
+
+            wave1.SizeChanged += (s, e) => w1Visual.CenterPoint = new Vector3((float)wave1.ActualWidth / 2, (float)wave1.ActualHeight / 2, 0);
+            wave2.SizeChanged += (s, e) => w2Visual.CenterPoint = new Vector3((float)wave2.ActualWidth / 2, (float)wave2.ActualHeight / 2, 0);
+
+            btn.PointerEntered += (s, e) => {
+                // Wave 1: Rapid outward burst
+                var burst1 = compositor.CreateVector3KeyFrameAnimation();
+                burst1.InsertKeyFrame(0f, new Vector3(1f, 1f, 1f));
+                burst1.InsertKeyFrame(1f, new Vector3(2.5f, 2.5f, 1f));
+                burst1.Duration = TimeSpan.FromMilliseconds(800);
+                w1Visual.StartAnimation("Scale", burst1);
+
+                var opac1 = compositor.CreateScalarKeyFrameAnimation();
+                opac1.InsertKeyFrame(0f, 0.6f);
+                opac1.InsertKeyFrame(1f, 0f);
+                opac1.Duration = TimeSpan.FromMilliseconds(800);
+                w1Visual.StartAnimation("Opacity", opac1);
+
+                // Wave 2: Slower secondary ripple
+                var burst2 = compositor.CreateVector3KeyFrameAnimation();
+                burst2.InsertKeyFrame(0.2f, new Vector3(1f, 1f, 1f));
+                burst2.InsertKeyFrame(1f, new Vector3(2f, 2f, 1f));
+                burst2.Duration = TimeSpan.FromMilliseconds(1200);
+                w2Visual.StartAnimation("Scale", burst2);
+
+                var opac2 = compositor.CreateScalarKeyFrameAnimation();
+                opac2.InsertKeyFrame(0.2f, 0.4f);
+                opac2.InsertKeyFrame(1f, 0f);
+                opac2.Duration = TimeSpan.FromMilliseconds(1200);
+                w2Visual.StartAnimation("Opacity", opac2);
+            };
+        }
+
+        private void SetupMagneticGlow(Button btn, FrameworkElement glow)
+        {
+            if (btn == null || glow == null) return;
+            var compositor = _compositor;
+            var visual = ElementCompositionPreview.GetElementVisual(glow);
+
+            btn.PointerEntered += (s, e) => {
+                var fadeIn = compositor.CreateScalarKeyFrameAnimation();
+                fadeIn.InsertKeyFrame(1f, 0.15f);
+                fadeIn.Duration = TimeSpan.FromMilliseconds(300);
+                visual.StartAnimation("Opacity", fadeIn);
+            };
+
+            btn.PointerExited += (s, e) => {
+                var fadeOut = compositor.CreateScalarKeyFrameAnimation();
+                fadeOut.InsertKeyFrame(1f, 0f);
+                fadeOut.Duration = TimeSpan.FromMilliseconds(400);
+                visual.StartAnimation("Opacity", fadeOut);
+            };
+
+            btn.PointerMoved += (s, e) => {
+                var pos = e.GetCurrentPoint(btn).Position;
+                var centerX = btn.ActualWidth / 2;
+                var centerY = btn.ActualHeight / 2;
+                var offX = (float)(pos.X - centerX) * 0.5f;
+                var offY = (float)(pos.Y - centerY) * 0.5f;
+                
+                visual.Offset = new Vector3(offX, offY, 0);
+            };
+        }
+
+        private void ApplyOrganicBreathing(FrameworkElement element)
+        {
+            if (element == null) return;
+            var compositor = _compositor;
+            var visual = ElementCompositionPreview.GetElementVisual(element);
+            
+            element.SizeChanged += (s, e) => {
+                visual.CenterPoint = new Vector3((float)element.ActualWidth / 2, (float)element.ActualHeight / 2, 0);
+            };
+
+            var breath = compositor.CreateVector3KeyFrameAnimation();
+            breath.InsertKeyFrame(0f, new Vector3(1f, 1f, 1f));
+            breath.InsertKeyFrame(0.5f, new Vector3(1.03f, 1.03f, 1f));
+            breath.InsertKeyFrame(1f, new Vector3(1f, 1f, 1f));
+            breath.Duration = TimeSpan.FromSeconds(3 + new Random().NextDouble() * 2); // Randomized period
+            breath.IterationBehavior = AnimationIterationBehavior.Forever;
+            
+            visual.StartAnimation("Scale", breath);
         }
     }
 }

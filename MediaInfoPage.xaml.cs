@@ -65,6 +65,7 @@ namespace ModernIPTVPlayer
             };
 
             System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Constructor completed.");
+            SetupProfessionalAnimations();
         }
 
         private int _isWideModeIndex = -1; // -1: undefined, 0: narrow, 1: wide
@@ -267,6 +268,11 @@ namespace ModernIPTVPlayer
             
             // Setup Alive Buttons (Micro-interactions)
             SetupButtonInteractions(PlayButton, RestartButton, TrailerButton, DownloadButton, CopyLinkButton, StickyPlayButton);
+            SetupMagneticEffect(PlayButton, 0.15f);
+            SetupMagneticEffect(TrailerButton, 0.2f);
+            SetupMagneticEffect(DownloadButton, 0.2f);
+            SetupMagneticEffect(CopyLinkButton, 0.2f);
+            SetupVortexEffect(BackButton, BackIconVisual);
             
             // Setup Sticky Header Scroll Logic
             SetupStickyScroller();
@@ -1482,19 +1488,16 @@ namespace ModernIPTVPlayer
                 if (btn == null) continue;
                 
                 var visual = ElementCompositionPreview.GetElementVisual(btn);
-                
-                // Ensure center point for center-scaling
                 btn.SizeChanged += (s, e) => 
                 {
                     visual.CenterPoint = new Vector3((float)btn.ActualWidth / 2f, (float)btn.ActualHeight / 2f, 0);
                 };
 
-                // Use AddHandler to capture events handled by Button
                 btn.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((s, e) =>
                 {
                     var scale = _compositor.CreateVector3KeyFrameAnimation();
-                    scale.InsertKeyFrame(1f, new Vector3(0.94f, 0.94f, 1f));
-                    scale.Duration = TimeSpan.FromMilliseconds(50);
+                    scale.InsertKeyFrame(1f, new Vector3(0.92f, 0.92f, 1f));
+                    scale.Duration = TimeSpan.FromMilliseconds(100);
                     visual.StartAnimation("Scale", scale);
                 }), true);
 
@@ -1502,25 +1505,106 @@ namespace ModernIPTVPlayer
                 {
                     var spring = _compositor.CreateSpringVector3Animation();
                     spring.FinalValue = new Vector3(1f, 1f, 1f);
-                    spring.DampingRatio = 0.4f; // Bouncy
-                    spring.Period = TimeSpan.FromMilliseconds(50);
+                    spring.DampingRatio = 0.5f;
+                    spring.Period = TimeSpan.FromMilliseconds(40);
                     visual.StartAnimation("Scale", spring);
-                    
-                    // Audio Feedback: ONLY for BackButton (if passed) or specifically requested
-                    // The user requested NO sounds for player buttons, only BackButton.
-                    // BackButton is not typically in this list (it's hardcoded in XAML)
-                    // So we REMOVE all automatic sound playing here.
                 }), true);
                 
                 btn.PointerExited += (s, e) =>
                 {
-                     // Reset if dragged out
                     var spring = _compositor.CreateSpringVector3Animation();
                     spring.FinalValue = new Vector3(1f, 1f, 1f);
-                    spring.DampingRatio = 0.6f;
+                    spring.DampingRatio = 0.7f;
                     visual.StartAnimation("Scale", spring);
                 };
             }
+        }
+
+        private void SetupMagneticEffect(Button btn, float intensity)
+        {
+            if (btn == null) return;
+            var visual = ElementCompositionPreview.GetElementVisual(btn);
+            ElementCompositionPreview.SetIsTranslationEnabled(btn, true);
+
+            var props = visual.Properties;
+            props.InsertVector2("TouchPoint", new Vector2(0, 0));
+
+            // Expression: (PointerPosition - Center) * intensity
+            // For simplicity and high perf, we use the TouchPoint updated in PointerMoved
+            var leanExpr = _compositor.CreateExpressionAnimation("Vector2(props.TouchPoint.X * intensity, props.TouchPoint.Y * intensity)");
+            leanExpr.SetReferenceParameter("props", props);
+            leanExpr.SetScalarParameter("intensity", intensity);
+            visual.StartAnimation("Translation.XY", leanExpr);
+
+            btn.PointerMoved += (s, e) =>
+            {
+                var ptr = e.GetCurrentPoint(btn).Position;
+                var cx = btn.ActualWidth / 2;
+                var cy = btn.ActualHeight / 2;
+                props.InsertVector2("TouchPoint", new Vector2((float)(ptr.X - cx), (float)(ptr.Y - cy)));
+            };
+
+            btn.PointerExited += (s, e) =>
+            {
+                var reset = _compositor.CreateVector2KeyFrameAnimation();
+                reset.InsertKeyFrame(1f, new Vector2(0, 0));
+                reset.Duration = TimeSpan.FromMilliseconds(400);
+                visual.StartAnimation("Translation.XY", reset);
+            };
+        }
+
+        private void SetupVortexEffect(Button btn, FrameworkElement target)
+        {
+            if (btn == null || target == null) return;
+            var visual = ElementCompositionPreview.GetElementVisual(target);
+            
+            target.SizeChanged += (s, e) => {
+                visual.CenterPoint = new Vector3((float)target.ActualWidth / 2f, (float)target.ActualHeight / 2f, 0);
+            };
+
+            btn.PointerEntered += (s, e) =>
+            {
+                // 1. Vortex Rotation with Overshoot
+                var spin = _compositor.CreateScalarKeyFrameAnimation();
+                spin.InsertKeyFrame(0.7f, 380f, _compositor.CreateCubicBezierEasingFunction(new Vector2(0.3f, 0f), new Vector2(0f, 1f)));
+                spin.InsertKeyFrame(1f, 360f);
+                spin.Duration = TimeSpan.FromMilliseconds(700);
+                visual.StartAnimation("RotationAngleInDegrees", spin);
+
+                // 2. Anticipation Scale Pulse
+                var pulse = _compositor.CreateVector3KeyFrameAnimation();
+                pulse.InsertKeyFrame(0.3f, new Vector3(0.85f, 0.85f, 1f));
+                pulse.InsertKeyFrame(1f, new Vector3(1.1f, 1.1f, 1f));
+                pulse.Duration = TimeSpan.FromMilliseconds(300);
+                visual.StartAnimation("Scale", pulse);
+
+                // 3. AnimatedIcon State
+                AnimatedIcon.SetState(BackIconVisual, "PointerOver");
+            };
+
+            btn.PointerExited += (s, e) =>
+            {
+                var reset = _compositor.CreateScalarKeyFrameAnimation();
+                reset.InsertKeyFrame(1f, 0f);
+                reset.Duration = TimeSpan.FromMilliseconds(500);
+                visual.StartAnimation("RotationAngleInDegrees", reset);
+
+                var scaleReset = _compositor.CreateSpringVector3Animation();
+                scaleReset.FinalValue = new Vector3(1f, 1f, 1f);
+                scaleReset.DampingRatio = 0.6f;
+                visual.StartAnimation("Scale", scaleReset);
+
+                AnimatedIcon.SetState(BackIconVisual, "Normal");
+            };
+
+            btn.PointerPressed += (s, e) =>
+            {
+                AnimatedIcon.SetState(BackIconVisual, "Pressed");
+            };
+            btn.PointerReleased += (s, e) =>
+            {
+                AnimatedIcon.SetState(BackIconVisual, "PointerOver");
+            };
         }
 
         private void InitializePrebufferPlayer(string url, double startTime)
@@ -2434,6 +2518,71 @@ namespace ModernIPTVPlayer
             _slideshowTimer.Start();
         }
 
+        private void SetupProfessionalAnimations()
+        {
+            // 1. Back Button Vortex + Morph
+            SetupVortexEffect(BackButton, BackIconVisual);
+
+            // 2. Play Button Anticipation
+            SetupAnticipationPulse(PlayButton, PlayButtonIcon);
+            SetupAnticipationPulse(StickyPlayButton, StickyPlayButtonIcon);
+            
+            // 3. Action Bar Buttons
+            var actionButtons = new Button[] { DownloadButton, TrailerButton, CopyLinkButton, RestartButton };
+            foreach (var btn in actionButtons)
+            {
+                if (btn != null) SetupAnticipationPulse(btn, (FrameworkElement)btn.Content);
+            }
+
+            // 4. Alive System: Organic Breathing
+            ApplyOrganicBreathing(PlayButtonIcon);
+        }
+
+        private void SetupAnticipationPulse(Button btn, FrameworkElement content)
+        {
+            if (btn == null || content == null) return;
+            var visual = ElementCompositionPreview.GetElementVisual(content);
+
+            content.SizeChanged += (s, e) => {
+                visual.CenterPoint = new Vector3((float)content.ActualWidth / 2, (float)content.ActualHeight / 2, 0);
+            };
+
+            btn.PointerEntered += (s, e) => {
+                var pulse = _compositor.CreateVector3KeyFrameAnimation();
+                pulse.InsertKeyFrame(0.2f, new Vector3(0.85f, 0.85f, 1f));
+                pulse.InsertKeyFrame(0.6f, new Vector3(1.25f, 1.25f, 1f));
+                pulse.InsertKeyFrame(1f, new Vector3(1.15f, 1.15f, 1f));
+                pulse.Duration = TimeSpan.FromMilliseconds(500);
+                visual.StartAnimation("Scale", pulse);
+            };
+
+            btn.PointerExited += (s, e) => {
+                var reset = _compositor.CreateSpringVector3Animation();
+                reset.FinalValue = new Vector3(1f, 1f, 1f);
+                reset.DampingRatio = 0.5f;
+                reset.Period = TimeSpan.FromMilliseconds(40);
+                visual.StartAnimation("Scale", reset);
+            };
+        }
+
+        private void ApplyOrganicBreathing(FrameworkElement element)
+        {
+            if (element == null) return;
+            var visual = ElementCompositionPreview.GetElementVisual(element);
+            
+            element.SizeChanged += (s, e) => {
+                visual.CenterPoint = new Vector3((float)element.ActualWidth / 2, (float)element.ActualHeight / 2, 0);
+            };
+
+            var breath = _compositor.CreateVector3KeyFrameAnimation();
+            breath.InsertKeyFrame(0f, new Vector3(1f, 1f, 1f));
+            breath.InsertKeyFrame(0.5f, new Vector3(1.04f, 1.04f, 1f));
+            breath.InsertKeyFrame(1f, new Vector3(1f, 1f, 1f));
+            breath.Duration = TimeSpan.FromSeconds(4);
+            breath.IterationBehavior = AnimationIterationBehavior.Forever;
+            
+            visual.StartAnimation("Scale", breath);
+        }
     }
 
     public class SeasonItem

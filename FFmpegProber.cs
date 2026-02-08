@@ -15,13 +15,16 @@ namespace ModernIPTVPlayer
         // Path to the ffprobe executable found on the system
         private const string FfprobePath = @"C:\Users\mertg\Documents\Stremio\stremio-community-v5\dist\win-x64\ffprobe.exe";
 
-        public async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr)> ProbeAsync(string url, CancellationToken ct = default)
+        public async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr)> ProbeAsync(string url, CancellationToken ct = default, bool force = false)
         {
             // 1. Check Cache
-            var cached = Services.ProbeCacheService.Instance.Get(url);
-            if (cached != null)
+            if (!force)
             {
-                return (cached.Resolution, cached.Fps, cached.Codec, cached.Bitrate, true, cached.IsHdr);
+                var cached = Services.ProbeCacheService.Instance.Get(url);
+                if (cached != null)
+                {
+                    return (cached.Resolution, cached.Fps, cached.Codec, cached.Bitrate, true, cached.IsHdr);
+                }
             }
 
             if (!File.Exists(FfprobePath))

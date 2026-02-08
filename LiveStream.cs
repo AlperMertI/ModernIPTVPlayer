@@ -146,8 +146,9 @@ namespace ModernIPTVPlayer
                 if (IsOnline == false) return "#FF0000"; // Red
                 if (IsOnline == true)
                 {
-                    // Bitrate < 200kbps is likely black screen or static (FAKE)
-                    if (Bitrate < 200000) return "#FFCC00"; // Orange/Yellow
+                    // Bitrate < 100kbps is extremely likely to be a black screen or static image (FAKE/STALE)
+                    // If Bitrate is 0, we assume it's a Live Stream where bitrate couldn't be calculated yet (GREEN)
+                    if (Bitrate > 0 && Bitrate < 100000) return "#FFCC00"; // Orange/Yellow
                     return "#00FF00"; // Green
                 }
                 return "#888888"; // Gray
@@ -155,7 +156,7 @@ namespace ModernIPTVPlayer
         }
 
         public bool IsOffline => IsOnline == false;
-        public bool IsUnstable => IsOnline == true && Bitrate < 200000;
+        public bool IsUnstable => IsOnline == true && Bitrate > 0 && Bitrate < 100000;
 
         public bool HasMetadata => !string.IsNullOrEmpty(Resolution);
 
