@@ -41,6 +41,7 @@ public class D3D11RenderControl : ContentControl
     private double _targetWidth, _targetHeight;
     private double _targetScaleX = 1.0, _targetScaleY = 1.0;
     private long _lastSizeChangedTicks;
+    private long _lastPhysicalResizeTicks = 0; // Throttle for animations
     private bool _needsFirstFrameLink = false;
 
     // Performance Tracking
@@ -53,6 +54,7 @@ public class D3D11RenderControl : ContentControl
     public int CurrentHeight { get; private set; }
     
     // SwapChain Dimensions - Gerçek texture boyutları
+    // SwapChain Dimensions - Gerçek texture boyutları
     private int _swapChainWidth;
     private int _swapChainHeight;
     
@@ -62,6 +64,25 @@ public class D3D11RenderControl : ContentControl
     
     public bool ForceRedraw { get; set; }
     public bool PreserveStateOnUnload { get; set; } = false;
+
+    // [PERF] Animation Optimization
+    private bool _isResizeSuspended = false;
+    public bool IsResizeSuspended
+    {
+        get => _isResizeSuspended;
+        set
+        {
+            if (_isResizeSuspended != value)
+            {
+                _isResizeSuspended = value;
+                if (!_isResizeSuspended)
+                {
+                    // Resume: Force update to catch up with final size
+                    RequestResize(force: true);
+                }
+            }
+        }
+    }
 
     public event EventHandler Ready;
     
@@ -80,24 +101,96 @@ public class D3D11RenderControl : ContentControl
     private IntPtr _cachedNativePanel = IntPtr.Zero;
     private IntPtr _lastLinkedHandle = IntPtr.Zero;
 
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+    [DllImport("user32.dll")]
+    private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
     [DllImport("kernel32.dll", SetLastError = true)]
     private static unsafe extern uint WaitForMultipleObjects(uint nCount, IntPtr* lpHandles, bool bWaitAll, uint dwMilliseconds);
 
     private const uint WAIT_OBJECT_0 = 0x00000000;
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct DEVMODE
+    {
+        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmDeviceName;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
+    }
+
+    private int _monitorRefreshRate = 60;
+
     public D3D11RenderControl()
     {
         SizeChanged += OnSizeChanged;
         Unloaded += OnUnloaded;
+        UpdateRefreshRate();
+    }
+
+    private void UpdateRefreshRate()
+    {
+        try
+        {
+            var ptr = GetForegroundWindow();
+            if (ptr == IntPtr.Zero) return;
+
+            var devMode = new DEVMODE();
+            devMode.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+            
+            if (EnumDisplaySettings(null, -1, ref devMode)) // ENUM_CURRENT_SETTINGS = -1
+            {
+                if (devMode.dmDisplayFrequency > 0)
+                {
+                    _monitorRefreshRate = devMode.dmDisplayFrequency;
+                    // LogSync($"[REFRESH_RATE] Detected: {_monitorRefreshRate}Hz");
+                }
+            }
+        }
+        catch { /* Fallback to 60 */ }
     }
 
     public unsafe void Initialize()
     {
         if (_disposed) return;
+        UpdateRefreshRate(); // Re-check on init
 
         if (_device.Handle == null)
         {
-            LogSync("Stable Native Bridge Initializing...");
+            LogSync($"Stable Native Bridge Initializing... (TargetHz: {_monitorRefreshRate})");
             try
             {
                 _d3d11 ??= D3D11.GetApi();
@@ -135,13 +228,13 @@ public class D3D11RenderControl : ContentControl
 
     private unsafe void RenderLoop()
     {
-        Thread.CurrentThread.Priority = ThreadPriority.Highest; // Maksimum tepki hızı
-        LogSync("Render Thread Engaged.");
+        Thread.CurrentThread.Priority = ThreadPriority.AboveNormal; // Balanced Priority
+        LogSync("Render Thread Engaged (AboveNormal).");
         
         var cycleSw = new Stopwatch();
         var stageSw = new Stopwatch();
         IntPtr[] waitHandles = new IntPtr[2];
-        bool lastPresentWasSuccess = false; // Takılmayı çözen kilit değişken
+        bool lastPresentWasSuccess = false; 
 
         while (!_cts.IsCancellationRequested && !_disposed)
         {
@@ -149,8 +242,6 @@ public class D3D11RenderControl : ContentControl
             uint waitResult = 0;
 
             stageSw.Restart();
-            // AKILLI BEKLEME: Sadece eğer bir önceki turda Present yaptıysak VSync bekliyoruz.
-            // Yapmadıysak beklemiyoruz (çünkü sinyal gelmez, 500ms donarız).
             bool allowWait = lastPresentWasSuccess && _frameLatencyWaitHandle != IntPtr.Zero;
 
             if (allowWait)
@@ -164,7 +255,7 @@ public class D3D11RenderControl : ContentControl
             }
             else
             {
-                _resizeEvent.Wait(1); 
+                _resizeEvent.Wait(4); // Optimized Idle Wait (1ms -> 4ms)
             }
             var waitMs = (float)stageSw.Elapsed.TotalMilliseconds;
 
@@ -175,7 +266,6 @@ public class D3D11RenderControl : ContentControl
                 var lockMs = (float)stageSw.Elapsed.TotalMilliseconds;
                 if (_disposed) break;
 
-                float opMs = 0;
                 if (_resizePending)
                 {
                     ActiveResizeId = _pendingResizeId;
@@ -184,8 +274,8 @@ public class D3D11RenderControl : ContentControl
                     
                     var opSw = Stopwatch.StartNew();
                     PerformResize(force: false);
-                    opMs = (float)opSw.Elapsed.TotalMilliseconds;
-                    LogSync($"[RES_STEP_2] PerformResize DONE for ID: {ActiveResizeId} | Took: {opMs:F1}ms");
+                    // opMs removed, logic logs inside PerformResize
+                    // Detailed logging inside PerformResize now
                 }
 
                 try
@@ -203,6 +293,7 @@ public class D3D11RenderControl : ContentControl
                     var renderMs = (float)stageSw.Elapsed.TotalMilliseconds;
 
                     float presentMs = 0;
+
                     if (didDraw || ForceRedraw)
                     {
                         stageSw.Restart();
@@ -222,10 +313,10 @@ public class D3D11RenderControl : ContentControl
                     }
 
                     var totalMs = (float)cycleSw.Elapsed.TotalMilliseconds;
-                    // UNMUTED: Performance logging for analysis
-                    if (totalMs > 1.0f || opMs > 0) 
+                    // Monitoring for slow frames
+                    if (totalMs > (1000.0f / _monitorRefreshRate) + 2.0f && didDraw) 
                     {
-                          // LogSync($"[DRAW_PERF] ID: {ActiveResizeId} | Total: {totalMs:F1}ms | Wait: {waitMs:F1}ms | Lock: {lockMs:F1}ms | Resize: {opMs:F1}ms | Render: {renderMs:F1}ms | Gpu: {presentMs:F1}ms | Drawn: {didDraw}");
+                          LogSync($"[SLOW_FRAME] Total: {totalMs:F1}ms | Render: {renderMs:F1}ms | Present: {presentMs:F1}ms");
                     }
                 }
                 catch (Exception ex)
@@ -241,8 +332,8 @@ public class D3D11RenderControl : ContentControl
         if (_swapChain.Handle == null) return;
         try {
             int hr = _swapChain.Handle->Present(0, 0); 
-            if (hr != 0) {
-                 LogSync($"[(!!!) PRESENT_STATUS] HR: 0x{hr:X} | Handle: {(IntPtr)_swapChain.Handle:X}");
+            if (hr != 0 && hr != unchecked((int)0x887A0005)) { // Ignore DEVICE_REMOVED for log spam
+                 // LogSync($"[(!!!) PRESENT_STATUS] HR: 0x{hr:X}");
             }
         } catch (Exception ex) {
             LogSync($"[FATAL] Present Exception: {ex.Message}");
@@ -264,10 +355,6 @@ public class D3D11RenderControl : ContentControl
         DeviceHandle = (IntPtr)_device.Handle;
         ContextHandle = (IntPtr)_context.Handle;
 
-        // PERFORMANCE: Disable D3D11 internal locking (we use _renderLock for serialization)
-        // using var multithread = _device.QueryInterface<ID3D11Multithread>();
-        // if (multithread.Handle != null) multithread.Handle->SetMultithreadProtected(1);
-        
         LogSync($"Device Context Ready. Dev: {DeviceHandle:X}");
     }
 
@@ -281,7 +368,6 @@ public class D3D11RenderControl : ContentControl
         if (_disposed || _device.Handle == null) return;
         var sw = Stopwatch.StartNew();
 
-        // READ DIMENSIONS ATOMICALLY: No long-blocking lock here
         int width, height;
         double logW, logH, scaleX, scaleY;
         lock (_sizeLock)
@@ -302,7 +388,6 @@ public class D3D11RenderControl : ContentControl
 
         double lockTime = sw.Elapsed.TotalMilliseconds;
 
-        // ÖNEMLİ DEĞİŞİKLİK: CurrentWidth/CurrentHeight HER ZAMAN güncellenmeli
         int oldWidth = CurrentWidth;
         int oldHeight = CurrentHeight;
         CurrentWidth = width;
@@ -311,31 +396,50 @@ public class D3D11RenderControl : ContentControl
 
         try
         {
-            _frameLatencyWaitHandle = IntPtr.Zero; // Invalidate current handle
+            _frameLatencyWaitHandle = IntPtr.Zero;
 
             int deltaW = Math.Abs(width - _swapChainWidth);
             int deltaH = Math.Abs(height - _swapChainHeight);
-            bool needsPhysicalResize = _swapChain.Handle == null || deltaW > 16 || deltaH > 16 || force;
-            string resizeMode = needsPhysicalResize ? "PHYSICAL" : "STRETCH";
+            
+            // EXACT SIZING STRATEGY (Reverted from Elastic due to MPV constraints)
+            // 1. Check if we actually need to touch the GPU
+            bool needsRealloc = _swapChain.Handle == null || width != _swapChainWidth || height != _swapChainHeight || force;
+            
+            // 2. Throttle Logic (Only applies if we need a physical realloc)
+            long nowTicks = Stopwatch.GetTimestamp();
+            double msSinceLastPhysical = (nowTicks - _lastPhysicalResizeTicks) * 1000.0 / Stopwatch.Frequency;
+            double throttleThreshold = (1000.0 / Math.Max(30, _monitorRefreshRate)); 
+            bool throttleActive = msSinceLastPhysical < throttleThreshold;
+
+            if (needsRealloc && throttleActive && !force && _swapChain.Handle != null)
+            {
+                needsRealloc = false; // Skip physical resize, just stretch for this frame
+            }
+
+            string resizeMode = needsRealloc ? "PHYSICAL" : "STRETCH";
 
             double resizeBuffersTime = 0;
             double getBufferTime = 0;
+            double flushTime = 0;
+            double releaseTime = 0;
 
-            if (needsPhysicalResize)
+            if (needsRealloc)
             {
-                // 1. DRAIN GPU PIPELINE
+                _lastPhysicalResizeTicks = nowTicks;
+                
+                // 1. DRAIN
                 if (_context.Handle != null) {
                     _context.Handle->OMSetRenderTargets(0, null, null);
                 }
-                double flushTime = sw.Elapsed.TotalMilliseconds;
+                flushTime = sw.Elapsed.TotalMilliseconds - lockTime;
 
-                // 2. ATOMIC BUFFER RELEASE
+                // 2. RELEASE
                 IntPtr oldBuffer = Interlocked.Exchange(ref _atomicBackBuffer, IntPtr.Zero);
                 if (oldBuffer != IntPtr.Zero)
                 {
                     ((IUnknown*)oldBuffer)->Release();
                 }
-                double releaseTime = sw.Elapsed.TotalMilliseconds;
+                releaseTime = sw.Elapsed.TotalMilliseconds - (lockTime + flushTime);
 
                 if (_swapChain.Handle == null)
                 {
@@ -349,9 +453,10 @@ public class D3D11RenderControl : ContentControl
                         CreateSwapChain(width, height);
                     }
                 }
-                resizeBuffersTime = sw.Elapsed.TotalMilliseconds - releaseTime;
+                
+                resizeBuffersTime = sw.Elapsed.TotalMilliseconds - (lockTime + flushTime + releaseTime);
 
-                // 3. RECOVER NEW BUFFER
+                // 3. RECOVER
                 if (_swapChain.Handle != null) {
                     ID3D11Texture2D* bufferRaw = null;
                     var hr = _swapChain.Handle->GetBuffer(0, SilkMarshal.GuidPtrOf<ID3D11Texture2D>(), (void**)&bufferRaw);
@@ -361,12 +466,14 @@ public class D3D11RenderControl : ContentControl
                         _swapChainHeight = height;
                     }
                 }
-                getBufferTime = sw.Elapsed.TotalMilliseconds - (releaseTime + resizeBuffersTime);
+                getBufferTime = sw.Elapsed.TotalMilliseconds - (lockTime + flushTime + releaseTime + resizeBuffersTime);
             }
 
-            // 4. APPLY MATRIX TRANSFORM (Stretches buffer to window and handles High-DPI)
             if (_swapChain.Handle != null)
             {
+                // ALWAYS match viewport to current logic size
+                _swapChain.Handle->SetSourceSize((uint)width, (uint)height);
+
                 var stretchX = (float)(logW / _swapChainWidth);
                 var stretchY = (float)(logH / _swapChainHeight);
                 var mat = new Silk.NET.Maths.Matrix3X2<float>(stretchX, 0, 0, stretchY, 0, 0);
@@ -379,7 +486,14 @@ public class D3D11RenderControl : ContentControl
             }
             
             double totalTime = sw.Elapsed.TotalMilliseconds;
-            LogSync($"[RES_DEEP] ID: {ActiveResizeId} | Mode: {resizeMode} | Total: {totalTime:F2}ms | Lock: {lockTime:F2}ms | ResizeBuffers: {resizeBuffersTime:F2}ms | GetBuffer: {getBufferTime:F2}ms | Target: {width}x{height} | Buffer: {_swapChainWidth}x{_swapChainHeight}");
+            
+            if (resizeMode == "PHYSICAL")
+            {
+                LogSync($"[RES_PERF] Mode: {resizeMode} | Total: {totalTime:F2}ms | Valid: {width}x{height} | ResBuf: {resizeBuffersTime:F2}ms");
+            }
+        
+
+
         }
         catch (Exception ex) { LogSync($"[FATAL] Resize Exception: {ex}"); }
     }
@@ -397,6 +511,8 @@ public class D3D11RenderControl : ContentControl
     {
         if (_swapChain.Handle != null) return;
         
+        if (_d3d11 == null) Initialize(); 
+
         using var dxgiDevice = _device.QueryInterface<IDXGIDevice1>();
         IDXGIAdapter* adapter;
         dxgiDevice.Handle->GetAdapter(&adapter);
@@ -412,7 +528,7 @@ public class D3D11RenderControl : ContentControl
             BufferCount = 3, BufferUsage = DXGI.UsageRenderTargetOutput,
             SampleDesc = new SampleDesc(1, 0), Scaling = Scaling.Stretch,
             SwapEffect = SwapEffect.FlipDiscard, AlphaMode = AlphaMode.Ignore,
-            Flags = (uint)SwapChainFlag.FrameLatencyWaitableObject 
+            Flags = (uint)SwapChainFlag.FrameLatencyWaitableObject
         };
 
         IDXGISwapChain1* sc1Raw;
@@ -423,6 +539,8 @@ public class D3D11RenderControl : ContentControl
         _swapChain = sc1.QueryInterface<IDXGISwapChain2>();
         sc1.Dispose();
     }
+    
+
 
     private long _swapChainVersion = 0;
 
@@ -439,7 +557,7 @@ public class D3D11RenderControl : ContentControl
         if (!needsLinking) return;
 
         long resizeIdAtEnq = ActiveResizeId;
-        LogSync($"[UI_BINDING] Enqueueing SetSwapChain for ID: {resizeIdAtEnq} | Handle: {handle:X}");
+        // LogSync($"[UI_BINDING] Enqueueing SetSwapChain for ID: {resizeIdAtEnq} | Handle: {handle:X}");
         Marshal.AddRef(handle);
         var queueTicks = Stopwatch.GetTimestamp();
 
@@ -472,7 +590,7 @@ public class D3D11RenderControl : ContentControl
                     var uiEndTicks = Stopwatch.GetTimestamp();
                     double lagMs = (uiStartTicks - queueTicks) * 1000.0 / Stopwatch.Frequency;
                     double execMs = (uiEndTicks - uiStartTicks) * 1000.0 / Stopwatch.Frequency;
-                    LogSync($"[UI_WATCHDOG] ID: {resizeIdAtEnq} | SetSwapChain HR: {hr:X} | Lag: {lagMs:F1}ms | Exec: {execMs:F1}ms | Handle: {handle:X}");
+                    // LogSync($"[UI_WATCHDOG] ID: {resizeIdAtEnq} | Lag: {lagMs:F1}ms | Exec: {execMs:F1}ms");
                 }
             }
             catch (Exception ex) { LogSync($"[FATAL] UI Core Fault: {ex.Message}"); }
@@ -522,9 +640,6 @@ public class D3D11RenderControl : ContentControl
         _disposed = true;
         _cts?.Cancel();
         _resizeEvent.Set();
-        
-        // Note: Actual resource destruction should happen AFTER libmpv is gone
-        // to avoid "Device Removed" or access violation during render callbacks.
     }
 
     public unsafe void DestroyResources()
@@ -545,6 +660,9 @@ public class D3D11RenderControl : ContentControl
     {
         if (_disposed || _swapChainPanel == null) return;
         
+        // [PERF] Skip resize if suspended (during animation)
+        if (_isResizeSuspended && !force) return;
+        
         long id = Interlocked.Increment(ref _resizeIdCounter);
         double oldW, oldH;
         lock (_sizeLock)
@@ -557,12 +675,9 @@ public class D3D11RenderControl : ContentControl
             _targetScaleY = _swapChainPanel.CompositionScaleY;
         }
 
-        // DIAGNOSTIC: Her RequestResize çağrısını logla
-        int physW = (int)Math.Max(1, Math.Ceiling(_targetWidth * _targetScaleX));
-        int physH = (int)Math.Max(1, Math.Ceiling(_targetHeight * _targetScaleY));
-        LogSync($"[RES_STEP_1] RequestResize ID: {id} (force:{force}) | Old: {oldW:F0}x{oldH:F0} → New: {_targetWidth:F0}x{_targetHeight:F0} | Physical: {physW}x{physH} | Current: {CurrentWidth}x{CurrentHeight}");
+        // DIAGNOSTIC: Reduced frequency or level if needed
+        // LogSync($"[RES_REQ] ID: {id}");
 
-        // Timer YOK - Her zaman işlem yap
         _pendingResizeId = id;
         _resizePending = true;
         _resizeEvent.Set();
@@ -570,8 +685,6 @@ public class D3D11RenderControl : ContentControl
 
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        // DIAGNOSTIC: SizeChanged event detayları
-        LogSync($"[DIAG_SIZE] SizeChanged Event | Previous: {e.PreviousSize.Width:F0}x{e.PreviousSize.Height:F0} → New: {e.NewSize.Width:F0}x{e.NewSize.Height:F0}");
         RequestResize(false);
     }
 

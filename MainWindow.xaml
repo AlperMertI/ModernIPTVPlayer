@@ -7,18 +7,20 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <Grid Background="#FF000000">
+    <Grid x:Name="RootGrid" Background="#FF000000">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
+            <RowDefinition x:Name="TitleBarRow" Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
         <Border x:Name="AppTitleBar"
                 Height="32"
+                Grid.Row="0"
+                Grid.RowSpan="2"
                 IsHitTestVisible="True"
                 VerticalAlignment="Top"
                 Background="Transparent"
-                Canvas.ZIndex="1" />
+                Canvas.ZIndex="9999" />
 
         <NavigationView x:Name="NavView"
                         Grid.Row="1"

@@ -167,6 +167,23 @@ public sealed partial class MpvPlayer : Control
         }
     }
 
+    public async Task<bool> TakeScreenshotAsync(string filePath)
+    {
+        if (Player == null) return false;
+        try
+        {
+            // "screenshot-to-file" command: filename, flags
+            // flags: "video" (no subtitles/OSD) or "subtitles" (with OSD) or "window"
+            await Player.Client.ExecuteAsync(new string[] { "screenshot-to-file", filePath, "video" });
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MPV_ERR] Screenshot failed: {ex.Message}");
+            return false;
+        }
+    }
+
     public async Task CleanupAsync()
     {
         Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] CleanupAsync STARTED (Strict Sequential Mode)");
@@ -274,6 +291,22 @@ public sealed partial class MpvPlayer : Control
         if (_renderControl != null)
         {
             _renderControl.PreserveStateOnUnload = false;
+        }
+    }
+
+    public void SuspendResize()
+    {
+        if (_renderControl != null)
+        {
+            _renderControl.IsResizeSuspended = true;
+        }
+    }
+
+    public void ResumeResize()
+    {
+        if (_renderControl != null)
+        {
+            _renderControl.IsResizeSuspended = false;
         }
     }
 

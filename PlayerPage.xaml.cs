@@ -1,4 +1,7 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Windowing;
+using Microsoft.UI;
+using WinRT.Interop;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using MpvWinUI; 
@@ -61,10 +64,18 @@ namespace ModernIPTVPlayer
         private int _nativeMonitorFps = 0;
         private bool _isHandoff = false;
         private bool _bufferUnlocked = false;
+        private DateTime _lastFullScreenToggle = DateTime.MinValue;
         
         // Auto-Hide Logic
         private DispatcherTimer? _cursorTimer;
         private bool _controlsHidden = false;
+        private bool _isPiPMode = false;
+
+        
+        // [PiP] Single Window State Preservation
+        private Windows.Graphics.RectInt32 _savedWindowBounds;
+        private bool _savedIsFullScreen;
+        private OverlappedPresenterState _savedPresenterState;
 
         public PlayerPage()
         {
@@ -505,6 +516,12 @@ namespace ModernIPTVPlayer
             {
                 MainWindow.Current.SetFullScreen(false);
                 _isFullScreen = false;
+            }
+
+            if (_isPiPMode)
+            {
+                MainWindow.Current.SetCompactOverlay(false);
+                _isPiPMode = false;
             }
 
             base.OnNavigatedFrom(e);
@@ -979,13 +996,29 @@ namespace ModernIPTVPlayer
         {
         }
 
+        private void UpdateFullScreenUI()
+        {
+            if (_isFullScreen)
+            {
+                FullScreenIcon.Glyph = "\uE1D8"; // BackToWindow icon
+                ToolTipService.SetToolTip(FullScreenButton, "Tam Ekrandan Çık");
+            }
+            else
+            {
+                FullScreenIcon.Glyph = "\uE1D9"; // Fullscreen icon
+                ToolTipService.SetToolTip(FullScreenButton, "Tam Ekran");
+            }
+        }
+
         private void ToggleFullScreen()
         {
-            System.Diagnostics.Debug.WriteLine($"[ToggleFullScreen] Toggling... Current State: {_isFullScreen}");
+            // Guard against redundant calls or rapid clicks (winui3/appwindow sensitive to rapid state changes)
+            if (DateTime.Now - _lastFullScreenToggle < TimeSpan.FromMilliseconds(500)) return;
+            _lastFullScreenToggle = DateTime.Now;
+
             _isFullScreen = !_isFullScreen;
             MainWindow.Current.SetFullScreen(_isFullScreen);
-            FullScreenIcon.Glyph = _isFullScreen ? "\uE1D8" : "\uE1D9"; // E1D8=BackToWindow, E1D9=FullScreen
-            ToolTipService.SetToolTip(FullScreenButton, _isFullScreen ? "Tam Ekrandan Çık" : "Tam Ekran");
+            UpdateFullScreenUI();
         }
 
         private void FullScreenButton_Click(object sender, RoutedEventArgs e)
@@ -1016,6 +1049,14 @@ namespace ModernIPTVPlayer
                 HideVolumeOverlayAnim.Begin();
                 await Task.Delay(200);
                 VolumeOverlay.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void CloseStatsOverlay()
+        {
+            if (StatsOverlay != null)
+            {
+                StatsOverlay.Visibility = Visibility.Collapsed;
             }
         }
 
@@ -1473,10 +1514,12 @@ namespace ModernIPTVPlayer
             if (isMuted || volume == 0)
             {
                  MuteIcon.Glyph = "\uE767"; // Volume Icon (Speaker) -> Unmute
+                 if (PipMuteIcon != null) PipMuteIcon.Glyph = "\uE767";
             }
             else
             {
                  MuteIcon.Glyph = "\uE74F"; // Mute Icon (Cross) -> Mute
+                 if (PipMuteIcon != null) PipMuteIcon.Glyph = "\uE74F";
             }
         }
 
@@ -1511,6 +1554,7 @@ namespace ModernIPTVPlayer
                 
                 // Update Icon: If paused(true) -> Show Play Icon, If playing(false) -> Show Pause Icon
                 PlayPauseIcon.Glyph = newState ? "\uF5B0" : "\uF8AE"; // PlaySolid / PauseSolid
+                if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = newState ? "\uF5B0" : "\uF8AE";
             }
             catch { }
         }
@@ -1801,6 +1845,12 @@ namespace ModernIPTVPlayer
         // ---------- DOUBLE TAP LOGIC ----------
         private async void Page_DoubleTapped(object sender, Microsoft.UI.Xaml.Input.DoubleTappedRoutedEventArgs e)
         {
+            if (_isPiPMode)
+            {
+                TogglePiPAsync();
+                return;
+            }
+
             // [FIX] Ignore double taps if they originated from a control/button or if we were dragging
             if (_isPointerDragging) return;
 
@@ -2350,6 +2400,281 @@ namespace ModernIPTVPlayer
             breath.IterationBehavior = AnimationIterationBehavior.Forever;
             
             visual.StartAnimation("Scale", breath);
+        }
+        // ==========================================
+        // PiP IMPLEMENTATION
+        // ==========================================
+
+        // ==========================================
+        // PiP IMPLEMENTATION (Single Window - Round 15)
+        // ==========================================
+
+        private void PipButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (!_isPiPMode)
+            {
+                EnterPiPAsync();
+            }
+            else
+            {
+                ExitPiP();
+            }
+        }
+
+        private async void EnterPiPAsync()
+        {
+            if (_mpvPlayer == null || _isPiPMode) return;
+            Debug.WriteLine("[PiP] Entering Single-Window PiP...");
+            
+            try 
+            {
+                // 1. Save Current Window State
+                var appWindow = MainWindow.Current.AppWindow;
+                _savedWindowBounds = appWindow.Position.X != 0 || appWindow.Position.Y != 0 || appWindow.Size.Width != 0 ? 
+                                     new Windows.Graphics.RectInt32(appWindow.Position.X, appWindow.Position.Y, appWindow.Size.Width, appWindow.Size.Height) : 
+                                     new Windows.Graphics.RectInt32(100, 100, 1280, 720); // Fallback
+                
+                _savedIsFullScreen = _isFullScreen;
+                
+                if (appWindow.Presenter is OverlappedPresenter op)
+                {
+                    _savedPresenterState = op.State;
+                }
+                else
+                {
+                    _savedPresenterState = OverlappedPresenterState.Restored;
+                }
+
+                _isPiPMode = true;
+
+                // 2. Hide UI Elements (Clean View)
+                ControlsBorder.Visibility = Visibility.Collapsed;
+                BackButton.Visibility = Visibility.Collapsed;
+                VideoTitleText.Visibility = Visibility.Collapsed;
+                FullScreenButton.Visibility = Visibility.Collapsed;
+                InfoPillsStack.Visibility = Visibility.Collapsed;
+                OsdOverlay.Visibility = Visibility.Collapsed;
+                
+                _statsTimer.Stop();
+                _cursorTimer.Stop();
+
+                // Show PiP Controls Overlay
+                PipOverlay.Visibility = Visibility.Visible;
+                PipControls.Opacity = 0; // Hidden until hover
+
+                // Sync Icons
+                bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
+                PipPlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE";
+                
+                string muteState = await _mpvPlayer.GetPropertyAsync("mute");
+                PipMuteIcon.Glyph = (muteState == "yes") ? "\uE767" : "\uE74F";
+
+                // 3. Prepare for Transition
+                // Ensure we are in Overlapped mode (not Fullscreen) so we can resize
+                if (_isFullScreen)
+                {
+                    MainWindow.Current.SetFullScreen(false);
+                    _isFullScreen = false;
+                    UpdateFullScreenUI();
+                }
+                // Also ensure we aren't Maximized, otherwise MoveAndResize might be ignored or wonky
+                if (appWindow.Presenter is OverlappedPresenter presenter)
+                {
+                    if (presenter.State == OverlappedPresenterState.Maximized)
+                    {
+                        presenter.Restore();
+                    }
+                    
+                    // Make Always on Top
+                    presenter.IsAlwaysOnTop = true;
+                }
+
+                // 4. Calculate Target Bounds (Bottom Right)
+                var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(appWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+                int targetW = displayArea.WorkArea.Width / 4;
+                if (targetW < 320) targetW = 320; // Min width
+                int targetH = (int)(targetW * 9.0 / 16.0);
+                
+                int targetX = displayArea.WorkArea.X + displayArea.WorkArea.Width - targetW - 20;
+                int targetY = displayArea.WorkArea.Y + displayArea.WorkArea.Height - targetH - 20;
+
+                // 5. Animate
+                // [PERF] Suspend Resize to just stretch the texture during animation
+                _mpvPlayer.SuspendResize();
+
+                await Task.Run(async () => {
+                    const int steps = 25; // Faster than 40, since we are moving the heavy window
+                    
+                    int startX = appWindow.Position.X;
+                    int startY = appWindow.Position.Y;
+                    int startW = appWindow.Size.Width;
+                    int startH = appWindow.Size.Height;
+
+                    for (int i = 0; i <= steps; i++)
+                    {
+                        float t = (float)i / steps;
+                        float ease = 1 - MathF.Pow(1 - t, 4); // EaseOutQuartic
+                        
+                        int curX = (int)(startX + (targetX - startX) * ease);
+                        int curY = (int)(startY + (targetY - startY) * ease);
+                        int curW = (int)(startW + (targetW - startW) * ease);
+                        int curH = (int)(startH + (targetH - startH) * ease);
+                        
+                        this.DispatcherQueue.TryEnqueue(() => {
+                            if (_isPiPMode) // Guard
+                                appWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curW, curH));
+                        });
+                        
+                        await Task.Delay(10);
+                    }
+                });
+
+                // 6. Finish
+                _mpvPlayer.ResumeResize();
+
+                // Swap TitleBar to allow native dragging anywhere in PiP
+                MainWindow.Current.SetTitleBar(PipDragRegion);
+
+                // Hide System Caption Buttons (Min/Max/Close) by disabling system title bar
+                if (appWindow.Presenter is OverlappedPresenter pipPresenter)
+                {
+                    pipPresenter.SetBorderAndTitleBar(true, false);
+                }
+
+                Debug.WriteLine("[PiP] Single-Window Transition Complete");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[PiP] Enter Error: {ex.Message}");
+                ExitPiP();
+            }
+        }
+
+        private async void ExitPiP()
+        {
+            if (!_isPiPMode) return;
+            Debug.WriteLine("[PiP] Exiting Single-Window PiP...");
+
+            try
+            {
+                var appWindow = MainWindow.Current.AppWindow;
+
+                // 1. Animate Back to Saved Bounds
+                _mpvPlayer.ResumeResize(); // Resume early so it sharpen as it grows
+
+                int targetX = _savedWindowBounds.X;
+                int targetY = _savedWindowBounds.Y;
+                int targetW = _savedWindowBounds.Width;
+                int targetH = _savedWindowBounds.Height;
+                
+                await Task.Run(async () => {
+                    const int steps = 20;
+                    
+                    int startX = appWindow.Position.X;
+                    int startY = appWindow.Position.Y;
+                    int startW = appWindow.Size.Width;
+                    int startH = appWindow.Size.Height;
+
+                    for (int i = 0; i <= steps; i++)
+                    {
+                        float t = (float)i / steps;
+                        float ease = 1 - MathF.Pow(1 - t, 4);
+                        
+                        int curX = (int)(startX + (targetX - startX) * ease);
+                        int curY = (int)(startY + (targetY - startY) * ease);
+                        int curW = (int)(startW + (targetW - startW) * ease);
+                        int curH = (int)(startH + (targetH - startH) * ease);
+                        
+                        this.DispatcherQueue.TryEnqueue(() => {
+                            // Only restore if we are still meant to be restoring
+                            // (Race condition guard not strictly needed but good practice)
+                            appWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curW, curH));
+                        });
+                        
+                        await Task.Delay(10);
+                    }
+                });
+
+                // 2. Restore Window State
+                _isPiPMode = false;
+
+                // Restore Main TitleBar
+                MainWindow.Current.SetTitleBar(MainWindow.Current.TitleBarElement);
+
+                if (appWindow.Presenter is OverlappedPresenter presenter)
+                {
+                    // Restore System Caption Buttons
+                    presenter.SetBorderAndTitleBar(true, true);
+
+                    presenter.IsAlwaysOnTop = false;
+                    
+                    if (_savedPresenterState == OverlappedPresenterState.Maximized)
+                    {
+                        presenter.Maximize();
+                    }
+                    else if (_savedPresenterState == OverlappedPresenterState.Minimized)
+                    {
+                        presenter.Restore(); // Should happen automatically but forcing it
+                    }
+                }
+
+                if (_savedIsFullScreen)
+                {
+                    MainWindow.Current.SetFullScreen(true);
+                    _isFullScreen = true;
+                    UpdateFullScreenUI();
+                }
+                else
+                {
+                    _isFullScreen = false;
+                    UpdateFullScreenUI();
+                }
+
+                // 3. Show UI
+                ControlsBorder.Visibility = Visibility.Visible;
+                BackButton.Visibility = Visibility.Visible;
+                VideoTitleText.Visibility = Visibility.Visible;
+                FullScreenButton.Visibility = Visibility.Visible;
+                
+                if (InfoPillsStack != null) InfoPillsStack.Visibility = Visibility.Visible;
+                
+                _statsTimer.Start();
+                StartCursorTimer();
+
+                // Hide PiP Controls Overlay
+                PipOverlay.Visibility = Visibility.Collapsed;
+                
+                Debug.WriteLine("[PiP] Restored Normal View");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[PiP] Exit Error: {ex.Message}");
+                // Force state reset
+                _isPiPMode = false;
+                ControlsBorder.Visibility = Visibility.Visible;
+                MainWindow.Current.Activate();
+            }
+        }
+
+
+
+        private async void TogglePiPAsync()
+        {
+            PipButton_Click(null, null);
+        }
+
+
+
+        private void PipOverlay_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            PipControls.Opacity = 1;
+            // Window.Current.CoreWindow.PointerCursor = new Windows.UI.Core.CoreCursor(Windows.UI.Core.CoreCursorType.Arrow, 0);
+        }
+
+        private void PipOverlay_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            PipControls.Opacity = 0;
+            // Optionally hide cursor again if desired, but user might be moving mouse out to other window
         }
     }
 }

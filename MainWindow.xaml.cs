@@ -12,6 +12,10 @@ namespace ModernIPTVPlayer
     public sealed partial class MainWindow : Window
     {
         public new static MainWindow Current { get; private set; }
+        
+        // Expose NavView for PiP mode access from PlayerPage
+        public NavigationView NavigationViewControl => NavView;
+        public UIElement TitleBarElement => AppTitleBar;
         public MainWindow()
         {
             Current = this;
@@ -28,6 +32,26 @@ namespace ModernIPTVPlayer
             ContentFrame.Navigate(typeof(LoginPage));
 
             NavView.Loaded += (s, e) => AnimateSidebarWaterfall();
+            
+            // Auto-Restore Opacity when Window is Activated (e.g. user clicks taskbar)
+            this.Activated += MainWindow_Activated;
+        }
+
+        private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
+        {
+            if (args.WindowActivationState != WindowActivationState.Deactivated)
+            {
+                // specific check: if opacity is 0, restore it
+                if (RootGrid.Opacity < 1.0)
+                {
+                    SetWindowOpacity(1.0);
+                }
+            }
+        }
+
+        public void SetWindowOpacity(double opacity)
+        {
+            RootGrid.Opacity = opacity;
         }
 
         private void AnimateSidebarWaterfall()
@@ -180,9 +204,20 @@ namespace ModernIPTVPlayer
                         AppTitleBar.Visibility = Visibility.Visible;
                         ContentFrame.Margin = new Thickness(0, 4, 0, 0);
                     }
+                    else
+                    {
+                        // PlayerPage default state
+                        NavView.IsPaneVisible = false;
+                        AppTitleBar.Visibility = Visibility.Collapsed; 
+                        ContentFrame.Margin = new Thickness(0);
+                    }
                 }
             }
         }
+
+        [System.Obsolete("Replaced by PiPWindow")]
+        public void SetCompactOverlay(bool isCompact) { }
+
 
         // ==========================================
         // GLOBAL DOWNLOAD MANAGER UI

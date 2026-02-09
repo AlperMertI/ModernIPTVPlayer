@@ -211,6 +211,9 @@
               VerticalAlignment="Stretch"
               Background="Black"/>
 
+        <!-- [FIX] Snapshot Image for Smooth PiP Transition -->
+        <Image x:Name="SnapshotImage" Stretch="Uniform" Visibility="Collapsed" IsHitTestVisible="False"/>
+
         <!-- 2. Brightness Overlay (Simulated Dimming) -->
         <Rectangle x:Name="BrightnessOverlay"
                    Fill="Black"
@@ -585,6 +588,15 @@
                         <FontIcon x:Name="MultiViewIconVisual" Glyph="&#xF164;" FontSize="20"/>
                     </Button>
 
+                    <Button x:Name="PipButton"
+                            Click="PipButton_Click"
+                            Width="48" Height="48" CornerRadius="24"
+                            Background="#99000000" Foreground="White"
+                            BorderThickness="0"
+                            ToolTipService.ToolTip="Resim İçinde Resim (P)">
+                        <FontIcon Glyph="&#xE8A7;" FontSize="20"/>
+                    </Button>
+
                     <!-- Speed Button Wrapper -->
                     <Grid Width="48">
                          <!-- Speed Overlay -->
@@ -758,5 +770,60 @@
                 </StackPanel>
             </Grid>
         </Border>
+
+        <!-- 7. PiP Hover Overlay (Only visible in PiP mode) -->
+        <Grid x:Name="PipOverlay"
+              Visibility="Collapsed"
+              Background="#01000000" 
+              PointerEntered="PipOverlay_PointerEntered"
+              PointerExited="PipOverlay_PointerExited"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch">
+            <!-- Native Drag Handle for PiP -->
+            <Border x:Name="PipDragRegion" 
+                    Background="Transparent" 
+                    IsHitTestVisible="True" />
+            
+            <!-- Controls Container (Hidden by default, shown on hover) -->
+            <Grid x:Name="PipControls" Opacity="0" Transitions="{x:Null}">
+                <Grid.Background>
+                    <SolidColorBrush Color="Black" Opacity="0.6"/>
+                </Grid.Background>
+
+                <!-- Center Play/Pause -->
+                <Button x:Name="PipPlayPauseButton"
+                        Click="PlayPauseButton_Click"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Width="48" Height="48" CornerRadius="24"
+                        Background="White" Foreground="Black" BorderThickness="0" Padding="0">
+                     <FontIcon x:Name="PipPlayPauseIcon" Glyph="&#xE768;" FontSize="20"/>
+                </Button>
+
+                <!-- Top Right: Exit PiP -->
+                <Button x:Name="PipExitButton"
+                        Click="PipButton_Click"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Margin="12"
+                        Width="32" Height="32" CornerRadius="16"
+                        Background="#CC000000" Foreground="White" BorderThickness="0" Padding="0"
+                        ToolTipService.ToolTip="Büyüt">
+                    <FontIcon Glyph="&#xE73F;" FontSize="14"/>
+                </Button>
+
+                <!-- Top Left: Mute -->
+                 <Button x:Name="PipMuteButton" 
+                        Click="MuteButton_Click"
+                        HorizontalAlignment="Left" 
+                        VerticalAlignment="Top"
+                        Margin="12"
+                        Width="32" Height="32" CornerRadius="16"
+                        Background="#CC000000" Foreground="White" BorderThickness="0" Padding="0">
+                        <FontIcon x:Name="PipMuteIcon" Glyph="&#xE767;" FontSize="14"/>
+                 </Button>
+            </Grid>
+        </Grid>
+
     </Grid>
 </Page>
