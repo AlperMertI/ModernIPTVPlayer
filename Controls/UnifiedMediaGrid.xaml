@@ -60,7 +60,8 @@
                         Width="200" 
                         Height="300"
                         ColorsExtracted="PosterCard_ColorsExtracted"
-                        HoverStarted="Card_HoverStarted"/>
+                        HoverStarted="Card_HoverStarted"
+                        HoverEnded="Card_HoverEnded"/>
                 </DataTemplate>
             </GridView.ItemTemplate>
         </GridView>

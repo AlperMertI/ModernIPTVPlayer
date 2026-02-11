@@ -62,6 +62,14 @@
 
                 <NavigationViewItemSeparator/>
 
+                <NavigationViewItem Content="Eklentiler" Tag="AddonsPage">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE710;"/> <!-- Add / Plug -->
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+
+                <NavigationViewItemSeparator/>
+
                 <NavigationViewItem Content="Çoklu Ekran" Tag="MultiPlayerPage">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xF164;"/> <!-- Multi Window -->

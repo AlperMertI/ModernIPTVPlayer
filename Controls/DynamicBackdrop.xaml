@@ -9,10 +9,10 @@
     IsHitTestVisible="False">
 
     <Grid x:Name="BackdropContainer">
-        <!-- Layer 1: Large Diffuse Ambient (fills most of screen) -->
-        <Grid x:Name="AmbientLayer" Opacity="0.45">
+        <!-- Layer 1: Large Diffuse Ambient -->
+        <Grid x:Name="AmbientLayer" Opacity="0.25">
             <Grid.Background>
-                <RadialGradientBrush Center="0.0,0.0" RadiusX="1.8" RadiusY="1.4" GradientOrigin="0.0,0.0">
+                <RadialGradientBrush Center="0.0,0.0" RadiusX="1.2" RadiusY="1.0" GradientOrigin="0.0,0.0">
                     <GradientStop Color="Transparent" Offset="0"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </RadialGradientBrush>
@@ -20,50 +20,33 @@
         </Grid>
         
         <!-- Layer 2: Primary Concentrated Glow -->
-        <Grid x:Name="PrimaryGlowLayer" Opacity="0.55">
+        <Grid x:Name="PrimaryGlowLayer" Opacity="0.45">
             <Grid.Background>
-                <RadialGradientBrush Center="0.1,0.15" RadiusX="0.9" RadiusY="0.7" GradientOrigin="0.0,0.0">
+                <RadialGradientBrush Center="0.5,0.3" RadiusX="0.9" RadiusY="0.7" GradientOrigin="0.5,0.3">
                     <GradientStop Color="Transparent" Offset="0"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </RadialGradientBrush>
             </Grid.Background>
         </Grid>
         
-        <!-- Layer 3: Corner Bloom (light source origin) -->
-        <Grid x:Name="BloomLayer" Opacity="0.25">
+        <!-- Layer 3: Bloom Accent -->
+        <Grid x:Name="BloomLayer" Opacity="0.15">
             <Grid.Background>
-                <RadialGradientBrush Center="0.0,0.0" RadiusX="0.4" RadiusY="0.3" GradientOrigin="0.0,0.0">
-                    <GradientStop Color="Transparent" Offset="0"/>
-                    <GradientStop Color="Transparent" Offset="1"/>
-                </RadialGradientBrush>
-            </Grid.Background>
-        </Grid>
-        
-        <!-- Layer 4: Secondary subtle light from top-right -->
-        <Grid x:Name="SecondaryGlowLayer" Opacity="0.12">
-            <Grid.Background>
-                <RadialGradientBrush Center="1.0,0.0" RadiusX="0.6" RadiusY="0.5" GradientOrigin="1.0,0.0">
+                <RadialGradientBrush Center="0.5,0.1" RadiusX="0.7" RadiusY="0.5" GradientOrigin="0.5,0.1">
                     <GradientStop Color="Transparent" Offset="0"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </RadialGradientBrush>
             </Grid.Background>
         </Grid>
 
-        <!-- Layer 5: Bottom-Left subtle warmth -->
-        <Grid x:Name="BottomLeftGlowLayer" Opacity="0.1">
+        <!-- Layer 4: Floating Accent (subtle) -->
+        <Grid x:Name="FloatingAccentLayer" Opacity="0.15">
+            <Grid.RenderTransform>
+                <TranslateTransform x:Name="FloatingTransform"/>
+            </Grid.RenderTransform>
             <Grid.Background>
-                <RadialGradientBrush Center="0.0,1.0" RadiusX="0.7" RadiusY="0.6" GradientOrigin="0.0,1.0">
-                    <GradientStop Color="Transparent" Offset="0"/>
-                    <GradientStop Color="Transparent" Offset="1"/>
-                </RadialGradientBrush>
-            </Grid.Background>
-        </Grid>
-
-        <!-- Layer 6: Middle-Right accent -->
-        <Grid x:Name="MiddleRightGlowLayer" Opacity="0.08">
-            <Grid.Background>
-                <RadialGradientBrush Center="1.0,0.5" RadiusX="0.5" RadiusY="0.4" GradientOrigin="1.0,0.5">
-                    <GradientStop Color="Transparent" Offset="0"/>
+                <RadialGradientBrush Center="0.5,0.5" RadiusX="0.6" RadiusY="0.4" GradientOrigin="0.5,0.5">
+                    <GradientStop x:Name="FloatingStop" Color="Transparent" Offset="0"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </RadialGradientBrush>
             </Grid.Background>

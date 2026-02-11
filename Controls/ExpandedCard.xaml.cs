@@ -17,10 +17,14 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler PlayClicked;
         public event EventHandler<TmdbMovieResult> DetailsClicked;
         public event EventHandler AddListClicked;
+        public event EventHandler<bool> CinemaModeToggled;
         
         // Hold data
         private ModernIPTVPlayer.Models.IMediaStream _stream;
         private TmdbMovieResult _tmdbInfo;
+        
+        // Cinema Mode State
+        private bool _isCinemaMode = false;
         
         // Pre-initialization state
         private bool _webViewInitialized = false;
@@ -219,11 +223,58 @@ namespace ModernIPTVPlayer.Controls
         // FFmpeg Prober
         private FFmpegProber _prober = new FFmpegProber();
 
+        private void ExpandButton_Click(object sender, RoutedEventArgs e)
+        {
+            ToggleCinemaMode(!_isCinemaMode);
+        }
+
+        public void ToggleCinemaMode(bool enable)
+        {
+            if (_isCinemaMode == enable) return;
+            _isCinemaMode = enable;
+
+            if (enable)
+            {
+                // Enter Cinema Mode
+                // 1. Hide Content Rows
+                RootGrid.RowDefinitions[1].Height = new GridLength(0);
+                RootGrid.RowDefinitions[2].Height = new GridLength(0);
+                
+                // 2. Maximize Trailer Row
+                RootGrid.RowDefinitions[0].Height = new GridLength(1, GridUnitType.Star);
+                
+                // 3. Unmute if muted
+                if (_isMuted)
+                {
+                    _ = TrailerWebView.CoreWebView2.ExecuteScriptAsync("toggleMute()");
+                    _isMuted = false;
+                    UpdateMuteIcon();
+                }
+                
+                // 4. Change Icon to Shrink
+                ((FontIcon)ExpandButton.Content).Glyph = "\uE73F"; // Shrink Icon
+            }
+            else
+            {
+                // Exit Cinema Mode
+                // 1. Restore Rows
+                RootGrid.RowDefinitions[0].Height = new GridLength(160);
+                RootGrid.RowDefinitions[1].Height = new GridLength(1, GridUnitType.Star);
+                RootGrid.RowDefinitions[2].Height = GridLength.Auto;
+
+                // 2. Change Icon to Expand
+                ((FontIcon)ExpandButton.Content).Glyph = "\uE740"; // Expand Icon
+            }
+
+            CinemaModeToggled?.Invoke(this, _isCinemaMode);
+        }
+
         /// <summary>
         /// Public method to stop trailer playback when card is hidden
         /// </summary>
         public void StopTrailer()
         {
+            if (_isCinemaMode) ToggleCinemaMode(false); // Reset mode
             ResetState(isMorphing: false, isStopping: true);
         }
 
@@ -235,6 +286,7 @@ namespace ModernIPTVPlayer.Controls
             // Reset trailer/WebView - stop video via JavaScript (preserve pre-initialized player)
             TrailerWebView.Visibility = Visibility.Collapsed;
             MuteButton.Visibility = Visibility.Collapsed;
+            ExpandButton.Visibility = Visibility.Collapsed;
             if (TrailerWebView.CoreWebView2 != null && _webViewInitialized)
             {
                 // Stop video via JavaScript - don't navigate away to preserve the player
@@ -790,6 +842,7 @@ namespace ModernIPTVPlayer.Controls
                         BackdropContainer.Visibility = Visibility.Collapsed;
                         TrailerWebView.Visibility = Visibility.Visible;
                         MuteButton.Visibility = Visibility.Visible;
+                        ExpandButton.Visibility = Visibility.Visible;
                     });
                 }
             }
@@ -988,7 +1041,7 @@ namespace ModernIPTVPlayer.Controls
                 var parent = obj;
                 while (parent != null && parent != TrailerArea)
                 {
-                    if (parent == MuteButton) return;
+                    if (parent == MuteButton || parent == ExpandButton) return;
                     parent = VisualTreeHelper.GetParent(parent);
                 }
             }

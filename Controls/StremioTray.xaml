@@ -1,0 +1,89 @@
+<UserControl
+    x:Class="ModernIPTVPlayer.Controls.StremioTray"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ModernIPTVPlayer.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:ModernIPTVPlayer.Models.Stremio"
+    mc:Ignorable="d">
+
+    <Grid x:Name="TrayRoot" VerticalAlignment="Bottom" Height="600" Margin="0,0,0,-600">
+        <!-- Obsidian Background with Depth -->
+        <Grid>
+            <!-- Heavy Blur Glass -->
+            <Border CornerRadius="32,32,0,0" BorderBrush="#22FFFFFF" BorderThickness="1,1,1,0">
+                <Border.Background>
+                    <AcrylicBrush TintColor="#0A0A0A" TintOpacity="0.9" FallbackColor="#0A0A0A"/>
+                </Border.Background>
+            </Border>
+            
+            <!-- Texture/Noise Overlay (Premium Grain) -->
+            <Border x:Name="GrainOverlay" Opacity="0.03" CornerRadius="32,32,0,0">
+                <Border.Background>
+                    <ImageBrush ImageSource="ms-appx:///Assets/grain.png" Stretch="UniformToFill"/>
+                </Border.Background>
+            </Border>
+
+            <!-- Dim Handle -->
+            <Border Width="40" Height="4" Background="#33FFFFFF" CornerRadius="2" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,12,0,0"/>
+        </Grid>
+
+        <!-- Content -->
+        <Grid Margin="0,32,0,0" Padding="32,16,32,40">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Title Section -->
+            <StackPanel Spacing="4">
+                <TextBlock x:Name="TrayTitle" Text="KAYNAK SEÇİMİ" FontSize="12" FontWeight="Bold" Foreground="#88FFFFFF" CharacterSpacing="100"/>
+                <TextBlock x:Name="MediaTitleLabel" Text="Dune: Part Two" FontSize="24" FontWeight="SemiBold" Foreground="White"/>
+            </StackPanel>
+
+            <!-- Close Button (Sleek Icon) -->
+            <Button x:Name="CloseButton" Click="CloseButton_Click" 
+                    HorizontalAlignment="Right" VerticalAlignment="Top" 
+                    Style="{StaticResource GlassButtonStyle}" Width="40" Height="40" CornerRadius="20" Padding="0">
+                <FontIcon Glyph="&#xE711;" FontSize="16"/>
+            </Button>
+
+            <!-- Quick Filter / Badges Section -->
+            <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,20">
+                <Border Background="#1AFFFFFF" CornerRadius="8" Padding="12,6">
+                    <TextBlock x:Name="SourceCountLabel" Text="12 Kaynak Bulundu" FontSize="13" Foreground="#CCFFFFFF"/>
+                </Border>
+            </StackPanel>
+
+            <!-- Dynamic Source List (Grouped by Addon Quality implied via simple list for now as per feedback) -->
+            <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Hidden">
+                <ItemsControl x:Name="StreamGroupsControl">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Spacing="12" Margin="0,0,0,24">
+                                <!-- Groups titles are implied content or can be added back if needed -->
+                                <GridView ItemsSource="{Binding Streams}" 
+                                          SelectionMode="None" 
+                                          IsItemClickEnabled="True" 
+                                          ItemClick="GridView_ItemClick">
+                                    <GridView.ItemTemplate>
+                                        <DataTemplate>
+                                            <local:StreamCard ViewModel="{Binding}"/>
+                                        </DataTemplate>
+                                    </GridView.ItemTemplate>
+                                    <GridView.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <VariableSizedWrapGrid Orientation="Horizontal" ItemWidth="300" MaximumRowsOrColumns="3"/>
+                                        </ItemsPanelTemplate>
+                                    </GridView.ItemsPanel>
+                                </GridView>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

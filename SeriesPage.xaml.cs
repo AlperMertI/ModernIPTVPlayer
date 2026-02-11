@@ -34,6 +34,7 @@ namespace ModernIPTVPlayer
             MediaGrid.DetailsAction += MediaGrid_DetailsAction;
             MediaGrid.AddListAction += MediaGrid_AddListAction;
             MediaGrid.ColorExtracted += MediaGrid_ColorExtracted;
+            MediaGrid.HoverEnded += MediaGrid_HoverEnded;
         }
 
         private void MediaGrid_ItemClicked(object sender, ModernIPTVPlayer.Models.IMediaStream e)
@@ -62,6 +63,12 @@ namespace ModernIPTVPlayer
         private void MediaGrid_ColorExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
         {
             BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+        }
+
+        private void MediaGrid_HoverEnded(object sender, EventArgs e)
+        {
+             // Revert to default dark
+             BackdropControl.TransitionTo(Windows.UI.Color.FromArgb(0,0,0,0), Windows.UI.Color.FromArgb(0,0,0,0));
         }
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)

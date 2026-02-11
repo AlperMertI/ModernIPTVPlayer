@@ -157,37 +157,67 @@
             <Image x:Name="HeroImage2" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
             <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="1"/>
             
-            <!-- 2. AMBIENT BLOOM (Dynamic Ambilight) -->
-            <Rectangle x:Name="AmbientBloom" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Opacity="0" IsHitTestVisible="False">
+            <!-- 2. AMBIENT BLOOM (Subtle Dynamic Ambilight) -->
+            <Rectangle x:Name="AmbientBloom" VerticalAlignment="Top" HorizontalAlignment="Stretch" Height="600" Opacity="0" IsHitTestVisible="False">
                 <Rectangle.Fill>
-                    <RadialGradientBrush Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="1.0" RadiusY="1.0">
-                        <GradientStop Color="#00000000" Offset="0.3"/>
+                    <RadialGradientBrush Center="0.5,0.0" GradientOrigin="0.5,0.0" RadiusX="1.5" RadiusY="1.0">
+                        <GradientStop Color="#00000000" Offset="0.4"/>
                         <GradientStop x:Name="BloomColorStop" Color="#00000000" Offset="1"/>
                     </RadialGradientBrush>
                 </Rectangle.Fill>
             </Rectangle>
 
 
-            <!-- Readability Scrim (Ultra-Soft Radial Corner Fade) -->
+            <!-- Readability Scrim (Softened) -->
             <Rectangle x:Name="LocalInfoGradient" VerticalAlignment="Stretch" HorizontalAlignment="Left" Width="1400" 
                        Opacity="0" IsHitTestVisible="False" Margin="-50,0,0,-50">
                 <Rectangle.Fill>
                     <RadialGradientBrush Center="0,1" GradientOrigin="0,1" RadiusX="1.2" RadiusY="1.2">
-                        <GradientStop Color="#CC000000" Offset="0"/> 
-                        <GradientStop Color="#66000000" Offset="0.35"/>
-                        <GradientStop Color="#1A000000" Offset="0.7"/>
-                        <GradientStop Color="#00000000" Offset="1"/>
+                        <GradientStop Color="#99000000" Offset="0"/> 
+                        <GradientStop Color="#44000000" Offset="0.35"/>
+                        <GradientStop Color="#00000000" Offset="0.7"/>
                     </RadialGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+
+            <!-- Bottom Blend (Smoother transition to page content) -->
+            <Rectangle Height="400" VerticalAlignment="Bottom" IsHitTestVisible="False">
+                <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#000D0D0D" Offset="0"/>
+                        <GradientStop Color="#880D0D0D" Offset="0.5"/>
+                        <GradientStop Color="#FF0D0D0D" Offset="1"/>
+                    </LinearGradientBrush>
                 </Rectangle.Fill>
             </Rectangle>
         </Grid>
 
-        
+        <!-- 0. BACK BUTTON (Vortex Style) -->
+        <Button x:Name="BackButton" 
+                Click="BackButton_Click"
+                VerticalAlignment="Top" 
+                HorizontalAlignment="Left" 
+                Margin="48,48,0,0" 
+                Style="{StaticResource VortexButtonStyle}"
+                Width="48" Height="48"
+                Canvas.ZIndex="1000">
+            <AnimatedIcon x:Name="BackIconVisual" Width="20" Height="20">
+                <AnimatedIcon.Source>
+                    <animated:AnimatedBackVisualSource/>
+                </AnimatedIcon.Source>
+                <AnimatedIcon.FallbackIconSource>
+                    <SymbolIconSource Symbol="Back"/>
+                </AnimatedIcon.FallbackIconSource>
+            </AnimatedIcon>
+        </Button>
 
-
-        <!-- 2. MAIN CONTENT -->
-        <!-- Fixed root container, scrolling behavior handled via VSM -->
-        <Grid x:Name="LayoutRoot" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
+        <!-- 2. MAIN CONTENT WRAPPER -->
+        <Grid x:Name="MainContentWrapper" RenderTransformOrigin="0.5,0.5" Margin="0,0,0,0">
+            <Grid.RenderTransform>
+                <CompositeTransform x:Name="MainContentTransform"/>
+            </Grid.RenderTransform>
+            
+            <Grid x:Name="LayoutRoot" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
             <ScrollViewer x:Name="RootScrollViewer" 
                           VerticalScrollBarVisibility="Disabled" 
                           VerticalScrollMode="Disabled" 
@@ -664,21 +694,13 @@
             </Border>
         </Grid>
 
-        <!-- Back Button -->
-        <Button x:Name="BackButton" Click="BackButton_Click" 
-                VerticalAlignment="Top" HorizontalAlignment="Left" Margin="40,40,0,0"
-                Style="{StaticResource VortexButtonStyle}" Height="52" Width="52" Padding="0" CornerRadius="26">
-            <muxc:AnimatedIcon x:Name="BackIconVisual" Height="24" Width="24">
-                <muxc:AnimatedIcon.Source>
-                    <animated:AnimatedBackVisualSource/>
-                </muxc:AnimatedIcon.Source>
-                <muxc:AnimatedIcon.FallbackIconSource>
-                    <muxc:FontIconSource Glyph="&#xE72B;"/>
-                </muxc:AnimatedIcon.FallbackIconSource>
-            </muxc:AnimatedIcon>
-        </Button>
+        </Grid> <!-- End of MainContentWrapper -->
 
-        <!-- 4. FEEDBACK & NOTIFICATIONS -->
+        <!-- 4. THE OBSIDIAN TRAY (Bottom-sliding selection) -->
+        <ctl:StremioTray x:Name="ObsidianTray" VerticalAlignment="Bottom" Visibility="Collapsed" Canvas.ZIndex="200"
+                        SourceSelected="ObsidianTray_SourceSelected" TrayClosed="ObsidianTray_TrayClosed"/>
+
+        <!-- 5. FEEDBACK & NOTIFICATIONS -->
         <TeachingTip x:Name="CopyFeedbackTip"
                      Title="Bağlantı Kopyalandı"
                      Subtitle="Yayın adresi panoya kaydedildi. Harici oynatıcılarda kullanabilirsiniz."

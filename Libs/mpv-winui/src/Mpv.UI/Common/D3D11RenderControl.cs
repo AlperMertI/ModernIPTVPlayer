@@ -312,12 +312,6 @@ public class D3D11RenderControl : ContentControl
                         _needsFirstFrameLink = false;
                     }
 
-                    var totalMs = (float)cycleSw.Elapsed.TotalMilliseconds;
-                    // Monitoring for slow frames
-                    if (totalMs > (1000.0f / _monitorRefreshRate) + 2.0f && didDraw) 
-                    {
-                          LogSync($"[SLOW_FRAME] Total: {totalMs:F1}ms | Render: {renderMs:F1}ms | Present: {presentMs:F1}ms");
-                    }
                 }
                 catch (Exception ex)
                 {

@@ -13,7 +13,7 @@
           PointerEntered="OnPointerEntered"
           PointerExited="OnPointerExited"
           PointerMoved="OnPointerMoved"
-          Margin="16"> <!-- Increased margin to prevent shadow clipping -->
+          Margin="4"> <!-- Reduced margin, let grid handle spacing -->
 
         <Grid.Resources>
             <Storyboard x:Name="HoverInStoryboard">
@@ -35,7 +35,7 @@
                     </DoubleAnimation.EasingFunction>
                 </DoubleAnimation>
                 <DoubleAnimation Storyboard.TargetName="ScaleTrans" Storyboard.TargetProperty="ScaleY" To="1.0" Duration="0:0:0.3">
-                     <DoubleAnimation.EasingFunction>
+                    <DoubleAnimation.EasingFunction>
                         <CubicEase EasingMode="EaseOut"/>
                     </DoubleAnimation.EasingFunction>
                 </DoubleAnimation>

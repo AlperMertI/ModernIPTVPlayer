@@ -108,6 +108,7 @@ namespace ModernIPTVPlayer
                     "MoviesPage" => typeof(MoviesPage), 
                     "SeriesPage" => typeof(SeriesPage),
                     "MultiPlayerPage" => typeof(MultiPlayerPage),
+                    "AddonsPage" => typeof(Pages.AddonsPage),
                     _ => null
                 };
 
@@ -168,6 +169,13 @@ namespace ModernIPTVPlayer
                 NavView.IsPaneVisible = true;
                 NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
                     .FirstOrDefault(i => i.Tag.ToString() == "SeriesPage");
+            }
+            else if (ContentFrame.SourcePageType == typeof(Pages.AddonsPage))
+            {
+                NavView.Header = "Eklentiler";
+                NavView.IsPaneVisible = true;
+                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
+                    .FirstOrDefault(i => i.Tag.ToString() == "AddonsPage");
             }
             else if (ContentFrame.SourcePageType == typeof(PlayerPage))
             {

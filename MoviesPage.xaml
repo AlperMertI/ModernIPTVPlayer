@@ -34,7 +34,7 @@
         </Style>
     </Page.Resources>
 
-    <Grid Background="#FF0D0D0D" PointerExited="RootGrid_PointerExited">
+    <Grid>
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup x:Name="AdaptiveStates">
                 <VisualState x:Name="Wide">
@@ -58,9 +58,11 @@
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
 
-        <!-- Dynamic Backdrop - Original 3-Layer Radial Gradient System -->
-        <!-- Dynamic Backdrop Control -->
+        <!-- Dynamic Backdrop -->
         <controls:DynamicBackdrop x:Name="BackdropControl" />
+        
+        <!-- Vignette -->
+        <Rectangle Fill="#15000000" IsHitTestVisible="False"/>
 
         <SplitView x:Name="MainSplitView"
                    DisplayMode="Overlay"
@@ -70,6 +72,7 @@
                    PaneBackground="#0F131C"
                    LightDismissOverlayMode="On">
             
+            <!-- SIDEBAR (IPTV Library Mode) -->
             <SplitView.Pane>
                 <Grid>
                     <Grid.Background>
@@ -83,6 +86,7 @@
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
     
+                        <!-- Title -->
                         <Grid Height="60" VerticalAlignment="Top" Padding="24,0">
                             <TextBlock Text="FİLMLER" FontSize="28" FontWeight="ExtraBold" VerticalAlignment="Center" CharacterSpacing="50">
                                 <TextBlock.Foreground>
@@ -94,15 +98,14 @@
                             </TextBlock>
                         </Grid>
     
+                        <!-- Search -->
                         <Grid Grid.Row="1" Padding="20,12">
-                            <Border x:Name="SearchPillBorder" CornerRadius="18" Background="#0AFFFFFF" BorderBrush="#1FFFFFFF" BorderThickness="1" Height="36"
-                                    PointerEntered="SearchPill_PointerEntered" PointerExited="SearchPill_PointerExited">
+                            <Border x:Name="SearchPillBorder" CornerRadius="18" Background="#0AFFFFFF" BorderBrush="#1FFFFFFF" BorderThickness="1" Height="36">
                                 <Grid VerticalAlignment="Stretch" Background="Transparent">
                                     <FontIcon Glyph="&#xE721;" FontSize="13" Foreground="White" Opacity="0.5" 
                                               HorizontalAlignment="Left" VerticalAlignment="Center" 
                                               Margin="12,0,0,0" IsHitTestVisible="False"/>
-                                    <TextBox x:Name="CategorySearchBox" TextChanged="CategorySearchBox_TextChanged" 
-                                             GotFocus="CategorySearchBox_GotFocus" LostFocus="CategorySearchBox_LostFocus"
+                                    <TextBox x:Name="CategorySearchBox" 
                                              PlaceholderText="Kategori Ara..." 
                                              BorderThickness="0" Background="Transparent" 
                                              Foreground="White" PlaceholderForeground="#80FFFFFF" FontSize="13" 
@@ -113,14 +116,13 @@
                             </Border>
                         </Grid>
     
-                        <ListView x:Name="CategoryListView" Grid.Row="2" 
+                        <!-- Iptv Categories -->
+                        <ListView x:Name="IptvCategoryList" Grid.Row="2" 
                                   SelectionMode="Single" 
                                   ItemClick="CategoryListView_ItemClick" 
                                   IsItemClickEnabled="True"
                                   Padding="12,8"
-                                  ScrollViewer.VerticalScrollBarVisibility="Hidden"
-                                  ScrollViewer.IsVerticalScrollChainingEnabled="False"
-                                  ScrollViewer.IsScrollInertiaEnabled="True">
+                                  ScrollViewer.VerticalScrollBarVisibility="Hidden">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
                                     <Setter Property="CornerRadius" Value="6"/>
@@ -139,15 +141,9 @@
                                                                     <ColorAnimation Storyboard.TargetName="Root" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#15FFFFFF" Duration="0:0:0.1"/>
                                                                 </Storyboard>
                                                             </VisualState>
-                                                            <VisualState x:Name="Pressed">
-                                                                 <Storyboard>
-                                                                    <ColorAnimation Storyboard.TargetName="Root" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#0AFFFFFF" Duration="0:0:0.1"/>
-                                                                </Storyboard>
-                                                            </VisualState>
                                                             <VisualState x:Name="Selected">
                                                                 <Storyboard>
                                                                     <ColorAnimation Storyboard.TargetName="Root" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#1FFFFFFF" Duration="0:0:0.1"/>
-                                                                    <DoubleAnimation Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.1"/>
                                                                 </Storyboard>
                                                             </VisualState>
                                                         </VisualStateGroup>
@@ -157,7 +153,6 @@
                                                         <ColumnDefinition Width="3"/>
                                                         <ColumnDefinition Width="*"/>
                                                     </Grid.ColumnDefinitions>
-                                                    
                                                     <Rectangle x:Name="SelectionIndicator" Fill="{ThemeResource SystemAccentColor}" RadiusX="2" RadiusY="2" Opacity="0" Height="16" VerticalAlignment="Center"/>
                                                     <ContentPresenter Grid.Column="1" Margin="8,0,0,0"/>
                                                 </Grid>
@@ -167,89 +162,202 @@
                                 </Style>
                             </ListView.ItemContainerStyle>
                             <ListView.ItemTemplate>
-                                <DataTemplate x:DataType="local:LiveCategory">
-                                    <Grid>
-                                        <TextBlock Text="{x:Bind CategoryName}" 
-                                                   FontSize="14" 
-                                                   FontFamily="Segoe UI Variable Text"
-                                                   FontWeight="Medium" 
-                                                   Opacity="0.85" 
-                                                   TextTrimming="CharacterEllipsis" 
-                                                   CharacterSpacing="30" 
-                                                   VerticalAlignment="Center" 
-                                                   Margin="8,0,0,0"/>
-                                    </Grid>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding CategoryName}" FontSize="14" FontWeight="Medium" Opacity="0.85" TextTrimming="CharacterEllipsis"/>
                                 </DataTemplate>
                             </ListView.ItemTemplate>
                         </ListView>
-                        
-                        <ProgressRing x:Name="LoadingRing" Grid.Row="2" IsActive="False" Width="40" Height="40" HorizontalAlignment="Center" VerticalAlignment="Center" Foreground="{ThemeResource AccentAAFillColorDefaultBrush}"/>
                     </Grid>
                 </Grid>
             </SplitView.Pane>
 
+            <!-- CONTENT AREA -->
             <SplitView.Content>
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/> <!-- Header -->
+                        <RowDefinition Height="Auto"/> <!-- Stremio Filters (Visible only in Stremio) -->
+                        <RowDefinition Height="*"/>    <!-- Media Grid -->
                     </Grid.RowDefinitions>
 
-                    <Grid Padding="24,36,36,12">
+                    <!-- HEADER -->
+                    <Grid Padding="24,24,36,12" Canvas.ZIndex="10">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/> <!-- Title/Toggle -->
+                            <ColumnDefinition Width="*"/>    <!-- Center: Switcher -->
+                            <ColumnDefinition Width="Auto"/> <!-- Right Actions -->
                         </Grid.ColumnDefinitions>
-                        
-                         <Button Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" Margin="0,0,16,0" VerticalAlignment="Center">
-                            <FontIcon Glyph="&#xE700;" FontSize="24" Foreground="White"/>
-                        </Button>
 
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock x:Name="SelectedCategoryTitle" 
-                                       Text="Son Eklenenler" 
-                                       FontSize="28" 
-                                       FontFamily="Segoe UI Variable Display" 
-                                       FontWeight="SemiBold" 
-                                       Foreground="White"
-                                       CharacterSpacing="-20"/>
-                            <TextBlock Text="Göz at ve keşfet" 
-                                       FontSize="14" 
-                                       FontFamily="Segoe UI Variable Text"
-                                       Opacity="0.6" 
-                                       Foreground="White" 
-                                       Margin="0,4,0,0"
-                                       CharacterSpacing="40"/>
+                        <!-- Left: Sidebar Toggle (IPTV) OR Title (Stremio) -->
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                             <Button x:Name="SidebarToggle" Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
+                            </Button>
+                            
+                            <!-- Stremio Title (Hidden in IPTV mode) -->
+                            <TextBlock x:Name="StremioTitle" Text="KEŞFET" FontSize="28" FontWeight="SemiBold" VerticalAlignment="Center" Visibility="Collapsed" CharacterSpacing="-20" Foreground="White"/>
+                        </StackPanel>
+                        
+                        <!-- Center: Source Switcher -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" 
+                                    Background="#15FFFFFF" Padding="4" CornerRadius="20" VerticalAlignment="Center">
+                            
+                            <RadioButton x:Name="SourceIPTV" Content="Kütüphanem" 
+                                         Style="{StaticResource PillRadioButtonStyle}" 
+                                         IsChecked="True" 
+                                         Checked="Source_Checked" Tag="IPTV"/>
+                            
+                            <RadioButton x:Name="SourceStremio" Content="Stremio" 
+                                         Style="{StaticResource PillRadioButtonStyle}" 
+                                         Checked="Source_Checked" Tag="Stremio"/>
                         </StackPanel>
 
+                        <!-- Right: Actions -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16">
-                             <Button Style="{ThemeResource DateTimePickerFlyoutButtonStyle}" 
-                                     Content="Sırala" 
-                                     CornerRadius="20" 
-                                     Background="#1FFFFFFF" 
-                                     Foreground="White" 
-                                     BorderThickness="0"
-                                     Padding="16,4"
-                                     FontFamily="Segoe UI Variable Small"/>
-                             <Button x:Name="SearchButton" 
-                                     Click="SearchButton_Click" 
-                                     Width="42" 
-                                     Height="42" 
-                                     CornerRadius="21" 
-                                     Background="#1FFFFFFF" 
-                                     BorderThickness="0">
-                                 <FontIcon Glyph="&#xE721;" FontSize="18" Foreground="White"/>
-                             </Button>
                              <controls:DownloadStatusButton />
                         </StackPanel>
                     </Grid>
 
-                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="1" />
+                    <!-- MEDIA CONTENT AREA -->
+                    <!-- 1. IPTV Grid (Standard) -->
+                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="2" Margin="0" Visibility="Visible" />
+
+                    <!-- 2. STREMIO HOME (Hero + Rows) -->
+                    <ScrollViewer x:Name="StremioHomeView" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed" 
+                                  VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
+                                  Canvas.ZIndex="0"
+                                  ViewChanged="StremioHomeView_ViewChanged">
+                        <StackPanel Spacing="36" Padding="0,0,0,48">
+                            
+                            <!-- HERO SECTION (Full Bleed) -->
+                            <Grid x:Name="HeroSection" Height="650" HorizontalAlignment="Stretch" Margin="0,0,0,0">
+                                <!-- Hero Image Background (Full Width) - Rendered via Composition API -->
+                                <Grid x:Name="HeroImageContainer">
+                                    <!-- Composition host: SpriteVisual with MaskBrush renders here -->
+                                    <Border x:Name="HeroImageHost" 
+                                            HorizontalAlignment="Stretch" 
+                                            VerticalAlignment="Stretch"/>
+                                    
+                                    <!-- Top Scrim (Header Readability) -->
+                                    <Rectangle VerticalAlignment="Top" Height="150" IsHitTestVisible="False">
+                                        <Rectangle.Fill>
+                                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                                <GradientStop Color="#CC0D0D0D" Offset="0"/>
+                                                <GradientStop Color="#000D0D0D" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </Rectangle.Fill>
+                                    </Rectangle>
+
+                                    <!-- Left Vignette (For Text Readability - soft fade in all directions) -->
+                                    <Rectangle HorizontalAlignment="Left" Width="900" IsHitTestVisible="False">
+                                        <Rectangle.Fill>
+                                            <RadialGradientBrush Center="0,0.45" RadiusX="1.0" RadiusY="0.7" GradientOrigin="0,0.45">
+                                                <GradientStop Color="#AA0D0D0D" Offset="0"/>
+                                                <GradientStop Color="#550D0D0D" Offset="0.5"/>
+                                                <GradientStop Color="#000D0D0D" Offset="1"/>
+                                            </RadialGradientBrush>
+                                        </Rectangle.Fill>
+                                    </Rectangle>
+                                </Grid>
+
+                                <!-- Navigation Arrows -->
+                                <Button x:Name="HeroPrevButton" Click="HeroPrev_Click" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="24,0,0,0" Style="{StaticResource VortexButtonStyle}" Width="48" Height="48" Canvas.ZIndex="5">
+                                    <FontIcon Glyph="&#xE760;" FontSize="18"/>
+                                </Button>
+                                <Button x:Name="HeroNextButton" Click="HeroNext_Click" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,24,0" Style="{StaticResource VortexButtonStyle}" Width="48" Height="48" Canvas.ZIndex="5">
+                                    <FontIcon Glyph="&#xE761;" FontSize="18"/>
+                                </Button>
+                                    
+                                
+                                <!-- Hero Content (Overlay on Left) -->
+                                <StackPanel x:Name="HeroContentPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Spacing="16" Margin="64,0,0,80">
+                                    <Border Background="#CCFFFFFF" HorizontalAlignment="Left" CornerRadius="4" Padding="8,4">
+                                        <TextBlock Text="GÜNÜN ÖNERİSİ" FontSize="12" FontWeight="Bold" Foreground="Black" CharacterSpacing="50"/>
+                                    </Border>
+                                    
+                                    <TextBlock x:Name="HeroTitle" Text="Dune: Part Two" 
+                                               FontSize="56" FontWeight="Black" Foreground="White" 
+                                               TextWrapping="Wrap" MaxWidth="800" LineHeight="60"/>
+                                    
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <TextBlock Text="2024" Foreground="#CCFFFFFF" FontSize="16" FontWeight="SemiBold"/>
+                                        <Ellipse Width="4" Height="4" Fill="#CCFFFFFF" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Bilim Kurgu" Foreground="#CCFFFFFF" FontSize="16" FontWeight="SemiBold"/>
+                                        <Ellipse Width="4" Height="4" Fill="#CCFFFFFF" VerticalAlignment="Center"/>
+                                        <TextBlock Text="8.8 ★" Foreground="#F5C518" FontSize="16" FontWeight="Bold"/>
+                                    </StackPanel>
+                                    
+                                    <TextBlock x:Name="HeroOverview" Text="Paul Atreides unites with Chani and the Fremen while on a warpath of revenge against the conspirators who destroyed his family."
+                                               Foreground="#CCFFFFFF" FontSize="16" TextWrapping="Wrap" MaxWidth="700" MaxLines="3" TextTrimming="CharacterEllipsis" LineHeight="24"/>
+                                    
+                                    <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,12,0,0">
+                                        <Button x:Name="HeroPlayButton" 
+                                                Click="HeroPlayButton_Click"
+                                                Background="White" Foreground="Black" 
+                                                CornerRadius="28" Height="56" Padding="32,0" 
+                                                BorderThickness="0">
+                                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                                <FontIcon Glyph="&#xE768;" FontSize="18"/>
+                                                <TextBlock Text="Hemen İzle" FontWeight="Bold" FontSize="16"/>
+                                            </StackPanel>
+                                        </Button>
+                                        
+                                         <Button x:Name="HeroDetailsButton" 
+                                                 Click="HeroDetailsButton_Click"
+                                                 Background="#33FFFFFF" Foreground="White" 
+                                                 CornerRadius="28" Height="56" Padding="24,0" 
+                                                 BorderThickness="1" BorderBrush="#55FFFFFF">
+                                             <StackPanel Orientation="Horizontal" Spacing="12">
+                                                 <FontIcon Glyph="&#xE946;" FontSize="18"/>
+                                                 <TextBlock Text="Detaylar" FontWeight="SemiBold" FontSize="16"/>
+                                             </StackPanel>
+                                         </Button>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- DYNAMIC CATALOG ROWS -->
+                            <ItemsControl x:Name="DiscoveryRows">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <controls:CatalogRow CatalogName="{Binding CatalogName}" 
+                                                           ItemsSource="{Binding Items}" 
+                                                            ItemClicked="CatalogRow_ItemClicked"
+                                                            HoverStarted="CatalogRow_HoverStarted"
+                                                            HoverEnded="CatalogRow_HoverEnded"
+                                                            ScrollStarted="CatalogRow_ScrollStarted"
+                                                            ScrollEnded="CatalogRow_ScrollEnded"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            
+                        </StackPanel>
+                    </ScrollViewer>
+                    
+                    <!-- Loading Indicator -->
+                    <ProgressRing x:Name="LoadingRing" Grid.Row="2" IsActive="False" Width="50" Height="50" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    
+                    <!-- Flying Panel Overlay (For Stremio) -->
+                    <Canvas x:Name="OverlayCanvas" Grid.Row="0" Grid.RowSpan="3" IsHitTestVisible="False">
+                        <!-- Cinema Mode Scrim -->
+                        <Rectangle x:Name="CinemaScrim" Fill="#E6000000" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="0"/>
+                        
+                        <controls:ExpandedCard x:Name="ActiveExpandedCard" 
+                                          Visibility="Collapsed" 
+                                          PlayClicked="ExpandedCard_PlayClicked"
+                                          DetailsClicked="ExpandedCard_DetailsClicked"
+                                          AddListClicked="ExpandedCard_AddListClicked"
+                                          PointerExited="ActiveExpandedCard_PointerExited"
+                                          CinemaModeToggled="ActiveExpandedCard_CinemaModeToggled"
+                                          IsHitTestVisible="True"
+                                          Canvas.ZIndex="1"/>
+                    </Canvas>
                 </Grid>
             </SplitView.Content>
 
         </SplitView>
+
     </Grid>
 </Page>
+
 

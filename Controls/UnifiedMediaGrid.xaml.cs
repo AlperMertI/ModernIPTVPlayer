@@ -18,6 +18,7 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<MediaNavigationArgs> DetailsAction;
         public event EventHandler<IMediaStream> AddListAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> ColorExtracted;
+        public event EventHandler HoverEnded;
 
         // Current Data
         private List<IMediaStream> _items;
@@ -101,6 +102,11 @@ namespace ModernIPTVPlayer.Controls
             ColorExtracted?.Invoke(this, colors);
         }
 
+        private void Card_HoverEnded(object sender, EventArgs e)
+        {
+            HoverEnded?.Invoke(this, EventArgs.Empty);
+        }
+
         // ==========================================
         // FLYING PANEL LOGIC (Shared)
         // ==========================================
@@ -110,55 +116,69 @@ namespace ModernIPTVPlayer.Controls
         private System.Threading.CancellationTokenSource _closeCts;
         private DispatcherTimer _flightTimer;
 
-        private void Card_HoverStarted(object sender, EventArgs e)
+        private async void Card_HoverStarted(object sender, EventArgs e)
         {
             if (sender is PosterCard card)
             {
-                 // Cancel any pending close
-                _closeCts?.Cancel();
+                 // 1. Force color update (Robustness fix)
+                 if (!string.IsNullOrEmpty(card.ImageUrl))
+                 {
+                      var colors = await ImageHelper.GetOrExtractColorAsync(card.ImageUrl);
+                      if (colors.HasValue)
+                      {
+                           ColorExtracted?.Invoke(this, colors.Value);
+                      }
+                 }
 
-                var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
-                // Safe cancel animations
-                try { visual.StopAnimation("Opacity"); } catch { }
-                try { visual.StopAnimation("Scale"); } catch { }
-                try { visual.StopAnimation("Translation"); } catch { }
+                 // Determine if we should show the expanded card
+                 // Only show if it's NOT a SeriesStream (Series usually go straight to details)
+                 // OR if we want consistent behavior.
+                 // For now, let's keep the flying panel logic but ensure color fires FIRST.
 
-                bool isAlreadyOpen = ActiveExpandedCard.Visibility == Visibility.Visible;
+                 _closeCts?.Cancel();
+                 
+                 // ... (Rest of Flying Panel Logic) ...
+                 var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
+                 try { visual.StopAnimation("Opacity"); } catch { }
+                 try { visual.StopAnimation("Scale"); } catch { }
+                 try { visual.StopAnimation("Translation"); } catch { }
 
-                if (isAlreadyOpen)
-                {
-                    // Flight Mode
-                    visual.Opacity = 1f;
-                    
-                    if (_flightTimer == null) 
-                    {
-                        _flightTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
-                        _flightTimer.Tick += FlightTimer_Tick;
-                    }
-                    else
-                    {
-                        _flightTimer.Stop();
-                    }
-                    
-                    _pendingHoverCard = card;
-                    _flightTimer.Start();
-                }
-                else
-                {
-                    // Fresh Open (Debounce)
-                    _pendingHoverCard = card;
-                    if (_hoverTimer == null)
-                    {
-                        _hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-                        _hoverTimer.Tick += HoverTimer_Tick;
-                    }
-                    else
-                    {
-                        _hoverTimer.Stop();
-                    }
-                    _hoverTimer.Start();
-                    ActiveExpandedCard.PrepareForTrailer();
-                }
+                 bool isAlreadyOpen = ActiveExpandedCard.Visibility == Visibility.Visible;
+
+                 if (isAlreadyOpen)
+                 {
+                     // Flight Mode
+                     visual.Opacity = 1f;
+                     
+                     if (_flightTimer == null) 
+                     {
+                         _flightTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+                         _flightTimer.Tick += FlightTimer_Tick;
+                     }
+                     else
+                     {
+                         _flightTimer.Stop();
+                     }
+                     
+                     _pendingHoverCard = card;
+                     _flightTimer.Start();
+                 }
+                 else
+                 {
+                     // Fresh Open (Debounce)
+                     _pendingHoverCard = card;
+                     if (_hoverTimer == null)
+                     {
+                         _hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+                         _hoverTimer.Tick += HoverTimer_Tick;
+                     }
+                     else
+                     {
+                         _hoverTimer.Stop();
+                     }
+                     _hoverTimer.Start();
+                     ActiveExpandedCard.PrepareForTrailer();
+                 }
             }
         }
 

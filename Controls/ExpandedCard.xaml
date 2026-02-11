@@ -57,6 +57,20 @@
             
             <Button x:Name="MuteButton" 
                     Click="MuteButton_Click"
+                    HorizontalAlignment="Left" 
+                    VerticalAlignment="Bottom" 
+                    Margin="8,0,0,8"
+                    Width="32" Height="32"
+                    CornerRadius="16"
+                    Background="#66000000"
+                    BorderThickness="0"
+                    Padding="0"
+                    Visibility="Collapsed">
+                <FontIcon x:Name="MuteIcon" Glyph="&#xE74F;" FontSize="14" Foreground="White"/>
+            </Button>
+
+            <Button x:Name="ExpandButton" 
+                    Click="ExpandButton_Click"
                     HorizontalAlignment="Right" 
                     VerticalAlignment="Bottom" 
                     Margin="0,0,8,8"
@@ -66,7 +80,7 @@
                     BorderThickness="0"
                     Padding="0"
                     Visibility="Collapsed">
-                <FontIcon x:Name="MuteIcon" Glyph="&#xE74F;" FontSize="14" Foreground="White"/>
+                <FontIcon Glyph="&#xE740;" FontSize="14" Foreground="White"/>
             </Button>
             
             <ProgressRing x:Name="LoadingRing" IsActive="False" Visibility="Collapsed" Foreground="White" Width="24" Height="24"/>

@@ -19,6 +19,7 @@ namespace ModernIPTVPlayer.Controls
 
         public event EventHandler<(Color Primary, Color Secondary)> ColorsExtracted;
         public event EventHandler HoverStarted;
+        public event EventHandler HoverEnded;
 
         public static readonly DependencyProperty ImageUrlProperty =
             DependencyProperty.Register("ImageUrl", typeof(string), typeof(PosterCard), new PropertyMetadata(null, OnImageUrlChanged));
@@ -100,8 +101,17 @@ namespace ModernIPTVPlayer.Controls
 
         private void OnPointerExited(object sender, PointerRoutedEventArgs e)
         {
+             // Fix: Check if we are really outside the bounds
+             var point = e.GetCurrentPoint(RootGrid).Position;
+             if (point.X > 0 && point.Y > 0 && point.X < RootGrid.ActualWidth && point.Y < RootGrid.ActualHeight)
+             {
+                 // Still inside (likely moved over child element or weird glitch), ignore
+                 return;
+             }
+
              IsHovered = false;
              HoverOutStoryboard.Begin();
+             HoverEnded?.Invoke(this, EventArgs.Empty);
              
              TiltProjection.RotationX = 0;
              TiltProjection.RotationY = 0;

@@ -284,6 +284,34 @@ namespace ModernIPTVPlayer
             catch { return null; }
         }
 
+        public static async Task<TmdbMovieResult?> GetMovieByExternalIdAsync(string externalId)
+        {
+            try
+            {
+                // Use /find/ endpoint
+                var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language=tr-TR";
+                var json = await _client.GetStringAsync(url);
+                
+                // We need a specific response model for Find, or use dynamic/JsonElement
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                
+                if (root.TryGetProperty("movie_results", out var movies) && movies.GetArrayLength() > 0)
+                {
+                    var first = movies[0];
+                    return JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                }
+                 if (root.TryGetProperty("tv_results", out var tvs) && tvs.GetArrayLength() > 0)
+                {
+                    var first = tvs[0];
+                    return JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                }
+
+                return null;
+            }
+            catch { return null; }
+        }
+
         public static string ExtractYear(string input)
         {
             if (string.IsNullOrEmpty(input)) return null;

@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Navigation;
 using ModernIPTVPlayer.Controls;
 using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Models.Stremio;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -234,6 +235,12 @@ namespace ModernIPTVPlayer
                     _item = item;
                     await LoadDetailsAsync(item);
                 }
+                else if (e.Parameter is string stremioId) 
+                {
+                    // Support direct navigation via ID (Deep Link potential)
+                    // TODO: Implement fetching Meta by ID if needed.
+                }
+
                 
                 StartHeroConnectedAnimation();
             }
@@ -284,14 +291,21 @@ namespace ModernIPTVPlayer
             TitleText.Text = item.Title;
             StickyTitle.Text = item.Title; 
 
-            if (!string.IsNullOrEmpty(item.PosterUrl))
+            string heroUrl = item.PosterUrl;
+            // Prefer Stremio Background (Backdrop) over Poster for Hero Image
+            if (item is Models.Stremio.StremioMediaStream smsHero && !string.IsNullOrEmpty(smsHero.Meta.Background))
+            {
+                heroUrl = smsHero.Meta.Background;
+            }
+
+            if (!string.IsNullOrEmpty(heroUrl))
             {
                 HeroImage.Opacity = 0;
-                HeroImage.Source = new BitmapImage(new Uri(item.PosterUrl));
+                HeroImage.Source = new BitmapImage(new Uri(heroUrl));
                 await Task.Delay(50);
                 HeroImage.Opacity = 1; 
                 StartHeroConnectedAnimation();
-                ApplyPremiumAmbience(item.PosterUrl);
+                ApplyPremiumAmbience(heroUrl);
                 ElementSoundPlayer.Play(ElementSoundKind.Show);
             }
 
@@ -338,6 +352,28 @@ namespace ModernIPTVPlayer
                 {
                      string extractedYear = TmdbHelper.ExtractYear(item.Title);
                      _cachedTmdb = await TmdbHelper.SearchTvAsync(item.Title, extractedYear);
+                }
+                else if (item is Models.Stremio.StremioMediaStream sms)
+                {
+                     // Stremio items usually have IMDB ID in their ID field (e.g. tt1234567)
+                     string imdbId = sms.Meta.Id ?? "";
+                     string rawTitle = item.Title;
+                     string rawYear = sms.Year;
+
+                     System.Diagnostics.Debug.WriteLine($"[Stremio] Fetching details for: {rawTitle} (ID: {imdbId}, Year: {rawYear})");
+
+                     if (!string.IsNullOrEmpty(imdbId) && imdbId.StartsWith("tt"))
+                     {
+                         _cachedTmdb = await TmdbHelper.GetMovieByExternalIdAsync(imdbId);
+                     }
+                     
+                     if (_cachedTmdb == null)
+                     {
+                         // Fallback to title search if ID lookup failed
+                         string cleanYear = TmdbHelper.ExtractYear(rawYear) ?? rawYear;
+                         System.Diagnostics.Debug.WriteLine($"[Stremio] ID lookup failed. Searching by Title: {rawTitle} Year: {cleanYear}");
+                         _cachedTmdb = await TmdbHelper.SearchMovieAsync(rawTitle, cleanYear);
+                     }
                 }
                 else
                 {
@@ -390,6 +426,9 @@ namespace ModernIPTVPlayer
                 {
                     _ = UpdateTechnicalBadgesAsync(live.StreamUrl);
                 }
+                // Stremio: We don't have a stream URL yet, so we can't probe.
+                // But we might have some info in Meta.BehaviorHints (not implemented yet)
+
 
                 // Initial Cast Shimmer (Standard 4 items)
                 AdjustCastShimmer(4);
@@ -477,9 +516,54 @@ namespace ModernIPTVPlayer
                 GenresText.Text = "Genel";
                 CastSection.Visibility = Visibility.Collapsed;
                 AdjustCastShimmer(0);
+                CastSection.Visibility = Visibility.Collapsed;
+                AdjustCastShimmer(0);
             }
 
-            // Determine Stream Type Logic
+            // Stremio Specifics
+            if (item is Models.Stremio.StremioMediaStream stremioItem)
+            {
+                 // Catalog items often miss 'background' (backdrop) and 'videos' (episodes).
+                 // If missing, enforce a full metadata fetch from Cinemeta (or the source addon if known, defaulting to Cinemeta).
+                 if (string.IsNullOrEmpty(stremioItem.Meta.Background) || stremioItem.Meta.Videos == null || stremioItem.Meta.Videos.Count == 0)
+                 {
+                      try 
+                      {
+                          // Default to Cinemeta for metadata
+                          string metaUrl = "https://v3-cinemeta.strem.io";
+                          var fullMeta = await Services.Stremio.StremioService.Instance.GetMetaAsync(metaUrl, stremioItem.Meta.Type, stremioItem.Meta.Id);
+                          if (fullMeta != null)
+                          {
+                              stremioItem.Meta = fullMeta; 
+                              
+                              // Update Hero Image immediately if we found a background
+                              if (!string.IsNullOrEmpty(fullMeta.Background))
+                              {
+                                  HeroImage.Source = new BitmapImage(new Uri(fullMeta.Background));
+                                  ApplyPremiumAmbience(fullMeta.Background);
+                              }
+                          }
+                      }
+                      catch (Exception ex)
+                      {
+                          System.Diagnostics.Debug.WriteLine($"[Stremio] Failed to enrich metadata: {ex.Message}");
+                      }
+                 }
+                 if (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")
+                 {
+                     EpisodesPanel.Visibility = Visibility.Visible;
+                     PlayButtonText.Text = "Bölüm Seçin"; // Prompt user to pick episode
+                     await LoadStremioSeriesDataAsync(stremioItem);
+                 }
+                 else
+                 {
+                     EpisodesPanel.Visibility = Visibility.Collapsed;
+                     PlayButtonText.Text = "Oynat"; // Prepare to fetch stream
+                     _streamUrl = null; // No URL yet
+                 }
+                 // REMOVED 'return;' to allow StaggeredRevealContent to run
+            }
+
             if (item is SeriesStream series)
             {
                 // SERIES MODE
@@ -539,13 +623,6 @@ namespace ModernIPTVPlayer
                                     OverviewText.Text = ep.Overview;
                                     AdjustOverviewShimmer(ep.Overview);
                                 }
-                                
-                                // Update Hero Image to episode still if available
-                                // REMOVED: User prefers Series Backdrop/Slideshow over low-res episode stills
-                                // if (!string.IsNullOrEmpty(ep.StillUrl))
-                                // {
-                                //    HeroImage.Source = new BitmapImage(new Uri(TmdbHelper.GetImageUrl(ep.StillUrl)));
-                                // }
                             }
                         }
                     }
@@ -609,35 +686,27 @@ namespace ModernIPTVPlayer
                     RestartButton.Visibility = Visibility.Collapsed;
                 }
 
-                // SLIDESHOW (MOVIE)
-                bool startedSlideshow = false;
-                System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Checking availability...");
-                
-                if (_cachedTmdb != null && _cachedTmdb.Images?.Backdrops != null && _cachedTmdb.Images.Backdrops.Count > 0)
-                {
-                    // Extract URLs
-                    var backdrops = _cachedTmdb.Images.Backdrops.Select(i => TmdbHelper.GetImageUrl(i.FilePath, "original")).Take(10).ToList();
-                    if (backdrops.Count > 0)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Starting with {backdrops.Count} TMDB backdrops.");
-                        StartBackgroundSlideshow(backdrops);
-                        startedSlideshow = true;
-                    }
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine("[SLIDESHOW] No TMDB Backdrops found.");
-                }
-                
-                if (!startedSlideshow && _item is LiveStream ls && !string.IsNullOrEmpty(ls.IconUrl))
-                {
-                    // Single Image fallback (IPTV Cover)
-                    // Only if we haven't started a TMDB slideshow
-                    System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Falling back to Series Cover.");
-                    StartBackgroundSlideshow(new List<string> { ls.IconUrl });
-                }
-
                 InitializePrebufferPlayer(_streamUrl, history?.Position ?? 0);
+            }
+
+            // SHARED SLIDESHOW LOGIC (For Stremio, Movies, Live)
+            // Move out of type-specific blocks so it works for everyone with TMDB data
+            bool startedSlideshow = false;
+            if (_cachedTmdb != null && _cachedTmdb.Images?.Backdrops != null && _cachedTmdb.Images.Backdrops.Count > 0)
+            {
+                // Extract URLs
+                var backdrops = _cachedTmdb.Images.Backdrops.Select(i => TmdbHelper.GetImageUrl(i.FilePath, "original")).Take(10).ToList();
+                if (backdrops.Count > 0)
+                {
+                    StartBackgroundSlideshow(backdrops);
+                    startedSlideshow = true;
+                }
+            }
+            
+            if (!startedSlideshow && _item is LiveStream lsFallback && !string.IsNullOrEmpty(lsFallback.IconUrl))
+            {
+                // Single Image fallback (IPTV Cover)
+                StartBackgroundSlideshow(new List<string> { lsFallback.IconUrl });
             }
 
             // Wait for at least 500ms aesthetic delay to pass before reveal
@@ -1830,15 +1899,85 @@ namespace ModernIPTVPlayer
 
         #region Actions
 
-        private void EpisodePlayButton_Click(object sender, RoutedEventArgs e)
+        private async Task LoadStremioSeriesDataAsync(Models.Stremio.StremioMediaStream series)
+        {
+            try
+            {
+                Seasons.Clear();
+                CurrentEpisodes.Clear();
+
+                if (series.Meta.Videos == null || series.Meta.Videos.Count == 0) return;
+
+                // Group by Season
+                // Stremio videos usually have 'season' and 'episode' properties.
+                // Some might not (anime?), but generally they do for 'series'.
+                
+                var grouped = series.Meta.Videos
+                    .GroupBy(v => v.Season)
+                    .OrderBy(g => g.Key);
+
+                foreach (var group in grouped)
+                {
+                    int seasonNum = group.Key;
+                    var epList = new List<EpisodeItem>();
+
+                    foreach (var vid in group.OrderBy(v => v.Episode))
+                    {
+                        var epItem = new EpisodeItem
+                        {
+                            Id = vid.Id, // Store Stremio Video ID (e.g. tt1234:1:1)
+                            SeasonNumber = seasonNum,
+                            EpisodeNumber = vid.Episode,
+                            Title = vid.Title ?? $"Bölüm {vid.Episode}", // Fallback
+                            Name = vid.Title ?? $"Bölüm {vid.Episode}",
+                            Overview = vid.Overview ?? (vid.Title ?? ""), // Use title if no plot
+                            ImageUrl = vid.Thumbnail ?? series.PosterUrl, // Fallback to series poster
+                            StreamUrl = "" // No stream URL yet!
+                        };
+                        epList.Add(epItem);
+                    }
+
+                    if (epList.Count > 0)
+                    {
+                        Seasons.Add(new SeasonItem
+                        {
+                            Name = $"Sezon {seasonNum}",
+                            SeasonName = $"Sezon {seasonNum}",
+                            SeasonNumber = seasonNum,
+                            Episodes = epList
+                        });
+                    }
+                }
+
+                SeasonComboBox.ItemsSource = Seasons;
+                if (Seasons.Count > 0) SeasonComboBox.SelectedIndex = 0;
+
+                // Stremio History Logic (TODO)
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Stremio] Error loading series: {ex.Message}");
+            }
+        }
+
+
+
+        private async void EpisodePlayButton_Click(object sender, RoutedEventArgs e)
         {
              if (sender is Button btn && btn.Tag is EpisodeItem ep)
              {
                  // Ensure this episode is selected
                  _selectedEpisode = ep;
                  EpisodesListView.SelectedItem = ep;
+
+                 // STREMIO LOGIC
+                 if (_item is Models.Stremio.StremioMediaStream)
+                 {
+                     await PlayStremioContent(ep.Id); // Pass Video ID
+                     return;
+                 }
                  
-                 // Play Logic
+                 // IPTV Logic
                  if (_item is SeriesStream ss)
                  {
                       string parentId = ss.SeriesId.ToString();
@@ -1847,8 +1986,24 @@ namespace ModernIPTVPlayer
              }
         }
 
-        private void PlayButton_Click(object sender, RoutedEventArgs e)
+        private async void PlayButton_Click(object sender, RoutedEventArgs e)
         {
+            // STREMIO LOGIC
+            if (_item is Models.Stremio.StremioMediaStream stremioItem)
+            {
+                if (stremioItem.Meta.Type == "movie")
+                {
+                    // For movies, use the main ID
+                    await PlayStremioContent(stremioItem.Meta.Id);
+                }
+                else if (_selectedEpisode != null)
+                {
+                    // For series, play selected episode
+                    await PlayStremioContent(_selectedEpisode.Id);
+                }
+                return;
+            }
+
             if (!string.IsNullOrEmpty(_streamUrl))
             {
                 // Series Episode
@@ -1893,6 +2048,82 @@ namespace ModernIPTVPlayer
             }
         }
         
+        private async Task PlayStremioContent(string videoId)
+        {
+            try
+            {
+                string type = (_item as Models.Stremio.StremioMediaStream).Meta.Type;
+                
+                // Fetch streams
+                var streamList = await Services.Stremio.StremioService.Instance.GetStreamsAsync(
+                    Services.Stremio.StremioAddonManager.Instance.GetAddons(), type, videoId);
+                
+                if (streamList == null || streamList.Count == 0)
+                {
+                     var err = new ContentDialog { Title = "Hata", Content = "Kaynak bulunamadı.", CloseButtonText = "Tamam", XamlRoot = this.XamlRoot };
+                     await err.ShowAsync();
+                     return;
+                }
+
+                // Show Obsidian Tray instead of Dialog
+                ShowObsidianTray(TitleText.Text, streamList);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"PlayStremio Error: {ex}");
+            }
+        }
+
+        private void ShowObsidianTray(string title, List<StremioStream> streams)
+        {
+            ObsidianTray.Show(title, streams);
+            AnimateMainContentRecede(true);
+        }
+
+        private void ObsidianTray_TrayClosed(object sender, EventArgs e)
+        {
+            AnimateMainContentRecede(false);
+        }
+
+        private void ObsidianTray_SourceSelected(object sender, StremioStream stream)
+        {
+            string title = _selectedEpisode?.Title ?? _item.Title;
+            string videoId = _selectedEpisode?.Id ?? (_item as Models.Stremio.StremioMediaStream).Meta.Id;
+
+            if (!string.IsNullOrEmpty(stream.InfoHash))
+            {
+                // Torrent warning (House style: Sleek alert)
+                var tip = new TeachingTip { Title = "Torrent Desteği", Subtitle = "Torrent akışları yakında eklenecek. Şimdilik HTTP/Debrid kaynaklarını kullanın.", IsLightDismissEnabled = true };
+                tip.XamlRoot = this.XamlRoot;
+                tip.IsOpen = true;
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(stream.Url))
+            {
+                PerformHandoverAndNavigate(stream.Url, title, videoId);
+            }
+        }
+
+        private void AnimateMainContentRecede(bool recede)
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(MainContentWrapper);
+            var compositor = visual.Compositor;
+
+            // 1. Scale Animation (0.98 for recede)
+            var scaleAnim = compositor.CreateVector3KeyFrameAnimation();
+            scaleAnim.InsertKeyFrame(1.0f, recede ? new Vector3(0.98f, 0.98f, 1f) : Vector3.One);
+            scaleAnim.Duration = TimeSpan.FromMilliseconds(500);
+            visual.StartAnimation("Scale", scaleAnim);
+
+            // 2. Blur / Dim Overlay (We use the Rectangle scrim if complex effects are too slow)
+            // But let's try a simple dimming/opacity for now to be safe with performance
+            var opacityAnim = compositor.CreateScalarKeyFrameAnimation();
+            opacityAnim.InsertKeyFrame(1.0f, recede ? 0.6f : 1.0f);
+            opacityAnim.Duration = TimeSpan.FromMilliseconds(500);
+            visual.StartAnimation("Opacity", opacityAnim);
+        }
+
         private void RestartButton_Click(object sender, RoutedEventArgs e)
         {
              if (!string.IsNullOrEmpty(_streamUrl))
@@ -2121,6 +2352,8 @@ namespace ModernIPTVPlayer
                  // MediaInfoPlayer.Dispose(); // REMOVED: MpvPlayer does not support Dispose
             }
         }
+
+
 
         #endregion
 
@@ -2645,4 +2878,4 @@ namespace ModernIPTVPlayer
 
 
 }
-namespace System.Runtime.CompilerServices { internal static class IsExternalInit { } }
+
