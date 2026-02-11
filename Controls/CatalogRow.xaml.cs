@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Input;
 
 namespace ModernIPTVPlayer.Controls
 {
+
     public sealed partial class CatalogRow : UserControl
     {
         public static readonly DependencyProperty CatalogNameProperty =
@@ -27,6 +28,43 @@ namespace ModernIPTVPlayer.Controls
             get => GetValue(ItemsSourceProperty);
             set => SetValue(ItemsSourceProperty, value);
         }
+
+        public static readonly DependencyProperty IsLoadingProperty =
+            DependencyProperty.Register("IsLoading", typeof(bool), typeof(CatalogRow), new PropertyMetadata(false, OnIsLoadingChanged));
+
+        public bool IsLoading
+        {
+            get => (bool)GetValue(IsLoadingProperty);
+            set => SetValue(IsLoadingProperty, value);
+        }
+
+        private static void OnIsLoadingChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is CatalogRow row)
+            {
+                row.UpdateLoadingState();
+            }
+        }
+
+        private void UpdateLoadingState()
+        {
+            if (ShimmerPanel == null || ItemsListView == null || RowTitle == null) return;
+
+            if (IsLoading)
+            {
+                ShimmerPanel.Visibility = Visibility.Visible;
+                ItemsListView.Visibility = Visibility.Collapsed;
+                RowTitle.Opacity = 0.5;
+            }
+            else
+            {
+                ShimmerPanel.Visibility = Visibility.Collapsed;
+                ItemsListView.Visibility = Visibility.Visible;
+                RowTitle.Opacity = 1.0;
+            }
+        }
+
+
 
         public event EventHandler<IMediaStream> ItemClicked;
         public event EventHandler<PosterCard> HoverStarted;

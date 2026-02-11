@@ -51,9 +51,16 @@
 
 
 
+
+
         <!-- Main Content -->
         <Border x:Name="MainBorder" CornerRadius="12" Background="#FF1a1a1a">
-             <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
+            <Grid>
+                <local:ShimmerCard x:Name="PosterShimmer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
+            </Grid>
         </Border>
+
+
     </Grid>
 </UserControl>

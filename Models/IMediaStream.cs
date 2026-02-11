@@ -17,10 +17,13 @@ namespace ModernIPTVPlayer.Models
         public IMediaStream Stream { get; set; }
         public TmdbMovieResult TmdbInfo { get; set; }
 
-        public MediaNavigationArgs(IMediaStream stream, TmdbMovieResult tmdbInfo = null)
+        public bool AutoResume { get; set; }
+
+        public MediaNavigationArgs(IMediaStream stream, TmdbMovieResult tmdbInfo = null, bool autoResume = false)
         {
             Stream = stream;
             TmdbInfo = tmdbInfo ?? stream.TmdbInfo;
+            AutoResume = autoResume;
         }
     }
 }

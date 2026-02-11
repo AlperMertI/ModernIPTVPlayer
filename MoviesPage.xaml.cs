@@ -24,10 +24,19 @@ using Microsoft.UI.Xaml.Hosting;
 
 namespace ModernIPTVPlayer
 {
-    public class CatalogRowViewModel
+    public class CatalogRowViewModel : System.ComponentModel.INotifyPropertyChanged
     {
-        public string CatalogName { get; set; }
-        public ObservableCollection<StremioMediaStream> Items { get; set; } = new();
+        private string _catalogName;
+        private bool _isLoading;
+        private ObservableCollection<StremioMediaStream> _items = new();
+
+        public string CatalogName { get => _catalogName; set { _catalogName = value; OnPropertyChanged(); } }
+        public ObservableCollection<StremioMediaStream> Items { get => _items; set { _items = value; OnPropertyChanged(); } }
+        public bool IsLoading { get => _isLoading; set { _isLoading = value; OnPropertyChanged(); } }
+
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        protected void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string name = null)
+            => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
     public sealed partial class MoviesPage : Page
     {
@@ -72,7 +81,18 @@ namespace ModernIPTVPlayer
             MediaGrid.HoverEnded += MediaGrid_HoverEnded;
 
             // Setup composition-based hero image with true alpha mask
-            HeroImageHost.Loaded += (s, e) => SetupHeroCompositionMask();
+            HeroImageHost.Loaded += (s, e) => 
+            {
+                if (_heroVisual == null) 
+                {
+                    SetupHeroCompositionMask();
+                }
+                else
+                {
+                    // Re-attach existing visual if page was cached
+                    ElementCompositionPreview.SetElementChildVisual(HeroImageHost, _heroVisual);
+                }
+            };
 
             _stremioExpandedCardOverlay = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, StremioHomeView);
             _stremioExpandedCardOverlay.PlayRequested += StremioExpandedCardOverlay_PlayRequested;
@@ -156,6 +176,13 @@ namespace ModernIPTVPlayer
             UpdateLayoutForMode();
         }
 
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        {
+            base.OnNavigatedFrom(e);
+            // Stop any playing trailer in ExpandedCard when leaving the page
+            _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
+        }
+
         // ==========================================
         // SOURCE SWITCHING LOGIC
         // ==========================================
@@ -197,10 +224,9 @@ namespace ModernIPTVPlayer
                 MainSplitView.IsPaneOpen = true; 
                 MainSplitView.DisplayMode = SplitViewDisplayMode.Inline;
                 SidebarToggle.Visibility = Visibility.Visible;
-                StremioTitle.Visibility = Visibility.Collapsed;
                 MediaGrid.Visibility = Visibility.Visible;
                 StremioHomeView.Visibility = Visibility.Collapsed;
-                OverlayCanvas.Visibility = Visibility.Collapsed;
+                OverlayCanvas.Visibility = Visibility.Visible;
             }
             else
             {
@@ -208,11 +234,11 @@ namespace ModernIPTVPlayer
                 MainSplitView.IsPaneOpen = false;
                 MainSplitView.DisplayMode = SplitViewDisplayMode.Overlay;
                 SidebarToggle.Visibility = Visibility.Collapsed;
-                StremioTitle.Visibility = Visibility.Visible;
+                // StremioTitle removed per request
                 
                 MediaGrid.Visibility = Visibility.Collapsed;
                 StremioHomeView.Visibility = Visibility.Visible;
-                OverlayCanvas.Visibility = Visibility.Collapsed;
+                OverlayCanvas.Visibility = Visibility.Visible;
             }
         }
 
@@ -356,46 +382,73 @@ namespace ModernIPTVPlayer
         {
             try
             {
-                LoadingRing.IsActive = true;
-                DiscoveryRows.ItemsSource = null;
+                // 1. Initial Shimmer State
+                HeroShimmer.Visibility = Visibility.Visible;
+                HeroTextShimmer.Visibility = Visibility.Visible;
+                HeroRealContent.Opacity = 0;
+                
+                DiscoveryRows.ItemsSource = _discoveryRows;
                 _discoveryRows.Clear();
+                
+                // Add 6 skeleton rows
+                for (int i = 0; i < 6; i++)
+                {
+                    _discoveryRows.Add(new CatalogRowViewModel { CatalogName = "Yükleniyor...", IsLoading = true });
+                }
 
-                // 1. Fetch Manifests from all addons
+                // 2. Fetch Manifests
                 var addonUrls = StremioAddonManager.Instance.GetAddons();
-                var tasks = new List<Task<CatalogRowViewModel>>();
+                var catalogTasks = new List<Task<CatalogRowViewModel>>();
+
+                bool firstHeroSet = false;
+                int activeSkeletonIndex = 0;
 
                 foreach (var url in addonUrls)
                 {
-                    var manifest = await StremioService.Instance.GetManifestAsync(url);
-                    if (manifest?.Catalogs == null) continue;
-
-                    foreach (var cat in manifest.Catalogs.Where(c => c.Type == contentType))
+                    // Run each addon's catalog fetching in parallel
+                    _ = Task.Run(async () =>
                     {
-                        tasks.Add(LoadCatalogRowAsync(url, contentType, cat));
-                    }
-                }
+                        try
+                        {
+                            var manifest = await StremioService.Instance.GetManifestAsync(url);
+                            if (manifest?.Catalogs == null) return;
 
-                var rows = await Task.WhenAll(tasks);
-                foreach (var row in rows.Where(r => r != null && r.Items.Count > 0))
-                {
-                    _discoveryRows.Add(row);
-                }
+                            foreach (var cat in manifest.Catalogs.Where(c => c.Type == contentType))
+                            {
+                                var row = await LoadCatalogRowAsync(url, contentType, cat);
+                                if (row != null && row.Items.Count > 0)
+                                {
+                                    DispatcherQueue.TryEnqueue(() =>
+                                    {
+                                        // Replace skeleton if available, otherwise just add
+                                        if (activeSkeletonIndex < _discoveryRows.Count && _discoveryRows[activeSkeletonIndex].IsLoading)
+                                        {
+                                            _discoveryRows[activeSkeletonIndex].CatalogName = row.CatalogName;
+                                            _discoveryRows[activeSkeletonIndex].Items = row.Items;
+                                            _discoveryRows[activeSkeletonIndex].IsLoading = false;
+                                            activeSkeletonIndex++;
+                                        }
+                                        else
+                                        {
+                                            _discoveryRows.Add(row);
+                                        }
 
-                DiscoveryRows.ItemsSource = _discoveryRows;
-
-                // 2. Prepare Hero Items (Top 5 from first row)
-                _heroItems.Clear();
-                if (_discoveryRows.Count > 0)
-                {
-                    _heroItems.AddRange(_discoveryRows[0].Items.Take(5));
-                }
-
-                // Update Hero Section
-                if (_heroItems.Count > 0)
-                {
-                    _currentHeroIndex = 0;
-                    UpdateHeroSection(_heroItems[0]);
-                    StartHeroAutoRotation();
+                                        // Update Hero if this is the very first row
+                                        if (!firstHeroSet && row.Items.Count > 0)
+                                        {
+                                            firstHeroSet = true;
+                                            _heroItems.Clear();
+                                            _heroItems.AddRange(row.Items.Take(5));
+                                            _currentHeroIndex = 0;
+                                            UpdateHeroSection(_heroItems[0]);
+                                            StartHeroAutoRotation();
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        catch { }
+                    });
                 }
             }
             catch (Exception ex)
@@ -404,6 +457,8 @@ namespace ModernIPTVPlayer
             }
             finally
             {
+                // Remove remaining skeletons after a timeout or when all tasks are done
+                // For now we keep them until replaced
                 LoadingRing.IsActive = false;
             }
         }
@@ -415,9 +470,12 @@ namespace ModernIPTVPlayer
                 var items = await StremioService.Instance.GetCatalogItemsAsync(baseUrl, type, cat.Id);
                 if (items == null || items.Count == 0) return null;
 
+                string finalName = cat.Name;
+                if (finalName == "KEŞFET" || finalName == "Keşfet") finalName = string.Empty;
+
                 return new CatalogRowViewModel
                 {
-                    CatalogName = cat.Name,
+                    CatalogName = finalName,
                     Items = new ObservableCollection<StremioMediaStream>(items)
                 };
             }
@@ -426,6 +484,15 @@ namespace ModernIPTVPlayer
 
         private async void UpdateHeroSection(StremioMediaStream item, bool animate = false)
         {
+            // Transition from Shimmer to Real Content
+            if (HeroShimmer.Visibility == Visibility.Visible)
+            {
+                HeroShimmer.Visibility = Visibility.Collapsed;
+                HeroTextShimmer.Visibility = Visibility.Collapsed;
+                HeroRealContent.Opacity = 1; // Or animate it
+                AnimateTextIn();
+            }
+
             string imgUrl = item.Meta?.Background ?? item.PosterUrl;
 
             if (animate && _heroVisual != null && !_heroTransitioning)
@@ -442,9 +509,17 @@ namespace ModernIPTVPlayer
                 AnimateTextOut();
                 await Task.Delay(420);
 
+
                 // Phase 2: Swap content
                 HeroTitle.Text = item.Title;
                 HeroOverview.Text = item.Meta?.Description ?? "Sinematik bir serüven sizi bekliyor.";
+                HeroYear.Text = item.Meta?.ReleaseInfo ?? "";
+                HeroGenres.Text = (item.Meta?.Genres != null && item.Meta.Genres.Count > 0) ? string.Join(", ", item.Meta.Genres.Take(2)) : "";
+                HeroRating.Text = item.Meta?.ImdbRating != null ? $"{item.Meta.ImdbRating} ★" : "";
+
+                // Dots Visibility Logic
+                HeroYearDot.Visibility = (!string.IsNullOrEmpty(HeroYear.Text) && !string.IsNullOrEmpty(HeroGenres.Text)) ? Visibility.Visible : Visibility.Collapsed;
+                HeroRatingDot.Visibility = (!string.IsNullOrEmpty(HeroGenres.Text) && !string.IsNullOrEmpty(HeroRating.Text)) ? Visibility.Visible : Visibility.Collapsed;
 
                 if (!string.IsNullOrEmpty(imgUrl))
                 {
@@ -478,6 +553,12 @@ namespace ModernIPTVPlayer
                 // No animation (first load)
                 HeroTitle.Text = item.Title;
                 HeroOverview.Text = item.Meta?.Description ?? "Sinematik bir serüven sizi bekliyor.";
+                HeroYear.Text = item.Meta?.ReleaseInfo ?? "";
+                HeroGenres.Text = (item.Meta?.Genres != null && item.Meta.Genres.Count > 0) ? string.Join(", ", item.Meta.Genres.Take(2)) : "";
+                HeroRating.Text = item.Meta?.ImdbRating != null ? $"{item.Meta.ImdbRating} ★" : "";
+
+                HeroYearDot.Visibility = (!string.IsNullOrEmpty(HeroYear.Text) && !string.IsNullOrEmpty(HeroGenres.Text)) ? Visibility.Visible : Visibility.Collapsed;
+                HeroRatingDot.Visibility = (!string.IsNullOrEmpty(HeroGenres.Text) && !string.IsNullOrEmpty(HeroRating.Text)) ? Visibility.Visible : Visibility.Collapsed;
 
                 if (!string.IsNullOrEmpty(imgUrl))
                 {
@@ -494,6 +575,7 @@ namespace ModernIPTVPlayer
                 }
             }
         }
+
 
         private void AnimateTextOut()
         {
@@ -765,7 +847,7 @@ namespace ModernIPTVPlayer
         {
             if (stream is StremioMediaStream)
             {
-                Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(stream), new SuppressNavigationTransitionInfo());
+                Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(stream, null, true), new SuppressNavigationTransitionInfo());
             }
         }
 

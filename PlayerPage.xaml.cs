@@ -529,16 +529,29 @@ namespace ModernIPTVPlayer
             // 2. Cleanup MPV carefully
             if (_mpvPlayer is not null)
             {
-                try
+                // Detach from visual tree first
+                try {
+                    if (PlayerContainer != null && PlayerContainer.Children.Contains(_mpvPlayer))
+                        PlayerContainer.Children.Remove(_mpvPlayer);
+                } catch { }
+
+                if (_isHandoff)
                 {
-                    // If OnNavigatedFrom is called, the page is unloading.
-                    // We must ensure we don't block the UI thread too long, 
-                    // but we must also dispose MPV.
-                    await _mpvPlayer.CleanupAsync();
+                    // If it was a handoff, we DON'T CleanupAsync because the control belongs to MediaInfoPage.
+                    // CleanupAsync destroys the native MpvContext, making the control unusable on the previous page.
+                    // Instead, we just stop playback and reset state.
+                    _ = _mpvPlayer.ExecuteCommandAsync("stop");
+                    _mpvPlayer.DisableHandoffMode();
+                    Debug.WriteLine("[PlayerPage] Returned handed-off player to source page without destruction.");
                 }
-                catch (Exception) 
+                else
                 {
-                    // Swallow cleanup errors to prevent crash on exit
+                    try
+                    {
+                        // Fresh player created on this page: Full destruction is safe and required.
+                        await _mpvPlayer.CleanupAsync();
+                    }
+                    catch (Exception) { }
                 }
                 _mpvPlayer = null;
             }
@@ -578,28 +591,11 @@ namespace ModernIPTVPlayer
 
         private async void PlayerPage_Loaded(object sender, RoutedEventArgs e)
         {
-            System.Diagnostics.Debug.WriteLine($"PlayerPage_Loaded Triggered for {_streamUrl}");
+            Debug.WriteLine($"[PlayerPage] PlayerPage_Loaded Triggered for {_streamUrl}");
             if (_isPageLoaded) return;
             
-            // [SINGLE PLAYER ENFORCEMENT]
-            // Ensure any background simulator streams (from MultiView) are killed
-            // to free up the provider slot for this direct connection.
-            Services.Streaming.StreamSlotSimulator.Instance.StopAll();
-            
-            // [Guard Time] Wait for sockets/probes to fully disconnect before starting new stream
-            // Critical for providers with "Max Connection: 1" policy.
-            // Increased to 1500ms to allow full TCP teardown (TIME_WAIT).
-            await Task.Delay(1500);
-
-            // Enable Verbose Logging for debugging (OUTPUT TO CONSOLE)
-            if (_mpvPlayer != null)
-            {
-                await _mpvPlayer.SetPropertyAsync("msg-level", "all=trace");
-            }
-            // File logging removed per user request (and fixes CS0103)
-            
             _isPageLoaded = true;
-            _isStaticMetadataFetched = false; // Reset cache for new video
+            _isStaticMetadataFetched = false;
             _cachedResolution = "-";
             _cachedFps = "-";
             _cachedCodec = "-";
@@ -614,101 +610,91 @@ namespace ModernIPTVPlayer
                 return;
             }
 
-            // 1. Determine Player Instance
             if (_useMpvPlayer)
             {
                 MediaFoundationPlayer.Visibility = Visibility.Collapsed;
-                // Ensure native player is completely stopped
                 MediaFoundationPlayer.Source = null;
                 try { MediaFoundationPlayer.MediaPlayer?.Pause(); } catch {}
 
                 if (App.HandoffPlayer != null)
                 {
-                    // HANDOFF MODE
+                    // HANDOFF MODE: FAST PATH (No Delay!)
                     Debug.WriteLine("[PlayerPage] Doing Handoff...");
                     _isHandoff = true;
                     _bufferUnlocked = false;
                     _mpvPlayer = App.HandoffPlayer;
-                    App.HandoffPlayer = null; // Consume
+                    App.HandoffPlayer = null; 
                     
-                    // Attach to Visual Tree
                     PlayerContainer.Children.Add(_mpvPlayer);
-                    
-                    // Reset Visual Properties that might have been hidden/ghosted
                     _mpvPlayer.Visibility = Visibility.Visible;
                     _mpvPlayer.Opacity = 1;
-                    _mpvPlayer.IsHitTestVisible = true; // Player page needs hits? Actually grid handles events usually.
-                                                        // But previous XAML had IsHitTestVisible="False" for VideoPlayer to let Grid catch events?
-                                                        // Let's check: MainGrid has pointer events. VideoPlayer had HitTest=False.
-                    _mpvPlayer.IsHitTestVisible = false; // Matched original behavior
+                    _mpvPlayer.IsHitTestVisible = false;
                     _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
                     _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
 
-                    // RESTORE BUFFER LIMITS FOR FULL PLAYBACK
-                    // We limited valid in MediaInfoPage, now expand it.
-                    await _mpvPlayer.SetPropertyAsync("cache", "yes");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", "120");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "300MiB");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
-                    
-                    // Force a small seek to re-trigger demuxer? No, might stutter.
-                    // But some properties need cache flush.
+                    // 1. Initial State Restoration & UI Activation
+                    _statsTimer?.Start(); 
+                    await _mpvPlayer.SetPropertyAsync("pause", "no");
+                    await _mpvPlayer.SetPropertyAsync("mute", "no");
 
-                    // DIAGNOSTICS
-                    var checkBytes = await _mpvPlayer.GetPropertyAsync("demuxer-max-bytes");
-                    var checkSecs = await _mpvPlayer.GetPropertyAsync("demuxer-readahead-secs");
-                    var checkCache = await _mpvPlayer.GetPropertyAsync("cache");
-                    System.Diagnostics.Debug.WriteLine($"[HANDOFF_DIAG] Cache: {checkCache} | MaxBytes: {checkBytes} | Secs: {checkSecs}");
+                    // 2. Background Opts (Non-blocking)
+                    _ = _mpvPlayer.SetPropertyAsync("cache", "yes");
+                    _ = _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", "120");
+                    _ = _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "300MiB");
+                    _ = _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
 
-                    // RESTART / RESUME OVERRIDE with SEQUENCE
-                    // RESTART / RESUME OVERRIDE with ROBUST POLLING
+                    // 3. Verify and Fix
+                    var pPause = await _mpvPlayer.GetPropertyAsync("pause");
+                    var pMute = await _mpvPlayer.GetPropertyAsync("mute");
+                    var pIdle = await _mpvPlayer.GetPropertyAsync("core-idle");
+                    var pPath = await _mpvPlayer.GetPropertyAsync("path");
+                    Debug.WriteLine($"[PlayerPage:Handoff_Verify] State: Pause={pPause}, Mute={pMute}, CoreIdle={pIdle}, Path={pPath}");
+
+                    if (string.IsNullOrEmpty(pPath))
+                    {
+                        Debug.WriteLine("[PlayerPage:Handoff] Path is EMPTY! Player lost content. Reloading URL...");
+                        await _mpvPlayer.OpenAsync(_navArgs.Url);
+                        await _mpvPlayer.SetPropertyAsync("pause", "no");
+                    }
+                    else if (pIdle == "yes")
+                    {
+                        // Some streams need a kick after attachment
+                        Debug.WriteLine("[PlayerPage:Handoff] Player is stuck idle. Retrying unpause...");
+                        await _mpvPlayer.SetPropertyAsync("pause", "no");
+                        await Task.Delay(200);
+                        await _mpvPlayer.SetPropertyAsync("pause", "no");
+                    }
+
                     if (_navArgs != null && _navArgs.StartSeconds >= 0)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[HANDOFF] Enforcing Start Position: {_navArgs.StartSeconds} (While Paused)");
-                        
+                        Debug.WriteLine($"[PlayerPage:Handoff] Enforcing Start Position: {_navArgs.StartSeconds}");
                         bool seekSuccess = false;
                         int retries = 0;
-                        while (retries < 20) // Try for up to 2 seconds
+                        while (retries < 20) 
                         {
                             try 
                             {
-                                // Check if seekable
                                 var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
                                 if (seekable == "yes")
                                 {
-                                    // 1. Force Seek (Player is PAUSED, so no bad frames shown)
                                     await _mpvPlayer.ExecuteCommandAsync("seek", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
-                                    System.Diagnostics.Debug.WriteLine("[HANDOFF] Seek Command Accepted.");
                                     seekSuccess = true;
                                     break;
                                 }
                             }
-                            catch (Exception ex) 
-                            {
-                                System.Diagnostics.Debug.WriteLine($"[HANDOFF] Seek/Check Failed (Retry {retries}): {ex.Message}");
-                            }
-                            
+                            catch (Exception ex) { Debug.WriteLine($"[PlayerPage:Handoff] Seek Failed: {ex.Message}"); }
                             await Task.Delay(100);
                             retries++;
                         }
-                        
-                        if (!seekSuccess) System.Diagnostics.Debug.WriteLine("[HANDOFF] Gave up seeking after timeout.");
-
-                        // 2. Unpause ONLY after seek command is dispatched (or timeout)
-                        await _mpvPlayer.SetPropertyAsync("pause", "no");
                     }
-                    else
-                    {
-                        // Standard Resume (Just unpause what was handed off)
-                        await _mpvPlayer.SetPropertyAsync("pause", "no");
-                    }
-
-                    // Start Stats Timer
-                    _statsTimer?.Start();
                 }
                 else
                 {
-                     // FRESH START MODE
+                     // FRESH START MODE: SLOW PATH (Delay for socket safety)
+                     Debug.WriteLine("[PlayerPage] Starting Fresh Playback...");
+                     Services.Streaming.StreamSlotSimulator.Instance.StopAll();
+                     await Task.Delay(1200);
+
                      _mpvPlayer = new MpvWinUI.MpvPlayer();
                      PlayerContainer.Children.Add(_mpvPlayer);
                      _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -717,10 +703,8 @@ namespace ModernIPTVPlayer
 
                      try
                     {
-                        // 0. PRE-FLIGHT CHECK
                         ShowOsd("Bağlantı Kontrol Ediliyor...");
                         var checkResult = await CheckStreamUrlAsync(_streamUrl);
-
                         if (!checkResult.Success)
                         {
                             await ShowMessageDialog("Yayın Hatası", checkResult.ErrorMsg);
@@ -728,52 +712,26 @@ namespace ModernIPTVPlayer
                             return;
                         }
 
-                        // Update URL with the cleaned version (e.g. port 80 removed)
                         _streamUrl = checkResult.Url;
-
-                        // 1. Configure MPV using Shared Helper
                         await MpvSetupHelper.ConfigurePlayerAsync(_mpvPlayer, _streamUrl, isSecondary: false);
-
-
-
-                        // ----------------------------------------------------------------------------------
-                        // OPTİMİZASYONLAR: Ses ve Altyazı Takılmalarını Önleme & Akıllı RAM Yönetimi
-                        // (MpvSetupHelper içinde yapıldı ama varsa sayfa özel override buraya gelebilir)
-                        // ----------------------------------------------------------------------------------
-                        
-                        // CRITICAL: Ensure we actually LOAD the file now that headers are set.
-                        // Wait a bit? No, open directly.
                         await _mpvPlayer.OpenAsync(_streamUrl);
-
-                        // DIAGNOSTICS LOG
-                        // var checkBytes = await _mpvPlayer.GetPropertyAsync("demuxer-max-bytes");
-                        // System.Diagnostics.Debug.WriteLine($"[PlayerPage] Configured. MaxBytes: {checkBytes}");
                         
-                        // Altyazı gecikmesi ve stil sorunları için ek ayarlar
-                        await _mpvPlayer.SetPropertyAsync("sub-scale-with-window", "yes");
-
-                        // Detect Physical Refresh Rate (Native override for MPV)
+                        // Detect Physical Refresh Rate
                         try
                         {
-                             // Use GetForegroundWindow as a robust fallback since we are the active app
                              var ptr = GetForegroundWindow();
                              var monitor = MonitorFromWindow(ptr, MONITOR_DEFAULTTONEAREST);
-                                
                              var devMode = new DEVMODE();
                              devMode.dmSize = (short)System.Runtime.InteropServices.Marshal.SizeOf(typeof(DEVMODE));
                              if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref devMode))
                              {
                                  if (devMode.dmDisplayFrequency > 0)
                                  {
-                                     System.Diagnostics.Debug.WriteLine($"[PlayerPage] Native Display Frequency: {devMode.dmDisplayFrequency}Hz");
                                      _mpvPlayer?.SetDisplayFps(devMode.dmDisplayFrequency);
                                  }
                              }
                         }
-                        catch (Exception ex)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[PlayerPage] Failed to get native refresh rate: {ex.Message}");
-                        }
+                        catch {}
 
                         _statsTimer?.Start();
                         SetupProfessionalAnimations();

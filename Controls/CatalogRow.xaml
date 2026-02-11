@@ -28,7 +28,18 @@
         
         <TextBlock x:Name="RowTitle" Text="{x:Bind CatalogName, Mode=OneWay}" FontSize="22" FontWeight="Bold" Foreground="White" CharacterSpacing="20"/>
         
+
         <Grid x:Name="ListContainer">
+            <!-- Shimmer State -->
+            <StackPanel x:Name="ShimmerPanel" Orientation="Horizontal" Visibility="Collapsed">
+                 <local:ShimmerCard Width="160" Height="240" Margin="0,0,16,0"/>
+                 <local:ShimmerCard Width="160" Height="240" Margin="0,0,16,0"/>
+                 <local:ShimmerCard Width="160" Height="240" Margin="0,0,16,0"/>
+                 <local:ShimmerCard Width="160" Height="240" Margin="0,0,16,0"/>
+                 <local:ShimmerCard Width="160" Height="240" Margin="0,0,16,0"/>
+                 <local:ShimmerCard Width="160" Height="240" Margin="0,0,16,0"/>
+            </StackPanel>
+
             <ListView x:Name="ItemsListView" 
                       ItemsSource="{x:Bind ItemsSource, Mode=OneWay}"
                       ScrollViewer.HorizontalScrollMode="Disabled" 
@@ -44,6 +55,7 @@
                       SelectionMode="None"
                       ItemClick="ItemsListView_ItemClick"
                       IsItemClickEnabled="True">
+
                 <ListView.ItemsPanel>
                     <ItemsPanelTemplate>
                         <ItemsStackPanel Orientation="Horizontal"/>

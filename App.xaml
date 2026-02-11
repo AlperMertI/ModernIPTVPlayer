@@ -91,6 +91,9 @@
             </Style>
 
             <Style x:Key="VortexButtonStyle" TargetType="Button" BasedOn="{StaticResource GlassButtonStyle}">
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="HorizontalContentAlignment" Value="Center"/>
+                <Setter Property="VerticalContentAlignment" Value="Center"/>
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
@@ -120,9 +123,9 @@
                                         BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
                                     <Grid>
                                         <Border x:Name="HoverOverlay" Background="White" Opacity="0" CornerRadius="{TemplateBinding CornerRadius}"/>
-                                        <ContentPresenter x:Name="ContentPresenter" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter x:Name="ContentPresenter" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="{TemplateBinding Padding}" RenderTransformOrigin="0.5,0.5">
                                             <ContentPresenter.RenderTransform>
-                                                <CompositeTransform x:Name="IconRotation" CenterX="0" CenterY="0"/>
+                                                <CompositeTransform x:Name="IconRotation"/>
                                             </ContentPresenter.RenderTransform>
                                         </ContentPresenter>
                                     </Grid>
