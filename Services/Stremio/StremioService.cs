@@ -22,6 +22,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         private StremioService()
         {
             _client = new HttpClient();
+            _client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             _client.Timeout = TimeSpan.FromSeconds(10); // Fast timeout
             _jsonOptions = new JsonSerializerOptions 
             { 
@@ -37,7 +38,19 @@ namespace ModernIPTVPlayer.Services.Stremio
         {
             try
             {
-                string url = $"{baseUrl.TrimEnd('/')}/manifest.json";
+                string url = baseUrl.Trim();
+                
+                // Handle stremio:// protocol
+                if (url.StartsWith("stremio://", StringComparison.OrdinalIgnoreCase))
+                {
+                    url = "https://" + url.Substring(10);
+                }
+
+                if (!url.EndsWith("/manifest.json", StringComparison.OrdinalIgnoreCase))
+                {
+                    url = $"{url.TrimEnd('/')}/manifest.json";
+                }
+
                 string json = await _client.GetStringAsync(url);
                 return JsonSerializer.Deserialize<StremioManifest>(json, _jsonOptions);
             }
@@ -126,6 +139,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         // Format: /stream/{type}/{id}.json
                         string url = $"{baseUrl.TrimEnd('/')}/stream/{type}/{id}.json";
                         string json = await _client.GetStringAsync(url);
+                        System.Diagnostics.Debug.WriteLine($"[StremioService] FULL RAW JSON from {baseUrl}: {json}");
                         var response = JsonSerializer.Deserialize<StremioStreamResponse>(json, _jsonOptions);
                         if (response?.Streams != null)
                         {

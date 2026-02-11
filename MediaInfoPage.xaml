@@ -254,6 +254,11 @@
                         <Setter Target="EpisodesPanel.VerticalAlignment" Value="Center"/>
                         <Setter Target="EpisodesPanel.(Grid.RowSpan)" Value="1"/>
                         <Setter Target="EpisodesPanel.HorizontalAlignment" Value="Right"/>
+                        
+                        <!-- Collapse Narrow Sections in Wide Mode -->
+                        <Setter Target="NarrowEpisodesSection.Visibility" Value="Collapsed"/>
+                        <Setter Target="NarrowSourcesSection.Visibility" Value="Collapsed"/>
+                        <Setter Target="NarrowCastSection.Visibility" Value="Collapsed"/>
                     </VisualState.Setters>
                 </VisualState>
                 <VisualState x:Name="NarrowState">
@@ -274,7 +279,10 @@
                         <Setter Target="InfoContainer.(Grid.RowSpan)" Value="1"/>
                         <Setter Target="InfoColumn.Margin" Value="0,0,0,20"/>
                         
+                        <!-- Collapse Wide Panels in Narrow Mode -->
                         <Setter Target="EpisodesPanel.Visibility" Value="Collapsed"/>
+                        <Setter Target="SourcesPanel.Visibility" Value="Collapsed"/>
+                        <Setter Target="SourcesShimmerPanel.Visibility" Value="Collapsed"/>
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
@@ -562,6 +570,225 @@
                              </Grid>
                          </Border>
                     </Grid>
+
+                    <!-- SOURCES PANEL (Stremio Streams) -->
+                    <Grid x:Name="SourcesPanel" Grid.Column="1" Grid.Row="0" Width="450" MaxWidth="600" Visibility="Collapsed" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Center">
+                         <Border CornerRadius="20" BorderBrush="#1AFFFFFF" BorderThickness="1">
+                             <Border.Background>
+                                 <SolidColorBrush Color="Black" Opacity="0.5"/>
+                             </Border.Background>
+                              <Grid>
+                                 <Grid.RowDefinitions>
+                                     <RowDefinition Height="Auto"/>
+                                     <RowDefinition Height="Auto"/>
+                                     <RowDefinition Height="*"/>
+                                 </Grid.RowDefinitions>
+                                 
+                                 <!-- Header -->
+                                 <Grid Padding="24,20,24,10">
+                                     <Grid.ColumnDefinitions>
+                                         <ColumnDefinition Width="*"/>
+                                         <ColumnDefinition Width="Auto"/>
+                                     </Grid.ColumnDefinitions>
+                                     <TextBlock Text="Kaynaklar" FontSize="22" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                                     <Button Grid.Column="1" x:Name="BtnCloseSources" Click="BtnCloseSources_Click" Style="{StaticResource GlassButtonStyle}" Width="36" Height="36" Padding="0" CornerRadius="18">
+                                         <FontIcon Glyph="&#xE711;" FontSize="14"/>
+                                     </Button>
+                                 </Grid>
+
+                                 <!-- Addon Selector -->
+                                 <ListView x:Name="AddonSelectorList" Grid.Row="1" Margin="24,0,24,10" 
+                                           SelectionMode="Single" SelectionChanged="AddonSelectorList_SelectionChanged"
+                                           ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden">
+                                     <ListView.ItemContainerStyle>
+                                         <Style TargetType="ListViewItem">
+                                             <Setter Property="Padding" Value="0"/>
+                                             <Setter Property="Margin" Value="0,0,20,0"/>
+                                             <Setter Property="MinWidth" Value="0"/>
+                                             <Setter Property="Background" Value="Transparent"/>
+                                             <Setter Property="Template">
+                                                 <Setter.Value>
+                                                     <ControlTemplate TargetType="ListViewItem">
+                                                         <ListViewItemPresenter 
+                                                             SelectionCheckMarkVisualEnabled="False"
+                                                             SelectedBackground="Transparent"
+                                                             SelectedForeground="{StaticResource GoldGradient}"
+                                                             SelectedPointerOverBackground="Transparent"
+                                                             PointerOverBackground="Transparent"
+                                                             PressedBackground="Transparent"
+                                                             ContentMargin="0"
+                                                             HorizontalContentAlignment="Center"
+                                                         />
+                                                     </ControlTemplate>
+                                                 </Setter.Value>
+                                             </Setter>
+                                         </Style>
+                                     </ListView.ItemContainerStyle>
+                                     <ListView.ItemsPanel>
+                                         <ItemsPanelTemplate>
+                                             <StackPanel Orientation="Horizontal"/>
+                                         </ItemsPanelTemplate>
+                                     </ListView.ItemsPanel>
+                                     <ListView.ItemTemplate>
+                                         <DataTemplate>
+                                             <Grid VerticalAlignment="Center">
+                                                 <!-- Loaded State -->
+                                                 <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="Bold" Opacity="0.7"
+                                                            Visibility="{Binding IsLoaded, Converter={StaticResource BoolToVis}}"/>
+                                                 
+                                                 <!-- Loading State -->
+                                                 <ctl:ShimmerControl Width="80" Height="14" CornerRadius="4" Opacity="0.5"
+                                                                     Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}"/>
+                                             </Grid>
+                                         </DataTemplate>
+                                     </ListView.ItemTemplate>
+                                 </ListView>
+
+                                  <ListView x:Name="SourcesListView" Grid.Row="2" SelectionMode="None" 
+                                            IsItemClickEnabled="True" ItemClick="SourcesListView_ItemClick"
+                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                            ScrollViewer.VerticalScrollMode="Enabled"
+                                            Padding="16,0,16,20">
+                                      <ListView.ItemContainerStyle>
+                                          <Style TargetType="ListViewItem">
+                                              <Setter Property="Padding" Value="0"/>
+                                              <Setter Property="Margin" Value="0,6"/>
+                                              <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                              <Setter Property="CornerRadius" Value="10"/>
+                                          </Style>
+                                      </ListView.ItemContainerStyle>
+                                      <ListView.ItemTemplate>
+                                          <DataTemplate>
+                                               <Grid Padding="8,10" Background="#1AFFFFFF" CornerRadius="10" BorderThickness="1" BorderBrush="#10FFFFFF">
+                                                  <Grid.ColumnDefinitions>
+                                                      <ColumnDefinition Width="70"/>
+                                                      <ColumnDefinition Width="*"/>
+                                                  </Grid.ColumnDefinitions>
+                                                  
+                                                  <!-- Provider Badge -->
+                                                  <Border Grid.Column="0" BorderBrush="{StaticResource GoldGradient}" BorderThickness="0,0,1,0" Margin="0,0,8,0" VerticalAlignment="Stretch">
+                                                      <TextBlock Text="{Binding ProviderText}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}" 
+                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" 
+                                                                 TextAlignment="Center" TextWrapping="Wrap" LineHeight="14"/>
+                                                  </Border>
+
+                                                  <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="6">
+                                                      <!-- File Name -->
+                                                      <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="15" Foreground="White" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+                                                      
+                                                      <StackPanel Orientation="Horizontal" Spacing="8">
+                                                          <!-- Quality -->
+                                                          <Border Background="#26FFFFFF" CornerRadius="4" Padding="6,2" Visibility="{Binding HasQuality, Converter={StaticResource BoolToVis}}">
+                                                              <TextBlock Text="{Binding Quality}" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                                                          </Border>
+                                                          <!-- Size -->
+                                                          <Border Background="#1AFFFFFF" CornerRadius="4" Padding="6,2" Visibility="{Binding HasSize, Converter={StaticResource BoolToVis}}">
+                                                              <TextBlock Text="{Binding Size}" FontSize="10" FontWeight="Bold" Foreground="#AAA"/>
+                                                          </Border>
+                                                          <!-- Cached Badge -->
+                                                          <Border Background="#1A00FF88" CornerRadius="4" Padding="6,2" Visibility="{Binding IsCached, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
+                                                              <TextBlock Text="⚡ CACHED" FontSize="9" FontWeight="Black" Foreground="#FF00FF88"/>
+                                                          </Border>
+                                                      </StackPanel>
+
+                                                      <!-- Metadata Info -->
+                                                      <TextBlock Text="{Binding Name}" FontSize="12" Foreground="#CCC" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
+                                                  </StackPanel>
+                                              </Grid>
+                                          </DataTemplate>
+                                      </ListView.ItemTemplate>
+                                  </ListView>
+                             </Grid>
+                         </Border>
+                    </Grid>
+
+                    <!-- SOURCES SHIMMER (Loading State) -->
+                    <Grid x:Name="SourcesShimmerPanel" Grid.Column="1" Grid.Row="0" Width="450" MaxWidth="600" Visibility="Collapsed" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Center">
+                        <Border CornerRadius="20" BorderBrush="#1AFFFFFF" BorderThickness="1">
+                            <Border.Background>
+                                <SolidColorBrush Color="Black" Opacity="0.5"/>
+                            </Border.Background>
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+
+                                <!-- Header -->
+                                <Grid Padding="24,20,24,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ctl:ShimmerControl Width="100" Height="24" CornerRadius="4" HorizontalAlignment="Left"/>
+                                    <ctl:ShimmerControl Grid.Column="1" Width="36" Height="36" CornerRadius="18"/>
+                                </Grid>
+
+                                <!-- Addon Selector Shimmer -->
+                                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="20" Margin="24,0,24,10">
+                                    <ctl:ShimmerControl Width="80" Height="20" CornerRadius="4"/>
+                                    <ctl:ShimmerControl Width="60" Height="20" CornerRadius="4"/>
+                                    <ctl:ShimmerControl Width="70" Height="20" CornerRadius="4"/>
+                                </StackPanel>
+
+                                <!-- Sources List Shimmer -->
+                                <StackPanel Grid.Row="2" Spacing="8" Padding="16,0,16,20">
+                                    <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
+                                            <StackPanel Grid.Column="1" Spacing="6">
+                                                <ctl:ShimmerControl Width="200" Height="18" CornerRadius="4"/>
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
+                                                    <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                                </StackPanel>
+                                                <ctl:ShimmerControl Width="280" Height="14" CornerRadius="4"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
+                                            <StackPanel Grid.Column="1" Spacing="6">
+                                                <ctl:ShimmerControl Width="180" Height="18" CornerRadius="4"/>
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
+                                                    <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                                </StackPanel>
+                                                <ctl:ShimmerControl Width="250" Height="14" CornerRadius="4"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>
+                                                <ColumnDefinition Width="*"/>
+                                            </Grid.ColumnDefinitions>
+                                            <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
+                                            <StackPanel Grid.Column="1" Spacing="6">
+                                                <ctl:ShimmerControl Width="220" Height="18" CornerRadius="4"/>
+                                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                                    <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
+                                                    <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                                </StackPanel>
+                                                <ctl:ShimmerControl Width="260" Height="14" CornerRadius="4"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
                 
 
                 
@@ -612,6 +839,86 @@
                         </ListView.ItemTemplate>
                     </ListView>
                 </StackPanel>
+
+                <StackPanel x:Name="NarrowSourcesSection" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" 
+                               Visibility="Collapsed" Spacing="8" Margin="0,4,0,0">
+                    <ListView x:Name="NarrowAddonSelector" SelectionMode="Single" SelectionChanged="AddonSelectorList_SelectionChanged"
+                               ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                               Margin="20,0,20,8" Height="40">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0,0,16,0"/>
+                                <Setter Property="MinWidth" Value="0"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListViewItem">
+                                            <ListViewItemPresenter 
+                                                SelectionCheckMarkVisualEnabled="False"
+                                                SelectedBackground="Transparent"
+                                                SelectedForeground="{StaticResource GoldGradient}"
+                                                SelectedPointerOverBackground="Transparent"
+                                                PointerOverBackground="Transparent"
+                                                PressedBackground="Transparent"
+                                                ContentMargin="0"
+                                            />
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold" Opacity="0.7"/>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <ListView x:Name="NarrowSourcesListView" SelectionMode="None" 
+                               IsItemClickEnabled="True" ItemClick="SourcesListView_ItemClick" 
+                               ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollMode="Enabled"
+                               Padding="20,0,20,20">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid CornerRadius="12" Background="#1AFFFFFF" Margin="0,0,0,12" Padding="16">
+                                     <Grid.ColumnDefinitions>
+                                         <ColumnDefinition Width="Auto"/>
+                                         <ColumnDefinition Width="*"/>
+                                     </Grid.ColumnDefinitions>
+                                     <Border Grid.Column="0" Background="#22000000" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1" CornerRadius="8" Padding="8,4" Margin="0,0,12,0" VerticalAlignment="Top" MinWidth="60">
+                                         <TextBlock Text="{Binding ProviderText}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                                     </Border>
+                                     <StackPanel Grid.Column="1" Spacing="6">
+                                          <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="14" Foreground="White" TextWrapping="Wrap" MaxLines="3"/>
+                                          
+                                          <StackPanel Orientation="Horizontal" Spacing="6">
+                                              <!-- Quality -->
+                                              <Border Background="#26FFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasQuality, Converter={StaticResource BoolToVis}}">
+                                                  <TextBlock Text="{Binding Quality}" FontSize="9" FontWeight="Bold" Foreground="White"/>
+                                              </Border>
+                                              <!-- Size -->
+                                              <Border Background="#1AFFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasSize, Converter={StaticResource BoolToVis}}">
+                                                  <TextBlock Text="{Binding Size}" FontSize="9" FontWeight="Bold" Foreground="#AAA"/>
+                                              </Border>
+                                              <!-- Cached Badge -->
+                                              <Border Background="#1A00FF88" CornerRadius="4" Padding="4,1" Visibility="{Binding IsCached, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
+                                                  <TextBlock Text="⚡ CACHED" FontSize="8" FontWeight="Black" Foreground="#FF00FF88"/>
+                                              </Border>
+                                          </StackPanel>
+                                          
+                                          <TextBlock Text="{Binding Name}" FontSize="11" Foreground="#888" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
+                                     </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+
                 
                 <StackPanel x:Name="NarrowCastSection" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" 
                              Visibility="Collapsed" Spacing="12" Margin="0,4,0,0">
@@ -696,9 +1003,6 @@
 
         </Grid> <!-- End of MainContentWrapper -->
 
-        <!-- 4. THE OBSIDIAN TRAY (Bottom-sliding selection) -->
-        <ctl:StremioTray x:Name="ObsidianTray" VerticalAlignment="Bottom" Visibility="Collapsed" Canvas.ZIndex="200"
-                        SourceSelected="ObsidianTray_SourceSelected" TrayClosed="ObsidianTray_TrayClosed"/>
 
         <!-- 5. FEEDBACK & NOTIFICATIONS -->
         <TeachingTip x:Name="CopyFeedbackTip"

@@ -168,8 +168,14 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("title")]
         public string Title { get; set; } // Details: "4K HDR 2.5GB"
 
+        [JsonPropertyName("description")]
+        public string Description { get; set; }
+
         [JsonPropertyName("url")]
         public string Url { get; set; } // DIRECT HTTP URL
+
+        [JsonPropertyName("externalUrl")]
+        public string ExternalUrl { get; set; }
 
         [JsonPropertyName("infoHash")]
         public string InfoHash { get; set; } // For Torrents (Magnet) - Not supported yet

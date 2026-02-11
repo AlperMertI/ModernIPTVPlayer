@@ -46,7 +46,17 @@ namespace ModernIPTVPlayer.Pages
                  var manifest = await StremioService.Instance.GetManifestAsync(url);
                  if (manifest != null)
                  {
-                     StremioAddonManager.Instance.AddAddon(url);
+                     // Normalize saved URL: remove manifest.json if present, ensure https
+                     string savedUrl = url;
+                     if (savedUrl.StartsWith("stremio://", StringComparison.OrdinalIgnoreCase))
+                         savedUrl = "https://" + savedUrl.Substring(10);
+                     
+                     if (savedUrl.EndsWith("/manifest.json", StringComparison.OrdinalIgnoreCase))
+                         savedUrl = savedUrl.Substring(0, savedUrl.Length - 14);
+                     else if (savedUrl.EndsWith("manifest.json", StringComparison.OrdinalIgnoreCase))
+                         savedUrl = savedUrl.Substring(0, savedUrl.Length - 13);
+
+                     StremioAddonManager.Instance.AddAddon(savedUrl.TrimEnd('/'));
                      LoadAddons();
                      AddonUrlBox.Text = "";
                      ShowStatus("Eklenti başarıyla yüklendi!", InfoBarSeverity.Success);

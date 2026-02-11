@@ -29,6 +29,7 @@ namespace ModernIPTVPlayer
     public sealed partial class MediaInfoPage : Page
     {
         private IMediaStream _item;
+        private System.Collections.ObjectModel.ObservableCollection<StremioAddonViewModel> _addonResults;
         private Compositor _compositor;
         private string _streamUrl;
         
@@ -128,6 +129,21 @@ namespace ModernIPTVPlayer
                     EpisodesListView.MaxHeight = maxPanelHeight - 100; 
                 }
             }
+
+            if (SourcesPanel != null)
+            {
+                double margin = 100;
+                double maxPanelHeight = targetHeight - margin;
+
+                SourcesPanel.Height = double.NaN;
+                SourcesPanel.MaxHeight = maxPanelHeight;
+                SourcesPanel.VerticalAlignment = VerticalAlignment.Center;
+
+                if (SourcesListView != null)
+                {
+                    SourcesListView.MaxHeight = maxPanelHeight - 100;
+                }
+            }
             System.Diagnostics.Debug.WriteLine($"[LayoutDebug] SyncWideHeights: Grid={targetHeight}, Panel={EpisodesPanel?.Height}, ListMax={EpisodesListView?.MaxHeight}");
         }
 
@@ -161,6 +177,15 @@ namespace ModernIPTVPlayer
                         if (EpisodesPanel != null) EpisodesPanel.Visibility = Visibility.Collapsed;
                     }
                     
+                    // Handle sources visibility in Wide mode
+                    if (SourcesPanel != null && SourcesPanel.Visibility == Visibility.Visible)
+                    {
+                        // Sources are active
+                        SourcesPanel.Visibility = Visibility.Visible;
+                        if (NarrowSourcesSection != null) NarrowSourcesSection.Visibility = Visibility.Collapsed;
+                        if (EpisodesPanel != null) EpisodesPanel.Visibility = Visibility.Collapsed;
+                    }
+
                     if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Collapsed;
                     if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
                     if (CastSection != null) CastSection.Visibility = Visibility.Visible;
@@ -198,6 +223,15 @@ namespace ModernIPTVPlayer
                          if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Collapsed;
                          if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
                     }
+
+                    // Handle sources visibility in Narrow mode
+                    if (NarrowSourcesSection != null && (NarrowSourcesSection.Visibility == Visibility.Visible || SourcesPanel.Visibility == Visibility.Visible))
+                    {
+                        NarrowSourcesSection.Visibility = Visibility.Visible;
+                        if (SourcesPanel != null) SourcesPanel.Visibility = Visibility.Collapsed;
+                        if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Collapsed;
+                    }
+
                     if (CastSection != null) CastSection.Visibility = Visibility.Collapsed;
                 }
                 
@@ -560,6 +594,7 @@ namespace ModernIPTVPlayer
                      EpisodesPanel.Visibility = Visibility.Collapsed;
                      PlayButtonText.Text = "Oynat"; // Prepare to fetch stream
                      _streamUrl = null; // No URL yet
+                     _ = PlayStremioContent(stremioItem.Meta.Id, false);
                  }
                  // REMOVED 'return;' to allow StaggeredRevealContent to run
             }
@@ -1466,7 +1501,10 @@ namespace ModernIPTVPlayer
                      InitializePrebufferPlayer(ep.StreamUrl, history?.Position ?? 0);
 
                      // TRIGGER TECHNICAL PROBE
-                     _ = UpdateTechnicalBadgesAsync(ep.StreamUrl);
+                     if (!string.IsNullOrEmpty(ep.StreamUrl))
+                         _ = UpdateTechnicalBadgesAsync(ep.StreamUrl);
+                     else if (_item is Models.Stremio.StremioMediaStream)
+                         _ = PlayStremioContent(ep.Id, false);
                  }
                  finally
                  {
@@ -2048,61 +2086,361 @@ namespace ModernIPTVPlayer
             }
         }
         
-        private async Task PlayStremioContent(string videoId)
+        private async Task PlayStremioContent(string videoId, bool showGlobalLoading = true)
         {
             try
             {
+                if (showGlobalLoading) SetLoadingState(true);
+                
+                // Show Shimmer, Hide Content
+                SourcesPanel.Visibility = Visibility.Collapsed;
+                SourcesShimmerPanel.Visibility = Visibility.Visible;
+                
                 string type = (_item as Models.Stremio.StremioMediaStream).Meta.Type;
+                var addons = Services.Stremio.StremioAddonManager.Instance.GetAddons();
+                var allStreams = new List<StremioStreamViewModel>();
+
+                // Initialize ObservableCollection for Incremental Updates
+                _addonResults = new System.Collections.ObjectModel.ObservableCollection<StremioAddonViewModel>();
+                var activeCollection = _addonResults; // Capture for safe updates
                 
-                // Fetch streams
-                var streamList = await Services.Stremio.StremioService.Instance.GetStreamsAsync(
-                    Services.Stremio.StremioAddonManager.Instance.GetAddons(), type, videoId);
+                // WinUI 3: Use DispatcherQueue instead of Dispatcher (which is null in Desktop apps)
+                var dispatcherQueue = this.DispatcherQueue;
                 
-                if (streamList == null || streamList.Count == 0)
+                AddonSelectorList.ItemsSource = _addonResults;
+                NarrowAddonSelector.ItemsSource = _addonResults; // Ensure Narrow selector also updated
+
+                // Add a single "Loading..." placeholder at the end to indicate background activity
+                var loadingPlaceholder = new StremioAddonViewModel 
+                { 
+                    Name = "", 
+                    IsLoading = true,
+                    SortIndex = int.MaxValue // Always at the end
+                };
+                _addonResults.Add(loadingPlaceholder);
+
+                System.Diagnostics.Debug.WriteLine($"[Stremio] Fetching sources for {videoId} ({type}) from {addons.Count} addons.");
+
+                var tasks = new List<Task>();
+                
+                for (int i = 0; i < addons.Count; i++)
                 {
-                     var err = new ContentDialog { Title = "Hata", Content = "Kaynak bulunamadı.", CloseButtonText = "Tamam", XamlRoot = this.XamlRoot };
-                     await err.ShowAsync();
-                     return;
+                    int sortIndex = i;
+                    string baseUrl = addons[i];
+
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        try
+                        {
+                            // 1. Get Manifest
+                            var manifest = await Services.Stremio.StremioService.Instance.GetManifestAsync(baseUrl);
+                            string addonDisplayName = manifest?.Name ?? baseUrl.Replace("https://", "").Replace("http://", "").Split('/')[0];
+                            
+                            // 2. Get Streams
+                            var streams = await Services.Stremio.StremioService.Instance.GetStreamsAsync(new List<string> { baseUrl }, type, videoId);
+                            
+                            if (streams != null && streams.Count > 0)
+                            {
+                                var processedStreams = new List<StremioStreamViewModel>();
+
+                                foreach (var s in streams)
+                                {
+                                    string displayFileName = "";
+                                    string displayDescription = "";
+                                    string rawName = s.Name ?? "";
+                                    string rawTitle = s.Title ?? "";
+                                    string rawDesc = s.Description ?? "";
+
+                                    // Identify Filename and Metadata parts from Description
+                                    if (!string.IsNullOrEmpty(rawDesc))
+                                    {
+                                        var lines = rawDesc.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+                                        var metaParts = new List<string>();
+                                        
+                                        foreach (var line in lines)
+                                        {
+                                            string trimmed = line.Trim();
+                                            if (string.IsNullOrEmpty(trimmed)) continue;
+
+                                            if (trimmed.StartsWith("Name:", StringComparison.OrdinalIgnoreCase) || 
+                                                trimmed.StartsWith("File:", StringComparison.OrdinalIgnoreCase) ||
+                                                trimmed.StartsWith("📄"))
+                                            {
+                                                displayFileName = trimmed.Replace("Name:", "").Replace("File:", "").Replace("📄", "").Trim();
+                                            }
+                                            else
+                                            {
+                                                metaParts.Add(trimmed);
+                                            }
+                                        }
+
+                                        if (string.IsNullOrEmpty(displayFileName) && lines.Length > 0)
+                                        {
+                                            string lastLine = lines.Last().Trim();
+                                            if (lastLine.Contains(".") && lastLine.Split('.').Last().Length <= 4)
+                                            {
+                                                displayFileName = lastLine;
+                                                metaParts.RemoveAt(metaParts.Count - 1);
+                                            }
+                                        }
+                                        displayDescription = string.Join("  •  ", metaParts);
+                                    }
+
+                                    string finalTitle = displayFileName;
+                                    if (string.IsNullOrEmpty(finalTitle)) finalTitle = rawTitle;
+                                    if (string.IsNullOrEmpty(finalTitle) || finalTitle.Length < 3) finalTitle = rawName.Split('\n')[0];
+                                    if (string.IsNullOrEmpty(finalTitle)) finalTitle = addonDisplayName;
+
+                                    bool isCached = IsStreamCached(s) || addonDisplayName.ToLower().Contains("debrid") || rawName.ToLower().Contains("rd+");
+                                    
+                                    string providerLine = rawName.Split('\n')[0].Trim();
+                                    string shortProvider = providerLine;
+                                    string[] qualityMarkers = { "4K", "2160p", "1080p", "720p", "480p", "HDR", "DV" };
+                                    foreach(var q in qualityMarkers) 
+                                        shortProvider = System.Text.RegularExpressions.Regex.Replace(shortProvider, $@"\b{q}\b", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+                                    
+                                    string sizeInfo = ExtractSize(displayDescription) ?? ExtractSize(rawTitle) ?? ExtractSize(rawName);
+                                    string finalDescription = displayDescription;
+                                    if (!string.IsNullOrEmpty(sizeInfo) && !string.IsNullOrEmpty(finalDescription))
+                                    {
+                                       finalDescription = finalDescription.Replace(sizeInfo, "").Replace("[]", "").Replace("  •    •  ", "  •  ").Trim(' ', '•');
+                                    }
+                                    
+                                    processedStreams.Add(new StremioStreamViewModel
+                                    {
+                                        Title = finalTitle,
+                                        Name = finalDescription,
+                                        ProviderText = rawName.Trim(),
+                                        AddonName = addonDisplayName,
+                                        Url = s.Url,
+                                        ExternalUrl = s.ExternalUrl,
+                                        Quality = ParseQuality(rawName + " " + rawTitle + " " + rawDesc),
+                                        Size = sizeInfo,
+                                        IsCached = isCached,
+                                        OriginalStream = s
+                                    });
+                                }
+
+                                if (processedStreams.Count > 0)
+                                {
+                                    var addonVM = new StremioAddonViewModel 
+                                    { 
+                                        Name = addonDisplayName.ToUpper(), 
+                                        Streams = processedStreams,
+                                        IsLoading = false,
+                                        SortIndex = sortIndex
+                                    };
+
+                                    // Insert into UI Collection in correct order
+                                    var tcs = new TaskCompletionSource<bool>();
+                                    dispatcherQueue.TryEnqueue(() =>
+                                    {
+                                        try
+                                        {
+                                            if (_addonResults != activeCollection) return;
+
+                                            // Find insertion point (keep placeholder at end)
+                                            int insertAt = 0;
+                                            while (insertAt < _addonResults.Count && _addonResults[insertAt].SortIndex < sortIndex)
+                                            {
+                                                insertAt++;
+                                            }
+
+                                            _addonResults.Insert(insertAt, addonVM);
+
+                                            if (SourcesShimmerPanel.Visibility == Visibility.Visible)
+                                            {
+                                                SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+                                                ShowSourcesPanel(true);
+                                            }
+
+                                            // If nothing selected (and not just placeholder), select this
+                                            if (AddonSelectorList.SelectedIndex == -1 || (AddonSelectorList.SelectedItem as StremioAddonViewModel)?.IsLoading == true)
+                                            {
+                                                AddonSelectorList.SelectedItem = addonVM;
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            System.Diagnostics.Debug.WriteLine($"[Stremio] UI Error: {ex}");
+                                        }
+                                        finally
+                                        {
+                                            tcs.TrySetResult(true);
+                                        }
+                                    });
+                                    await tcs.Task;
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[Stremio] Error fetching from {baseUrl}: {ex.Message}");
+                        }
+                    }));
                 }
 
-                // Show Obsidian Tray instead of Dialog
-                ShowObsidianTray(TitleText.Text, streamList);
+                await Task.WhenAll(tasks);
+                
+                // Final Cleanup (UI Thread)
+                var tcsFinal = new TaskCompletionSource<bool>();
+                dispatcherQueue.TryEnqueue(async () =>
+                {
+                    try
+                    {
+                        if (_addonResults != activeCollection) return;
+
+                        // Remove placeholder
+                        if (_addonResults.Contains(loadingPlaceholder))
+                            _addonResults.Remove(loadingPlaceholder);
+
+                        if (showGlobalLoading) SetLoadingState(false);
+                        SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+
+                        if (_addonResults.Count == 0)
+                        {
+                            var err = new ContentDialog { Title = "Kaynak Bulunamadı", Content = "Eklentilerinizde bu içerik için uygun bir kaynak bulunamadı.", CloseButtonText = "Tamam", XamlRoot = this.XamlRoot };
+                            await err.ShowAsync();
+                        }
+                    }
+                    finally { tcsFinal.TrySetResult(true); }
+                });
+                await tcsFinal.Task;
             }
+
             catch (Exception ex)
             {
+                if (showGlobalLoading) SetLoadingState(false);
+                SourcesShimmerPanel.Visibility = Visibility.Collapsed;
                 System.Diagnostics.Debug.WriteLine($"PlayStremio Error: {ex}");
             }
         }
 
-        private void ShowObsidianTray(string title, List<StremioStream> streams)
+        private void ShowSourcesPanel(bool show)
         {
-            ObsidianTray.Show(title, streams);
-            AnimateMainContentRecede(true);
+            // Determine which panel to show based on width
+            bool isWide = _isWideModeIndex == 1;
+
+            if (show)
+            {
+                EpisodesPanel.Visibility = Visibility.Collapsed;
+                NarrowEpisodesSection.Visibility = Visibility.Collapsed;
+                
+                if (isWide)
+                {
+                    SourcesPanel.Visibility = Visibility.Visible;
+                    NarrowSourcesSection.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    SourcesPanel.Visibility = Visibility.Collapsed;
+                    NarrowSourcesSection.Visibility = Visibility.Visible;
+                }
+            }
+            else
+            {
+                SourcesPanel.Visibility = Visibility.Collapsed;
+                NarrowSourcesSection.Visibility = Visibility.Collapsed;
+                
+                if (_item is Models.Stremio.StremioMediaStream sms && sms.Meta.Type == "series")
+                {
+                    if (isWide) EpisodesPanel.Visibility = Visibility.Visible;
+                    else NarrowEpisodesSection.Visibility = Visibility.Visible;
+                }
+                else if (_item is SeriesStream)
+                {
+                    EpisodesPanel.Visibility = Visibility.Visible;
+                    NarrowEpisodesSection.Visibility = Visibility.Visible;
+                }
+            }
+        }
+
+        private string ParseQuality(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            if (text.Contains("4K", StringComparison.OrdinalIgnoreCase) || text.Contains("2160p", StringComparison.OrdinalIgnoreCase)) return "4K";
+            if (text.Contains("1080p", StringComparison.OrdinalIgnoreCase)) return "1080P";
+            if (text.Contains("720p", StringComparison.OrdinalIgnoreCase)) return "720P";
+            return "";
+        }
+
+        private bool IsStreamCached(ModernIPTVPlayer.Models.Stremio.StremioStream s)
+        {
+            string all = ((s.Name ?? "") + (s.Title ?? "") + (s.Description ?? "")).ToLower();
+            return all.Contains("⚡") || all.Contains("[rd+]") || all.Contains("[ad+]") || all.Contains("[pm+]") || 
+                   all.Contains("cached") || all.Contains("downloaded") || all.Contains("tb+") || 
+                   all.Contains("📥") || all.Contains("instant") || all.Contains("[debrid]") ||
+                   all.Contains("real-debrid") || all.Contains("all-debrid") || all.Contains("premiumize");
+        }
+
+        private string ExtractSize(string input)
+        {
+            if (string.IsNullOrEmpty(input)) return null;
+            // Focus on common sizes, avoiding single 'B' false positives unless it's clearly Bytes
+            var match = System.Text.RegularExpressions.Regex.Match(input, @"\d+(\.\d+)?\s*(GB|MB|MiB|GiB|TB)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return match.Success ? match.Value : null;
+        }
+
+        private void AddonSelectorList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is ListView lv && lv.SelectedItem is StremioAddonViewModel addon)
+            {
+                SourcesListView.ItemsSource = addon.Streams;
+                NarrowSourcesListView.ItemsSource = addon.Streams;
+
+                // Sync the other list if one changes
+                if (lv == AddonSelectorList) NarrowAddonSelector.SelectedItem = addon;
+                else if (lv == NarrowAddonSelector) AddonSelectorList.SelectedItem = addon;
+            }
+        }
+
+        private void SourcesListView_ItemClick(object sender, ItemClickEventArgs e)
+        {
+            if (e.ClickedItem is StremioStreamViewModel vm)
+            {
+                string title = _selectedEpisode?.Title ?? _item.Title;
+                string videoId = _selectedEpisode?.Id ?? (_item as Models.Stremio.StremioMediaStream).Meta.Id;
+
+                if (!string.IsNullOrEmpty(vm.Url))
+                {
+                    PerformHandoverAndNavigate(vm.Url, title, videoId);
+                }
+                else if (!string.IsNullOrEmpty(vm.ExternalUrl))
+                {
+                    _ = Windows.System.Launcher.LaunchUriAsync(new Uri(vm.ExternalUrl));
+                }
+                else if (!string.IsNullOrEmpty(vm.OriginalStream.InfoHash))
+                {
+                    var tip = new TeachingTip { Title = "Torrent Bilgisi", Subtitle = "Torrent akışları yakında desteklenecek. Lütfen HTTP kaynaklarını kullanın.", IsLightDismissEnabled = true };
+                    tip.XamlRoot = this.XamlRoot;
+                    tip.IsOpen = true;
+                }
+                else
+                {
+                    // No URL available (e.g. informative message)
+                    System.Diagnostics.Debug.WriteLine($"[Stremio] Clicked item with no URL or InfoHash: {vm.Title}");
+                }
+            }
+        }
+
+        private void BtnCloseSources_Click(object sender, RoutedEventArgs e)
+        {
+            ShowSourcesPanel(false);
+        }
+
+        private void ShowObsidianTray(string title, List<Models.Stremio.StremioStream> streams)
+        {
+            // Deprecated - using SourcesPanel now
         }
 
         private void ObsidianTray_TrayClosed(object sender, EventArgs e)
         {
-            AnimateMainContentRecede(false);
+             AnimateMainContentRecede(false);
         }
 
-        private void ObsidianTray_SourceSelected(object sender, StremioStream stream)
+        private void ObsidianTray_SourceSelected(object sender, Models.Stremio.StremioStream stream)
         {
-            string title = _selectedEpisode?.Title ?? _item.Title;
-            string videoId = _selectedEpisode?.Id ?? (_item as Models.Stremio.StremioMediaStream).Meta.Id;
-
-            if (!string.IsNullOrEmpty(stream.InfoHash))
-            {
-                // Torrent warning (House style: Sleek alert)
-                var tip = new TeachingTip { Title = "Torrent Desteği", Subtitle = "Torrent akışları yakında eklenecek. Şimdilik HTTP/Debrid kaynaklarını kullanın.", IsLightDismissEnabled = true };
-                tip.XamlRoot = this.XamlRoot;
-                tip.IsOpen = true;
-                return;
-            }
-
-            if (!string.IsNullOrEmpty(stream.Url))
-            {
-                PerformHandoverAndNavigate(stream.Url, title, videoId);
-            }
+            // Deprecated
         }
 
         private void AnimateMainContentRecede(bool recede)
@@ -2876,6 +3214,63 @@ namespace ModernIPTVPlayer
 
     }
 
+    public class StremioStreamViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string Title { get; set; }
+        public string Name { get; set; }
+        public string ProviderText { get; set; }
+        public string AddonName { get; set; }
+        public string Url { get; set; }
+        public string ExternalUrl { get; set; }
+        public bool IsExternalLink => !string.IsNullOrEmpty(ExternalUrl) && string.IsNullOrEmpty(Url);
+        public string Quality { get; set; }
+        public bool HasQuality => !string.IsNullOrEmpty(Quality);
+        public string Size { get; set; }
+        public bool HasSize => !string.IsNullOrEmpty(Size);
+        public bool IsCached { get; set; }
+        public ModernIPTVPlayer.Models.Stremio.StremioStream OriginalStream { get; set; }
 
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
+
+    public class StremioAddonViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        private string _name;
+        public string Name 
+        { 
+            get => _name; 
+            set { if(_name != value) { _name = value; OnPropertyChanged(nameof(Name)); } } 
+        }
+
+        private List<StremioStreamViewModel> _streams;
+        public List<StremioStreamViewModel> Streams
+        {
+            get => _streams;
+            set { if(_streams != value) { _streams = value; OnPropertyChanged(nameof(Streams)); } }
+        }
+
+        private bool _isLoading;
+        public bool IsLoading
+        {
+            get => _isLoading;
+            set 
+            { 
+                if(_isLoading != value) 
+                { 
+                    _isLoading = value; 
+                    OnPropertyChanged(nameof(IsLoading)); 
+                    OnPropertyChanged(nameof(IsLoaded));
+                } 
+            }
+        }
+        
+        public bool IsLoaded => !IsLoading;
+        
+        public int SortIndex { get; set; }
+
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
 }
 
