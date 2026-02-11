@@ -79,13 +79,9 @@
         </GridView>
         
         <!-- Flying Panel Overlay -->
-        <Canvas x:Name="OverlayCanvas">
-            <local:ExpandedCard x:Name="ActiveExpandedCard" 
-                              Visibility="Collapsed" 
-                              PlayClicked="ExpandedCard_PlayClicked"
-                              DetailsClicked="ExpandedCard_DetailsClicked"
-                              AddListClicked="ExpandedCard_AddListClicked"
-                              PointerExited="ActiveExpandedCard_PointerExited"/>
+        <Canvas x:Name="OverlayCanvas" Visibility="Collapsed">
+            <Rectangle x:Name="CinemaScrim" Fill="#FF000000" Opacity="0" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="0"/>
+            <local:ExpandedCard x:Name="ActiveExpandedCard" Visibility="Collapsed" Canvas.ZIndex="1"/>
         </Canvas>
     </Grid>
 </UserControl>

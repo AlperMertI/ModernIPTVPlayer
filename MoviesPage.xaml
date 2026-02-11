@@ -338,17 +338,12 @@
                     <ProgressRing x:Name="LoadingRing" Grid.Row="2" IsActive="False" Width="50" Height="50" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     
                     <!-- Flying Panel Overlay (For Stremio) -->
-                    <Canvas x:Name="OverlayCanvas" Grid.Row="0" Grid.RowSpan="3" IsHitTestVisible="False">
+                    <Canvas x:Name="OverlayCanvas" Grid.Row="0" Grid.RowSpan="3">
                         <!-- Cinema Mode Scrim -->
-                        <Rectangle x:Name="CinemaScrim" Fill="#E6000000" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="0"/>
+                        <Rectangle x:Name="CinemaScrim" Fill="#FF000000" Opacity="0" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="0"/>
                         
                         <controls:ExpandedCard x:Name="ActiveExpandedCard" 
                                           Visibility="Collapsed" 
-                                          PlayClicked="ExpandedCard_PlayClicked"
-                                          DetailsClicked="ExpandedCard_DetailsClicked"
-                                          AddListClicked="ExpandedCard_AddListClicked"
-                                          PointerExited="ActiveExpandedCard_PointerExited"
-                                          CinemaModeToggled="ActiveExpandedCard_CinemaModeToggled"
                                           IsHitTestVisible="True"
                                           Canvas.ZIndex="1"/>
                     </Canvas>

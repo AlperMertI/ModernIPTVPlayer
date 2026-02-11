@@ -46,6 +46,7 @@ namespace ModernIPTVPlayer
         private int _currentHeroIndex = 0;
         private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _heroColors;
         private bool _isDraggingRow = false;
+        private readonly ExpandedCardOverlayController _stremioExpandedCardOverlay;
 
         // Composition API: True pixel-level alpha masking
         private Microsoft.UI.Composition.SpriteVisual _heroVisual;
@@ -72,6 +73,11 @@ namespace ModernIPTVPlayer
 
             // Setup composition-based hero image with true alpha mask
             HeroImageHost.Loaded += (s, e) => SetupHeroCompositionMask();
+
+            _stremioExpandedCardOverlay = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, StremioHomeView);
+            _stremioExpandedCardOverlay.PlayRequested += StremioExpandedCardOverlay_PlayRequested;
+            _stremioExpandedCardOverlay.DetailsRequested += StremioExpandedCardOverlay_DetailsRequested;
+            _stremioExpandedCardOverlay.AddListRequested += StremioExpandedCardOverlay_AddListRequested;
         }
 
         private void SetupHeroCompositionMask()
@@ -185,6 +191,8 @@ namespace ModernIPTVPlayer
         {
             if (_currentSource == ContentSource.IPTV)
             {
+                _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);
+
                 // Sidebar Mode
                 MainSplitView.IsPaneOpen = true; 
                 MainSplitView.DisplayMode = SplitViewDisplayMode.Inline;
@@ -204,7 +212,7 @@ namespace ModernIPTVPlayer
                 
                 MediaGrid.Visibility = Visibility.Collapsed;
                 StremioHomeView.Visibility = Visibility.Visible;
-                OverlayCanvas.Visibility = Visibility.Visible;
+                OverlayCanvas.Visibility = Visibility.Collapsed;
             }
         }
 
@@ -218,7 +226,7 @@ namespace ModernIPTVPlayer
              if (_heroItems.Count > _currentHeroIndex)
              {
                  var item = _heroItems[_currentHeroIndex];
-                 Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new HyperlinkButton().Margin == new Thickness(0) ? null : new SuppressNavigationTransitionInfo());
+                 Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
              }
         }
 
@@ -660,11 +668,6 @@ namespace ModernIPTVPlayer
              Frame.Navigate(typeof(MediaInfoPage), e, new SuppressNavigationTransitionInfo());
         }
 
-        private void MediaGrid_DetailsAction(object sender, LiveStream e)
-        {
-             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
-        }
-
         private void StremioHomeView_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
         {
             if (sender is ScrollViewer sv)
@@ -672,12 +675,11 @@ namespace ModernIPTVPlayer
                 BackdropControl.SetVerticalShift(sv.VerticalOffset);
                 
                 // Close expanded card on scroll to prevent detachment
-                // If in Cinema Mode, ignore scroll close request
-                if (_isInCinemaMode) return;
+                if (_stremioExpandedCardOverlay.IsInCinemaMode) return;
             
-                if (ActiveExpandedCard.Visibility == Visibility.Visible)
+                if (_stremioExpandedCardOverlay.IsCardVisible)
                 {
-                   _ = CloseExpandedCardAsync();
+                    _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync();
                 }
             }
         }
@@ -711,8 +713,14 @@ namespace ModernIPTVPlayer
         // ==========================================
         private void CatalogRow_HoverStarted(object sender, PosterCard card)
         {
-            // Call the shared logic
-            Card_HoverStarted(card, EventArgs.Empty);
+            if (_isDraggingRow) return;
+
+            if (card.DataContext is IMediaStream stream && !string.IsNullOrEmpty(stream.PosterUrl))
+            {
+                _ = UpdateBackgroundFromPoster(stream.PosterUrl);
+            }
+
+            _stremioExpandedCardOverlay.OnHoverStarted(card);
         }
 
         private void CatalogRow_HoverEnded(object sender, PosterCard card)
@@ -734,9 +742,8 @@ namespace ModernIPTVPlayer
         private async void CatalogRow_ScrollStarted(object sender, EventArgs e)
         {
             _isDraggingRow = true;
-            _hoverTimer?.Stop();
-            _flightTimer?.Stop();
-            await CloseExpandedCardAsync();
+            _stremioExpandedCardOverlay.CancelPendingShow();
+            await _stremioExpandedCardOverlay.CloseExpandedCardAsync();
         }
 
         private void CatalogRow_ScrollEnded(object sender, EventArgs e)
@@ -752,426 +759,24 @@ namespace ModernIPTVPlayer
                 BackdropControl.TransitionTo(colors.Value.Primary, colors.Value.Secondary);
             }
         }
-        private void MediaGridView_ItemClick(object sender, ItemClickEventArgs e)
+        public Task CloseExpandedCardAsync() => _stremioExpandedCardOverlay.CloseExpandedCardAsync();
+
+        private void StremioExpandedCardOverlay_PlayRequested(object? sender, IMediaStream stream)
         {
-            if (e.ClickedItem is IMediaStream stream)
+            if (stream is StremioMediaStream)
             {
-                 Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(stream), new SuppressNavigationTransitionInfo());
+                Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(stream), new SuppressNavigationTransitionInfo());
             }
         }
 
-        // ==========================================
-        // FLYING PANEL LOGIC (Stremio)
-        // ==========================================
-        
-        private DispatcherTimer _hoverTimer;
-        private PosterCard _pendingHoverCard;
-        private System.Threading.CancellationTokenSource _closeCts;
-        private DispatcherTimer _flightTimer;
-
-        private void Card_HoverStarted(object sender, EventArgs e)
+        private void StremioExpandedCardOverlay_DetailsRequested(object? sender, (IMediaStream Stream, TmdbMovieResult Tmdb) args)
         {
-            if (_isDraggingRow) return;
-
-            if (sender is PosterCard card)
-            {
-                // 1. Cinematic Background Update
-                if (card.DataContext is IMediaStream stream && !string.IsNullOrEmpty(stream.PosterUrl))
-                {
-                    _ = UpdateBackgroundFromPoster(stream.PosterUrl);
-                }
-
-                // 2. Expanded Card Logic
-                // Cancel any pending close
-                _closeCts?.Cancel();
-
-                var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
-                // Safe cancel animations
-                try { visual.StopAnimation("Opacity"); } catch { }
-                try { visual.StopAnimation("Scale"); } catch { }
-                try { visual.StopAnimation("Translation"); } catch { }
-
-                bool isAlreadyOpen = ActiveExpandedCard.Visibility == Visibility.Visible;
-
-                if (isAlreadyOpen)
-                {
-                    // Flight Mode
-                    visual.Opacity = 1f;
-                    
-                    if (_flightTimer == null) 
-                    {
-                        _flightTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
-                        _flightTimer.Tick += FlightTimer_Tick;
-                    }
-                    else
-                    {
-                        _flightTimer.Stop();
-                    }
-                    
-                    _pendingHoverCard = card;
-                    _flightTimer.Start();
-                }
-                else
-                {
-                    // Fresh Open (Debounce)
-                    _pendingHoverCard = card;
-                    if (_hoverTimer == null)
-                    {
-                        _hoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-                        _hoverTimer.Tick += HoverTimer_Tick;
-                    }
-                    else
-                    {
-                        _hoverTimer.Stop();
-                    }
-                    _hoverTimer.Start();
-                    ActiveExpandedCard.PrepareForTrailer();
-                }
-            }
+            Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(args.Stream, args.Tmdb), new SuppressNavigationTransitionInfo());
         }
 
-        private void FlightTimer_Tick(object sender, object e)
+        private void StremioExpandedCardOverlay_AddListRequested(object? sender, IMediaStream stream)
         {
-            _flightTimer.Stop();
-            if (_pendingHoverCard != null && _pendingHoverCard.IsHovered)
-            {
-                 ShowExpandedCard(_pendingHoverCard);
-            }
-        }
-
-        private void HoverTimer_Tick(object sender, object e)
-        {
-            _hoverTimer.Stop();
-            if (_pendingHoverCard != null && _pendingHoverCard.IsHovered)
-            {
-                ShowExpandedCard(_pendingHoverCard);
-            }
-        }
-
-        private async void ShowExpandedCard(PosterCard sourceCard)
-        {
-            try
-            {
-                _closeCts?.Cancel();
-                _closeCts = new System.Threading.CancellationTokenSource();
-
-                // 1. Coordinates relative to OverlayCanvas
-                // OverlayCanvas covers the entire SplitView.Content Grid
-                var transform = sourceCard.TransformToVisual(OverlayCanvas);
-                var position = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
-                
-                double widthDiff = 320 - sourceCard.ActualWidth;
-                double heightDiff = 420 - sourceCard.ActualHeight;
-                
-                double targetX = position.X - (widthDiff / 2);
-                double targetY = position.Y - (heightDiff / 2);
-
-                // Boundaries
-                if (targetX < 10) targetX = 10;
-                if (targetX + 320 > OverlayCanvas.ActualWidth) targetX = OverlayCanvas.ActualWidth - 330;
-                if (targetY < 10) targetY = 10;
-                if (targetY + 420 > OverlayCanvas.ActualHeight) targetY = OverlayCanvas.ActualHeight - 430;
-
-                var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
-                var compositor = visual.Compositor;
-                ElementCompositionPreview.SetIsTranslationEnabled(ActiveExpandedCard, true);
-
-                // 2. Pop vs Morph
-                bool isMorph = ActiveExpandedCard.Visibility == Visibility.Visible && visual.Opacity > 0.1f;
-
-                if (isMorph)
-                {
-                    ActiveExpandedCard.StopTrailer();
-
-                    double oldLeft = Canvas.GetLeft(ActiveExpandedCard);
-                    double oldTop = Canvas.GetTop(ActiveExpandedCard);
-                    
-                    Canvas.SetLeft(ActiveExpandedCard, targetX);
-                    Canvas.SetTop(ActiveExpandedCard, targetY);
-                    ActiveExpandedCard.UpdateLayout(); 
-
-                    float deltaX = (float)(oldLeft - targetX);
-                    float deltaY = (float)(oldTop - targetY);
-                    
-                    // Translation Hack
-                    visual.Properties.InsertVector3("Translation", new Vector3(deltaX, deltaY, 0));
-                    
-                    var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
-                    offsetAnim.Target = "Translation";
-                    var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.2f, 0.8f), new Vector2(0.2f, 1.0f));
-                    offsetAnim.InsertKeyFrame(1.0f, Vector3.Zero, easing);
-                    offsetAnim.Duration = TimeSpan.FromMilliseconds(400);
-                    
-                    visual.StartAnimation("Translation", offsetAnim);
-                    visual.Opacity = 1f;
-                    visual.Scale = Vector3.One;
-                }
-                else
-                {
-                    visual.StopAnimation("Translation");
-                    visual.Properties.InsertVector3("Translation", Vector3.Zero);
-                    visual.Scale = new Vector3(0.8f, 0.8f, 1f);
-                    visual.Opacity = 0;
-
-                    Canvas.SetLeft(ActiveExpandedCard, targetX);
-                    Canvas.SetTop(ActiveExpandedCard, targetY);
-                    ActiveExpandedCard.Visibility = Visibility.Visible;
-
-                    var springAnim = compositor.CreateSpringVector3Animation();
-                    springAnim.Target = "Scale";
-                    springAnim.FinalValue = Vector3.One;
-                    springAnim.DampingRatio = 0.7f;
-                    springAnim.Period = TimeSpan.FromMilliseconds(50);
-                    
-                    var fadeAnim = compositor.CreateScalarKeyFrameAnimation();
-                    fadeAnim.Target = "Opacity";
-                    fadeAnim.InsertKeyFrame(1f, 1f);
-                    fadeAnim.Duration = TimeSpan.FromMilliseconds(200);
-
-                    visual.StartAnimation("Scale", springAnim);
-                    visual.StartAnimation("Opacity", fadeAnim);
-                }
-
-                if (sourceCard.DataContext is IMediaStream stream)
-                {
-                    await ActiveExpandedCard.LoadDataAsync(stream, isMorphing: isMorph);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error showing card: {ex.Message}");
-            }
-        }
-
-        // Cinema Mode State
-        private bool _isInCinemaMode = false;
-        private Rect _preCinemaBounds; // To restore position
-
-        private async void ActiveExpandedCard_PointerExited(object sender, PointerRoutedEventArgs e)
-        {
-            // If in Cinema Mode, don't close on hover exit
-            if (_isInCinemaMode) return;
-
-            
-            // Actually, the existing logic is:
-            // _hoverTimer.Tick += (s, args) => CloseExpandedCardAsync();
-            // We should cancel that timer if we enter Cinema Mode.
-            await CloseExpandedCardAsync();
-        }
-
-        private void ActiveExpandedCard_CinemaModeToggled(object sender, bool isCinema)
-        {
-            _isInCinemaMode = isCinema;
-            System.Diagnostics.Debug.WriteLine($"[MoviesPage] Cinema Mode Toggled: {isCinema}");
-
-            if (isCinema)
-            {
-                // ENTER CINEMA MODE
-                
-                // 1. Cancel any close timers
-                _hoverTimer?.Stop();
-                
-                // 2. Save current position
-                double currentLeft = Canvas.GetLeft(ActiveExpandedCard);
-                double currentTop = Canvas.GetTop(ActiveExpandedCard);
-                _preCinemaBounds = new Rect(currentLeft, currentTop, ActiveExpandedCard.ActualWidth, ActiveExpandedCard.ActualHeight);
-
-                // 3. Calculate Target (Center of Page)
-                // User requested "almost half the screen", let's make it significant but not overwhelming? 
-                // Actually 85% is a good "Cinema" standard.
-                double targetWidth = this.ActualWidth * 0.85;
-                double targetHeight = this.ActualHeight * 0.85;
-                
-                // Aspect Ratio 16:9 check
-                if (targetWidth / targetHeight > 1.77)
-                {
-                    targetWidth = targetHeight * 1.77;
-                }
-                else
-                {
-                    targetHeight = targetWidth / 1.77;
-                }
-
-                double targetLeft = (this.ActualWidth - targetWidth) / 2;
-                double targetTop = (this.ActualHeight - targetHeight) / 2;
-
-                System.Diagnostics.Debug.WriteLine($"[MoviesPage] Animate To: {targetWidth}x{targetHeight} at {targetLeft},{targetTop}");
-
-                // 4. Animate to Center
-                AnimateCardTo(targetLeft, targetTop, targetWidth, targetHeight);
-                
-                // 5. Show Scrim (AND SET SIZE)
-                CinemaScrim.Width = this.ActualWidth;
-                CinemaScrim.Height = this.ActualHeight;
-                CinemaScrim.Visibility = Visibility.Visible;
-                CinemaScrim.IsHitTestVisible = true; 
-                
-                // 6. Disable Scrolling
-                StremioHomeView.VerticalScrollMode = ScrollMode.Disabled;
-                
-                // 7. Bring to very front
-                Canvas.SetZIndex(CinemaScrim, 100);
-                Canvas.SetZIndex(ActiveExpandedCard, 101);
-            }
-            else
-            {
-                // EXIT CINEMA MODE
-                
-                // 1. Animate back to original position
-                AnimateCardTo(_preCinemaBounds.Left, _preCinemaBounds.Top, 320, 420); // 320x420 is default size
-                
-                // 2. Hide Scrim
-                CinemaScrim.Visibility = Visibility.Collapsed;
-                CinemaScrim.IsHitTestVisible = false;
-                
-                // 3. Re-enable Scrolling
-                StremioHomeView.VerticalScrollMode = ScrollMode.Enabled;
-                
-                // 4. Reset Z-Index
-                Canvas.SetZIndex(CinemaScrim, 0);
-                Canvas.SetZIndex(ActiveExpandedCard, 1);
-            }
-        }
-
-        private void AnimateCardTo(double left, double top, double width, double height)
-        {
-            // SCALE TRANSFORM APPROACH
-            // Instead of resizing the control (which seems stubborn), we will Scale it.
-            // Default size: 320x420
-            
-            double targetScaleX = width / 320.0;
-            double targetScaleY = height / 420.0;
-            
-            System.Diagnostics.Debug.WriteLine($"[MoviesPage] AnimateCardTo (Scale): Target {width}x{height} -> Scale {targetScaleX:F2}x{targetScaleY:F2} @ {left},{top}");
-
-            // Ensure RenderTransform is CompositeTransform
-            if (!(ActiveExpandedCard.RenderTransform is CompositeTransform))
-            {
-                ActiveExpandedCard.RenderTransform = new CompositeTransform();
-                ActiveExpandedCard.RenderTransformOrigin = new Windows.Foundation.Point(0, 0); // Scale from top-left match Canvas positioning
-            }
-
-            var storyboard = new Storyboard();
-            
-            var animSX = new DoubleAnimation 
-            { 
-                To = targetScaleX, 
-                Duration = TimeSpan.FromMilliseconds(400), 
-                EnableDependentAnimation = true, 
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut } 
-            };
-            Storyboard.SetTarget(animSX, ActiveExpandedCard);
-            Storyboard.SetTargetProperty(animSX, "(UIElement.RenderTransform).(CompositeTransform.ScaleX)");
-            
-            var animSY = new DoubleAnimation 
-            { 
-                To = targetScaleY, 
-                Duration = TimeSpan.FromMilliseconds(400), 
-                EnableDependentAnimation = true, 
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut } 
-            };
-            Storyboard.SetTarget(animSY, ActiveExpandedCard);
-            Storyboard.SetTargetProperty(animSY, "(UIElement.RenderTransform).(CompositeTransform.ScaleY)");
-            
-            var animL = new DoubleAnimation 
-            { 
-                To = left, 
-                Duration = TimeSpan.FromMilliseconds(400), 
-                EnableDependentAnimation = true, 
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut } 
-            };
-            Storyboard.SetTarget(animL, ActiveExpandedCard);
-            Storyboard.SetTargetProperty(animL, "(Canvas.Left)");
-            
-            var animT = new DoubleAnimation 
-            { 
-                To = top, 
-                Duration = TimeSpan.FromMilliseconds(400), 
-                EnableDependentAnimation = true, 
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut } 
-            };
-            Storyboard.SetTarget(animT, ActiveExpandedCard);
-            Storyboard.SetTargetProperty(animT, "(Canvas.Top)");
-            
-            storyboard.Children.Add(animSX);
-            storyboard.Children.Add(animSY);
-            storyboard.Children.Add(animL);
-            storyboard.Children.Add(animT);
-            
-            storyboard.Begin();
-        }
-
-        public async Task CloseExpandedCardAsync()
-        {
-             // If in Cinema Mode, ignore close request
-             if (_isInCinemaMode) return;
-
-             try 
-             {
-                 _closeCts?.Cancel();
-                 _closeCts = new System.Threading.CancellationTokenSource();
-                 var token = _closeCts.Token;
-
-                 ActiveExpandedCard.StopTrailer();
-                 await Task.Delay(50, token);
-                 
-                 if (token.IsCancellationRequested) return;
-
-                 var visual = ElementCompositionPreview.GetElementVisual(ActiveExpandedCard);
-                 var compositor = visual.Compositor;
-                 
-                 var fadeOut = compositor.CreateScalarKeyFrameAnimation();
-                 fadeOut.Target = "Opacity";
-                 fadeOut.InsertKeyFrame(1f, 0f);
-                 fadeOut.Duration = TimeSpan.FromMilliseconds(200);
-                 
-                 var scaleDown = compositor.CreateVector3KeyFrameAnimation();
-                 scaleDown.Target = "Scale";
-                 scaleDown.InsertKeyFrame(1f, new Vector3(0.95f, 0.95f, 1f));
-                 scaleDown.Duration = TimeSpan.FromMilliseconds(200);
-                 
-                 visual.StartAnimation("Opacity", fadeOut);
-                 visual.StartAnimation("Scale", scaleDown);
-                 
-                 await Task.Delay(200, token);
-                 if (token.IsCancellationRequested) return;
-
-                 ActiveExpandedCard.Visibility = Visibility.Collapsed;
-             }
-             catch (TaskCanceledException) { }
-        }
-
-        private void ExpandedCard_PlayClicked(object sender, EventArgs e) 
-        {
-             // TODO: Handle Play from Card (for now same as ItemClick)
-             if (_pendingHoverCard?.DataContext is IMediaStream item)
-             {
-                 // Re-use existing play logic?
-                 // MediaGridView_ItemClick handles navigation to Details/Player
-                 // But we need to call it manually
-                 // For now, let's just trigger item click logic
-                 // But ItemClickEventArgs is internal.
-                 
-                 // We can direct navigate
-                 if (item is Models.Stremio.StremioMediaStream sms)
-                 {
-                      // Stremio Play Logic (TODO: Verify specific stream play or details)
-                      Frame.Navigate(typeof(MediaInfoPage), item); 
-                 }
-             }
-        }
-
-        private void ExpandedCard_DetailsClicked(object sender, TmdbMovieResult tmdb) 
-        {
-             if (_pendingHoverCard?.DataContext is IMediaStream item)
-             {
-                 Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item, tmdb));
-             }
-        }
-
-        private void ExpandedCard_AddListClicked(object sender, EventArgs e) 
-        {
-             // Add to list logic (ignored for now)
+            // TODO: Favorites logic for Stremio expanded card action.
         }
     }
 }

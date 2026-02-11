@@ -28,7 +28,6 @@ namespace ModernIPTVPlayer.Controls
         
         // Pre-initialization state
         private bool _webViewInitialized = false;
-        private bool _youtubePlayerReady = false;
         private string _trailerFolder;
         private string _virtualHost = "trailers.moderniptv.local";
         private Microsoft.UI.Composition.Compositor _compositor;
@@ -73,12 +72,9 @@ namespace ModernIPTVPlayer.Controls
                 
                 string htmlFilePath = System.IO.Path.Combine(_trailerFolder, "player.html");
                 
-                // OPTIMIZATION: Don't rewrite file if it exists (saves I/O)
-                if (!System.IO.File.Exists(htmlFilePath))
-                {
-                    string htmlContent = CreateYouTubePlayerHtml();
-                    await System.IO.File.WriteAllTextAsync(htmlFilePath, htmlContent);
-                }
+                // Always refresh player script so quality/behavior updates are picked up immediately.
+                string htmlContent = CreateYouTubePlayerHtml();
+                await System.IO.File.WriteAllTextAsync(htmlFilePath, htmlContent);
                 
                 // Setup virtual host mapping once
                 try
@@ -146,7 +142,7 @@ namespace ModernIPTVPlayer.Controls
         var pendingVideoId = null;
         
         function onYouTubeIframeAPIReady() {
-            player = new YT.Player('player', {
+                player = new YT.Player('player', {
                 height: '100%',
                 width: '100%',
                 playerVars: {
@@ -159,7 +155,8 @@ namespace ModernIPTVPlayer.Controls
                     modestbranding: 1,
                     showinfo: 0,
                     iv_load_policy: 3,
-                    playsinline: 1
+                    playsinline: 1,
+                    vq: 'hd1080'
                 },
                 events: {
                     'onReady': onPlayerReady,
@@ -170,6 +167,9 @@ namespace ModernIPTVPlayer.Controls
         
         function onPlayerReady(event) {
             isReady = true;
+            try {
+                player.mute();
+            } catch (e) {}
             document.getElementById('loading').style.display = 'none';
             window.chrome.webview.postMessage('PLAYER_READY');
             
@@ -182,7 +182,18 @@ namespace ModernIPTVPlayer.Controls
         
         function onPlayerStateChange(event) {
             if (event.data === YT.PlayerState.PLAYING) {
+                applyQualityPreference();
                 window.chrome.webview.postMessage('VIDEO_PLAYING');
+            }
+        }
+
+        function applyQualityPreference() {
+            if (!player || !isReady) return;
+            try {
+                player.setPlaybackQualityRange('hd1080');
+                player.setPlaybackQuality('hd1080');
+            } catch (e) {
+                // Device/network may limit this; YouTube will fallback automatically.
             }
         }
         
@@ -194,8 +205,10 @@ namespace ModernIPTVPlayer.Controls
             }
             player.loadVideoById({
                 videoId: videoId,
-                suggestedQuality: 'hd720'
+                suggestedQuality: 'hd1080'
             });
+            setTimeout(applyQualityPreference, 80);
+            setTimeout(applyQualityPreference, 700);
             player.playVideo();
         }
         
@@ -205,8 +218,24 @@ namespace ModernIPTVPlayer.Controls
                 player.stopVideo();
             }
         }
+
+        function getMuteState() {
+            if (player && isReady) {
+                return player.isMuted() ? 'muted' : 'unmuted';
+            }
+            return 'unknown';
+        }
+
+        function setMuted(shouldMute) {
+            if (player && isReady) {
+                if (shouldMute) player.mute();
+                else player.unMute();
+            }
+            return getMuteState();
+        }
         
         function toggleMute() {
+            if (!player || !isReady) return 'unknown';
             if (player.isMuted()) {
                 player.unMute();
                 return 'unmuted';
@@ -222,6 +251,7 @@ namespace ModernIPTVPlayer.Controls
 
         // FFmpeg Prober
         private FFmpegProber _prober = new FFmpegProber();
+        private long _loadNonce = 0;
 
         private void ExpandButton_Click(object sender, RoutedEventArgs e)
         {
@@ -246,9 +276,7 @@ namespace ModernIPTVPlayer.Controls
                 // 3. Unmute if muted
                 if (_isMuted)
                 {
-                    _ = TrailerWebView.CoreWebView2.ExecuteScriptAsync("toggleMute()");
-                    _isMuted = false;
-                    UpdateMuteIcon();
+                    _ = SetMutedAsync(false);
                 }
                 
                 // 4. Change Icon to Shrink
@@ -287,6 +315,8 @@ namespace ModernIPTVPlayer.Controls
             TrailerWebView.Visibility = Visibility.Collapsed;
             MuteButton.Visibility = Visibility.Collapsed;
             ExpandButton.Visibility = Visibility.Collapsed;
+            _isMuted = true;
+            UpdateMuteIcon();
             if (TrailerWebView.CoreWebView2 != null && _webViewInitialized)
             {
                 // Stop video via JavaScript - don't navigate away to preserve the player
@@ -385,6 +415,8 @@ namespace ModernIPTVPlayer.Controls
 
         public async Task LoadDataAsync(ModernIPTVPlayer.Models.IMediaStream stream, bool isMorphing = false)
         {
+            var loadNonce = ++_loadNonce;
+
             // Reset all state first (except image)
             ResetState(isMorphing);
             
@@ -426,6 +458,7 @@ namespace ModernIPTVPlayer.Controls
                 // Fix: Await TMDB, Update UI, THEN await Probe.
                 
                 var tmdb = await tmdbTask;
+                if (loadNonce != _loadNonce) return;
                 
                 if (tmdb != null)
                 {
@@ -474,6 +507,7 @@ namespace ModernIPTVPlayer.Controls
 
                     // NOW Fetch Trailer (Async)
                     var trailerKey = await TmdbHelper.GetTrailerKeyAsync(tmdb.Id, stream is SeriesStream);
+                    if (loadNonce != _loadNonce) return;
                     if (!string.IsNullOrEmpty(trailerKey))
                     {
                          PlayTrailer(trailerKey);
@@ -500,7 +534,7 @@ namespace ModernIPTVPlayer.Controls
                 
                 // Run Probe in Background - Do NOT await it to block the UI interaction
                 // BadgeSkeleton remains Visible until this finishes
-                _ = ProbeStreamInternal(stream);
+                _ = ProbeStreamInternal(stream, loadNonce);
 
             }
             catch (Exception ex)
@@ -514,7 +548,7 @@ namespace ModernIPTVPlayer.Controls
             // Finally logic moved to inside success/fail blocks to avoid premature hiding
         }
         
-        private async Task ProbeStreamInternal(IMediaStream stream)
+        private async Task ProbeStreamInternal(IMediaStream stream, long loadNonce)
         {
             if (stream == null) return;
             
@@ -586,8 +620,11 @@ namespace ModernIPTVPlayer.Controls
                 if (Services.ProbeCacheService.Instance.Get(url) is Services.ProbeData cached)
                 {
                     Services.CacheLogger.Success(Services.CacheLogger.Category.Probe, "ExpandedCard Cache Hit", url);
-                    BadgeSkeleton.Visibility = Visibility.Collapsed;
-                    ApplyProbeResult(stream, cached);
+                    if (loadNonce == _loadNonce)
+                    {
+                        BadgeSkeleton.Visibility = Visibility.Collapsed;
+                        ApplyProbeResult(stream, cached, loadNonce);
+                    }
                     return;
                 }
 
@@ -610,7 +647,7 @@ namespace ModernIPTVPlayer.Controls
                         Bitrate = result.Bitrate, 
                         IsHdr = result.IsHdr 
                     };
-                    ApplyProbeResult(stream, data);
+                    ApplyProbeResult(stream, data, loadNonce);
                 }
                 else
                 {
@@ -633,8 +670,10 @@ namespace ModernIPTVPlayer.Controls
             else if (stream is SeriesStream series) series.IsProbing = isProbing;
         }
 
-        private void ApplyProbeResult(IMediaStream stream, Services.ProbeData result)
+        private void ApplyProbeResult(IMediaStream stream, Services.ProbeData result, long loadNonce)
         {
+            if (loadNonce != _loadNonce) return;
+
             if (stream is LiveStream live)
             {
                 live.Resolution = result.Resolution;
@@ -656,6 +695,7 @@ namespace ModernIPTVPlayer.Controls
 
             DispatcherQueue.TryEnqueue(() =>
             {
+                if (loadNonce != _loadNonce) return;
                 BadgeSkeleton.Visibility = Visibility.Collapsed;
                 UpdateTooltip(stream);
                 UpdatePlayButton(stream);
@@ -812,6 +852,7 @@ namespace ModernIPTVPlayer.Controls
 
                 _isMuted = true;
                 UpdateMuteIcon();
+                _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
             }
             catch (Exception ex)
             {
@@ -828,8 +869,8 @@ namespace ModernIPTVPlayer.Controls
                 
                 if (message == "PLAYER_READY")
                 {
-                    _youtubePlayerReady = true;
                     System.Diagnostics.Debug.WriteLine("[ExpandedCard] YouTube player ready for instant video loading");
+                    _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
                 }
                 else if (message == "VIDEO_PLAYING")
                 {
@@ -843,6 +884,7 @@ namespace ModernIPTVPlayer.Controls
                         TrailerWebView.Visibility = Visibility.Visible;
                         MuteButton.Visibility = Visibility.Visible;
                         ExpandButton.Visibility = Visibility.Visible;
+                        _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
                     });
                 }
             }
@@ -853,6 +895,75 @@ namespace ModernIPTVPlayer.Controls
         }
         
         private bool _isMuted = true;
+
+        private static string? ParseScriptString(string? rawResult)
+        {
+            if (string.IsNullOrWhiteSpace(rawResult)) return null;
+            var value = rawResult.Trim();
+
+            // WebView2 returns JSON encoded values ("\"muted\"" etc).
+            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
+            {
+                value = value.Substring(1, value.Length - 2).Replace("\\\"", "\"");
+            }
+            return value;
+        }
+
+        private bool? ParseMuteState(string? rawResult)
+        {
+            var state = ParseScriptString(rawResult)?.ToLowerInvariant();
+            return state switch
+            {
+                "muted" => true,
+                "unmuted" => false,
+                "true" => true,
+                "false" => false,
+                _ => null
+            };
+        }
+
+        private async Task RefreshMuteStateFromPlayerAsync(bool defaultMutedWhenUnknown = true)
+        {
+            try
+            {
+                if (TrailerWebView.CoreWebView2 == null)
+                {
+                    _isMuted = defaultMutedWhenUnknown;
+                    UpdateMuteIcon();
+                    return;
+                }
+
+                var raw = await TrailerWebView.CoreWebView2.ExecuteScriptAsync("getMuteState()");
+                var parsed = ParseMuteState(raw);
+                _isMuted = parsed ?? defaultMutedWhenUnknown;
+                UpdateMuteIcon();
+            }
+            catch
+            {
+                _isMuted = defaultMutedWhenUnknown;
+                UpdateMuteIcon();
+            }
+        }
+
+        private async Task SetMutedAsync(bool shouldMute)
+        {
+            try
+            {
+                if (TrailerWebView.CoreWebView2 == null)
+                {
+                    return;
+                }
+
+                var raw = await TrailerWebView.CoreWebView2.ExecuteScriptAsync($"setMuted({(shouldMute ? "true" : "false")})");
+                var parsed = ParseMuteState(raw);
+                _isMuted = parsed ?? shouldMute;
+                UpdateMuteIcon();
+            }
+            catch
+            {
+                _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: _isMuted);
+            }
+        }
         
         private async void MuteButton_Click(object sender, RoutedEventArgs e)
         {
@@ -860,8 +971,9 @@ namespace ModernIPTVPlayer.Controls
             {
                 if (TrailerWebView.CoreWebView2 != null)
                 {
-                    await TrailerWebView.CoreWebView2.ExecuteScriptAsync("toggleMute()");
-                    _isMuted = !_isMuted;
+                    var raw = await TrailerWebView.CoreWebView2.ExecuteScriptAsync("toggleMute()");
+                    var parsed = ParseMuteState(raw);
+                    _isMuted = parsed ?? _isMuted;
                     UpdateMuteIcon();
                 }
             }
