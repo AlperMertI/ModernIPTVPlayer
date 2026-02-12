@@ -21,6 +21,7 @@ namespace ModernIPTVPlayer
             try
             {
                 // 1. Initialize Core
+                if (player == null) return;
                 await player.InitializePlayerAsync();
 
                 // 2. Network & Headers

@@ -5,71 +5,77 @@ using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Input;
-using Windows.UI;
-using Windows.Graphics.Imaging;
-using Windows.Storage.Streams;
 using System;
-using System.IO;
 using System.Collections.Generic;
-using System.Collections.Concurrent;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Linq;
+using ModernIPTVPlayer.Controls;
+using System.Diagnostics;
 using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Services.Stremio;
+using Microsoft.UI.Xaml.Media.Imaging;
+using System.Collections.ObjectModel;
+using Windows.Foundation;
+using System.Numerics;
+using Microsoft.UI.Xaml.Hosting;
 
 namespace ModernIPTVPlayer
 {
     public sealed partial class SeriesPage : Page
     {
+        private enum ContentSource { IPTV, Stremio }
+        private ContentSource _currentSource = ContentSource.IPTV;
+
         private LoginParams? _loginInfo;
         private HttpClient _httpClient;
+        
+        // Data Store
+        private List<LiveCategory> _iptvCategories = new();
+        private List<SeriesStream> _allIptvSeries = new();
+
+        private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _heroColors;
+        private readonly ExpandedCardOverlayController _stremioExpandedCardOverlay;
+
+
         public SeriesPage()
         {
             this.InitializeComponent();
             _httpClient = HttpHelper.Client;
             
+            // Wire up MediaGrid events
             MediaGrid.ItemClicked += MediaGrid_ItemClicked;
             MediaGrid.PlayAction += MediaGrid_PlayAction;
             MediaGrid.DetailsAction += MediaGrid_DetailsAction;
             MediaGrid.AddListAction += MediaGrid_AddListAction;
             MediaGrid.ColorExtracted += MediaGrid_ColorExtracted;
             MediaGrid.HoverEnded += MediaGrid_HoverEnded;
+
+            // Wire up StremioControl events
+            StremioControl.PlayAction += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
+            StremioControl.DetailsAction += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
+            StremioControl.ItemClicked += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
+            StremioControl.BackdropColorChanged += (s, colors) => 
+            {
+                 _heroColors = colors;
+                 BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+            };
+            StremioControl.ViewChanged += StremioControl_ViewChanged;
+
+            // Connect Overlay to StremioControl's ScrollViewer
+            _stremioExpandedCardOverlay = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, StremioControl.MainScrollViewer);
+            _stremioExpandedCardOverlay.PlayRequested += StremioExpandedCardOverlay_PlayRequested;
+            _stremioExpandedCardOverlay.DetailsRequested += StremioExpandedCardOverlay_DetailsRequested;
+            _stremioExpandedCardOverlay.AddListRequested += StremioExpandedCardOverlay_AddListRequested;
+            
+            // Wire Hover Events
+            StremioControl.CardHoverStarted += (s, card) => _stremioExpandedCardOverlay.OnHoverStarted(card);
+            StremioControl.CardHoverEnded += async (s, card) => await _stremioExpandedCardOverlay.CloseExpandedCardAsync();
+
         }
 
-        private void MediaGrid_ItemClicked(object sender, ModernIPTVPlayer.Models.IMediaStream e)
-        {
-             Frame.Navigate(typeof(MediaInfoPage), new ModernIPTVPlayer.Models.MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
-        }
-
-        private void MediaGrid_PlayAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
-        {
-            // For Series, play intent usually means resume or play first.
-            // Navigating to details allows user to pick.
-            Frame.Navigate(typeof(MediaInfoPage), new ModernIPTVPlayer.Models.MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
-        }
-        
-        private void MediaGrid_DetailsAction(object sender, ModernIPTVPlayer.Models.MediaNavigationArgs e)
-        {
-             // Navigate to new MediaInfoPage with animation
-             Frame.Navigate(typeof(MediaInfoPage), e, new SuppressNavigationTransitionInfo());
-        }
-        
-        private void MediaGrid_AddListAction(object sender, ModernIPTVPlayer.Models.IMediaStream e)
-        {
-            ShowMessageDialog("Listem", "Listeye Eklendi");
-        }
-        
-        private void MediaGrid_ColorExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
-        {
-            BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
-        }
-
-        private void MediaGrid_HoverEnded(object sender, EventArgs e)
-        {
-             // Revert to default dark
-             BackdropControl.TransitionTo(Windows.UI.Color.FromArgb(0,0,0,0), Windows.UI.Color.FromArgb(0,0,0,0));
-        }
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
@@ -79,170 +85,164 @@ namespace ModernIPTVPlayer
             {
                 if (_loginInfo != null && _loginInfo.PlaylistUrl != p.PlaylistUrl)
                 {
-                    CategoryListView.ItemsSource = null;
+                    // Reset on playlist change
+                    IptvCategoryList.ItemsSource = null;
                     MediaGrid.ItemsSource = null;
+                    _iptvCategories.Clear();
+                    _allIptvSeries.Clear();
                 }
                 _loginInfo = p;
             }
 
+            // Initial Load (Default to IPTV if first time)
             if (_loginInfo != null && !string.IsNullOrEmpty(_loginInfo.Host))
             {
-                if (CategoryListView.ItemsSource != null) return;
-                await LoadSeriesCategoriesAsync();
+                if (_currentSource == ContentSource.IPTV && _iptvCategories.Count == 0)
+                {
+                    await LoadIptvDataAsync();
+                }
+            }
+            
+            // Ensure layout matches mode (Vital for collapsing OverlayCanvas)
+            UpdateLayoutForMode();
+        }
+
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        {
+            base.OnNavigatedFrom(e);
+            // Stop any playing trailer in ExpandedCard when leaving the page
+            _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
+        }
+
+        // ==========================================
+        // SOURCE SWITCHING LOGIC
+        // ==========================================
+        private async void Source_Checked(object sender, RoutedEventArgs e)
+        {
+            if (sender is RadioButton rb && rb.Tag is string tag)
+            {
+                var newSource = tag == "Stremio" ? ContentSource.Stremio : ContentSource.IPTV;
+                
+                // Avoid reloading if clicking already selected
+                // if (_currentSource == newSource && MediaGrid.ItemsSource != null) return;
+                
+                _currentSource = newSource;
+                
+                // UI Toggle Logic
+                UpdateLayoutForMode();
+
+                // Clear Grid
+                MediaGrid.ItemsSource = null;
+                
+                if (_currentSource == ContentSource.IPTV)
+                {
+                    await LoadIptvDataAsync();
+                }
+                else
+                {
+                    // Trigger load on control -> SERIES
+                     await StremioControl.LoadDiscoveryAsync("series");
+                }
             }
         }
 
-        private List<SeriesCategory> _allCategories = new();
+        private void UpdateLayoutForMode()
+        {
+            if (_currentSource == ContentSource.IPTV)
+            {
+                _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);
+
+                // Sidebar Mode
+                MainSplitView.IsPaneOpen = true; 
+                MainSplitView.DisplayMode = SplitViewDisplayMode.Inline;
+                SidebarToggle.Visibility = Visibility.Visible;
+                MediaGrid.Visibility = Visibility.Visible;
+                StremioControl.Visibility = Visibility.Collapsed;
+                OverlayCanvas.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                // Stremio Mode (Full Screen Premium)
+                MainSplitView.IsPaneOpen = false;
+                MainSplitView.DisplayMode = SplitViewDisplayMode.Overlay;
+                SidebarToggle.Visibility = Visibility.Collapsed;
+                
+                MediaGrid.Visibility = Visibility.Collapsed;
+                StremioControl.Visibility = Visibility.Visible;
+                OverlayCanvas.Visibility = Visibility.Visible;
+            }
+        }
 
         private void ToggleSidebar_Click(object sender, RoutedEventArgs e)
         {
             MainSplitView.IsPaneOpen = !MainSplitView.IsPaneOpen;
         }
 
-        private void CategorySearchBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_allCategories == null) return;
-            
-            var query = CategorySearchBox.Text.ToLowerInvariant();
-            if (string.IsNullOrWhiteSpace(query))
-            {
-                CategoryListView.ItemsSource = _allCategories;
-            }
-            else
-            {
-                var filtered = new List<SeriesCategory>();
-                foreach (var cat in _allCategories)
-                {
-                    if (cat.CategoryName != null && cat.CategoryName.ToLowerInvariant().Contains(query))
-                    {
-                        filtered.Add(cat);
-                    }
-                }
-                CategoryListView.ItemsSource = filtered;
-            }
-        }
-
         // ==========================================
-        // Premium Search Box Interactions
+        // IPTV LOGIC
         // ==========================================
-        private void SearchPill_PointerEntered(object sender, PointerRoutedEventArgs e)
+        private async Task LoadIptvDataAsync()
         {
-            if (CategorySearchBox.FocusState == FocusState.Unfocused)
-            {
-                SearchPillBorder.Background = new SolidColorBrush(Color.FromArgb(25, 255, 255, 255));
-            }
-        }
-
-        private void SearchPill_PointerExited(object sender, PointerRoutedEventArgs e)
-        {
-            if (CategorySearchBox.FocusState == FocusState.Unfocused)
-            {
-                SearchPillBorder.Background = new SolidColorBrush(Color.FromArgb(10, 255, 255, 255));
-            }
-        }
-
-        private void CategorySearchBox_GotFocus(object sender, RoutedEventArgs e)
-        {
-            SearchPillBorder.Background = new SolidColorBrush(Color.FromArgb(40, 255, 255, 255));
-            SearchPillBorder.BorderBrush = (Brush)Application.Current.Resources["SystemControlHighlightAccentBrush"];
-        }
-
-        private void CategorySearchBox_LostFocus(object sender, RoutedEventArgs e)
-        {
-            SearchPillBorder.Background = new SolidColorBrush(Color.FromArgb(10, 255, 255, 255));
-            SearchPillBorder.BorderBrush = new SolidColorBrush(Color.FromArgb(31, 255, 255, 255));
-        }
-
-        // Global list of all series
-        private List<SeriesStream> _allSeries = new();
-
-        private async Task LoadSeriesCategoriesAsync()
-        {
-            string api = "";
             try
             {
                 LoadingRing.IsActive = true;
-                CategoryListView.ItemsSource = null;
-                MediaGrid.ItemsSource = null;
-                _allCategories.Clear();
-                _allSeries.Clear();
                 
+                // Return cached if available
+                if (_iptvCategories.Count > 0 && _allIptvSeries.Count > 0)
+                {
+                     DisplayCategories(_iptvCategories);
+                     return;
+                }
+
                 string username = _loginInfo.Username;
                 string password = _loginInfo.Password;
                 string baseUrl = _loginInfo.Host.TrimEnd('/');
                 string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
 
-                // -------------------------------------------------------------
-                // 1. DATA FETCHING (Cache First -> Network Fallback)
-                // -------------------------------------------------------------
-                
-                // A. Categories
-                var cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<SeriesCategory>(playlistId, "series_cats");
+                // 1. Categories
+                var cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, "series_cats");
                 if (cachedCats != null)
                 {
-                    _allCategories = cachedCats;
-                     System.Diagnostics.Debug.WriteLine("[SeriesPage] Loaded Categories from Cache");
+                     _iptvCategories = cachedCats;
                 }
                 else
                 {
-                    api = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_series_categories";
+                    string api = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_series_categories";
                     string json = await _httpClient.GetStringAsync(api);
-                    
                     var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
-                    _allCategories = JsonSerializer.Deserialize<List<SeriesCategory>>(json, options) ?? new List<SeriesCategory>();
+                    _iptvCategories = JsonSerializer.Deserialize<List<LiveCategory>>(json, options) ?? new List<LiveCategory>();
                     
-                    // Save
-                    _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "series_cats", _allCategories);
+                    _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "series_cats", _iptvCategories);
                 }
-                
-                CategoryListView.ItemsSource = _allCategories;
 
-                // B. Global Series List
-                var cachedSeries = await Services.ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series_list");
-                if (cachedSeries != null && cachedSeries.Count > 0)
+                // 2. Streams (Global List)
+                var cachedStreams = await Services.ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series_streams");
+                if (cachedStreams != null && cachedStreams.Count > 0)
                 {
-                    _allSeries = cachedSeries;
-                    System.Diagnostics.Debug.WriteLine($"[SeriesPage] Loaded {_allSeries.Count} Series from Cache");
+                    _allIptvSeries = cachedStreams;
                 }
                 else
                 {
-                    // Fetch ALL Series
-                    // Usually 'get_series' returns all
-                    string seriesApi = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_series";
-                    string seriesJson = await _httpClient.GetStringAsync(seriesApi);
-
-                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
-                    var seriesList = JsonSerializer.Deserialize<List<SeriesStream>>(seriesJson, options);
-
-                    if (seriesList != null)
-                    {
-                        // Fix Covers URLs if needed? usually they come with full path or partial.
-                        // Assuming they are fine or we fix in binding. 
-                        _allSeries = seriesList;
-                        
-                        // Save
-                        _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "series_list", _allSeries);
-                    }
+                     string streamApi = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_series";
+                     string streamJson = await _httpClient.GetStringAsync(streamApi);
+                     var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
+                     var streams = JsonSerializer.Deserialize<List<SeriesStream>>(streamJson, options);
+                     
+                     if (streams != null)
+                     {
+                         // Fix URLs if needed (Series usually have seasons/episodes structure, but here we list the shows)
+                         // The series object from get_series acts as the 'Stream' here
+                         // Series ID is likely needed for fetching details later
+                         _allIptvSeries = streams;
+                         _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "series_streams", _allIptvSeries);
+                     }
                 }
 
-                // -------------------------------------------------------------
-                // 2. UI INITIALIZATION
-                // -------------------------------------------------------------
-                
-                if (_allCategories.Count > 0)
-                {
-                    // Restoration Logic
-                    var lastId = AppSettings.LastSeriesCategoryId;
-                    var targetCat = _allCategories.FirstOrDefault(c => c.CategoryId == lastId) ?? _allCategories[0];
-
-                    CategoryListView.SelectedItem = targetCat;
-                    CategoryListView.ScrollIntoView(targetCat);
-                    await LoadSeriesAsync(targetCat);
-                }
+                DisplayCategories(_iptvCategories);
             }
             catch (Exception ex)
             {
-                await ShowMessageDialog("Kritik Hata (Dizi Kategori)", $"Hata: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[SeriesPage] IPTV Error: {ex.Message}");
             }
             finally
             {
@@ -250,30 +250,27 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private async Task LoadSeriesAsync(SeriesCategory category)
+        private async Task DisplayCategories(List<LiveCategory> categories)
         {
-            SelectedCategoryTitle.Text = category.CategoryName;
+            IptvCategoryList.ItemsSource = categories; // Binds to Sidebar List
+            if (categories.Count > 0)
+            {
+                // Restore last selection or pick first
+                IptvCategoryList.SelectedItem = categories[0];
+                await LoadIptvStreams(categories[0]);
+            }
+        }
 
-            // Save selection
-            AppSettings.LastSeriesCategoryId = category?.CategoryId;
-
+        private async Task LoadIptvStreams(LiveCategory category)
+        {
+            MediaGrid.IsLoading = true;
             try
             {
-                MediaGrid.IsLoading = true;
-                
-                // Filter locally on thread pool
-                var filtered = await Task.Run(() => 
-                {
-                    if (_allSeries == null || _allSeries.Count == 0) return new List<SeriesStream>();
-                    return _allSeries.Where(s => s.CategoryId == category.CategoryId).ToList();
-                });
-
-                category.Series = filtered;
-                MediaGrid.ItemsSource = new List<ModernIPTVPlayer.Models.IMediaStream>(category.Series);
-            }
-            catch (Exception ex)
-            {
-                 System.Diagnostics.Debug.WriteLine($"Error filtering series: {ex.Message}");
+                 var filtered = await Task.Run(() => 
+                 {
+                     return _allIptvSeries.Where(m => m.CategoryId == category.CategoryId).ToList();
+                 });
+                 MediaGrid.ItemsSource = filtered.Cast<IMediaStream>().ToList();
             }
             finally
             {
@@ -281,60 +278,127 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void Image_ImageOpened(object sender, RoutedEventArgs e)
+        private async Task LoadStremioStreams(LiveCategory category)
         {
-            if (sender is Image img)
+            if (category.CategoryId == "empty") return;
+
+            MediaGrid.IsLoading = true;
+            try
             {
-                img.Opacity = 0;
-                var anim = new DoubleAnimation
+                // Deconstruct ID: "URL|Type|Id"
+                var parts = category.CategoryId.Split('|');
+                if (parts.Length >= 3)
                 {
-                    To = 1,
-                    Duration = TimeSpan.FromSeconds(0.6),
-                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
-                };
-                
-                var sb = new Storyboard();
-                sb.Children.Add(anim);
-                Storyboard.SetTarget(anim, img);
-                Storyboard.SetTargetProperty(anim, "Opacity");
-                sb.Begin();
+                    string baseUrl = parts[0];
+                    string type = parts[1];
+                    string id = parts[2];
+
+                    var streams = await StremioService.Instance.GetCatalogItemsAsync(baseUrl, type, id);
+                    
+                    // Convert Cast
+                    // StremioMediaStream implements IMediaStream
+                    MediaGrid.ItemsSource = new List<IMediaStream>(streams); 
+                }
+            }
+            finally
+            {
+                MediaGrid.IsLoading = false;
             }
         }
 
+
+        // ==========================================
+        // EVENTS
+        // ==========================================
         private async void CategoryListView_ItemClick(object sender, ItemClickEventArgs e)
         {
-            if (e.ClickedItem is SeriesCategory category)
+            if (e.ClickedItem is LiveCategory category)
             {
-                await LoadSeriesAsync(category);
+                if (_currentSource == ContentSource.IPTV)
+                    await LoadIptvStreams(category);
+                else
+                    await LoadStremioStreams(category);
             }
         }
 
-        private async Task ShowMessageDialog(string title, string content)
+        private void SearchButton_Click(object sender, RoutedEventArgs e)
         {
-            if (this.XamlRoot == null) return;
-            ContentDialog dialog = new ContentDialog 
-            { 
-                Title = title, 
-                Content = content, 
-                CloseButtonText = "Tamam", 
-                XamlRoot = this.XamlRoot 
-            };
-            await dialog.ShowAsync();
+            // TODO: Implement Unified Search
         }
-        
-        private async void SearchButton_Click(object sender, RoutedEventArgs e)
+
+        private void MediaGrid_ItemClicked(object sender, IMediaStream e)
         {
-             // Placeholder for Global Spotlight Search
-            ContentDialog searchDialog = new ContentDialog
+             // For Series, we typically go to MediaInfoPage too? Or specific SeriesDetailsPage?
+             // Assuming MediaInfoPage handles series too
+             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+        }
+
+        private void MediaGrid_PlayAction(object sender, IMediaStream e)
+        {
+             // Direct Play logic for Series might mean playing S1E1 or resuming
+             // For now navigate to details
+             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+        }
+
+        private void MediaGrid_DetailsAction(object sender, MediaNavigationArgs e)
+        {
+             Frame.Navigate(typeof(MediaInfoPage), e, new SuppressNavigationTransitionInfo());
+        }
+
+        private void StremioControl_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
+        {
+            if (sender is Controls.StremioDiscoveryControl control) 
             {
-                Title = "Global Arama",
-                Content = "Bu özellik (Spotlight Search) yakında eklenecek.",
-                CloseButtonText = "Kapat",
-                XamlRoot = this.XamlRoot
-            };
-            await searchDialog.ShowAsync();
+                 BackdropControl.SetVerticalShift(control.MainScrollViewer.VerticalOffset);
+
+                // Close expanded card on scroll to prevent detachment
+                if (_stremioExpandedCardOverlay.IsInCinemaMode) return;
+            
+                if (_stremioExpandedCardOverlay.IsCardVisible)
+                {
+                    _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync();
+                }
+            }
         }
 
+        private void MediaGrid_AddListAction(object sender, IMediaStream e)
+        {
+             // TODO: Favorites Logic
+        }
 
+        private void MediaGrid_ColorExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
+        {
+            BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+        }
+
+        private void MediaGrid_HoverEnded(object sender, EventArgs e)
+        {
+            if (_heroColors.HasValue)
+            {
+                BackdropControl.TransitionTo(_heroColors.Value.Primary, _heroColors.Value.Secondary);
+            }
+            else
+            {
+                BackdropControl.TransitionTo(Windows.UI.Color.FromArgb(255, 13, 13, 13), Windows.UI.Color.FromArgb(255, 13, 13, 13));
+            }
+        }
+
+        // ==========================================
+        // EXPANDED CARD PROXY EVENTS
+        // ==========================================
+        private void StremioExpandedCardOverlay_PlayRequested(object sender, IMediaStream e)
+        {
+             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+        }
+
+        private void StremioExpandedCardOverlay_DetailsRequested(object sender, (IMediaStream Stream, TmdbMovieResult Tmdb) e)
+        {
+             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e.Stream), new SuppressNavigationTransitionInfo());
+        }
+
+        private void StremioExpandedCardOverlay_AddListRequested(object sender, IMediaStream e)
+        {
+             // To be implemented
+        }
     }
 }

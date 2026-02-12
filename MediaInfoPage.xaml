@@ -505,7 +505,7 @@
                                      </ListView.ItemContainerStyle>
                                      <ListView.ItemTemplate>
                                          <DataTemplate x:DataType="local:EpisodeItem">
-                                             <Grid Height="90" CornerRadius="10" Background="#1AFFFFFF" Padding="0">
+                                             <Grid Height="110" CornerRadius="10" Background="#1AFFFFFF" Padding="0">
                                                  <Grid.ColumnDefinitions>
                                                      <ColumnDefinition Width="140"/>
                                                      <ColumnDefinition Width="*"/>
@@ -538,6 +538,7 @@
                                                          <RowDefinition Height="Auto"/>
                                                          <RowDefinition Height="Auto"/>
                                                          <RowDefinition Height="Auto"/>
+                                                         <RowDefinition Height="Auto"/>
                                                      </Grid.RowDefinitions>
                                                      
                                                      <!-- Top Row -->
@@ -548,9 +549,12 @@
                                                      <!-- Title -->
                                                      <TextBlock Grid.Row="1" Text="{x:Bind Title}" FontWeight="Bold" FontSize="15" 
                                                                 TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Foreground="White" Margin="0,4"/>
+
+                                                     <TextBlock Grid.Row="2" Text="{x:Bind Overview}" FontSize="12" Foreground="#C8C8C8"
+                                                                TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
                                                      
                                                      <!-- Progress Text -->
-                                                     <TextBlock Grid.Row="2" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA" 
+                                                     <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA" 
                                                                 Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
                                                  </Grid>
                                              </Grid>
@@ -577,11 +581,15 @@
                                  <!-- Header -->
                                  <Grid Padding="24,20,24,10">
                                      <Grid.ColumnDefinitions>
+                                         <ColumnDefinition Width="Auto"/>
                                          <ColumnDefinition Width="*"/>
                                          <ColumnDefinition Width="Auto"/>
                                      </Grid.ColumnDefinitions>
-                                     <TextBlock Text="Kaynaklar" FontSize="22" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
-                                     <Button Grid.Column="1" x:Name="BtnCloseSources" Click="BtnCloseSources_Click" Style="{StaticResource GlassButtonStyle}" Width="36" Height="36" Padding="0" CornerRadius="18">
+                                     <Button x:Name="BtnBackToEpisodes" Click="BtnBackToEpisodes_Click" Style="{StaticResource GlassButtonStyle}" Width="36" Height="36" Padding="0" CornerRadius="18" Margin="0,0,12,0" Visibility="Collapsed">
+                                         <FontIcon Glyph="&#xE72B;" FontSize="14"/>
+                                     </Button>
+                                     <TextBlock Grid.Column="1" Text="Kaynaklar" FontSize="22" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                                     <Button Grid.Column="2" x:Name="BtnCloseSources" Click="BtnCloseSources_Click" Style="{StaticResource GlassButtonStyle}" Width="36" Height="36" Padding="0" CornerRadius="18">
                                          <FontIcon Glyph="&#xE711;" FontSize="14"/>
                                      </Button>
                                  </Grid>
@@ -688,6 +696,53 @@
                                           </DataTemplate>
                                       </ListView.ItemTemplate>
                                   </ListView>
+
+                                 <Grid x:Name="SourcesInlineShimmerOverlay" Grid.RowSpan="3" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="20">
+                                     <Border Background="#FF0D0D0D" CornerRadius="20"/>
+                                     <Grid>
+                                         <Grid.RowDefinitions>
+                                             <RowDefinition Height="Auto"/>
+                                             <RowDefinition Height="Auto"/>
+                                             <RowDefinition Height="*"/>
+                                         </Grid.RowDefinitions>
+
+                                         <Grid Padding="24,20,24,10">
+                                             <Grid.ColumnDefinitions>
+                                                 <ColumnDefinition Width="Auto"/>
+                                                 <ColumnDefinition Width="*"/>
+                                                 <ColumnDefinition Width="Auto"/>
+                                             </Grid.ColumnDefinitions>
+                                             <ctl:ShimmerControl Width="36" Height="36" CornerRadius="18"/>
+                                             <ctl:ShimmerControl Grid.Column="1" Width="120" Height="24" CornerRadius="4" HorizontalAlignment="Left" Margin="12,0,0,0"/>
+                                             <ctl:ShimmerControl Grid.Column="2" Width="36" Height="36" CornerRadius="18"/>
+                                         </Grid>
+
+                                         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="20" Margin="24,0,24,10">
+                                             <ctl:ShimmerControl Width="80" Height="20" CornerRadius="4"/>
+                                             <ctl:ShimmerControl Width="60" Height="20" CornerRadius="4"/>
+                                             <ctl:ShimmerControl Width="70" Height="20" CornerRadius="4"/>
+                                         </StackPanel>
+
+                                         <StackPanel Grid.Row="2" Spacing="8" Padding="16,0,16,20">
+                                             <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
+                                                 <ctl:ShimmerControl Width="220" Height="18" CornerRadius="4"/>
+                                                 <ctl:ShimmerControl Width="300" Height="14" CornerRadius="4"/>
+                                                 <StackPanel Orientation="Horizontal" Spacing="8">
+                                                     <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
+                                                     <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                                 </StackPanel>
+                                             </StackPanel>
+                                             <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
+                                                 <ctl:ShimmerControl Width="190" Height="18" CornerRadius="4"/>
+                                                 <ctl:ShimmerControl Width="260" Height="14" CornerRadius="4"/>
+                                                 <StackPanel Orientation="Horizontal" Spacing="8">
+                                                     <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
+                                                     <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                                 </StackPanel>
+                                             </StackPanel>
+                                         </StackPanel>
+                                     </Grid>
+                                 </Grid>
                              </Grid>
                          </Border>
                     </Grid>
@@ -798,7 +853,7 @@
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <Grid Width="260" Height="150" CornerRadius="12" Background="#1AFFFFFF" Margin="0,0,16,0">
+                                <Grid Width="260" Height="170" CornerRadius="12" Background="#1AFFFFFF" Margin="0,0,16,0">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="90"/>
                                         <RowDefinition Height="*"/>
@@ -822,6 +877,8 @@
                                     <StackPanel Grid.Row="1" Padding="12,0" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding Title}" FontWeight="SemiBold" FontSize="13" 
                                                    TextTrimming="CharacterEllipsis" Foreground="White" MaxLines="1"/>
+                                        <TextBlock Text="{Binding Overview}" FontSize="11" Foreground="#C8C8C8" Margin="0,2,0,0"
+                                                   TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
                                         <TextBlock Text="{Binding Duration}" FontSize="11" Foreground="#AAA" Margin="0,2,0,0"/>
                                     </StackPanel>
                                 </Grid>
@@ -832,6 +889,12 @@
 
                 <StackPanel x:Name="NarrowSourcesSection" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" 
                                Visibility="Collapsed" Spacing="8" Margin="0,4,0,0">
+                    <StackPanel Orientation="Horizontal" Spacing="12" Margin="20,0,20,0">
+                        <Button x:Name="BtnBackToEpisodesNarrow" Click="BtnBackToEpisodes_Click" Style="{StaticResource GlassButtonStyle}" Width="36" Height="36" Padding="0" CornerRadius="18" Visibility="Collapsed">
+                            <FontIcon Glyph="&#xE72B;" FontSize="14"/>
+                        </Button>
+                        <TextBlock Text="Kaynaklar" FontSize="20" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
+                    </StackPanel>
                     <ListView x:Name="NarrowAddonSelector" SelectionMode="Single" SelectionChanged="AddonSelectorList_SelectionChanged"
                                ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                                Margin="20,0,20,8" Height="40">

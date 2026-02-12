@@ -1,4 +1,4 @@
-using Microsoft.UI;
+﻿using Microsoft.UI;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -24,12 +24,14 @@ using Windows.Storage.Pickers;
 using System.IO;
 using System.Threading;
 using System.Diagnostics;
+using System.Text;
 
 namespace ModernIPTVPlayer
 {
     public sealed partial class MediaInfoPage : Page
     {
         private IMediaStream _item;
+        private bool _isProgrammaticSelection;
         private System.Collections.ObjectModel.ObservableCollection<StremioAddonViewModel> _addonResults;
         private Compositor _compositor;
         private string _streamUrl;
@@ -42,6 +44,12 @@ namespace ModernIPTVPlayer
         private EpisodeItem _selectedEpisode;
         private SeasonItem _selectedSeason;
         private TmdbMovieResult _cachedTmdb;
+        private bool _isInitializingSeriesUi;
+        private readonly Dictionary<string, StremioSourcesCacheEntry> _stremioSourcesCache = new();
+        private int _sourcesRequestVersion;
+        private string _currentStremioVideoId;
+        private bool _isSourcesFetchInProgress;
+        private bool _isCurrentSourcesComplete;
         
         private FFmpegProber _ffprober = new();
         private CancellationTokenSource _probeCts;
@@ -156,8 +164,17 @@ namespace ModernIPTVPlayer
             {
                 if (_item == null) return; // Data not loaded yet
 
-                bool isSeries = _item is SeriesStream;
-                System.Diagnostics.Debug.WriteLine($"[LayoutDebug] UpdateLayoutState START. Wide: {isWide}, Series: {isSeries}");
+                bool isSeries = false;
+                if (_item is SeriesStream)
+                {
+                    isSeries = true;
+                }
+                else if (_item is StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv"))
+                {
+                    isSeries = true;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[LayoutDebug] UpdateLayoutState START. Wide: {isWide}, Series: {isSeries}, ItemType: {_item?.GetType().Name}, MetaType: {(_item as StremioMediaStream)?.Meta?.Type ?? "N/A"}");
 
                 if (isWide)
                 {
@@ -390,9 +407,28 @@ namespace ModernIPTVPlayer
             SetLoadingState(true); 
             SetBadgeLoadingState(true); // Explicitly reset badges to loading state
             
+            // CLEAR STATE (Prevent Stale Data)
+            Seasons?.Clear();
+            CurrentEpisodes?.Clear();
+
             // Reset Progress Subtexts
             PlayButtonSubtext.Visibility = Visibility.Collapsed;
             StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
+            
+            // RESET PANELS (Prevent State Bleed)
+            SourcesPanel.Visibility = Visibility.Collapsed;
+            NarrowSourcesSection.Visibility = Visibility.Collapsed; 
+            if (item is SeriesStream || (item is Models.Stremio.StremioMediaStream smsCheck && (smsCheck.Meta.Type == "series" || smsCheck.Meta.Type == "tv")))
+            {
+                // Series: Episodes panel is managed by UpdateLayoutState/LoadSeriesData
+                // Ensure sources are hidden
+            }
+            else
+            {
+               // Movie: Episodes panel hidden
+               EpisodesPanel.Visibility = Visibility.Collapsed;
+               NarrowEpisodesSection.Visibility = Visibility.Collapsed;
+            }
             
             // Setup Alive Buttons (Micro-interactions)
             SetupButtonInteractions(PlayButton, RestartButton, TrailerButton, DownloadButton, CopyLinkButton, StickyPlayButton);
@@ -453,8 +489,8 @@ namespace ModernIPTVPlayer
                 }
 
                 // 2. Measure everything with tiny opacity to ensure layout is ready
-                TitlePanel.Opacity = 0.01;
-                OverviewPanel.Opacity = 0.01; 
+                TitlePanel.Opacity = 0;
+                OverviewPanel.Opacity = 0;
                 this.UpdateLayout(); // Global measurement
 
                 // Match shimmers to actual rendered sizes
@@ -485,7 +521,10 @@ namespace ModernIPTVPlayer
 
                      if (!string.IsNullOrEmpty(imdbId) && imdbId.StartsWith("tt"))
                      {
-                         _cachedTmdb = await TmdbHelper.GetMovieByExternalIdAsync(imdbId);
+                         if (sms.Meta.Type == "series" || sms.Meta.Type == "tv")
+                             _cachedTmdb = await TmdbHelper.GetTvByExternalIdAsync(imdbId);
+                         else
+                             _cachedTmdb = await TmdbHelper.GetMovieByExternalIdAsync(imdbId);
                      }
                      
                      if (_cachedTmdb == null)
@@ -493,7 +532,10 @@ namespace ModernIPTVPlayer
                          // Fallback to title search if ID lookup failed
                          string cleanYear = TmdbHelper.ExtractYear(rawYear) ?? rawYear;
                          System.Diagnostics.Debug.WriteLine($"[Stremio] ID lookup failed. Searching by Title: {rawTitle} Year: {cleanYear}");
-                         _cachedTmdb = await TmdbHelper.SearchMovieAsync(rawTitle, cleanYear);
+                         if (sms.Meta.Type == "series" || sms.Meta.Type == "tv")
+                              _cachedTmdb = await TmdbHelper.SearchTvAsync(rawTitle, cleanYear);
+                         else
+                              _cachedTmdb = await TmdbHelper.SearchMovieAsync(rawTitle, cleanYear);
                      }
                 }
                 else
@@ -554,10 +596,12 @@ namespace ModernIPTVPlayer
                 AdjustCastShimmer(4);
 
                 // Fetch Deep Details (Runtime, Genres)
-                var details = await TmdbHelper.GetDetailsAsync(_cachedTmdb.Id, item is SeriesStream);
+                bool isTv = item is SeriesStream || (item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv"));
+                
+                var details = await TmdbHelper.GetDetailsAsync(_cachedTmdb.Id, isTv);
                 if (details != null)
                 {
-                    RuntimeText.Text = (item is SeriesStream) ? "Dizi" : $"{details.Runtime / 60}sa {details.Runtime % 60}dk";
+                    RuntimeText.Text = isTv ? "Dizi" : $"{details.Runtime / 60}sa {details.Runtime % 60}dk";
                     GenresText.Text = string.Join(" • ", details.Genres.Select(g => g.Name).Take(3));
 
                     // FIX: Update Synopsis from Details if available (Search result might be incomplete)
@@ -570,10 +614,9 @@ namespace ModernIPTVPlayer
                 }
 
                 // Fetch Cast
-                // Fetch Cast
                 try
                 {
-                    var credits = await TmdbHelper.GetCreditsAsync(_cachedTmdb.Id, item is SeriesStream);
+                    var credits = await TmdbHelper.GetCreditsAsync(_cachedTmdb.Id, isTv);
                     if (credits != null && credits.Cast != null)
                     {
                         CastList.Clear();
@@ -665,14 +708,24 @@ namespace ModernIPTVPlayer
 
                  if (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")
                  {
-                     // Sync History & UI
-                     await RefreshStremioSeriesProgressAsync(stremioItem);
-                
-                     // Fetch Sources for Series (auto-load for first available or selected)
-                     if (_selectedEpisode != null)
+                     System.Diagnostics.Debug.WriteLine($"[Stremio] Series Detected. Videos Count: {stremioItem.Meta.Videos?.Count ?? 0}");
+
+                     _isInitializingSeriesUi = true;
+                     try
                      {
-                         _ = PlayStremioContent(_selectedEpisode.Id, false);
+                         // LOAD DATA FIRST
+                         await LoadStremioSeriesDataAsync(stremioItem);
+
+                         // THEN Sync History & UI
+                         await RefreshStremioSeriesProgressAsync(stremioItem);
                      }
+                     finally
+                     {
+                         _isInitializingSeriesUi = false;
+                     }
+
+                     // Keep episodes/seasons panel visible on initial detail open.
+                     ShowSourcesPanel(false);
                  }
                  else
                  {
@@ -755,7 +808,7 @@ namespace ModernIPTVPlayer
                                 // Determine best title (TMDB name vs IPTV title from history)
                                 string epName = ep.Name;
                                 string cleanIptv = TmdbHelper.CleanEpisodeTitle(lastWatched.Title);
-                                bool isGeneric = string.IsNullOrEmpty(epName) || epName.Contains("Bölüm") || epName.Contains("Episode") || epName == ep.EpisodeNumber.ToString();
+                                bool isGeneric = IsGenericEpisodeTitle(epName, ep.EpisodeNumber);
 
                                 if (isGeneric && !string.IsNullOrEmpty(cleanIptv) && cleanIptv.Length > 2)
                                 {
@@ -763,7 +816,7 @@ namespace ModernIPTVPlayer
                                 }
                                 else if (string.IsNullOrEmpty(epName))
                                 {
-                                    epName = $"Bölüm {ep.EpisodeNumber}";
+                                    epName = $"S{lastWatched.SeasonNumber:D2}E{ep.EpisodeNumber:D2}";
                                 }
 
                                 TitleText.Text = epName;
@@ -1334,7 +1387,7 @@ namespace ModernIPTVPlayer
                                 if (match != null)
                                 {
                                     string cleanIptv = TmdbHelper.CleanEpisodeTitle(title);
-                                    bool isGeneric = string.IsNullOrEmpty(match.Name) || match.Name.Contains("Bölüm") || match.Name.Contains("Episode") || match.Name == epNum.ToString();
+                                    bool isGeneric = IsGenericEpisodeTitle(match.Name, epNum);
                                     
                                     if (isGeneric && !string.IsNullOrEmpty(cleanIptv) && cleanIptv.Length > 2)
                                     {
@@ -1349,6 +1402,11 @@ namespace ModernIPTVPlayer
                                 {
                                      title = TmdbHelper.CleanEpisodeTitle(title);
                                 }
+                            }
+
+                            if (IsGenericEpisodeTitle(title, epNum))
+                            {
+                                title = $"S{seasonNum:D2}E{epNum:D2}";
                             }
 
                             string finalUrl = $"{activePlaylist.Host.TrimEnd('/')}/series/{activePlaylist.Username}/{activePlaylist.Password}/{id}.{container}";
@@ -1527,21 +1585,37 @@ namespace ModernIPTVPlayer
                 
                 if (_pendingAutoSelectEpisode != null && season.Episodes.Contains(_pendingAutoSelectEpisode))
                 {
-                    EpisodesListView.SelectedItem = _pendingAutoSelectEpisode;
-                    if (NarrowEpisodesListView != null)
+                    _isProgrammaticSelection = true;
+                    try
                     {
-                        NarrowEpisodesListView.SelectedItem = _pendingAutoSelectEpisode;
-                        NarrowEpisodesListView.ScrollIntoView(_pendingAutoSelectEpisode);
+                        EpisodesListView.SelectedItem = _pendingAutoSelectEpisode;
+                        if (NarrowEpisodesListView != null)
+                        {
+                            NarrowEpisodesListView.SelectedItem = _pendingAutoSelectEpisode;
+                            NarrowEpisodesListView.ScrollIntoView(_pendingAutoSelectEpisode);
+                        }
+                        EpisodesListView.ScrollIntoView(_pendingAutoSelectEpisode);
+                        _pendingAutoSelectEpisode = null;
                     }
-                    EpisodesListView.ScrollIntoView(_pendingAutoSelectEpisode);
-                    _pendingAutoSelectEpisode = null;
+                    finally
+                    {
+                        _isProgrammaticSelection = false;
+                    }
                 }
                 else if (CurrentEpisodes.Count > 0)
                 {
                     // Select first by default if no history
-                     EpisodesListView.SelectedItem = CurrentEpisodes[0];
-                     if (NarrowEpisodesListView != null)
-                         NarrowEpisodesListView.SelectedItem = CurrentEpisodes[0];
+                    _isProgrammaticSelection = true;
+                    try
+                    {
+                        EpisodesListView.SelectedItem = CurrentEpisodes[0];
+                        if (NarrowEpisodesListView != null)
+                            NarrowEpisodesListView.SelectedItem = CurrentEpisodes[0];
+                    }
+                    finally
+                    {
+                        _isProgrammaticSelection = false;
+                    }
                 }
             }
         }
@@ -1593,11 +1667,10 @@ namespace ModernIPTVPlayer
                      var history = HistoryManager.Instance.GetProgress(ep.Id);
                      InitializePrebufferPlayer(ep.StreamUrl, history?.Position ?? 0);
 
-                     // TRIGGER TECHNICAL PROBE
                      if (!string.IsNullOrEmpty(ep.StreamUrl))
-                         _ = UpdateTechnicalBadgesAsync(ep.StreamUrl);
-                     else if (_item is Models.Stremio.StremioMediaStream)
-                         _ = PlayStremioContent(ep.Id, false);
+                          _ = UpdateTechnicalBadgesAsync(ep.StreamUrl);
+                     else if (_item is Models.Stremio.StremioMediaStream && !_isProgrammaticSelection && !_isInitializingSeriesUi)
+                          _ = PlayStremioContent(ep.Id, false);
                  }
                  finally
                  {
@@ -2034,6 +2107,17 @@ namespace ModernIPTVPlayer
 
         #region Actions
 
+        private static bool IsGenericEpisodeTitle(string title, int episodeNumber)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return true;
+
+            string t = title.Trim().ToLowerInvariant();
+            if (t == episodeNumber.ToString()) return true;
+            if (t == $"e{episodeNumber}" || t == $"ep {episodeNumber}" || t == $"ep. {episodeNumber}") return true;
+            if (t.Contains("episode") || t.Contains("bölüm") || t.Contains("bolum")) return true;
+            return false;
+        }
+
         private async Task LoadStremioSeriesDataAsync(Models.Stremio.StremioMediaStream series)
         {
             try
@@ -2043,11 +2127,8 @@ namespace ModernIPTVPlayer
 
                 if (series.Meta.Videos == null || series.Meta.Videos.Count == 0) return;
 
-                // Group by Season
-                // Stremio videos usually have 'season' and 'episode' properties.
-                // Some might not (anime?), but generally they do for 'series'.
-                
                 var grouped = series.Meta.Videos
+                    .Where(v => v.Season > 0)
                     .GroupBy(v => v.Season)
                     .OrderBy(g => g.Key);
 
@@ -2056,18 +2137,53 @@ namespace ModernIPTVPlayer
                     int seasonNum = group.Key;
                     var epList = new List<EpisodeItem>();
 
+                    TmdbSeasonDetails tmdbSeason = null;
+                    if (_cachedTmdb != null)
+                    {
+                        tmdbSeason = await TmdbHelper.GetSeasonDetailsAsync(_cachedTmdb.Id, seasonNum);
+                    }
+
                     foreach (var vid in group.OrderBy(v => v.Episode))
                     {
+                        int episodeNum = vid.Episode > 0 ? vid.Episode : 1;
+                        var tmdbMatch = tmdbSeason?.Episodes?.FirstOrDefault(x => x.EpisodeNumber == episodeNum);
+
+                        string resolvedTitle = vid.Title;
+                        if (tmdbMatch != null && !IsGenericEpisodeTitle(tmdbMatch.Name, episodeNum))
+                        {
+                            resolvedTitle = tmdbMatch.Name;
+                        }
+                        else if (IsGenericEpisodeTitle(resolvedTitle, episodeNum))
+                        {
+                            resolvedTitle = $"S{seasonNum:D2}E{episodeNum:D2}";
+                        }
+
+                        string resolvedOverview = tmdbMatch?.Overview;
+                        if (string.IsNullOrWhiteSpace(resolvedOverview))
+                        {
+                            resolvedOverview = vid.Overview;
+                        }
+
+                        string resolvedImage = vid.Thumbnail;
+                        if (!string.IsNullOrEmpty(tmdbMatch?.StillPath))
+                        {
+                            resolvedImage = TmdbHelper.GetImageUrl(tmdbMatch.StillPath, "w300");
+                        }
+                        if (string.IsNullOrEmpty(resolvedImage))
+                        {
+                            resolvedImage = series.PosterUrl;
+                        }
+
                         var epItem = new EpisodeItem
                         {
-                            Id = vid.Id, // Store Stremio Video ID (e.g. tt1234:1:1)
+                            Id = vid.Id,
                             SeasonNumber = seasonNum,
-                            EpisodeNumber = vid.Episode,
-                            Title = vid.Title ?? $"Bölüm {vid.Episode}", // Fallback
-                            Name = vid.Title ?? $"Bölüm {vid.Episode}",
-                            Overview = vid.Overview ?? (vid.Title ?? ""), // Use title if no plot
-                            ImageUrl = vid.Thumbnail ?? series.PosterUrl, // Fallback to series poster
-                            StreamUrl = "" // No stream URL yet!
+                            EpisodeNumber = episodeNum,
+                            Title = resolvedTitle,
+                            Name = resolvedTitle,
+                            Overview = resolvedOverview ?? "",
+                            ImageUrl = resolvedImage,
+                            StreamUrl = ""
                         };
                         epList.Add(epItem);
                     }
@@ -2089,6 +2205,8 @@ namespace ModernIPTVPlayer
 
                 // Sync History & UI
                 await RefreshStremioSeriesProgressAsync(series);
+                
+                System.Diagnostics.Debug.WriteLine($"[Stremio] Series Data Loaded. Seasons: {Seasons.Count}, First Season Episodes: {Seasons.FirstOrDefault()?.Episodes?.Count ?? 0}");
             }
             catch (Exception ex)
             {
@@ -2127,7 +2245,10 @@ namespace ModernIPTVPlayer
                      SeasonComboBox.SelectedItem = Seasons.FirstOrDefault(s => s.SeasonNumber == lastWatched.SeasonNumber);
                      // Allow UI update
                      await Task.Delay(50); 
+                     
+                     _isProgrammaticSelection = true;
                      if (EpisodesListView != null) EpisodesListView.SelectedItem = targetEp;
+                     _isProgrammaticSelection = false;
                      
                      // Pre-buffer
                      _streamUrl = lastWatched.StreamUrl;
@@ -2153,18 +2274,31 @@ namespace ModernIPTVPlayer
         {
              if (sender is Button btn && btn.Tag is EpisodeItem ep)
              {
+                 // Check if selection creates a change
+                 bool isSelectionChange = EpisodesListView.SelectedItem != ep;
+                 
                  // Ensure this episode is selected
+                 // This triggers EpisodesListView_SelectionChanged which:
+                 // 1. Updates UI (Play button text, badges)
+                 // 2. For Stremio: Calls PlayStremioContent (Loads sources)
+                 // 3. For IPTV: Updates Technical Badges & Prebuffers
                  _selectedEpisode = ep;
                  EpisodesListView.SelectedItem = ep;
 
                  // STREMIO LOGIC
                  if (_item is Models.Stremio.StremioMediaStream)
                  {
-                     await PlayStremioContent(ep.Id, showGlobalLoading: false); // Pass Video ID
+                     // Only manually trigger if selection didn't change (because if it did change, the event handler already called it)
+                     if (!isSelectionChange)
+                     {
+                         await PlayStremioContent(ep.Id, showGlobalLoading: false);
+                     }
                      return;
                  }
                  
                  // IPTV Logic
+                 // For IPTV, SelectionChanged ONLY updates UI/Badges. 
+                 // Clicking "Play" on the card implies we want to Navigate to Player, so we ALWAYS do this.
                  if (_item is SeriesStream ss)
                  {
                       string parentId = ss.SeriesId.ToString();
@@ -2265,36 +2399,108 @@ namespace ModernIPTVPlayer
         
         private async Task PlayStremioContent(string videoId, bool showGlobalLoading = true, bool autoPlay = false)
         {
+            if (string.IsNullOrWhiteSpace(videoId)) return;
+
+            if (_currentStremioVideoId == videoId)
+            {
+                bool hasVisibleSources = _addonResults != null &&
+                                         _addonResults.Any(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0);
+
+                if (hasVisibleSources)
+                {
+                    ShowSourcesPanel(true);
+                    if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
+                    if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+                    return;
+                }
+            }
+
+            int requestVersion = Interlocked.Increment(ref _sourcesRequestVersion);
             try
             {
                 if (showGlobalLoading) SetLoadingState(true);
-                
-                // Show Shimmer, Hide Content
-                SourcesPanel.Visibility = Visibility.Collapsed;
-                SourcesShimmerPanel.Visibility = Visibility.Visible;
-                
+
                 string type = (_item as Models.Stremio.StremioMediaStream).Meta.Type;
+                string cacheKey = $"{type}|{videoId}";
+                bool hasCachedAddons = false;
+                StremioSourcesCacheEntry cacheEntry = null;
+
+                if (_stremioSourcesCache.TryGetValue(cacheKey, out cacheEntry) &&
+                    cacheEntry?.Addons != null &&
+                    cacheEntry.Addons.Count > 0)
+                {
+                    if (requestVersion != Volatile.Read(ref _sourcesRequestVersion)) return;
+
+                    _currentStremioVideoId = videoId;
+                    _isCurrentSourcesComplete = cacheEntry.IsComplete;
+                    _isSourcesFetchInProgress = !cacheEntry.IsComplete;
+                    hasCachedAddons = true;
+
+                    _addonResults = new ObservableCollection<StremioAddonViewModel>(cacheEntry.Addons.Select(CloneAddonViewModel));
+                    AddonSelectorList.ItemsSource = _addonResults;
+                    NarrowAddonSelector.ItemsSource = _addonResults;
+
+                    ShowSourcesPanel(true);
+                    if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
+                    if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+
+                    var firstAddon = _addonResults.FirstOrDefault(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0);
+                    if (firstAddon != null && AddonSelectorList.SelectedItem == null)
+                    {
+                        AddonSelectorList.SelectedItem = firstAddon;
+                    }
+
+                    if (autoPlay)
+                    {
+                        var firstStream = firstAddon?.Streams?.FirstOrDefault(s => !string.IsNullOrEmpty(s.Url));
+                        if (firstStream != null)
+                        {
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId));
+                            return;
+                        }
+                    }
+
+                    if (cacheEntry.IsComplete)
+                    {
+                        if (showGlobalLoading) SetLoadingState(false);
+                        return;
+                    }
+                }
+
+                ShowSourcesPanel(true);
+                if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = hasCachedAddons ? Visibility.Collapsed : Visibility.Visible;
+                if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+                _currentStremioVideoId = videoId;
+                _isCurrentSourcesComplete = false;
+                _isSourcesFetchInProgress = true;
+
                 var addons = Services.Stremio.StremioAddonManager.Instance.GetAddons();
                 var allStreams = new List<StremioStreamViewModel>();
 
                 // Initialize ObservableCollection for Incremental Updates
-                _addonResults = new System.Collections.ObjectModel.ObservableCollection<StremioAddonViewModel>();
+                if (!hasCachedAddons || _addonResults == null)
+                {
+                    _addonResults = new System.Collections.ObjectModel.ObservableCollection<StremioAddonViewModel>();
+                    AddonSelectorList.ItemsSource = _addonResults;
+                    NarrowAddonSelector.ItemsSource = _addonResults; // Ensure Narrow selector also updated
+                }
                 var activeCollection = _addonResults; // Capture for safe updates
                 
                 // WinUI 3: Use DispatcherQueue instead of Dispatcher (which is null in Desktop apps)
                 var dispatcherQueue = this.DispatcherQueue;
-                
-                AddonSelectorList.ItemsSource = _addonResults;
-                NarrowAddonSelector.ItemsSource = _addonResults; // Ensure Narrow selector also updated
 
                 // Add a single "Loading..." placeholder at the end to indicate background activity
-                var loadingPlaceholder = new StremioAddonViewModel 
-                { 
-                    Name = "", 
-                    IsLoading = true,
-                    SortIndex = int.MaxValue // Always at the end
-                };
-                _addonResults.Add(loadingPlaceholder);
+                var loadingPlaceholder = _addonResults.FirstOrDefault(a => a.IsLoading);
+                if (loadingPlaceholder == null)
+                {
+                    loadingPlaceholder = new StremioAddonViewModel
+                    {
+                        Name = "",
+                        IsLoading = true,
+                        SortIndex = int.MaxValue // Always at the end
+                    };
+                    _addonResults.Add(loadingPlaceholder);
+                }
 
                 System.Diagnostics.Debug.WriteLine($"[Stremio] Fetching sources for {videoId} ({type}) from {addons.Count} addons.");
 
@@ -2312,6 +2518,7 @@ namespace ModernIPTVPlayer
                             // 1. Get Manifest
                             var manifest = await Services.Stremio.StremioService.Instance.GetManifestAsync(baseUrl);
                             string addonDisplayName = manifest?.Name ?? baseUrl.Replace("https://", "").Replace("http://", "").Split('/')[0];
+                            addonDisplayName = NormalizeAddonText(addonDisplayName);
                             
                             // 2. Get Streams
                             var streams = await Services.Stremio.StremioService.Instance.GetStreamsAsync(new List<string> { baseUrl }, type, videoId);
@@ -2324,9 +2531,9 @@ namespace ModernIPTVPlayer
                                 {
                                     string displayFileName = "";
                                     string displayDescription = "";
-                                    string rawName = s.Name ?? "";
-                                    string rawTitle = s.Title ?? "";
-                                    string rawDesc = s.Description ?? "";
+                                    string rawName = NormalizeAddonText(s.Name ?? "");
+                                    string rawTitle = NormalizeAddonText(s.Title ?? "");
+                                    string rawDesc = NormalizeAddonText(s.Description ?? "");
 
                                     // Identify Filename and Metadata parts from Description
                                     if (!string.IsNullOrEmpty(rawDesc))
@@ -2341,9 +2548,17 @@ namespace ModernIPTVPlayer
 
                                             if (trimmed.StartsWith("Name:", StringComparison.OrdinalIgnoreCase) || 
                                                 trimmed.StartsWith("File:", StringComparison.OrdinalIgnoreCase) ||
-                                                trimmed.StartsWith("📄"))
+                                                trimmed.StartsWith("📄") ||
+                                                trimmed.StartsWith("ðŸ“„") ||
+                                                trimmed.StartsWith("ğŸ“„"))
                                             {
-                                                displayFileName = trimmed.Replace("Name:", "").Replace("File:", "").Replace("📄", "").Trim();
+                                                displayFileName = trimmed
+                                                    .Replace("Name:", "")
+                                                    .Replace("File:", "")
+                                                    .Replace("📄", "")
+                                                    .Replace("ðŸ“„", "")
+                                                    .Replace("ğŸ“„", "")
+                                                    .Trim();
                                             }
                                             else
                                             {
@@ -2380,7 +2595,11 @@ namespace ModernIPTVPlayer
                                     string finalDescription = displayDescription;
                                     if (!string.IsNullOrEmpty(sizeInfo) && !string.IsNullOrEmpty(finalDescription))
                                     {
-                                       finalDescription = finalDescription.Replace(sizeInfo, "").Replace("[]", "").Replace("  •    •  ", "  •  ").Trim(' ', '•');
+                                       finalDescription = finalDescription
+                                           .Replace(sizeInfo, "")
+                                           .Replace("[]", "")
+                                           .Replace("  •    •  ", "  •  ")
+                                           .Trim(' ', '•');
                                     }
                                     
                                     processedStreams.Add(new StremioStreamViewModel
@@ -2414,6 +2633,7 @@ namespace ModernIPTVPlayer
                                     {
                                         try
                                         {
+                                            if (requestVersion != Volatile.Read(ref _sourcesRequestVersion)) return;
                                             if (_addonResults != activeCollection) return;
 
                                             // Find insertion point (keep placeholder at end)
@@ -2423,12 +2643,34 @@ namespace ModernIPTVPlayer
                                                 insertAt++;
                                             }
 
-                                            _addonResults.Insert(insertAt, addonVM);
-
-                                            if (SourcesShimmerPanel.Visibility == Visibility.Visible)
+                                            var existing = _addonResults.FirstOrDefault(a => !a.IsLoading && a.SortIndex == sortIndex);
+                                            if (existing != null)
                                             {
-                                                SourcesShimmerPanel.Visibility = Visibility.Collapsed;
-                                                ShowSourcesPanel(true);
+                                                existing.Name = addonVM.Name;
+                                                existing.Streams = addonVM.Streams;
+                                                existing.IsLoading = false;
+                                            }
+                                            else
+                                            {
+                                                _addonResults.Insert(insertAt, addonVM);
+                                            }
+
+                                            if (SourcesInlineShimmerOverlay != null && SourcesInlineShimmerOverlay.Visibility == Visibility.Visible)
+                                            {
+                                                SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
+                                            }
+
+                                            var partialSnapshot = _addonResults
+                                                .Where(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0)
+                                                .Select(CloneAddonViewModel)
+                                                .ToList();
+                                            if (partialSnapshot.Count > 0)
+                                            {
+                                                _stremioSourcesCache[cacheKey] = new StremioSourcesCacheEntry
+                                                {
+                                                    Addons = partialSnapshot,
+                                                    IsComplete = false
+                                                };
                                             }
 
                                             // AUTO-PLAY LOGIC: If requested, pick the very first stream from the first responding addon
@@ -2482,14 +2724,31 @@ namespace ModernIPTVPlayer
                 {
                     try
                     {
+                        if (requestVersion != Volatile.Read(ref _sourcesRequestVersion)) return;
                         if (_addonResults != activeCollection) return;
 
                         // Remove placeholder
                         if (_addonResults.Contains(loadingPlaceholder))
                             _addonResults.Remove(loadingPlaceholder);
 
+                        var cacheSnapshot = _addonResults
+                            .Where(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0)
+                            .Select(CloneAddonViewModel)
+                            .ToList();
+                        if (cacheSnapshot.Count > 0)
+                        {
+                            _stremioSourcesCache[cacheKey] = new StremioSourcesCacheEntry
+                            {
+                                Addons = cacheSnapshot,
+                                IsComplete = true
+                            };
+                        }
+
                         if (showGlobalLoading) SetLoadingState(false);
-                        SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+                        if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
+                        if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+                        _isSourcesFetchInProgress = false;
+                        _isCurrentSourcesComplete = true;
 
                         if (_addonResults.Count == 0)
                         {
@@ -2504,16 +2763,61 @@ namespace ModernIPTVPlayer
 
             catch (Exception ex)
             {
-                if (showGlobalLoading) SetLoadingState(false);
-                SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+                if (requestVersion == Volatile.Read(ref _sourcesRequestVersion))
+                {
+                    if (showGlobalLoading) SetLoadingState(false);
+                    if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
+                    if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+                    _isSourcesFetchInProgress = false;
+                }
                 System.Diagnostics.Debug.WriteLine($"PlayStremio Error: {ex}");
             }
+        }
+
+        private static StremioAddonViewModel CloneAddonViewModel(StremioAddonViewModel source)
+        {
+            return new StremioAddonViewModel
+            {
+                Name = source.Name,
+                IsLoading = source.IsLoading,
+                SortIndex = source.SortIndex,
+                Streams = source.Streams?.Select(CloneStreamViewModel).ToList() ?? new List<StremioStreamViewModel>()
+            };
+        }
+
+        private static StremioStreamViewModel CloneStreamViewModel(StremioStreamViewModel source)
+        {
+            return new StremioStreamViewModel
+            {
+                Title = source.Title,
+                Name = source.Name,
+                ProviderText = source.ProviderText,
+                AddonName = source.AddonName,
+                Url = source.Url,
+                ExternalUrl = source.ExternalUrl,
+                Quality = source.Quality,
+                Size = source.Size,
+                IsCached = source.IsCached,
+                OriginalStream = source.OriginalStream
+            };
+        }
+
+        private sealed class StremioSourcesCacheEntry
+        {
+            public List<StremioAddonViewModel> Addons { get; set; } = new();
+            public bool IsComplete { get; set; }
         }
 
         private void ShowSourcesPanel(bool show)
         {
             // Determine which panel to show based on width
             bool isWide = _isWideModeIndex == 1;
+            bool canGoBackToEpisodes =
+                _item is SeriesStream ||
+                (_item is Models.Stremio.StremioMediaStream smsType && (smsType.Meta.Type == "series" || smsType.Meta.Type == "tv"));
+
+            if (BtnBackToEpisodes != null) BtnBackToEpisodes.Visibility = canGoBackToEpisodes ? Visibility.Visible : Visibility.Collapsed;
+            if (BtnBackToEpisodesNarrow != null) BtnBackToEpisodesNarrow.Visibility = canGoBackToEpisodes ? Visibility.Visible : Visibility.Collapsed;
 
             if (show)
             {
@@ -2533,10 +2837,13 @@ namespace ModernIPTVPlayer
             }
             else
             {
+                Interlocked.Increment(ref _sourcesRequestVersion);
                 SourcesPanel.Visibility = Visibility.Collapsed;
                 NarrowSourcesSection.Visibility = Visibility.Collapsed;
+                if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
+                _isSourcesFetchInProgress = false;
                 
-                if (_item is Models.Stremio.StremioMediaStream sms && sms.Meta.Type == "series")
+                if (_item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv"))
                 {
                     if (isWide) EpisodesPanel.Visibility = Visibility.Visible;
                     else NarrowEpisodesSection.Visibility = Visibility.Visible;
@@ -2547,6 +2854,52 @@ namespace ModernIPTVPlayer
                     NarrowEpisodesSection.Visibility = Visibility.Visible;
                 }
             }
+        }
+
+        private static string NormalizeAddonText(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return input;
+
+            var text = input
+                .Replace("â€¢", "•")
+                .Replace("â€”", "-")
+                .Replace("â€“", "-")
+                .Replace("â€˜", "'")
+                .Replace("â€™", "'")
+                .Replace("â€œ", "\"")
+                .Replace("â€", "\"")
+                .Replace("Â", "")
+                .Replace("ðŸ“„", "📄")
+                .Replace("ğŸ“„", "📄")
+                .Replace("âš¡", "⚡")
+                .Replace("ğŸ“¥", "📥");
+
+            if (LooksLikeMojibake(text))
+            {
+                try
+                {
+                    // Repair common UTF-8->Latin mojibake in addon metadata.
+                    var bytes = Encoding.GetEncoding(28591).GetBytes(text);
+                    text = Encoding.UTF8.GetString(bytes);
+                    text = text.Replace("Â", "");
+                }
+                catch
+                {
+                    // Keep original text if conversion fails.
+                }
+            }
+
+            return text;
+        }
+
+        private static bool LooksLikeMojibake(string text)
+        {
+            return text.Contains("Ã") ||
+                   text.Contains("Ä") ||
+                   text.Contains("Å") ||
+                   text.Contains("â") ||
+                   text.Contains("ðŸ") ||
+                   text.Contains("ğŸ");
         }
 
         private string ParseQuality(string text)
@@ -2560,7 +2913,7 @@ namespace ModernIPTVPlayer
 
         private bool IsStreamCached(ModernIPTVPlayer.Models.Stremio.StremioStream s)
         {
-            string all = ((s.Name ?? "") + (s.Title ?? "") + (s.Description ?? "")).ToLower();
+            string all = NormalizeAddonText((s.Name ?? "") + (s.Title ?? "") + (s.Description ?? "")).ToLowerInvariant();
             return all.Contains("⚡") || all.Contains("[rd+]") || all.Contains("[ad+]") || all.Contains("[pm+]") || 
                    all.Contains("cached") || all.Contains("downloaded") || all.Contains("tb+") || 
                    all.Contains("📥") || all.Contains("instant") || all.Contains("[debrid]") ||
@@ -2622,6 +2975,11 @@ namespace ModernIPTVPlayer
         }
 
         private void BtnCloseSources_Click(object sender, RoutedEventArgs e)
+        {
+            ShowSourcesPanel(false);
+        }
+
+        private void BtnBackToEpisodes_Click(object sender, RoutedEventArgs e)
         {
             ShowSourcesPanel(false);
         }
@@ -3470,4 +3828,10 @@ namespace ModernIPTVPlayer
         protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
 }
+
+
+
+
+
+
 

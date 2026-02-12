@@ -193,8 +193,6 @@
                              <Button x:Name="SidebarToggle" Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" VerticalAlignment="Center">
                                 <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
                             </Button>
-                            
-                            <!-- Stremio Title (Removed per request) -->
                         </StackPanel>
                         
                         <!-- Center: Source Switcher -->
@@ -222,128 +220,8 @@
                     <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="2" Margin="0" Visibility="Visible" />
 
                     <!-- 2. STREMIO HOME (Hero + Rows) -->
-                    <ScrollViewer x:Name="StremioHomeView" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed" 
-                                  VerticalScrollBarVisibility="Hidden" HorizontalScrollBarVisibility="Disabled"
-                                  Canvas.ZIndex="0"
-                                  ViewChanged="StremioHomeView_ViewChanged">
-                        <StackPanel Spacing="36" Padding="0,0,0,48">
-                            
-                            <!-- HERO SECTION (Full Bleed) -->
-                            <Grid x:Name="HeroSection" Height="650" HorizontalAlignment="Stretch" Margin="0,0,0,0">
-                                <!-- Hero Image Background (Full Width) - Rendered via Composition API -->
-                                <Grid x:Name="HeroImageContainer">
-                                    <Border x:Name="HeroImageHost" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
-                                    
-                                    <!-- Hero Shimmer (Visible when loading) -->
-                                    <Grid x:Name="HeroShimmer" Visibility="Collapsed">
-                                        <controls:ShimmerControl HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Opacity="0.3"/>
-                                    </Grid>
-                                    
-                                    <!-- Top Scrim -->
-                                    <Rectangle VerticalAlignment="Top" Height="150" IsHitTestVisible="False">
-                                        <Rectangle.Fill>
-                                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                                <GradientStop Color="#CC0D0D0D" Offset="0"/>
-                                                <GradientStop Color="#000D0D0D" Offset="1"/>
-                                            </LinearGradientBrush>
-                                        </Rectangle.Fill>
-                                    </Rectangle>
-
-                                    <!-- Left Vignette -->
-                                    <Rectangle HorizontalAlignment="Left" Width="900" IsHitTestVisible="False">
-                                        <Rectangle.Fill>
-                                            <RadialGradientBrush Center="0,0.45" RadiusX="1.0" RadiusY="0.7" GradientOrigin="0,0.45">
-                                                <GradientStop Color="#AA0D0D0D" Offset="0"/>
-                                                <GradientStop Color="#550D0D0D" Offset="0.5"/>
-                                                <GradientStop Color="#000D0D0D" Offset="1"/>
-                                            </RadialGradientBrush>
-                                        </Rectangle.Fill>
-                                    </Rectangle>
-                                </Grid>
-
-                                <!-- Navigation Arrows -->
-                                <Button x:Name="HeroPrevButton" Click="HeroPrev_Click" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="24,0,0,0" Style="{StaticResource VortexButtonStyle}" Width="48" Height="48" Canvas.ZIndex="5">
-                                    <FontIcon Glyph="&#xE760;" FontSize="18"/>
-                                </Button>
-                                <Button x:Name="HeroNextButton" Click="HeroNext_Click" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="0,0,24,0" Style="{StaticResource VortexButtonStyle}" Width="48" Height="48" Canvas.ZIndex="5">
-                                    <FontIcon Glyph="&#xE761;" FontSize="18"/>
-                                </Button>
-                                
-                                <!-- Hero Content -->
-                                <StackPanel x:Name="HeroContentPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Spacing="16" Margin="64,0,0,80">
-                                    <Grid>
-                                        <!-- Real Content -->
-                                        <StackPanel x:Name="HeroRealContent" Spacing="16" Opacity="0">
-                                            <Border Background="#CCFFFFFF" HorizontalAlignment="Left" CornerRadius="4" Padding="8,4">
-                                                <TextBlock Text="GÜNÜN ÖNERİSİ" FontSize="12" FontWeight="Bold" Foreground="Black" CharacterSpacing="50"/>
-                                            </Border>
-                                            <TextBlock x:Name="HeroTitle" Text="" FontSize="56" FontWeight="Black" Foreground="White" TextWrapping="Wrap" MaxWidth="800" LineHeight="60"/>
-                                            <StackPanel Orientation="Horizontal" Spacing="12">
-                                                <TextBlock x:Name="HeroYear" Text="" Foreground="#CCFFFFFF" FontSize="16" FontWeight="SemiBold"/>
-                                                <Ellipse x:Name="HeroYearDot" Width="4" Height="4" Fill="#CCFFFFFF" VerticalAlignment="Center" Visibility="Collapsed"/>
-                                                <TextBlock x:Name="HeroGenres" Text="" Foreground="#CCFFFFFF" FontSize="16" FontWeight="SemiBold"/>
-                                                <Ellipse x:Name="HeroRatingDot" Width="4" Height="4" Fill="#CCFFFFFF" VerticalAlignment="Center" Visibility="Collapsed"/>
-                                                <TextBlock x:Name="HeroRating" Text="" Foreground="#F5C518" FontSize="16" FontWeight="Bold"/>
-                                            </StackPanel>
-                                            <TextBlock x:Name="HeroOverview" Text="" Foreground="#CCFFFFFF" FontSize="16" TextWrapping="Wrap" MaxWidth="700" MaxLines="3" TextTrimming="CharacterEllipsis" LineHeight="24"/>
-                                            <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,12,0,0">
-                                                <Button x:Name="HeroPlayButton" Click="HeroPlayButton_Click" Background="White" Foreground="Black" CornerRadius="28" Height="56" Padding="32,0" BorderThickness="0">
-                                                    <StackPanel Orientation="Horizontal" Spacing="12">
-                                                        <FontIcon Glyph="&#xE768;" FontSize="18"/>
-                                                        <TextBlock Text="Hemen İzle" FontWeight="Bold" FontSize="16"/>
-                                                    </StackPanel>
-                                                </Button>
-                                                 <Button x:Name="HeroDetailsButton" Click="HeroDetailsButton_Click" Background="#33FFFFFF" Foreground="White" CornerRadius="28" Height="56" Padding="24,0" BorderThickness="1" BorderBrush="#55FFFFFF">
-                                                     <StackPanel Orientation="Horizontal" Spacing="12">
-                                                         <FontIcon Glyph="&#xE946;" FontSize="18"/>
-                                                         <TextBlock Text="Detaylar" FontWeight="SemiBold" FontSize="16"/>
-                                                     </StackPanel>
-                                                 </Button>
-                                            </StackPanel>
-                                        </StackPanel>
-
-                                        <!-- Hero Text Shimmer -->
-                                        <StackPanel x:Name="HeroTextShimmer" Spacing="16">
-                                            <controls:ShimmerControl Width="120" Height="24" CornerRadius="4"/>
-                                            <controls:ShimmerControl Width="500" Height="64" CornerRadius="8"/>
-                                            <StackPanel Orientation="Horizontal" Spacing="12">
-                                                <controls:ShimmerControl Width="60" Height="20" CornerRadius="4"/>
-                                                <controls:ShimmerControl Width="100" Height="20" CornerRadius="4"/>
-                                                <controls:ShimmerControl Width="40" Height="20" CornerRadius="4"/>
-                                            </StackPanel>
-                                            <StackPanel Spacing="8">
-                                                <controls:ShimmerControl Width="600" Height="18" CornerRadius="4"/>
-                                                <controls:ShimmerControl Width="550" Height="18" CornerRadius="4"/>
-                                            </StackPanel>
-                                            <StackPanel Orientation="Horizontal" Spacing="16" Margin="0,12,0,0">
-                                                <controls:ShimmerControl Width="160" Height="56" CornerRadius="28"/>
-                                                <controls:ShimmerControl Width="140" Height="56" CornerRadius="28"/>
-                                            </StackPanel>
-                                        </StackPanel>
-                                    </Grid>
-                                </StackPanel>
-                            </Grid>
-
-                            <!-- DYNAMIC CATALOG ROWS -->
-                            <ItemsControl x:Name="DiscoveryRows">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-
-                                        <controls:CatalogRow CatalogName="{Binding CatalogName}" 
-                                                           ItemsSource="{Binding Items}" 
-                                                           IsLoading="{Binding IsLoading}"
-                                                            ItemClicked="CatalogRow_ItemClicked"
-
-                                                            HoverStarted="CatalogRow_HoverStarted"
-                                                            HoverEnded="CatalogRow_HoverEnded"
-                                                            ScrollStarted="CatalogRow_ScrollStarted"
-                                                            ScrollEnded="CatalogRow_ScrollEnded"/>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                            
-                        </StackPanel>
-                    </ScrollViewer>
+                    <controls:StremioDiscoveryControl x:Name="StremioControl" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed" 
+                                                      Canvas.ZIndex="0"/>
                     
                     <!-- Loading Indicator (Legacy, can be hidden if shimmer is enough) -->
                     <ProgressRing x:Name="LoadingRing" Grid.Row="2" IsActive="False" Width="50" Height="50" HorizontalAlignment="Center" VerticalAlignment="Center"/>

@@ -1,0 +1,41 @@
+<UserControl
+    x:Class="ModernIPTVPlayer.Controls.StremioDiscoveryControl"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ModernIPTVPlayer.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    d:DesignHeight="1000"
+    d:DesignWidth="1200">
+
+    <Grid>
+        <ScrollViewer x:Name="DiscoveryScrollViewer" 
+                      VerticalScrollBarVisibility="Hidden" 
+                      HorizontalScrollBarVisibility="Disabled"
+                      ViewChanged="ScrollViewer_ViewChanged">
+            <StackPanel Spacing="36" Padding="0,0,0,48">
+                
+                <!-- HERO SECTION -->
+                <local:HeroSectionControl x:Name="HeroControl" />
+
+                <!-- DYNAMIC CATALOG ROWS -->
+                <ItemsControl x:Name="DiscoveryRows">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <local:CatalogRow CatalogName="{Binding CatalogName}" 
+                                              ItemsSource="{Binding Items}" 
+                                              IsLoading="{Binding IsLoading}"
+                                              ItemClicked="CatalogRow_ItemClicked"
+                                              HoverStarted="CatalogRow_HoverStarted"
+                                              HoverEnded="CatalogRow_HoverEnded"
+                                              ScrollStarted="CatalogRow_ScrollStarted"
+                                              ScrollEnded="CatalogRow_ScrollEnded"/>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>
