@@ -296,14 +296,12 @@
         <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Padding="0">
             
 
-            <StackPanel x:Name="InfoColumn" Spacing="8" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,40"> 
+            <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,40"> 
                  
                  <!-- BADGES & METADATA -->
-                  <!-- BADGES & METADATA -->
-                  <!-- BADGES & METADATA -->
-                  <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="0,0,0,8">
+                  <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="0,0,0,0">
                       <!-- 1. Technical Section (Dynamic: Shimmer or Badges) -->
-                      <Grid>
+                      <Grid x:Name="TechBadgeSection">
                           <StackPanel x:Name="TechBadgesContent" Orientation="Horizontal" Spacing="8" Opacity="0">
                              <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
                                  <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
@@ -339,7 +337,7 @@
                  <!-- TITLE -->
                  <Grid>
                      <StackPanel x:Name="TitlePanel" Opacity="0">
-                         <TextBlock x:Name="SuperTitleText" Text="" FontSize="16" FontWeight="SemiBold" 
+                         <TextBlock x:Name="SuperTitleText" Text="" FontSize="16" FontWeight="SemiBold" Visibility="Collapsed"
                                     Foreground="{StaticResource GoldGradient}" Opacity="0.8" Margin="2,0,0,-4"
                                     CharacterSpacing="100"/>
                          <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Bold" 

@@ -317,6 +317,7 @@ namespace ModernIPTVPlayer
                             {
                                 MetadataShimmer.Visibility = Visibility.Collapsed;
                                 TechBadgesContent.Visibility = Visibility.Collapsed;
+                                if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
                                 PlayButtonSubtext.Visibility = Visibility.Collapsed;
                             }
                         }
@@ -755,6 +756,7 @@ namespace ModernIPTVPlayer
                          // No history: Hide badges for now until user selects a source
                          MetadataShimmer.Visibility = Visibility.Collapsed;
                          TechBadgesContent.Visibility = Visibility.Collapsed;
+                         if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
                          
                          PlayButtonSubtext.Visibility = Visibility.Collapsed;
                          StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
@@ -3259,6 +3261,7 @@ namespace ModernIPTVPlayer
             if (isLoading)
             {
                 // Loading: Show Shimmer, Hide Badges
+                if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
                 MetadataShimmer.Width = double.NaN;
                 MetadataShimmer.Visibility = Visibility.Visible;
                 ElementCompositionPreview.GetElementVisual(MetadataShimmer).Opacity = 1f;
@@ -3347,8 +3350,6 @@ namespace ModernIPTVPlayer
         {
             if (string.IsNullOrEmpty(url)) return;
 
-            if (string.IsNullOrEmpty(url)) return;
-
             // Cancel previous probe
             try
             {
@@ -3412,16 +3413,6 @@ namespace ModernIPTVPlayer
 
                 Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "Probe Result", $"Success: {result.Success} | {result.Res}");
 
-                // Probe returns tuple: (Res, Fps, Codec, Bitrate, Success, IsHdr)
-                // Cache update is already handled inside FFmpegProber.ProbeAsync -> WAIT, it wasn't. It was handled in ExpandedCard but here it seems missing?
-                // Checking previous code... 
-                // In ExpandedCard: Services.ProbeCacheService.Instance.Update(...) was called.
-                // In MediaInfoPage (lines 2063+ in original): It just calls _ffprober.ProbeAsync.
-                // Let's look at line 1533 in Pre-buffer logic: It DOES call Update.
-                // But specifically inside UpdateTechnicalBadgesAsync it seems it DID NOT call Update in previous version?
-                // No, I need to check if _ffprober internally updates cache? No, it doesn't.
-                // So I SHOULD add cache update here too for consistency!
-                
                 if (result.Success)
                 {
                      Services.ProbeCacheService.Instance.Update(url, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
@@ -3449,19 +3440,23 @@ namespace ModernIPTVPlayer
                         ApplyMetadataToUi(probeData);
                         
                         // 4. PREVENT LAYOUT SHIFT: 
-                        // If Content is smaller than Shimmer, keep the container at Shimmer's width.
-                        // This prevents the "Year" text from jumping to the left.
-                        if (shimmerWidth > 0 && TechBadgesContent.ActualWidth < shimmerWidth)
+                        bool hasVisibleBadges = Badge4K.Visibility == Visibility.Visible || 
+                                                BadgeRes.Visibility == Visibility.Visible || 
+                                                BadgeHDR.Visibility == Visibility.Visible || 
+                                                BadgeCodecContainer.Visibility == Visibility.Visible;
+
+                        if (hasVisibleBadges && shimmerWidth > 0 && TechBadgesContent.ActualWidth < shimmerWidth)
                         {
                             TechBadgesContent.MinWidth = shimmerWidth;
+                            if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
                         }
                         else
                         {
-                            TechBadgesContent.MinWidth = 0; // Reset if content is wider, let it expand
+                            TechBadgesContent.MinWidth = 0; // Reset
+                            if (TechBadgeSection != null) TechBadgeSection.Visibility = hasVisibleBadges ? Visibility.Visible : Visibility.Collapsed;
                         }
                         
                         // Sync Shimmer to Content only if Content is WIDER (to cover it)
-                        // Otherwise leave Shimmer as is (wider than content) to mask the gap during fade
                         if (TechBadgesContent.ActualWidth > shimmerWidth)
                         {
                             MetadataShimmer.Width = TechBadgesContent.ActualWidth;
@@ -3474,9 +3469,13 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-               Services.CacheLogger.Error(Services.CacheLogger.Category.MediaInfo, "Technical Probe Failed", ex.Message);
-               // Ensure we exit loading state so text/layout doesn't stay hidden/ghosted if we decide to show fallback
-               DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
+                Services.CacheLogger.Error(Services.CacheLogger.Category.MediaInfo, "Technical Probe Failed", ex.Message);
+                // Ensure we exit loading state so text/layout doesn't stay hidden/ghosted
+                DispatcherQueue.TryEnqueue(() => 
+                {
+                    if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
+                    SetBadgeLoadingState(false);
+                });
             }
         }
 
