@@ -23,8 +23,8 @@ namespace ModernIPTVPlayer
             await _player.SetPropertyAsync("vo", "null"); // No video output
             await _player.SetPropertyAsync("ao", "null"); // No audio output
             // await _player.SetPropertyAsync("ytdl", "no"); // Removed: ytdl not available in this MPV build
-            await _player.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "no");
-            
+            await _player.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "yes");
+
 
 
             _isInitialized = true;
@@ -47,12 +47,12 @@ namespace ModernIPTVPlayer
                 while (retries < 20) // Max 10 seconds (20 * 500ms)
                 {
                     await Task.Delay(500);
-                    
+
                     var duration = await _player.GetPropertyAsync("duration");
                     var width = await _player.GetPropertyAsync("video-params/w");
-                    
+
                     // If we have basic video params, we are good
-                    if (!string.IsNullOrEmpty(width) && width != "N/A") 
+                    if (!string.IsNullOrEmpty(width) && width != "N/A")
                     {
                         break;
                     }
@@ -68,7 +68,7 @@ namespace ModernIPTVPlayer
 
                 // Format
                 string resStr = (!string.IsNullOrEmpty(w) && w != "N/A") ? $"{w}x{h}" : "Unknown";
-                
+
                 string fpsStr = "- fps";
                 if (double.TryParse(fps, NumberStyles.Any, CultureInfo.InvariantCulture, out double fv))
                 {
@@ -80,7 +80,7 @@ namespace ModernIPTVPlayer
                 if (!string.IsNullOrEmpty(codecStr))
                 {
                     if (codecStr.Contains("/")) codecStr = codecStr.Split('/')[0].Trim();
-                    
+
                     // Normalize common names
                     var lower = codecStr.ToLowerInvariant();
                     if (lower.Contains("h.264") || lower.Contains("avc")) codecStr = "H.264";

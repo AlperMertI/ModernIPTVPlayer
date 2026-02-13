@@ -25,6 +25,7 @@ using System.IO;
 using System.Threading;
 using System.Diagnostics;
 using System.Text;
+using MpvWinUI;
 
 namespace ModernIPTVPlayer
 {
@@ -278,7 +279,19 @@ namespace ModernIPTVPlayer
                 _isHandoffInProgress = false;
 
                 // RE-ATTACH: If the player was handed off, it might be detached from its original host.
-                if (MediaInfoPlayer != null && MediaInfoPlayer.Parent == null && PlayerHost != null)
+                if (MediaInfoPlayer == null && PlayerHost != null)
+                {
+                     // CRITICAL FIX: If player was cleaned up (Exit -> Return), we MUST recreate it 
+                     // because the old D3D Surface is permanently disposed.
+                     MediaInfoPlayer = new MpvPlayer();
+                     MediaInfoPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
+                     MediaInfoPlayer.VerticalAlignment = VerticalAlignment.Stretch;
+                     MediaInfoPlayer.Opacity = 0; // Start hidden
+                     MediaInfoPlayer.IsHitTestVisible = false;
+                     PlayerHost.Content = MediaInfoPlayer;
+                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Created NEW MpvPlayer instance for re-entry.");
+                }
+                else if (MediaInfoPlayer != null && MediaInfoPlayer.Parent == null && PlayerHost != null)
                 {
                     PlayerHost.Content = MediaInfoPlayer;
                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Re-attached player to original host.");
@@ -383,6 +396,8 @@ namespace ModernIPTVPlayer
                 System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] CRITICAL ERROR in OnNavigatedTo: {ex}");
             }
         }
+
+
 
         private void SetupParallax()
         {
@@ -1894,14 +1909,33 @@ namespace ModernIPTVPlayer
                      {
                          // Suppress crash on cached page if player context is invalid
                          if (MediaInfoPlayer == null) return;
+
+                         // PRE-BUFFER SETTINGS CHECK
+                         if (!AppSettings.IsPrebufferEnabled)
+                         {
+                             // If disabled, just ensure player is reset/ready but don't load media?
+                             // actually, if we don't load, Handoff might fail if it expects a loaded player?
+                             // For now, let's just RETURN and do nothing. 
+                             // When user clicks Play, we'll have to handle "Cold Start".
+                             // But PerformHandoverAndNavigate expects MediaInfoPlayer to be the carrier.
+                             // If we don't open the file, Handoff will carry an empty player?
+                             // The Handoff logic uses URL. If player is empty, PlayerPage loads it.
+                             return; 
+                         }
                          
                          await MediaInfoPlayer.InitializePlayerAsync();
                          
                          // Limits
                          await MediaInfoPlayer.SetPropertyAsync("cache", "yes");
-                         await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", "5");
-                         await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "5MiB");
-                         await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "1MiB");
+                         
+                         // DYNAMIC SETTINGS
+                         int preSeconds = AppSettings.PrebufferSeconds;
+                         await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", preSeconds.ToString());
+                         
+                         // Allow sufficient bytes for the seconds duration (e.g. 500MB for 4K)
+                         // 5MiB was causing bottleneck.
+                         await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "500MiB");
+                         await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "50MiB");
                          await MediaInfoPlayer.SetPropertyAsync("force-window", "yes");
 
                          // Headers
@@ -1922,15 +1956,25 @@ namespace ModernIPTVPlayer
                          await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
                          await MediaInfoPlayer.SetPropertyAsync("pause", "yes"); // Start paused, let it buffer
                          
-                         if (startTime > 0)
+                         // CHECK IF ALREADY PLAYING THIS URL (Preserve Buffer)
+                         string currentPath = await MediaInfoPlayer.GetPropertyAsync("path");
+                         if (!string.IsNullOrEmpty(currentPath) && (currentPath == url || currentPath.EndsWith(url) || url.EndsWith(currentPath)))
                          {
-                             // Use 'start' property instead of seeking after open to avoid "property unavailable" errors
-                             await MediaInfoPlayer.SetPropertyAsync("start", startTime.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                              System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Prebuffer: Already playing {url}. Skipping OpenAsync to preserve buffer.");
+                              PlayerOverlayContainer.Visibility = Visibility.Visible;
                          }
-                         
-                         PlayerOverlayContainer.Visibility = Visibility.Visible;
-                         PlayerOverlayContainer.Opacity = 0;
-                         await MediaInfoPlayer.OpenAsync(url);
+                         else
+                         {
+                             if (startTime > 0)
+                             {
+                                 // Use 'start' property instead of seeking after open to avoid "property unavailable" errors
+                                 await MediaInfoPlayer.SetPropertyAsync("start", startTime.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                             }
+                             
+                             PlayerOverlayContainer.Visibility = Visibility.Visible;
+                             PlayerOverlayContainer.Opacity = 0;
+                             await MediaInfoPlayer.OpenAsync(url);
+                         }
                          
                          // Optional: Detect media info
                          //_ = ExtractTechInfoAsync();
@@ -2377,6 +2421,12 @@ namespace ModernIPTVPlayer
                 if (MediaInfoPlayer != null)
                 {
                     Debug.WriteLine($"[MediaInfoPage:Handoff] Player State BEFORE: Pause={await MediaInfoPlayer.GetPropertyAsync("pause")}, Mute={await MediaInfoPlayer.GetPropertyAsync("mute")}");
+                    
+                    // APPLY MAIN BUFFER SETTINGS
+                    int mainBuffer = AppSettings.BufferSeconds;
+                    await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
+                    await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB"); // 2GB Limit for Main Player
+                    
                     await MediaInfoPlayer.SetPropertyAsync("pause", "no");
                     Debug.WriteLine($"[MediaInfoPage:Handoff] Player State AFTER: Pause={await MediaInfoPlayer.GetPropertyAsync("pause")}");
                     
@@ -3221,7 +3271,7 @@ namespace ModernIPTVPlayer
             if (Frame.CanGoBack) Frame.GoBack(); 
         }
 
-        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        protected override async void OnNavigatedFrom(NavigationEventArgs e)
         {
             base.OnNavigatedFrom(e);
             
@@ -3230,7 +3280,7 @@ namespace ModernIPTVPlayer
                 _probeCts?.Cancel(); 
                 _probeCts?.Dispose(); 
             } catch { }
-            _probeCts = null; // Added null assignment for CTS
+            _probeCts = null;
 
             // Stop Slideshow
             if (_slideshowTimer != null)
@@ -3239,12 +3289,26 @@ namespace ModernIPTVPlayer
                 _slideshowTimer = null;
             }
 
-            if (MediaInfoPlayer != null && !_isHandoffInProgress) 
+            if (!_isHandoffInProgress) 
             {
-                 // Stop playback but keep the player instance alive for Cache reuse.
-                 // CleanupAsync() destroys the MpvContext, which might cause AV if re-initialized on the same control instance improperly.
-                 _ = MediaInfoPlayer.ExecuteCommandAsync("stop");
-                 MediaInfoPlayer.DisableHandoffMode();
+                 // CRITICAL FIX: Fully dispose player on exit to avoid D3D re-init issues on re-entry.
+                 // We detach immediately to prevent race conditions.
+                 // OnNavigatedTo will recreate it.
+                var playerToDispose = MediaInfoPlayer;
+                MediaInfoPlayer = null; 
+                
+                if (PlayerHost != null) PlayerHost.Content = null;         
+
+                if (playerToDispose != null)
+                {
+                    // Fire-and-forget cleanup
+                    _ = Task.Run(async () => {
+                        try {
+                             await playerToDispose.ExecuteCommandAsync("stop");
+                             await playerToDispose.CleanupAsync();
+                        } catch {}
+                    });
+                }
             }
         }
 

@@ -145,5 +145,28 @@ namespace ModernIPTVPlayer
             get => (Settings.Values[IsAutoProbeEnabledKey] as bool?) ?? true;
             set => Settings.Values[IsAutoProbeEnabledKey] = value;
         }
+
+        // Buffer Settings
+        private const string PrebufferEnabledKey = "IsPrebufferEnabled";
+        private const string PrebufferSecondsKey = "PrebufferSeconds";
+        private const string BufferSecondsKey = "BufferSeconds";
+
+        public static bool IsPrebufferEnabled
+        {
+            get => (Settings.Values[PrebufferEnabledKey] as bool?) ?? true;
+            set => Settings.Values[PrebufferEnabledKey] = value;
+        }
+
+        public static int PrebufferSeconds
+        {
+            get => (Settings.Values[PrebufferSecondsKey] as int?) ?? 15;
+            set => Settings.Values[PrebufferSecondsKey] = value;
+        }
+
+        public static int BufferSeconds
+        {
+            get => (Settings.Values[BufferSecondsKey] as int?) ?? 60;
+            set => Settings.Values[BufferSecondsKey] = value;
+        }
     }
 }

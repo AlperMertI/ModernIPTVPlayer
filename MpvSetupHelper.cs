@@ -10,6 +10,9 @@ namespace ModernIPTVPlayer
 {
     public static class MpvSetupHelper
     {
+        // Subtitle switch latency is mainly affected by MKV subtitle preroll window.
+        private const string SubtitlePrerollSecs = "3";
+
         /// <summary>
         /// Initializes and configures an MpvPlayer instance for high-performance streaming.
         /// </summary>
@@ -77,13 +80,26 @@ namespace ModernIPTVPlayer
                 }
 
                 // 6. Fixes & Tweaks
-                await player.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "no");
+                // CRITICAL: Enable seekable cache - allows seeking within cached data without re-downloading.
+                // Without this, track switches (subtitle/audio) flush the entire demuxer cache.
+                await SetPropertySafeAsync(player, "demuxer-seekable-cache", "yes");
+                
+                // Use MKV index for subtitle preroll: finds subtitle packets via index WITHOUT
+                // seeking the demuxer, which would otherwise flush the video/audio cache.
+                // "index" mode is superior to "yes" because it doesn't trigger a demuxer seek.
+                await player.SetPropertyAsync("demuxer-mkv-subtitle-preroll", "index");
+                // How far back (in seconds) to search for subtitle packets on track switch
+                // Keep this tight to avoid 10-20s subtitle switch latency on large 4K MKV streams.
+                await SetPropertySafeAsync(player, "demuxer-mkv-subtitle-preroll-secs", SubtitlePrerollSecs);
+                await SetPropertySafeAsync(player, "demuxer-mkv-subtitle-preroll-secs-index", "3");
+                // Set general cache time window to match readahead, ensuring subtitle data stays in cache
+                await SetPropertySafeAsync(player, "cache-secs", isSecondary ? "20" : "120");
                 await player.SetPropertyAsync("sub-scale-with-window", "yes");
-                
+
                 // Network Stability & Performance
-                await SetPropertySafeAsync(player, "network-timeout", "20"); 
+                await SetPropertySafeAsync(player, "network-timeout", "20");
                 await SetPropertySafeAsync(player, "stream-buffer-size", "512KiB");
-                
+
                 // HTTP Reconnect Logic (Crucial for unstable IPTV servers)
                 // The correct property name is 'demuxer-lavf-o'
                 // Added reconnect_on_network_error and increased robustness
@@ -95,9 +111,9 @@ namespace ModernIPTVPlayer
 
                 // 7. Audio (If secondary, maybe mute by default? Let caller handle that.)
                 // But we can ensure correct audio output driver
-                await player.SetPropertyAsync("ao", "wasapi"); 
+                await player.SetPropertyAsync("ao", "wasapi");
                 // Allow some audio/video desync instead of freezing
-                await SetPropertySafeAsync(player, "video-sync", "audio"); 
+                await SetPropertySafeAsync(player, "video-sync", "audio");
                 await SetPropertySafeAsync(player, "audio-pitch-correction", "yes");
                 Debug.WriteLine($"[MpvSetupHelper] Configuration Complete. Secondary Mode: {isSecondary}");
             }

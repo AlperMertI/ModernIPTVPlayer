@@ -186,27 +186,27 @@ public sealed partial class MpvPlayer : Control
 
     public async Task CleanupAsync()
     {
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] CleanupAsync STARTED (Strict Sequential Mode)");
+
         
         // 1. Stop the Render Loop FIRST to prevent access violations during disposal
         if (_renderControl != null)
         {
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 1: Stopping Render Loop...");
+
             await _renderControl.StopLoopAsync();
         }
 
         // 2. Dispose of libmpv AFTER rendering is guaranteed to have stopped
         if (Player != null)
         {
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 2: Disposing Player...");
+
             try
             {
                 await Player.DisposeAsync();
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 2: Player.DisposeAsync SUCCESS");
+
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 2: Player.DisposeAsync FAILED: {ex.Message}");
+
             }
             Player = null;
         }
@@ -214,11 +214,11 @@ public sealed partial class MpvPlayer : Control
         // 3. Destroy D3D11 Resources LAST
         if (_renderControl != null)
         {
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Step 3: Destroying D3D11 Resources...");
+
             _renderControl.DestroyResources();
         }
 
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] CleanupAsync COMPLETED");
+
     }
 
     public void SetDisplayFps(double fps)
@@ -307,6 +307,15 @@ public sealed partial class MpvPlayer : Control
         if (_renderControl != null)
         {
             _renderControl.IsResizeSuspended = false;
+        }
+    }
+
+    public void Redraw()
+    {
+        if (_renderControl != null)
+        {
+            _renderControl.ForceRedraw = true;
+
         }
     }
 

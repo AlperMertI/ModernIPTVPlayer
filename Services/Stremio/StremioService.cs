@@ -139,7 +139,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         // Format: /stream/{type}/{id}.json
                         string url = $"{baseUrl.TrimEnd('/')}/stream/{type}/{id}.json";
                         string json = await _client.GetStringAsync(url);
-                        System.Diagnostics.Debug.WriteLine($"[StremioService] FULL RAW JSON from {baseUrl}: {json}");
+                        // System.Diagnostics.Debug.WriteLine($"[StremioService] FULL RAW JSON from {baseUrl}: {json}");
                         var response = JsonSerializer.Deserialize<StremioStreamResponse>(json, _jsonOptions);
                         if (response?.Streams != null)
                         {

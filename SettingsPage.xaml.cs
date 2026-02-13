@@ -48,6 +48,18 @@ namespace ModernIPTVPlayer
             AutoProbeToggle.IsOn = AppSettings.IsAutoProbeEnabled;
             // Set AutoCache Toggle (x:Bind handles two-way, but let's ensure initial state)
             AutoCacheToggle.IsOn = AppSettings.IsAutoCacheEnabled;
+
+            // Player Settings
+            PrebufferToggle.IsOn = AppSettings.IsPrebufferEnabled;
+            PrebufferSlider.Value = AppSettings.PrebufferSeconds;
+            BufferSlider.Value = AppSettings.BufferSeconds;
+            
+            UpdateSliderHeaders();
+        }
+
+        private void UpdateSliderHeaders()
+        {
+            // Optional: Update text to show current value if needed, or binding
         }
 
         private void IntervalCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -71,6 +83,28 @@ namespace ModernIPTVPlayer
         private void AutoCacheToggle_Toggled(object sender, RoutedEventArgs e)
         {
             ShowStatus(AutoCacheToggle.IsOn ? "Otomatik güncelleme açıldı." : "Otomatik güncelleme kapatıldı.");
+        }
+
+        private void PrebufferToggle_Toggled(object sender, RoutedEventArgs e)
+        {
+            AppSettings.IsPrebufferEnabled = PrebufferToggle.IsOn;
+            ShowStatus(PrebufferToggle.IsOn ? "Hızlı başlatma açıldı." : "Hızlı başlatma kapatıldı.");
+        }
+
+        private void PrebufferSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+        {
+            if (AppSettings.PrebufferSeconds != (int)e.NewValue)
+            {
+                AppSettings.PrebufferSeconds = (int)e.NewValue;
+            }
+        }
+
+        private void BufferSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+        {
+             if (AppSettings.BufferSeconds != (int)e.NewValue)
+            {
+                AppSettings.BufferSeconds = (int)e.NewValue;
+            }
         }
 
         private async void BtnClearCache_Click(object sender, RoutedEventArgs e)

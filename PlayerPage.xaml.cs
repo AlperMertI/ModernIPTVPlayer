@@ -480,6 +480,7 @@ namespace ModernIPTVPlayer
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
+
             base.OnNavigatedTo(e);
 
             if (e.Parameter is string url)
@@ -503,6 +504,7 @@ namespace ModernIPTVPlayer
         }
         protected override async void OnNavigatedFrom(NavigationEventArgs e)
         {
+
             // 1. Stop timer IMMEDIATELY
             _statsTimer?.Stop();
             StopCursorTimer();
@@ -539,19 +541,23 @@ namespace ModernIPTVPlayer
                 {
                     // If it was a handoff, we DON'T CleanupAsync because the control belongs to MediaInfoPage.
                     // CleanupAsync destroys the native MpvContext, making the control unusable on the previous page.
-                    // Instead, we just stop playback and reset state.
-                    _ = _mpvPlayer.ExecuteCommandAsync("stop");
-                    _mpvPlayer.DisableHandoffMode();
-                    Debug.WriteLine("[PlayerPage] Returned handed-off player to source page without destruction.");
+                    // Instead, we just PAUSE playback to keep buffer in RAM.
+                    _ = _mpvPlayer.ExecuteCommandAsync("set", "pause", "yes");
+                    
+                    // We DO NOT call DisableHandoffMode(); -> PreserveStateOnUnload keeps RenderControl alive.
+                    
+                    Debug.WriteLine("[PlayerPage] Returned handed-off player to source page (Paused, Buffer Preserved).");
                 }
                 else
                 {
                     try
                     {
                         // Fresh player created on this page: Full destruction is safe and required.
+
                         await _mpvPlayer.CleanupAsync();
+                        // _mpvPlayer.CleanupAsync() COMPLETED
                     }
-                    catch (Exception) { }
+                    catch (Exception ex) { Debug.WriteLine($"[LIFECYCLE] Cleanup Error: {ex}"); }
                 }
                 _mpvPlayer = null;
             }
@@ -560,6 +566,7 @@ namespace ModernIPTVPlayer
                 MediaFoundationPlayer.MediaPlayer.Pause();
                 MediaFoundationPlayer.Source = null;
             }
+
         }
 
         private async Task ShowMessageDialog(string title, string content)
@@ -591,7 +598,7 @@ namespace ModernIPTVPlayer
 
         private async void PlayerPage_Loaded(object sender, RoutedEventArgs e)
         {
-            Debug.WriteLine($"[PlayerPage] PlayerPage_Loaded Triggered for {_streamUrl}");
+
             if (_isPageLoaded) return;
             
             _isPageLoaded = true;
@@ -632,6 +639,9 @@ namespace ModernIPTVPlayer
                     _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
                     _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
 
+
+                    _mpvPlayer.Redraw();
+
                     // 1. Initial State Restoration & UI Activation
                     _statsTimer?.Start(); 
                     await _mpvPlayer.SetPropertyAsync("pause", "no");
@@ -663,6 +673,7 @@ namespace ModernIPTVPlayer
                         await _mpvPlayer.SetPropertyAsync("pause", "no");
                         await Task.Delay(200);
                         await _mpvPlayer.SetPropertyAsync("pause", "no");
+                        _mpvPlayer.Redraw(); // Force redraw after unpause kick
                     }
 
                     if (_navArgs != null && _navArgs.StartSeconds >= 0)
@@ -713,8 +724,12 @@ namespace ModernIPTVPlayer
                         }
 
                         _streamUrl = checkResult.Url;
+
                         await MpvSetupHelper.ConfigurePlayerAsync(_mpvPlayer, _streamUrl, isSecondary: false);
+                        
+
                         await _mpvPlayer.OpenAsync(_streamUrl);
+
                         
                         // Detect Physical Refresh Rate
                         try
@@ -2068,16 +2083,28 @@ namespace ModernIPTVPlayer
         {
              if (_isPopulatingTracks || _mpvPlayer == null || SubtitleListView.SelectedItem is not TrackItem item) return;
 
-             // ... REST OF LOGIC
             if (item.IsNone)
             {
+                // Altyazıyı kapatmak buffer'ı etkilemez, doğrudan kapat
                 await _mpvPlayer.SetPropertyAsync("sid", "no");
                 ShowOsd("Altyazı Kapalı");
             }
             else
             {
+                // === Buffer-korumalı altyazı değiştirme ===
+                // MPV Core Patch (v2) sayesinde artık manual seek yapmaya gerek YOKTUR.
+                // Patch, video/audio queue'sunu koruyarak seamless geçiş sağlar.
+                // Proaktif seek (eski workaround) state resetlediği için KALDIRILDI.
+
+                // Altyazı track'ini değiştir
                 await _mpvPlayer.SetPropertyAsync("sid", item.Id.ToString());
                 await _mpvPlayer.SetPropertyAsync("sub-visibility", "yes");
+
+                // [OPTIMIZATION] Index-Based Seek
+                // MPV with `preroll=index` automatically triggers a seek on track change.
+                // We do NOT need to manually seek here, as it causes double-seeking and race conditions.
+                // The native seek combined with `demux.c` patch is sufficient.
+
                 ShowOsd($"Altyazı: {item.Text}");
             }
         }
