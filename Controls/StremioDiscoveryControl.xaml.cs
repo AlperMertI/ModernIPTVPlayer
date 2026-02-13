@@ -23,6 +23,8 @@ namespace ModernIPTVPlayer.Controls
         // Expanded Card Event Bridges
         public event EventHandler<PosterCard> CardHoverStarted;
         public event EventHandler<PosterCard> CardHoverEnded;
+        public event EventHandler RowScrollStarted;
+        public event EventHandler RowScrollEnded;
 
         // Exposed properties for Controller linkage
         public ScrollViewer MainScrollViewer => DiscoveryScrollViewer;
@@ -153,11 +155,13 @@ namespace ModernIPTVPlayer.Controls
         private void CatalogRow_ScrollStarted(object sender, object e)
         {
             _isDraggingRow = true;
+            RowScrollStarted?.Invoke(this, EventArgs.Empty);
         }
 
         private void CatalogRow_ScrollEnded(object sender, object e)
         {
             _isDraggingRow = false;
+            RowScrollEnded?.Invoke(this, EventArgs.Empty);
         }
     }
 }

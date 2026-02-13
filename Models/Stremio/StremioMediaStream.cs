@@ -15,6 +15,8 @@ namespace ModernIPTVPlayer.Models.Stremio
             Meta = meta;
         }
 
+        public string SourceAddon { get; set; }
+
         // IMediaStream Implementation
         public int Id => Meta.Id.GetHashCode(); // Temporary Int ID for interface
         public string IMDbId => Meta.Id; // Real ID
@@ -22,6 +24,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Title => Meta.Name;
         public string PosterUrl => Meta.Poster;
         public string Rating => Meta.ImdbRating;
+        public string Type => Meta.Type?.ToUpper();
 
         public TmdbMovieResult TmdbInfo { get; set; } // Can populate later if needed
 

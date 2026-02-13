@@ -83,5 +83,11 @@
             <Rectangle x:Name="CinemaScrim" Fill="#FF000000" Opacity="0" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="0"/>
             <local:ExpandedCard x:Name="ActiveExpandedCard" Visibility="Collapsed" Canvas.ZIndex="1"/>
         </Canvas>
+
+        <!-- Empty State -->
+        <StackPanel x:Name="EmptyStatePanel" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12" IsHitTestVisible="False">
+            <FontIcon Glyph="&#xE773;" FontSize="48" Foreground="#33FFFFFF"/>
+            <TextBlock Text="Sonuç Bulunamadı" Foreground="#66FFFFFF" FontSize="16"/>
+        </StackPanel>
     </Grid>
 </UserControl>

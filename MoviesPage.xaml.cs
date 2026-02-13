@@ -21,6 +21,8 @@ using System.Collections.ObjectModel;
 using Windows.Foundation;
 using System.Numerics;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Input;
+using Microsoft.UI.Input;
 
 namespace ModernIPTVPlayer
 {
@@ -73,6 +75,21 @@ namespace ModernIPTVPlayer
             // Wire Hover Events
             StremioControl.CardHoverStarted += (s, card) => _stremioExpandedCardOverlay.OnHoverStarted(card);
             StremioControl.CardHoverEnded += async (s, card) => await _stremioExpandedCardOverlay.CloseExpandedCardAsync();
+            StremioControl.RowScrollStarted += (s, e) => 
+            {
+                _stremioExpandedCardOverlay.CancelPendingShow();
+                if (!_stremioExpandedCardOverlay.IsInCinemaMode)
+                {
+                    _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync();
+                }
+            };
+
+            // Wire Spotlight Search Events
+            SpotlightSearch.ItemClicked += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
+            SpotlightSearch.SeeAllClicked += (s, query) => 
+            {
+                Frame.Navigate(typeof(Pages.SearchResultsPage), query, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
+            };
 
         }
 
@@ -170,6 +187,7 @@ namespace ModernIPTVPlayer
                 MediaGrid.Visibility = Visibility.Collapsed;
                 StremioControl.Visibility = Visibility.Visible;
                 OverlayCanvas.Visibility = Visibility.Visible;
+                SearchButton.Visibility = Visibility.Visible;
             }
         }
 
@@ -324,10 +342,6 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void SearchButton_Click(object sender, RoutedEventArgs e)
-        {
-            // TODO: Implement Unified Search
-        }
 
         private void MediaGrid_ItemClicked(object sender, IMediaStream e)
         {
@@ -412,6 +426,97 @@ namespace ModernIPTVPlayer
         private void StremioExpandedCardOverlay_AddListRequested(object sender, IMediaStream e)
         {
              // To be implemented
+        }
+
+        // ==========================================
+        // SEARCH LOGIC
+        // ==========================================
+        private bool _isSearchActive = false;
+        private void SearchButton_Click(object sender, RoutedEventArgs e)
+        {
+            SpotlightSearch.Show();
+        }
+
+        private void SpotlightSearch_ItemClicked(object sender, StremioMediaStream e)
+        {
+            Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+        }
+
+        private async void SpotlightSearch_SeeAllClicked(object sender, string query)
+        {
+            // Enter Full Search Mode
+            _isSearchActive = true;
+            
+            // Hide Discovery
+            StremioControl.Visibility = Visibility.Collapsed;
+            OverlayCanvas.Visibility = Visibility.Collapsed; // Hide expanded cards if any
+
+            // Show Grid
+            MediaGrid.Visibility = Visibility.Visible;
+            MediaGrid.IsLoading = true;
+            
+            // Update UI (Maybe header title?)
+            // We don't have a dedicated Title TextBlock exposed in XAML easily, 
+            // but we can assume the user knows they are searching.
+            
+            try
+            {
+                var results = await StremioService.Instance.SearchAsync(query);
+                MediaGrid.ItemsSource = new List<IMediaStream>(results);
+            }
+            finally
+            {
+                MediaGrid.IsLoading = false;
+            }
+        }
+        
+        // Keyboard Shortcuts
+        protected override void OnKeyDown(KeyRoutedEventArgs e)
+        {
+            base.OnKeyDown(e);
+            
+            if (e.Key == Windows.System.VirtualKey.F && InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+            {
+                if (_currentSource == ContentSource.Stremio)
+                {
+                    SpotlightSearch.Show();
+                    e.Handled = true;
+                }
+            }
+        }
+
+        // Back Navigation Handling (Call this from MainWindow or verify generic back works)
+        // Since we don't have a global back handler here, we rely on the internal state.
+        // If the user presses "Back" on the mouse or NavView back, we should exit search mode.
+        // But Page doesn't have a "BackRequested" virtual method easily accessible without partial hacks or NavView hooks.
+        // For now, let's assume if they click "SidebarToggle" (which turns into Back in some designs) or just use the Grid actions.
+        
+        // To make "Back" work, we'll implement a public method called by MainWindow's BackRequested if Frame.CanGoBack is false?
+        // OR simply: If search is active, we provide a "Close Search" button in the header (which we haven't added yet).
+        // Let's add specific logic to "SidebarToggle" to act as Back when in search?
+        // Or better: Re-enable SidebarToggle as "Close Search" when _isSearchActive.
+        
+        public bool HandleBackRequest()
+        {
+            if (SpotlightSearch.Visibility == Visibility.Visible)
+            {
+                SpotlightSearch.Hide();
+                return true;
+            }
+
+            if (_isSearchActive)
+            {
+                // Exit Search Mode
+                _isSearchActive = false;
+                MediaGrid.ItemsSource = null; // Clear results
+                MediaGrid.Visibility = Visibility.Collapsed;
+                
+                StremioControl.Visibility = Visibility.Visible;
+                OverlayCanvas.Visibility = Visibility.Visible;
+                return true;
+            }
+            
+            return false;
         }
     }
 }

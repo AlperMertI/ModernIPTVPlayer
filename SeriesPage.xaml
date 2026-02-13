@@ -87,6 +87,11 @@
     
                         <!-- Title -->
                         <Grid Height="60" VerticalAlignment="Top" Padding="24,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
                             <TextBlock Text="DİZİLER" FontSize="28" FontWeight="ExtraBold" VerticalAlignment="Center" CharacterSpacing="50">
                                 <TextBlock.Foreground>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
@@ -95,6 +100,10 @@
                                     </LinearGradientBrush>
                                 </TextBlock.Foreground>
                             </TextBlock>
+
+                            <Button Grid.Column="1" Click="SearchButton_Click" Background="Transparent" BorderThickness="0" Padding="8" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xE721;" FontSize="20" Foreground="White"/>
+                            </Button>
                         </Grid>
     
                         <!-- Search -->
@@ -210,6 +219,9 @@
 
                         <!-- Right: Actions -->
                         <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="16">
+                             <Button x:Name="SearchButton" Click="SearchButton_Click" Background="Transparent" BorderThickness="0" Width="40" Height="40" Padding="0" Visibility="Visible">
+                                 <FontIcon Glyph="&#xE721;" FontSize="16" Foreground="White" Opacity="0.8"/>
+                             </Button>
                              <controls:DownloadStatusButton />
                         </StackPanel>
                     </Grid>
@@ -230,6 +242,10 @@
                         <Rectangle x:Name="CinemaScrim" Fill="#FF000000" Opacity="0" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="0"/>
                         <controls:ExpandedCard x:Name="ActiveExpandedCard" Visibility="Collapsed" IsHitTestVisible="True" Canvas.ZIndex="1"/>
                     </Canvas>
+
+                    <!-- Spotlight Search Overlay -->
+                    <controls:SpotlightSearchControl x:Name="SpotlightSearch" Grid.Row="0" Grid.RowSpan="3" 
+                                                     Visibility="Collapsed" Canvas.ZIndex="999"/>
                 </Grid>
             </SplitView.Content>
         </SplitView>

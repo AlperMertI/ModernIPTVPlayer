@@ -121,6 +121,16 @@ namespace ModernIPTVPlayer
 
         private void NavView_BackRequested(NavigationView sender, NavigationViewBackRequestedEventArgs args)
         {
+            // Check if current page handles back request (e.g. Closing Search)
+            if (ContentFrame.Content is MoviesPage moviesPage)
+            {
+                if (moviesPage.HandleBackRequest()) return;
+            }
+            else if (ContentFrame.Content is SeriesPage seriesPage)
+            {
+                if (seriesPage.HandleBackRequest()) return;
+            }
+
             if (ContentFrame.CanGoBack)
             {
                 ContentFrame.GoBack();

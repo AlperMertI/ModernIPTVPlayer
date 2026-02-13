@@ -21,6 +21,7 @@ using System.Collections.ObjectModel;
 using Windows.Foundation;
 using System.Numerics;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Input;
 
 namespace ModernIPTVPlayer
 {
@@ -73,6 +74,21 @@ namespace ModernIPTVPlayer
             // Wire Hover Events
             StremioControl.CardHoverStarted += (s, card) => _stremioExpandedCardOverlay.OnHoverStarted(card);
             StremioControl.CardHoverEnded += async (s, card) => await _stremioExpandedCardOverlay.CloseExpandedCardAsync();
+            StremioControl.RowScrollStarted += (s, e) => 
+            {
+                _stremioExpandedCardOverlay.CancelPendingShow();
+                if (!_stremioExpandedCardOverlay.IsInCinemaMode)
+                {
+                    _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync();
+                }
+            };
+
+            // Wire Spotlight Search Events
+            SpotlightSearch.ItemClicked += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
+            SpotlightSearch.SeeAllClicked += (s, query) => 
+            {
+                Frame.Navigate(typeof(Pages.SearchResultsPage), query, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
+            };
 
         }
 
@@ -321,10 +337,6 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void SearchButton_Click(object sender, RoutedEventArgs e)
-        {
-            // TODO: Implement Unified Search
-        }
 
         private void MediaGrid_ItemClicked(object sender, IMediaStream e)
         {
@@ -399,6 +411,82 @@ namespace ModernIPTVPlayer
         private void StremioExpandedCardOverlay_AddListRequested(object sender, IMediaStream e)
         {
              // To be implemented
+        }
+
+        // ==========================================
+        // SEARCH LOGIC
+        // ==========================================
+        private bool _isSearchActive = false;
+        private void SearchButton_Click(object sender, RoutedEventArgs e)
+        {
+            SpotlightSearch.Show();
+        }
+
+        private void SpotlightSearch_ItemClicked(object sender, StremioMediaStream e)
+        {
+            Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+        }
+
+        private async void SpotlightSearch_SeeAllClicked(object sender, string query)
+        {
+             // Enter Full Search Mode
+            _isSearchActive = true;
+            
+            // Hide Discovery
+            StremioControl.Visibility = Visibility.Collapsed;
+            OverlayCanvas.Visibility = Visibility.Collapsed; // Hide expanded cards if any
+
+            // Show Grid
+            MediaGrid.Visibility = Visibility.Visible;
+            MediaGrid.IsLoading = true;
+            
+            try
+            {
+                var results = await StremioService.Instance.SearchAsync(query);
+                MediaGrid.ItemsSource = new List<IMediaStream>(results);
+            }
+            finally
+            {
+                MediaGrid.IsLoading = false;
+            }
+        }
+        
+        // Keyboard Shortcuts
+        protected override void OnKeyDown(KeyRoutedEventArgs e)
+        {
+            base.OnKeyDown(e);
+            
+            if (e.Key == Windows.System.VirtualKey.F && InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control).HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+            {
+                if (_currentSource == ContentSource.Stremio)
+                {
+                    SpotlightSearch.Show();
+                    e.Handled = true;
+                }
+            }
+        }
+
+        public bool HandleBackRequest()
+        {
+            if (SpotlightSearch.Visibility == Visibility.Visible)
+            {
+                SpotlightSearch.Hide();
+                return true;
+            }
+
+            if (_isSearchActive)
+            {
+                 // Exit Search Mode
+                _isSearchActive = false;
+                MediaGrid.ItemsSource = null; // Clear results
+                MediaGrid.Visibility = Visibility.Collapsed;
+                
+                StremioControl.Visibility = Visibility.Visible;
+                OverlayCanvas.Visibility = Visibility.Visible;
+                return true;
+            }
+            
+            return false;
         }
     }
 }

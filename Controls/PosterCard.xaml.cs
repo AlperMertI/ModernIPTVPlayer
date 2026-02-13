@@ -194,10 +194,11 @@ namespace ModernIPTVPlayer.Controls
         private void OnPointerExited(object sender, PointerRoutedEventArgs e)
         {
              // Fix: Check if we are really outside the bounds
+             // This prevents the card from closing when the ExpandedCard overlay appears and "steals" focus
              var point = e.GetCurrentPoint(RootGrid).Position;
-             if (point.X > 0 && point.Y > 0 && point.X < RootGrid.ActualWidth && point.Y < RootGrid.ActualHeight)
+             if (point.X >= 0 && point.Y >= 0 && point.X <= RootGrid.ActualWidth && point.Y <= RootGrid.ActualHeight)
              {
-                 // Still inside (likely moved over child element or weird glitch), ignore
+                 // Still inside (likely moved over child element or the ExpandedCard overlay covers us), ignore
                  return;
              }
 

@@ -96,10 +96,11 @@ namespace ModernIPTVPlayer.Controls
             sb.Begin();
         }
 
-        private void ItemsListView_ItemClick(object sender, ItemClickEventArgs e)
+        private void PosterCard_Tapped(object sender, TappedRoutedEventArgs e)
         {
-            if (e.ClickedItem is IMediaStream stream)
+            if (sender is FrameworkElement fe && fe.DataContext is IMediaStream stream)
             {
+                ElementSoundPlayer.Play(ElementSoundKind.Invoke);
                 ItemClicked?.Invoke(this, stream);
             }
         }

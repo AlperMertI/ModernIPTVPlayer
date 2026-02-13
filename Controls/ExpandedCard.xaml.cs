@@ -1,4 +1,4 @@
-using Microsoft.UI.Xaml;
+﻿using Microsoft.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -488,12 +488,12 @@ namespace ModernIPTVPlayer.Controls
                                 {
                                     string epName = ep.Name;
                                     string cleanIptv = TmdbHelper.CleanEpisodeTitle(history.Title);
-                                    bool isGeneric = string.IsNullOrEmpty(epName) || epName.Contains("Bölüm") || epName.Contains("Episode") || epName == ep.EpisodeNumber.ToString();
+                                    bool isGeneric = string.IsNullOrEmpty(epName) || epName.Contains("BÃ¶lÃ¼m") || epName.Contains("Episode") || epName == ep.EpisodeNumber.ToString();
 
                                     if (isGeneric && !string.IsNullOrEmpty(cleanIptv) && cleanIptv.Length > 2)
                                         displayTitle = cleanIptv;
                                     else
-                                        displayTitle = !string.IsNullOrEmpty(epName) ? epName : $"Bölüm {ep.EpisodeNumber}";
+                                        displayTitle = !string.IsNullOrEmpty(epName) ? epName : $"BÃ¶lÃ¼m {ep.EpisodeNumber}";
 
                                     if (!string.IsNullOrEmpty(ep.Overview)) displayOverview = ep.Overview;
                                     if (!string.IsNullOrEmpty(ep.StillUrl)) displayBackdrop = ep.StillUrl;
@@ -717,8 +717,8 @@ namespace ModernIPTVPlayer.Controls
                      {
                          var remaining = TimeSpan.FromSeconds(hist.Duration - hist.Position);
                          string timeLeft = remaining.TotalHours >= 1 
-                             ? $"{remaining.Hours}sa {remaining.Minutes}dk Kaldı"
-                             : $"{remaining.Minutes}dk Kaldı";
+                             ? $"{remaining.Hours}sa {remaining.Minutes}dk KaldÄ±"
+                             : $"{remaining.Minutes}dk KaldÄ±";
                              
                          AddBadge(timeLeft, Colors.Crimson);
                      }
@@ -1009,7 +1009,7 @@ namespace ModernIPTVPlayer.Controls
             GenresText.Text = overrideSubtitle ?? tmdb.GetGenreNames();
             DescText.Text = overrideOverview ?? tmdb.Overview;
 
-            RatingText.Text = $"★ {tmdb.VoteAverage:F1}";
+            RatingText.Text = $"â˜… {tmdb.VoteAverage:F1}";
             YearText.Text = tmdb.DisplayDate?.Split('-')[0] ?? "";
             
             // Hide skeleton and reveal description with staggered reveal
@@ -1105,7 +1105,7 @@ namespace ModernIPTVPlayer.Controls
                     // Actually, let's keep it raw but if it was 0, and we show it as episode 1 in title, 
                     // maybe we should be consistent.
                     int displayEp = history.EpisodeNumber;
-                    if (displayEp == 0) displayEp = 1; // User said "Bölüm 1'deyim" but it showed 0.
+                    if (displayEp == 0) displayEp = 1; // User said "BÃ¶lÃ¼m 1'deyim" but it showed 0.
                     
                     subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
                 }

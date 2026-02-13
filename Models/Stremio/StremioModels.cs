@@ -64,6 +64,12 @@ namespace ModernIPTVPlayer.Models.Stremio
         public List<string> Options { get; set; }
     }
 
+    public class StremioCatalogRoot
+    {
+        [JsonPropertyName("metas")]
+        public List<StremioMeta> Metas { get; set; }
+    }
+
     // ==========================================
     // 2. META (Catalog Items / Details)
     // ==========================================

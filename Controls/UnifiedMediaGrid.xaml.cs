@@ -27,7 +27,7 @@ namespace ModernIPTVPlayer.Controls
             {
                 _items = value;
                 MediaGridView.ItemsSource = _items;
-                IsLoading = false;
+                IsLoading = false; // This triggers the visibility check
             }
         }
 
@@ -38,13 +38,24 @@ namespace ModernIPTVPlayer.Controls
                 if (value)
                 {
                     MediaGridView.Visibility = Visibility.Collapsed;
+                    EmptyStatePanel.Visibility = Visibility.Collapsed;
                     SkeletonGrid.Visibility = Visibility.Visible;
                     SkeletonGrid.ItemsSource = new List<int>(new int[20]);
                 }
                 else
                 {
                     SkeletonGrid.Visibility = Visibility.Collapsed;
-                    MediaGridView.Visibility = Visibility.Visible;
+                    
+                    if (_items == null || _items.Count == 0)
+                    {
+                        MediaGridView.Visibility = Visibility.Collapsed;
+                        EmptyStatePanel.Visibility = Visibility.Visible;
+                    }
+                    else
+                    {
+                        MediaGridView.Visibility = Visibility.Visible;
+                        EmptyStatePanel.Visibility = Visibility.Collapsed;
+                    }
                 }
             }
         }

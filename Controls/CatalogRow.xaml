@@ -53,8 +53,8 @@
                       ManipulationDelta="ItemsListView_ManipulationDelta"
                       ManipulationCompleted="ItemsListView_ManipulationCompleted"
                       SelectionMode="None"
-                      ItemClick="ItemsListView_ItemClick"
-                      IsItemClickEnabled="True">
+                      IsItemClickEnabled="False"
+                      ElementSoundMode="Off">
 
                 <ListView.ItemsPanel>
                     <ItemsPanelTemplate>
@@ -81,7 +81,9 @@
                     <DataTemplate>
                         <local:PosterCard ImageUrl="{Binding PosterUrl}" Width="160" Height="240" 
                                           HoverStarted="PosterCard_HoverStarted" 
-                                          HoverEnded="PosterCard_HoverEnded"/>
+                                          HoverEnded="PosterCard_HoverEnded"
+                                          Tapped="PosterCard_Tapped"
+                                          ElementSoundMode="Off"/>
                     </DataTemplate>
                 </ListView.ItemTemplate>
             </ListView>

@@ -322,18 +322,16 @@ namespace ModernIPTVPlayer
                                 PlayButtonSubtext.Visibility = Visibility.Visible;
                                 RestartButton.Visibility = Visibility.Visible;
                                 
-                                _streamUrl = history.StreamUrl;
-                                InitializePrebufferPlayer(_streamUrl, history.Position);
-                                _ = UpdateTechnicalBadgesAsync(_streamUrl);
-                            }
-                            else
-                            {
-                                MetadataShimmer.Visibility = Visibility.Collapsed;
-                                TechBadgesContent.Visibility = Visibility.Collapsed;
-                                if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
-                                PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                            }
-                        }
+                                 _streamUrl = history.StreamUrl;
+                                 InitializePrebufferPlayer(_streamUrl, history.Position);
+                                 _ = UpdateTechnicalBadgesAsync(_streamUrl);
+                             }
+                             else
+                             {
+                                 UpdateTechnicalSectionVisibility(false);
+                                 PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                             }
+                         }
                         else if (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")
                         {
                             // Refresh Series Progress
@@ -421,7 +419,18 @@ namespace ModernIPTVPlayer
             // 2. Immediate UI Update (Always show Shimmers for aesthetic delay)
             _streamUrl = null; // Clear old state
             SetLoadingState(true); 
-            SetBadgeLoadingState(true); // Explicitly reset badges to loading state
+            // RESET BADGE STATE: Collapse all badges from previous navigation
+            // This prevents stale badge visibility from leaking into StaggeredRevealContent's hasBadges check.
+            // We do NOT call SetBadgeLoadingState(true) here to avoid the shimmer race condition.
+            Badge4K.Visibility = Visibility.Collapsed;
+            BadgeRes.Visibility = Visibility.Collapsed;
+            BadgeHDR.Visibility = Visibility.Collapsed;
+            BadgeSDR.Visibility = Visibility.Collapsed;
+            BadgeCodecContainer.Visibility = Visibility.Collapsed;
+            if (TechBadgesContent != null) TechBadgesContent.Visibility = Visibility.Collapsed;
+            if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
+            if (MetadataShimmer != null) MetadataShimmer.Visibility = Visibility.Collapsed;
+            if (MetadataPanel != null) MetadataPanel.Margin = new Thickness(0);
             
             // CLEAR STATE (Prevent Stale Data)
             Seasons?.Clear();
@@ -766,16 +775,14 @@ namespace ModernIPTVPlayer
                          // Also fetch fresh sources in background (UI update)
                          _ = PlayStremioContent(stremioItem.Meta.Id, false);
                      }
-                     else
-                     {
-                         // No history: Hide badges for now until user selects a source
-                         MetadataShimmer.Visibility = Visibility.Collapsed;
-                         TechBadgesContent.Visibility = Visibility.Collapsed;
-                         if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
-                         
-                         PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                         StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
-                     }
+                      else
+                      {
+                          // No history: Hide badges for now until user selects a source
+                          UpdateTechnicalSectionVisibility(false);
+                          
+                          PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                          StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
+                      }
                      
                      // Auto-show sources if not resuming?
                      if (string.IsNullOrEmpty(_streamUrl))
@@ -950,13 +957,12 @@ namespace ModernIPTVPlayer
 
                 // Show Shimmers & Reset Opacities
                 TitleShimmer.Visibility = Visibility.Visible;
-                MetadataShimmer.Visibility = Visibility.Visible;
+                // Note: MetadataShimmer is managed by SetBadgeLoadingState, not here
                 ActionBarShimmer.Visibility = Visibility.Visible;
                 OverviewShimmer.Visibility = Visibility.Visible;
                 CastShimmer.Visibility = Visibility.Visible;
 
                 ElementCompositionPreview.GetElementVisual(TitleShimmer).Opacity = 1f;
-                ElementCompositionPreview.GetElementVisual(MetadataShimmer).Opacity = 1f;
                 ElementCompositionPreview.GetElementVisual(ActionBarShimmer).Opacity = 1f;
                 ElementCompositionPreview.GetElementVisual(OverviewShimmer).Opacity = 1f;
                 ElementCompositionPreview.GetElementVisual(CastShimmer).Opacity = 1f;
@@ -1015,6 +1021,9 @@ namespace ModernIPTVPlayer
             AnimatePair(TitlePanel, TitleShimmer, 50);
             AnimatePair(ActionBarPanel, ActionBarShimmer, 100);
             AnimatePair(OverviewPanel, OverviewShimmer, 150);
+
+            // Sync badge section alignment with current badge state
+            UpdateTechnicalSectionVisibility(HasVisibleBadges());
 
             if (CastSection.Visibility == Visibility.Visible)
             {
@@ -1510,7 +1519,22 @@ namespace ModernIPTVPlayer
                                 HasProgress = hasProg,
                                 ProgressPercent = pct,
                                 ProgressText = progText,
-                                SeasonNumber = seasonNum
+                                SeasonNumber = seasonNum,
+                                
+                                // New
+                                // Duration Logic: Episode Specific -> Series Average -> IPTV Duration
+                                // New Metadata
+                                // Duration Logic: Episode Specific -> Series Average -> IPTV Duration
+                                // CachedTmdb (TmdbMovieResult) does NOT have Runtime. Only Details has it.
+                                // We can try to use standard duration 0 if not available.
+                                DurationFormatted = (tmdbSeason?.Episodes?.FirstOrDefault(x => x.EpisodeNumber == epNum)?.Runtime ?? 0) > 0
+                                                    ? $"{(tmdbSeason.Episodes.FirstOrDefault(x => x.EpisodeNumber == epNum).Runtime)} dk"
+                                                    : (epDef.Info?.Duration != null ? epDef.Info.Duration : ""),
+
+                                ReleaseDate = tmdbSeason?.Episodes?.FirstOrDefault(x => x.EpisodeNumber == epNum)?.AirDateDateTime,
+                                // Fix: If AirDate is null, assume released
+                                IsReleased = (tmdbSeason?.Episodes?.FirstOrDefault(x => x.EpisodeNumber == epNum)?.AirDateDateTime ?? DateTime.MinValue) <= DateTime.Now,
+                                IsWatched = hasProg && pct > 90
                             });
                         }
                         
@@ -1599,6 +1623,29 @@ namespace ModernIPTVPlayer
                 EpisodesListView.ItemsSource = CurrentEpisodes;
                 if (NarrowEpisodesListView != null)
                     NarrowEpisodesListView.ItemsSource = CurrentEpisodes;
+
+                // SEASON SYNC FIX:
+                // Check if this season has TMDB data (e.g. check a sample episode for valid Runtime or non-empty Overview if it should have one)
+                // or simpler: Check if we have cached TMDB season details for this season
+                // The issue: "First season ok, others not".
+                // If we are Stremio/IPTV, we might have basic data.
+                // We want to ENRICH it if missing.
+                
+                if (_cachedTmdb != null && season.Episodes.Count > 0)
+                {
+                    // Check if the first episode of this season has "enriched" data (like DurationFormatted having 'dk' from TMDB)
+                    // or just check if we have season details in cache
+                    // Let's just TRY to load it if we think it's missing.
+                    // A simple heuristic: If DurationFormatted is empty (and it's not a special case), try fetch.
+                    
+                    bool seemsMissing = season.Episodes.Any(ep => string.IsNullOrEmpty(ep.DurationFormatted));
+                    
+                    if (seemsMissing)
+                    {
+                        // Trigger async loads
+                        _ = LoadTmdbSeasonDataAsync(season.SeasonNumber);
+                    }
+                }
                 
                 if (_pendingAutoSelectEpisode != null && season.Episodes.Contains(_pendingAutoSelectEpisode))
                 {
@@ -1614,6 +1661,7 @@ namespace ModernIPTVPlayer
                         EpisodesListView.ScrollIntoView(_pendingAutoSelectEpisode);
                         _pendingAutoSelectEpisode = null;
                     }
+                    catch {} // List might not be ready
                     finally
                     {
                         _isProgrammaticSelection = false;
@@ -1637,6 +1685,45 @@ namespace ModernIPTVPlayer
             }
         }
 
+        private async Task LoadTmdbSeasonDataAsync(int seasonNumber)
+        {
+             try
+             {
+                 if (_item == null) return;
+                 
+                 if (_cachedTmdb == null) return;
+                 
+                 int tmdbId = _cachedTmdb.Id;
+                 
+                 var sData = await TmdbHelper.GetSeasonDetailsAsync(tmdbId, seasonNumber);
+                 if (sData != null && sData.Episodes != null)
+                 {
+                     DispatcherQueue.TryEnqueue(() => 
+                     {
+                         foreach(var ep in CurrentEpisodes)
+                         {
+                             if (ep.SeasonNumber == seasonNumber)
+                             {
+                                 var t = sData.Episodes.FirstOrDefault(x => x.EpisodeNumber == ep.EpisodeNumber);
+                                 if (t != null)
+                                 {
+                                     if (string.IsNullOrEmpty(ep.Overview)) ep.Overview = t.Overview;
+                                     if (string.IsNullOrEmpty(ep.ImageUrl) && !string.IsNullOrEmpty(t.StillPath)) ep.ImageUrl = t.StillUrl;
+                                     if ((t.Runtime) > 0) ep.DurationFormatted = $"{t.Runtime} dk";
+                                     ep.ReleaseDate = t.AirDateDateTime;
+                                     ep.IsReleased = (t.AirDateDateTime ?? DateTime.MinValue) <= DateTime.Now;
+                                 }
+                             }
+                         }
+                     });
+                 }
+             }
+             catch (Exception ex)
+             {
+                 System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] LoadTmdbSeasonDataAsync Error: {ex.Message}");
+             }
+        }
+
         private void EpisodesListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
              if (_isSelectionSyncing) return;
@@ -1657,7 +1744,17 @@ namespace ModernIPTVPlayer
                         NarrowEpisodesListView.SelectedItem = ep;
                      
                      // UPDATE UI FOR SELECTED EPISODE
-                     if (TitleText != null) TitleText.Text = ep.Title;
+                     if (TitleText != null) 
+                     {
+                         TitleText.Text = ep.Title;
+                         
+                         // Fix: Always show Series Name as SuperTitle when looking at an episode
+                         if (SuperTitleText != null)
+                         {
+                             SuperTitleText.Text = _item.Title.ToUpperInvariant();
+                             SuperTitleText.Visibility = Visibility.Visible;
+                         }
+                     }
                      
                      // Update Play Button
                      if (PlayButtonText != null)
@@ -1714,6 +1811,13 @@ namespace ModernIPTVPlayer
                     // Sync selection with main list
                     if (EpisodesListView != null)
                          EpisodesListView.SelectedItem = ep;
+                         
+                    // Fix: Ensure SuperTitle is updated here too (Redundant but safe)
+                    if (SuperTitleText != null)
+                    {
+                        SuperTitleText.Text = _item.Title.ToUpperInvariant();
+                        SuperTitleText.Visibility = Visibility.Visible;
+                    }
                     
                     // Update Play Button
                     if (PlayButtonText != null)
@@ -2309,9 +2413,8 @@ namespace ModernIPTVPlayer
                   StickyPlayButtonText.Text = "Bölüm Seçin";
                   
                   // No episode selected: Hide badges
-                  MetadataShimmer.Visibility = Visibility.Collapsed;
-                  TechBadgesContent.Visibility = Visibility.Collapsed;
-              }
+                  UpdateTechnicalSectionVisibility(false);
+               }
         }
 
 
@@ -3320,11 +3423,8 @@ namespace ModernIPTVPlayer
         {
             if (MetadataShimmer == null || TechBadgesContent == null) return;
 
-            System.Diagnostics.Debug.WriteLine($"[TechBadges] SetBadgeLoadingState: {isLoading}");
-
             if (isLoading)
             {
-                // Loading: Show Shimmer, Hide Badges
                 if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
                 MetadataShimmer.Width = double.NaN;
                 MetadataShimmer.Visibility = Visibility.Visible;
@@ -3335,40 +3435,40 @@ namespace ModernIPTVPlayer
             }
             else
             {
-                // Loaded: Cross-fade to Badges
-                System.Diagnostics.Debug.WriteLine("[TechBadges] Revealing Content...");
+                // Loaded: Cross-fade to Badges or Collapse if empty
+                bool spansSpace = HasVisibleBadges();
 
-                // 1. Fade In Badges
-                TechBadgesContent.Visibility = Visibility.Visible;
-                var visContent = ElementCompositionPreview.GetElementVisual(TechBadgesContent);
-                visContent.Opacity = 0f; // Start at 0 on Composition layer
+                if (spansSpace)
+                {
+                    // Fade In Badges
+                    TechBadgesContent.Visibility = Visibility.Visible;
+                    var visContent = ElementCompositionPreview.GetElementVisual(TechBadgesContent);
+                    visContent.Opacity = 0f;
 
-                var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
-                fadeIn.InsertKeyFrame(0f, 0f); // Explicit start
-                fadeIn.InsertKeyFrame(1f, 1f); // Explicit end
-                fadeIn.Duration = TimeSpan.FromMilliseconds(400);
-                
-                // IMPORTANT: Start animation
-                visContent.StartAnimation("Opacity", fadeIn);
-                
-                // Ensure Logical Opacity is 1 so XAML doesn't cull it if animation fails/finishes
-                TechBadgesContent.Opacity = 1;
-                visContent.StartAnimation("Opacity", fadeIn);
+                    var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(0f, 0f);
+                    fadeIn.InsertKeyFrame(1f, 1f);
+                    fadeIn.Duration = TimeSpan.FromMilliseconds(400);
+                    visContent.StartAnimation("Opacity", fadeIn);
+                    TechBadgesContent.Opacity = 1;
 
-                // 2. Fade Out Shimmer
+                    if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
+                }
+
+                // Fade Out Shimmer
                 var visShimmer = ElementCompositionPreview.GetElementVisual(MetadataShimmer);
                 var fadeOut = _compositor.CreateScalarKeyFrameAnimation();
                 fadeOut.InsertKeyFrame(0f, 1f);
                 fadeOut.InsertKeyFrame(1f, 0f);
                 fadeOut.Duration = TimeSpan.FromMilliseconds(300);
-                
+
                 var batch = _compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
                 visShimmer.StartAnimation("Opacity", fadeOut);
-                batch.Completed += (s, e) => 
-                { 
-                    System.Diagnostics.Debug.WriteLine("[TechBadges] Shimmer Hidden.");
+                batch.Completed += (s, e) =>
+                {
                     MetadataShimmer.Visibility = Visibility.Collapsed;
                     MetadataShimmer.Width = double.NaN;
+                    UpdateTechnicalSectionVisibility(spansSpace);
                 };
                 batch.End();
             }
@@ -3412,7 +3512,11 @@ namespace ModernIPTVPlayer
 
         private async Task UpdateTechnicalBadgesAsync(string url)
         {
-            if (string.IsNullOrEmpty(url)) return;
+            if (string.IsNullOrEmpty(url))
+            {
+                UpdateTechnicalSectionVisibility(false);
+                return;
+            }
 
             // Cancel previous probe
             try
@@ -3504,10 +3608,7 @@ namespace ModernIPTVPlayer
                         ApplyMetadataToUi(probeData);
                         
                         // 4. PREVENT LAYOUT SHIFT: 
-                        bool hasVisibleBadges = Badge4K.Visibility == Visibility.Visible || 
-                                                BadgeRes.Visibility == Visibility.Visible || 
-                                                BadgeHDR.Visibility == Visibility.Visible || 
-                                                BadgeCodecContainer.Visibility == Visibility.Visible;
+                        bool hasVisibleBadges = HasVisibleBadges();
 
                         if (hasVisibleBadges && shimmerWidth > 0 && TechBadgesContent.ActualWidth < shimmerWidth)
                         {
@@ -3537,7 +3638,7 @@ namespace ModernIPTVPlayer
                 // Ensure we exit loading state so text/layout doesn't stay hidden/ghosted
                 DispatcherQueue.TryEnqueue(() => 
                 {
-                    if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
+                    UpdateTechnicalSectionVisibility(false);
                     SetBadgeLoadingState(false);
                 });
             }
@@ -3551,7 +3652,7 @@ namespace ModernIPTVPlayer
             bool is4K = result.Resolution.Contains("3840") || result.Resolution.Contains("4096") || result.Resolution.ToUpperInvariant().Contains("4K");
             Badge4K.Visibility = is4K ? Visibility.Visible : Visibility.Collapsed;
 
-            if (!is4K && !string.IsNullOrEmpty(result.Resolution) && result.Resolution != "Unknown" && result.Resolution != "Error")
+            if (!is4K && !string.IsNullOrWhiteSpace(result.Resolution) && result.Resolution != "Unknown" && result.Resolution != "Error" && result.Resolution.Trim().Length > 0)
             {
                 // Show resolution badge (e.g. 1080P)
                 string displayRes = result.Resolution;
@@ -3560,8 +3661,16 @@ namespace ModernIPTVPlayer
                     var h = displayRes.Split('x').LastOrDefault();
                     if (h != null) displayRes = h + "P";
                 }
-                BadgeResText.Text = displayRes.ToUpperInvariant();
-                BadgeRes.Visibility = Visibility.Visible;
+                
+                if (!string.IsNullOrWhiteSpace(displayRes))
+                {
+                    BadgeResText.Text = displayRes.ToUpperInvariant();
+                    BadgeRes.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    BadgeRes.Visibility = Visibility.Collapsed;
+                }
             }
             else
             {
@@ -3573,7 +3682,7 @@ namespace ModernIPTVPlayer
             BadgeSDR.Visibility = !result.IsHdr ? Visibility.Visible : Visibility.Collapsed;
 
             // Codec
-            if (!string.IsNullOrEmpty(result.Codec) && result.Codec != "-")
+            if (!string.IsNullOrWhiteSpace(result.Codec) && result.Codec != "-" && result.Codec.Trim().Length > 0)
             {
                 BadgeCodec.Text = result.Codec;
                 BadgeCodecContainer.Visibility = Visibility.Visible;
@@ -3583,17 +3692,42 @@ namespace ModernIPTVPlayer
                 BadgeCodecContainer.Visibility = Visibility.Collapsed;
             }
 
+            UpdateTechnicalSectionVisibility(HasVisibleBadges());
+
             // Disable dynamic shimmer adjustment: We are cross-fading, not morphing.
             // AdjustMetadataShimmer();
-            
-            // Final Width Sync if cached - handled by main update loop now
-            /*if (TechBadgesContent.ActualWidth > 0)
-            {
-                MetadataShimmer.Width = TechBadgesContent.ActualWidth;
-            }*/
         }
 
+        /// <summary>
+        /// Returns true if any technical badge (4K, Resolution, HDR, SDR, Codec) is currently visible.
+        /// </summary>
+        private bool HasVisibleBadges() =>
+            Badge4K.Visibility == Visibility.Visible ||
+            BadgeRes.Visibility == Visibility.Visible ||
+            BadgeHDR.Visibility == Visibility.Visible ||
+            BadgeSDR.Visibility == Visibility.Visible ||
+            BadgeCodecContainer.Visibility == Visibility.Visible;
 
+        /// <summary>
+        /// Manages TechBadgeSection visibility and MetadataPanel margin based on badge presence.
+        /// When badges are visible, adds a 16px left gap before MetadataPanel.
+        /// When no badges, collapses the entire section and resets margin to 0.
+        /// </summary>
+        private void UpdateTechnicalSectionVisibility(bool hasBadges)
+        {
+            if (hasBadges)
+            {
+                if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
+                if (MetadataPanel != null) MetadataPanel.Margin = new Thickness(16, 0, 0, 0);
+            }
+            else
+            {
+                if (MetadataShimmer != null) MetadataShimmer.Visibility = Visibility.Collapsed;
+                if (TechBadgesContent != null) TechBadgesContent.Visibility = Visibility.Collapsed;
+                if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
+                if (MetadataPanel != null) MetadataPanel.Margin = new Thickness(0);
+            }
+        }
 
 
 
@@ -3772,6 +3906,84 @@ namespace ModernIPTVPlayer
             
             visual.StartAnimation("Scale", breath);
         }
+
+        private void MarkWatched_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuFlyoutItem item && item.Tag is EpisodeItem ep)
+            {
+                 // Resolve Series ID and Name
+                 string seriesId = "";
+                 string seriesName = "";
+                 
+                 // Use SeriesStream instead of IPTVSERIES
+                 if (_item is SeriesStream iptv)
+                 {
+                     seriesId = iptv.SeriesId.ToString();
+                     seriesName = iptv.Name;
+                 }
+                 else if (_item is StremioMediaStream st)
+                 {
+                     seriesId = st.Id.ToString(); // Stremio ID is usually string hash in IMediaStream, but st.IMDbId is string
+                     // Actually st.Id is int (hash). HistoryManager expects string?
+                     // Let's use st.IMDbId if available, or just _item.Id.ToString()
+                     seriesId = st.IMDbId ?? st.Id.ToString();
+                     seriesName = st.Title; // StremioMediaStream has Title, not Name directly exposed publicly except via Meta
+                 }
+
+                 // Mark as completed
+                 HistoryManager.Instance.UpdateProgress(ep.Id, 
+                     ep.Title, 
+                     ep.StreamUrl ?? "", 
+                     1000, 1000, 
+                     seriesId,
+                     seriesName,
+                     ep.SeasonNumber, 
+                     ep.EpisodeNumber);
+
+                 // Update UI
+                 ep.IsWatched = true;
+                 ep.ProgressPercent = 100;
+                 ep.ProgressText = "100%";
+                 ep.HasProgress = true;
+            }
+        }
+
+        private void MarkUnwatched_Click(object sender, RoutedEventArgs e)
+        {
+             if (sender is MenuFlyoutItem item && item.Tag is EpisodeItem ep)
+            {
+                // Resolve Series ID
+                 string seriesId = "";
+                 string seriesName = "";
+                 
+                 if (_item is SeriesStream iptv)
+                 {
+                     seriesId = iptv.SeriesId.ToString();
+                     seriesName = iptv.Name;
+                 }
+                 else if (_item is StremioMediaStream st)
+                 {
+                      seriesId = st.IMDbId ?? st.Id.ToString();
+                      seriesName = st.Title;
+                 }
+
+                // Reset
+                HistoryManager.Instance.UpdateProgress(ep.Id, 
+                     ep.Title, 
+                     ep.StreamUrl ?? "", 
+                     0, 1000, 
+                     seriesId,
+                     seriesName,
+                     ep.SeasonNumber, 
+                     ep.EpisodeNumber);
+                     
+                // Update UI
+                ep.IsWatched = false;
+                ep.ProgressPercent = 0;
+                ep.ProgressText = "";
+                ep.HasProgress = false;
+            }
+        }
     }
 
     public class SeasonItem
@@ -3795,7 +4007,16 @@ namespace ModernIPTVPlayer
         public string StreamUrl { get; set; }
         public string Container { get; set; }
         public int SeasonNumber { get; set; }
+
         public int EpisodeNumber { get; set; }
+        
+        // Formatted Metadata
+        public string EpisodeNumberFormatted => $"{EpisodeNumber}. Bölüm";
+        public string DurationFormatted { get; set; }
+        public bool IsReleased { get; set; } = true;
+        public DateTime? ReleaseDate { get; set; }
+        public string ReleaseDateFormatted => ReleaseDate.HasValue ? ReleaseDate.Value.ToString("d MMMM yyyy", new System.Globalization.CultureInfo("tr-TR")) : "";
+        public bool IsWatched { get; set; }
         
         // Progress UI
         public bool HasProgress { get; set; }

@@ -15,6 +15,8 @@
     <Page.Resources>
         <local:BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <local:StringToImageSourceConverter x:Key="StringToImage"/>
+        <local:BooleanInverseToVisibilityConverter x:Key="BoolInverseToVis"/>
+        <local:StringToVisibilityConverter x:Key="StringToVis"/>
         <!-- Premium Glass Button Style -->
         <!-- Premium Glass Button Style -->
         <Style x:Key="GlassButtonStyle" TargetType="Button">
@@ -299,10 +301,10 @@
             <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,40"> 
                  
                  <!-- BADGES & METADATA -->
-                  <StackPanel Orientation="Horizontal" Spacing="16" VerticalAlignment="Center" Margin="0,0,0,0">
+                  <StackPanel Orientation="Horizontal" Spacing="0" VerticalAlignment="Center" Margin="2,0,0,0">
                       <!-- 1. Technical Section (Dynamic: Shimmer or Badges) -->
-                      <Grid x:Name="TechBadgeSection">
-                          <StackPanel x:Name="TechBadgesContent" Orientation="Horizontal" Spacing="8" Opacity="0">
+                       <Grid x:Name="TechBadgeSection" Visibility="Collapsed">
+                           <StackPanel x:Name="TechBadgesContent" Orientation="Horizontal" Spacing="8" Opacity="0" Visibility="Collapsed">
                              <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
                                  <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
                              </Border>
@@ -503,7 +505,14 @@
                                      </ListView.ItemContainerStyle>
                                      <ListView.ItemTemplate>
                                          <DataTemplate x:DataType="local:EpisodeItem">
-                                             <Grid Height="110" CornerRadius="10" Background="#1AFFFFFF" Padding="0">
+                                             <Grid Height="Auto" Background="Transparent" Padding="0,4" CornerRadius="8">
+                                                 <Grid.ContextFlyout>
+                                                     <MenuFlyout>
+                                                         <MenuFlyoutItem Text="İzlendi Olarak İşaretle" Click="MarkWatched_Click" Tag="{x:Bind}"/>
+                                                         <MenuFlyoutItem Text="İzlenmedi Olarak İşaretle" Click="MarkUnwatched_Click" Tag="{x:Bind}"/>
+                                                     </MenuFlyout>
+                                                 </Grid.ContextFlyout>
+                                                 
                                                  <Grid.ColumnDefinitions>
                                                      <ColumnDefinition Width="140"/>
                                                      <ColumnDefinition Width="*"/>
@@ -530,31 +539,47 @@
                                                                   Foreground="#E50914" Background="#44000000" BorderThickness="0" Margin="0"/>
                                                  </Grid>
                                                  
-                                                 <!-- Info -->
-                                                 <Grid Grid.Column="1" Padding="16,10" VerticalAlignment="Center">
-                                                     <Grid.RowDefinitions>
-                                                         <RowDefinition Height="Auto"/>
-                                                         <RowDefinition Height="Auto"/>
-                                                         <RowDefinition Height="Auto"/>
-                                                         <RowDefinition Height="Auto"/>
-                                                     </Grid.RowDefinitions>
-                                                     
-                                                     <!-- Top Row -->
-                                                     <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.7">
-                                                          <TextBlock Text="{x:Bind Duration}" FontSize="11" Foreground="#DDD"/>
-                                                     </StackPanel>
- 
-                                                     <!-- Title -->
-                                                     <TextBlock Grid.Row="1" Text="{x:Bind Title}" FontWeight="Bold" FontSize="15" 
-                                                                TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Foreground="White" Margin="0,4"/>
-
-                                                     <TextBlock Grid.Row="2" Text="{x:Bind Overview}" FontSize="12" Foreground="#C8C8C8"
-                                                                TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
-                                                     
-                                                     <!-- Progress Text -->
-                                                     <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA" 
-                                                                Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
-                                                 </Grid>
+                                                     <!-- Info -->
+                                                     <Grid Grid.Column="1" Padding="16,10" VerticalAlignment="Center">
+                                                         <Grid.RowDefinitions>
+                                                             <RowDefinition Height="Auto"/>
+                                                             <RowDefinition Height="Auto"/>
+                                                             <RowDefinition Height="Auto"/>
+                                                             <RowDefinition Height="Auto"/>
+                                                         </Grid.RowDefinitions>
+                                                         
+                                                         <!-- Top Row: Episode Number & Duration & Watched Status -->
+                                                         <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.7">
+                                                              <TextBlock Text="{x:Bind EpisodeNumberFormatted}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource GoldGradient}"/>
+                                                              <TextBlock Text="•" FontSize="11" Foreground="#666" Visibility="{x:Bind DurationFormatted, Converter={StaticResource StringToVis}}"/>
+                                                              <TextBlock Text="{x:Bind DurationFormatted}" FontSize="11" Foreground="#DDD"/>
+                                                              
+                                                              <!-- Watched Icon -->
+                                                              <FontIcon Glyph="&#xE73E;" FontSize="11" Foreground="{StaticResource GoldGradient}" 
+                                                                        Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                                                                        Margin="4,0,0,0" ToolTipService.ToolTip="İzlendi"/>
+                                                         </StackPanel>
+     
+                                                         <!-- Title -->
+                                                         <TextBlock Grid.Row="1" Text="{x:Bind Title}" FontWeight="Bold" FontSize="15" 
+                                                                    TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Foreground="White" Margin="0,4"/>
+    
+                                                         <!-- Unreleased / Overview -->
+                                                         <StackPanel Grid.Row="2" Margin="0,2,0,0">
+                                                             <!-- Release Date (if unreleased) -->
+                                                             <TextBlock Text="{x:Bind ReleaseDateFormatted}" FontSize="12" Foreground="#E50914" FontWeight="SemiBold"
+                                                                        Visibility="{x:Bind IsReleased, Mode=OneWay, Converter={StaticResource BoolInverseToVis}}"/>
+                                                             
+                                                             <!-- Overview (only if released) -->
+                                                             <TextBlock Text="{x:Bind Overview}" FontSize="12" Foreground="#C8C8C8"
+                                                                        TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
+                                                                        Visibility="{x:Bind IsReleased, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
+                                                         </StackPanel>
+                                                         
+                                                         <!-- Progress Text -->
+                                                         <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA" 
+                                                                    Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
+                                                     </Grid>
                                              </Grid>
                                          </DataTemplate>
                                      </ListView.ItemTemplate>

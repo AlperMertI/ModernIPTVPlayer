@@ -581,6 +581,14 @@ namespace ModernIPTVPlayer
         
         [JsonPropertyName("still_path")]
         public string StillPath { get; set; }
+
+        [JsonPropertyName("runtime")]
+        public int Runtime { get; set; }
+
+        [JsonPropertyName("air_date")]
+        public string AirDate { get; set; }
+
+        public DateTime? AirDateDateTime => !string.IsNullOrEmpty(AirDate) && DateTime.TryParse(AirDate, out var d) ? d : null;
         
         public string StillUrl => !string.IsNullOrEmpty(StillPath) ? $"https://image.tmdb.org/t/p/w300{StillPath}" : null;
     }

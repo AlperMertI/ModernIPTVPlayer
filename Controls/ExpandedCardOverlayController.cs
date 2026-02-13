@@ -37,6 +37,7 @@ namespace ModernIPTVPlayer.Controls
         private Storyboard? _cardBoundsStoryboard;
         private bool _pointerExitNeedsRearm;
         private DateTimeOffset _suppressPointerExitUntil;
+        private bool _isPointerOverCard;
 
         public event EventHandler<IMediaStream>? PlayRequested;
         public event EventHandler<(IMediaStream Stream, TmdbMovieResult Tmdb)>? DetailsRequested;
@@ -66,6 +67,7 @@ namespace ModernIPTVPlayer.Controls
             _expandedCard.PointerExited += ExpandedCard_PointerExited;
             _expandedCard.CinemaModeToggled += ExpandedCard_CinemaModeToggled;
 
+            _hostElement.PointerExited += (s, e) => _ = CloseExpandedCardAsync();
             _overlayCanvas.Visibility = Visibility.Collapsed;
             if (_cinemaScrim != null)
             {
@@ -85,6 +87,7 @@ namespace ModernIPTVPlayer.Controls
         {
             _hoverTimer?.Stop();
             _flightTimer?.Stop();
+            _pendingHoverCard = null;
         }
 
         public void OnHoverStarted(PosterCard card)
@@ -125,6 +128,7 @@ namespace ModernIPTVPlayer.Controls
         public async Task CloseExpandedCardAsync(bool force = false)
         {
             if (_isInCinemaMode && !force) return;
+            if (_isPointerOverCard && !force) return;
 
             try
             {
@@ -293,11 +297,13 @@ namespace ModernIPTVPlayer.Controls
 
         private void ExpandedCard_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {
+            _isPointerOverCard = true;
             _pointerExitNeedsRearm = false;
         }
 
         private async void ExpandedCard_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {
+            _isPointerOverCard = false;
             if (_pointerExitNeedsRearm) return;
             if (DateTimeOffset.UtcNow < _suppressPointerExitUntil) return;
             await CloseExpandedCardAsync();
@@ -569,6 +575,7 @@ namespace ModernIPTVPlayer.Controls
             _overlayCanvas.Visibility = Visibility.Collapsed;
             _activeSourceCard = null;
             _pendingHoverCard = null;
+            _isPointerOverCard = false;
 
             var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
             visual.Opacity = 1f;
