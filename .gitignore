@@ -78,6 +78,14 @@ Libs/mpv-0.41.0/*
 !Libs/mpv-0.41.0/player/
 !Libs/mpv-0.41.0/include/
 !Libs/mpv-0.41.0/video/
+!Libs/mpv-0.41.0/demux/
+!Libs/mpv-0.41.0/audio/
+!Libs/mpv-0.41.0/common/
+!Libs/mpv-0.41.0/options/
+!Libs/mpv-0.41.0/stream/
+!Libs/mpv-0.41.0/sub/
+!Libs/mpv-0.41.0/filters/
+!Libs/mpv-0.41.0/osdep/
 !Libs/mpv-0.41.0/meson.build
 !Libs/mpv-0.41.0/meson.options
 !Libs/mpv-0.41.0/subprojects/
