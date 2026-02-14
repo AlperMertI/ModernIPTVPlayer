@@ -376,7 +376,7 @@
                          </Button>
     
                          <Button x:Name="TrailerButton" Click="TrailerButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0">
-                             <FontIcon Glyph="&#xED54;" FontSize="20"/>
+                             <FontIcon Glyph="&#xE714;" FontSize="20"/>
                          </Button>
                          <Button x:Name="DownloadButton" Click="DownloadButton_Click" Style="{StaticResource GlassButtonStyle}" Height="52" Width="52" Padding="0" ToolTipService.ToolTip="İndir">
                              <FontIcon Glyph="&#xEBD3;" FontSize="20"/>
@@ -1097,5 +1097,33 @@
             <!-- Dynamic Download Cards will be added here -->
         </StackPanel>
 
+        <!-- 10. TRAILER OVERLAY -->
+        <!-- 10. TRAILER OVERLAY -->
+        <Grid x:Name="TrailerOverlay" Visibility="Collapsed" Canvas.ZIndex="2000" 
+              HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#01000000" Margin="-16"
+              Grid.RowSpan="99" Grid.ColumnSpan="99">
+            <Grid x:Name="TrailerScrim" Background="#FF000000" Opacity="0" Margin="-16"
+                  HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                  PointerPressed="TrailerScrim_PointerPressed"/>
+
+            <!-- Close Button - positioned outside TrailerContent to avoid fullscreen issues -->
+            <Button x:Name="CloseTrailerButton" Click="CloseTrailerButton_Click" VerticalAlignment="Top" HorizontalAlignment="Right" Margin="16,16,16,0" Style="{StaticResource GlassButtonStyle}" Width="40" Height="40" Padding="0" CornerRadius="20">
+                <FontIcon Glyph="&#xE711;" FontSize="14"/>
+            </Button>
+
+            <Grid x:Name="TrailerContent" Width="1000" Height="562" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0" RenderTransformOrigin="0.5,0.5">
+                <Grid.RenderTransform>
+                    <CompositeTransform x:Name="TrailerTransform" ScaleX="0.1" ScaleY="0.1"/>
+                </Grid.RenderTransform>
+                
+                <Border CornerRadius="12" Background="Black" BorderBrush="#33FFFFFF" BorderThickness="1">
+                    <muxc:WebView2 x:Name="TrailerWebView" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Visibility="Visible" Opacity="0"/>
+                </Border>
+
+                <!-- Loading State -->
+                <ProgressRing x:Name="TrailerLoadingRing" IsActive="True" Width="48" Height="48" Foreground="White" 
+                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
+        </Grid>
     </Grid>
 </Page>

@@ -31,6 +31,7 @@ namespace ModernIPTVPlayer.Controls
 
         private ObservableCollection<CatalogRowViewModel> _discoveryRows = new();
         private bool _isDraggingRow = false;
+        private System.Threading.CancellationTokenSource? _loadCts;
 
         public StremioDiscoveryControl()
         {
@@ -44,41 +45,70 @@ namespace ModernIPTVPlayer.Controls
             DiscoveryRows.ItemsSource = _discoveryRows;
         }
 
+        public bool HasContent => _discoveryRows.Count > 0 && !_discoveryRows.Any(r => r.IsLoading && r.CatalogName == "Yükleniyor...");
+
         public async Task LoadDiscoveryAsync(string contentType)
         {
             try
             {
-                // Reset state
-                _discoveryRows.Clear();
-                
-                // Add skeletons
-                for (int i = 0; i < 6; i++)
-                {
-                    _discoveryRows.Add(new CatalogRowViewModel { CatalogName = "Yükleniyor...", IsLoading = true });
-                }
+                // Cancel previous loading
+                _loadCts?.Cancel();
+                _loadCts = new System.Threading.CancellationTokenSource();
+                var token = _loadCts.Token;
 
+                // Optimization: Keep existing content visible if available
+                bool hasExistingContent = _discoveryRows.Count > 0;
+                
+                if (!hasExistingContent)
+                {
+                     HeroControl.SetLoading(true);
+                     // Add skeletons only if empty
+                     for (int i = 0; i < 6; i++)
+                     {
+                         _discoveryRows.Add(new CatalogRowViewModel { CatalogName = "Yükleniyor...", IsLoading = true });
+                     }
+                }
+                
                 // Fetch Manifests
                 var addonUrls = StremioAddonManager.Instance.GetAddons();
                 bool firstHeroSet = false;
                 int activeSkeletonIndex = 0;
+                
+                // Logic to handle clearing old content on first arrival of new content
+                bool isFirstLoadForThisCall = true;
 
                 foreach (var url in addonUrls)
                 {
                     _ = Task.Run(async () =>
                     {
+                        if (token.IsCancellationRequested) return;
+
                         try
                         {
                             var manifest = await StremioService.Instance.GetManifestAsync(url);
-                            if (manifest?.Catalogs == null) return;
+                            if (manifest?.Catalogs == null || token.IsCancellationRequested) return;
 
                             foreach (var cat in manifest.Catalogs.Where(c => c.Type == contentType))
                             {
+                                if (token.IsCancellationRequested) return;
+
                                 var row = await LoadCatalogRowAsync(url, contentType, cat);
                                 if (row != null && row.Items.Count > 0)
                                 {
+                                    if (token.IsCancellationRequested) return;
+
                                     DispatcherQueue.TryEnqueue(() =>
                                     {
-                                        // Replace skeleton
+                                        if (token.IsCancellationRequested) return;
+
+                                        if (isFirstLoadForThisCall && hasExistingContent)
+                                        {
+                                            _discoveryRows.Clear();
+                                            activeSkeletonIndex = 0;
+                                            hasExistingContent = false;
+                                        }
+
+                                        // Replace skeleton if any
                                         if (activeSkeletonIndex < _discoveryRows.Count && _discoveryRows[activeSkeletonIndex].IsLoading)
                                         {
                                             _discoveryRows[activeSkeletonIndex].CatalogName = row.CatalogName;
@@ -90,13 +120,16 @@ namespace ModernIPTVPlayer.Controls
                                         {
                                             _discoveryRows.Add(row);
                                         }
-
+                                        
                                         // Update Hero if first
                                         if (!firstHeroSet && row.Items.Count > 0)
                                         {
                                             firstHeroSet = true;
+                                            HeroControl.SetLoading(false); // Ensure shimmer is gone
                                             HeroControl.SetItems(row.Items.Take(5));
                                         }
+                                        
+                                        isFirstLoadForThisCall = false;
                                     });
                                 }
                             }

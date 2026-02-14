@@ -1,4 +1,4 @@
-﻿using Microsoft.UI;
+using Microsoft.UI;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -55,6 +55,17 @@ namespace ModernIPTVPlayer
         private FFmpegProber _ffprober = new();
         private CancellationTokenSource _probeCts;
 
+        // Trailer State
+        private bool _isTrailerWebViewInitialized = false;
+        private string _trailerFolder;
+        private string _trailerVirtualHost = "trailers.moderniptv.local";
+        private bool _isTrailerInitializing = false;
+        private bool _isTrailerFullscreen = false;
+        private int _trailerUiVersion = 0;
+        private const double TrailerDefaultWidth = 1000;
+        private const double TrailerDefaultHeight = 562;
+        private CancellationTokenSource _trailerCts;
+
         public MediaInfoPage()
         {
             this.InitializeComponent();
@@ -89,6 +100,12 @@ namespace ModernIPTVPlayer
         {
             try
             {
+                EnsureTrailerOverlayBounds();
+                if (TrailerOverlay?.Visibility == Visibility.Visible)
+                {
+                    ApplyTrailerFullscreenLayout(_isTrailerFullscreen);
+                }
+
                 double width = e.NewSize.Width;
                 double height = e.NewSize.Height;
                 bool isWide = width >= 900;
@@ -111,6 +128,88 @@ namespace ModernIPTVPlayer
             {
                  System.Diagnostics.Debug.WriteLine($"[LayoutDebug] CRITICAL ERROR in SizeChanged: {ex}");
             }
+        }
+
+        private void EnsureTrailerOverlayBounds()
+        {
+            if (TrailerOverlay == null || TrailerScrim == null)
+            {
+                return;
+            }
+
+            double rootWidth = RootGrid?.ActualWidth ?? 0;
+            double rootHeight = RootGrid?.ActualHeight ?? 0;
+            double pageWidth = ActualWidth;
+            double pageHeight = ActualHeight;
+            double xamlRootWidth = XamlRoot?.Size.Width ?? 0;
+            double xamlRootHeight = XamlRoot?.Size.Height ?? 0;
+
+            double targetWidth = Math.Max(Math.Max(rootWidth, pageWidth), xamlRootWidth);
+            double targetHeight = Math.Max(Math.Max(rootHeight, pageHeight), xamlRootHeight);
+
+            if (targetWidth <= 0 || targetHeight <= 0)
+            {
+                return;
+            }
+
+            // Aggressive overdraw to prevent title bar/top edge leaks on fractional scaling.
+            TrailerOverlay.Width = targetWidth + 48;
+            TrailerOverlay.Height = targetHeight + 48;
+            TrailerScrim.Width = targetWidth + 48;
+            TrailerScrim.Height = targetHeight + 48;
+        }
+
+        private void ApplyTrailerFullscreenLayout(bool enable)
+        {
+            if (TrailerContent == null)
+            {
+                return;
+            }
+
+            if (!enable)
+            {
+                TrailerContent.Width = TrailerDefaultWidth;
+                TrailerContent.Height = TrailerDefaultHeight;
+                
+                // Reset close button to default position
+                if (CloseTrailerButton != null)
+                {
+                    CloseTrailerButton.Margin = new Thickness(16, 16, 16, 0);
+                }
+                return;
+            }
+
+            double overlayWidth = TrailerOverlay?.ActualWidth > 0 ? TrailerOverlay.ActualWidth : (RootGrid?.ActualWidth > 0 ? RootGrid.ActualWidth : ActualWidth);
+            double overlayHeight = TrailerOverlay?.ActualHeight > 0 ? TrailerOverlay.ActualHeight : (RootGrid?.ActualHeight > 0 ? RootGrid.ActualHeight : ActualHeight);
+
+            // Keep 16:9 while maximizing visible area with safe margins.
+            double maxWidth = Math.Max(320, overlayWidth - 64);
+            double maxHeight = Math.Max(180, overlayHeight - 64);
+
+            double width = maxWidth;
+            double height = width * 9.0 / 16.0;
+            if (height > maxHeight)
+            {
+                height = maxHeight;
+                width = height * 16.0 / 9.0;
+            }
+
+            TrailerContent.Width = width;
+            TrailerContent.Height = height;
+            TrailerContent.UpdateLayout();
+
+            // Position close button at top-right of the overlay
+            if (CloseTrailerButton != null)
+            {
+                CloseTrailerButton.Margin = new Thickness(16, 16, 16, 0);
+            }
+
+            var visual = ElementCompositionPreview.GetElementVisual(TrailerContent);
+            visual.StopAnimation("Offset");
+            visual.Offset = Vector3.Zero;
+            float centerX = (float)(TrailerContent.ActualWidth > 0 ? TrailerContent.ActualWidth / 2.0 : width / 2.0);
+            float centerY = (float)(TrailerContent.ActualHeight > 0 ? TrailerContent.ActualHeight / 2.0 : height / 2.0);
+            visual.CenterPoint = new Vector3(centerX, centerY, 0);
         }
 
 
@@ -299,6 +398,8 @@ namespace ModernIPTVPlayer
 
                 // Load History
                 await HistoryManager.Instance.InitializeAsync();
+                
+                await CloseTrailer(); // Ensure trailer is closed on navigation
 
                 bool isBackNav = e.NavigationMode == NavigationMode.Back;
 
@@ -939,6 +1040,21 @@ namespace ModernIPTVPlayer
 
             // Wait for at least 500ms aesthetic delay to pass before reveal
             // await aestheticDelayTask; // REMOVED
+
+            // Fetch and Play Trailer
+             // Fetch and Play Trailer
+             if (_cachedTmdb != null)
+             {
+                  try 
+                  {
+                      // var trailerKey = await TmdbHelper.GetTrailerKeyAsync(_cachedTmdb.Id, item is SeriesStream);
+                      // if (!string.IsNullOrEmpty(trailerKey))
+                      // {
+                      //      await PlayTrailer(trailerKey);
+                      // }
+                  }
+                  catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Fetch Error: {ex}"); }
+             }
 
             // 3. Final Step: Smooth Staggered Crossfade (Skeleton -> Real UI)
             StaggeredRevealContent();
@@ -2456,6 +2572,686 @@ namespace ModernIPTVPlayer
              }
         }
 
+        private async void TrailerButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_cachedTmdb != null)
+            {
+                bool isTv = _item is SeriesStream || (_item is StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv"));
+                string trailerKey = await TmdbHelper.GetTrailerKeyAsync(_cachedTmdb.Id, isTv);
+
+                if (!string.IsNullOrEmpty(trailerKey))
+                {
+                    PlayTrailer(trailerKey);
+                }
+            }
+        }
+
+        private async Task PlayTrailer(string videoKey)
+        {
+            // Cancel previous Play requests
+            _trailerCts?.Cancel();
+            _trailerCts?.Dispose();
+            _trailerCts = new System.Threading.CancellationTokenSource();
+            var token = _trailerCts.Token;
+
+            System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] PlayTrailer START. Key: {videoKey}");
+
+            if (string.IsNullOrEmpty(videoKey))
+            {
+                System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] videoKey is null or empty, aborting.");
+                return;
+            }
+            Interlocked.Increment(ref _trailerUiVersion);
+
+            // 1. IMMEDIATE UI FEEDBACK
+            TrailerOverlay.Visibility = Visibility.Visible;
+            TrailerScrim.Opacity = 1; 
+            TrailerLoadingRing.IsActive = true;
+            TrailerLoadingRing.Visibility = Visibility.Visible;
+            _isTrailerFullscreen = false;
+            
+            // First apply layout to get correct measurements
+            ApplyTrailerFullscreenLayout(enable: false);
+            TrailerOverlay.UpdateLayout();
+            TrailerContent.UpdateLayout();
+            EnsureTrailerOverlayBounds();
+            
+            // CRITICAL: Reset visual state completely before animation
+            if (TrailerContent != null)
+            {
+                var contentVisual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerContent);
+                
+                // Stop ALL animations and reset completely
+                contentVisual.StopAnimation("Scale");
+                contentVisual.StopAnimation("Offset");
+                contentVisual.StopAnimation("Opacity");
+                
+                // Reset Scale and Offset to center
+                contentVisual.Scale = new System.Numerics.Vector3(0.1f, 0.1f, 1f);
+                contentVisual.Offset = System.Numerics.Vector3.Zero;
+                
+                // Use explicit Width/Height for center point calculation
+                double centerX = TrailerContent.Width > 0 ? TrailerContent.Width / 2 : TrailerDefaultWidth / 2;
+                double centerY = TrailerContent.Height > 0 ? TrailerContent.Height / 2 : TrailerDefaultHeight / 2;
+                contentVisual.CenterPoint = new System.Numerics.Vector3((float)centerX, (float)centerY, 0);
+                
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Visual reset - CenterPoint: {centerX}, {centerY}, Scale: 0.1, Offset: 0");
+            }
+            
+            // Start HIDDEN to avoid black screen / loading artifacts.
+            TrailerWebView.Opacity = 0;
+            TrailerWebView.Visibility = Visibility.Collapsed;
+            System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Overlay Visible, LoadingRing Active.");
+
+            if (token.IsCancellationRequested) return;
+
+            // 2. ANIMATION (Expand from Button)
+            try
+            {
+                // Using Composition for smoother performance
+                var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerContent);
+                
+                // Ensure center point is correct
+                double centerX = TrailerContent.Width > 0 ? TrailerContent.Width / 2 : TrailerDefaultWidth / 2;
+                double centerY = TrailerContent.Height > 0 ? TrailerContent.Height / 2 : TrailerDefaultHeight / 2;
+                visual.CenterPoint = new System.Numerics.Vector3((float)centerX, (float)centerY, 0);
+                
+                // Reset Offset to ensure it starts from center
+                visual.Offset = System.Numerics.Vector3.Zero;
+                
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Animation Start - Center: {centerX}, {centerY}");
+                
+                // Animate Scale from 0.1 to 1
+                var scaleAnim = _compositor.CreateVector3KeyFrameAnimation();
+                scaleAnim.InsertKeyFrame(0f, new System.Numerics.Vector3(0.1f, 0.1f, 1f));
+                scaleAnim.InsertKeyFrame(1f, System.Numerics.Vector3.One);
+                scaleAnim.Duration = TimeSpan.FromMilliseconds(250);
+                visual.StartAnimation("Scale", scaleAnim);
+                
+                // Animate Opacity
+                var opacityAnim = _compositor.CreateScalarKeyFrameAnimation();
+                opacityAnim.InsertKeyFrame(0f, 0f);
+                opacityAnim.InsertKeyFrame(1f, 1f);
+                opacityAnim.Duration = TimeSpan.FromMilliseconds(250);
+                visual.StartAnimation("Opacity", opacityAnim);
+                
+                // Reset XAML transform as we're using Composition animation
+                TrailerTransform.TranslateX = 0;
+                TrailerTransform.TranslateY = 0;
+                TrailerTransform.ScaleX = 1;
+                TrailerTransform.ScaleY = 1;
+
+                TrailerContent.Opacity = 1; 
+
+                // Animate Scrim Fade In
+                var scrimVisual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerScrim);
+                var fadeAnim = _compositor.CreateScalarKeyFrameAnimation();
+                fadeAnim.InsertKeyFrame(0f, 0f);
+                fadeAnim.InsertKeyFrame(1f, 1f);
+                fadeAnim.Duration = TimeSpan.FromMilliseconds(220);
+                scrimVisual.StartAnimation("Opacity", fadeAnim);
+                TrailerScrim.Opacity = 1;
+                
+                System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Animation started, Opacity=1.");
+            }
+            catch (Exception ex)
+            {
+                 System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] ANIMATION FATAL ERROR: {ex}");
+                 TrailerContent.Opacity = 1;
+                 TrailerOverlay.Visibility = Visibility.Visible;
+            }
+
+            if (token.IsCancellationRequested) return;
+
+            // 3. LOAD CONTENT
+            await LoadTrailerContentAsync(videoKey, token);
+        }
+
+        private async Task LoadTrailerContentAsync(string videoKey, CancellationToken token)
+        {
+             try
+             {
+                 System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Load Content: {videoKey}");
+                 
+                 int waitCount = 0;
+                 while (!_isTrailerWebViewInitialized && waitCount < 100)
+                 {
+                     if (token.IsCancellationRequested) return;
+                     if (!_isTrailerInitializing && waitCount % 10 == 0) _ = InitializeTrailerWebViewAsync();
+                     await Task.Delay(100, token);
+                     waitCount++;
+                 }
+
+                 if (token.IsCancellationRequested) return;
+
+                 if (TrailerWebView.CoreWebView2 != null)
+                 {
+                      System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Executing loadVideo('{videoKey}')");
+                      // Slight delay to ensure player is ready
+                      await Task.Delay(500, token); 
+                      await TrailerWebView.CoreWebView2.ExecuteScriptAsync($"loadVideo('{videoKey}')");
+                 }
+                 else
+                 {
+                      System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] FATAL: CoreWebView2 NULL!");
+                 }
+             }
+             catch (TaskCanceledException)
+             {
+                 System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] LoadTrailerContent Cancelled for {videoKey}");
+             }
+             catch(Exception ex)
+             {
+                  System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Load Error: {ex}");
+             }
+        }
+
+        private async Task InitializeTrailerWebViewAsync()
+        {
+            if (_isTrailerInitializing) return;
+            
+            System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] InitializeTrailerWebViewAsync START.");
+            _isTrailerInitializing = true;
+            
+            try
+            {
+                await TrailerWebView.EnsureCoreWebView2Async();
+                System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] CoreWebView2 Initialized.");
+
+                TrailerWebView.CoreWebView2.WebMessageReceived -= TrailerWebView_WebMessageReceived;
+                TrailerWebView.CoreWebView2.WebMessageReceived += TrailerWebView_WebMessageReceived;
+
+                TrailerWebView.CoreWebView2.Settings.IsWebMessageEnabled = true;
+
+                // Create a virtual host for the player assets
+                _trailerFolder = Path.Combine(Path.GetTempPath(), "ModernIPTVPlayer_Trailers");
+                Directory.CreateDirectory(_trailerFolder);
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Temporary directory: {_trailerFolder}");
+
+                string playerHtml = CreateYouTubePlayerHtml();
+                await File.WriteAllTextAsync(Path.Combine(_trailerFolder, "player.html"), playerHtml);
+                System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] player.html written to temp.");
+
+                try
+                {
+                    TrailerWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                        _trailerVirtualHost,
+                        _trailerFolder,
+                        Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
+                }
+                catch (ArgumentException) { }
+                
+                var tcs = new TaskCompletionSource<bool>();
+                void OnNavigationCompleted(object s, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs e)
+                {
+                    TrailerWebView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
+                    System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Navigation Completed. Success: {e.IsSuccess}");
+                    tcs.TrySetResult(e.IsSuccess);
+                }
+                TrailerWebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+
+                TrailerWebView.CoreWebView2.Navigate($"https://{_trailerVirtualHost}/player.html");
+
+                var timeoutTask = Task.Delay(8000); // 8 seconds timeout
+                var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
+                
+                if (completedTask == timeoutTask)
+                {
+                    System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] WebView Navigation TIMEOUT.");
+                }
+
+                _isTrailerWebViewInitialized = true;
+                System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] InitializeTrailerWebViewAsync FINISHED.");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] InitializeTrailerWebViewAsync ERROR: {ex}");
+            }
+            finally
+            {
+                _isTrailerInitializing = false;
+            }
+        }
+
+        private void TrailerWebView_WebMessageReceived(object sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
+        {
+            try
+            {
+                string message = e.TryGetWebMessageAsString();
+                
+                if (message.StartsWith("LOG:"))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TRAILER_JS_LOG] {message.Substring(4)}");
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] WebMessageReceived: {message}");
+                
+                if (message == "VIDEO_PLAYING")
+                {
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Video Playing! Hiding Loading Ring and Showing WebView.");
+                        TrailerLoadingRing.IsActive = false;
+                        TrailerLoadingRing.Visibility = Visibility.Collapsed;
+                        
+                        // Reveal WebView only now
+                        TrailerWebView.Opacity = 1;
+                        TrailerWebView.Visibility = Visibility.Visible;
+                    });
+                }
+                else if (message == "VIDEO_ENDED")
+                {
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Video Ended - Closing.");
+                        CloseTrailer();
+                    });
+                }
+                else if (message == "VIDEO_ERROR")
+                {
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Video Error - Closing.");
+                        _isTrailerWebViewInitialized = false;
+                        CloseTrailer();
+                    });
+                }
+                else if (message.StartsWith("TOGGLE_FULLSCREEN:", StringComparison.OrdinalIgnoreCase))
+                {
+                    bool enable = message.EndsWith(":ON", StringComparison.OrdinalIgnoreCase);
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        _isTrailerFullscreen = enable;
+                        EnsureTrailerOverlayBounds();
+                        ApplyTrailerFullscreenLayout(enable);
+                        var visual = ElementCompositionPreview.GetElementVisual(TrailerContent);
+                        visual.StopAnimation("Scale");
+                        visual.Scale = Vector3.One;
+                        visual.Offset = Vector3.Zero;
+                    });
+                }
+            }
+            catch(Exception ex) 
+            {
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Message Parse Error: {ex}");
+            }
+        }
+
+        private string CreateYouTubePlayerHtml()
+        {
+            return @"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset=""UTF-8"">
+    <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; margin: 0; padding: 0; background: #000; overflow: hidden; }
+        
+        .yt-wrapper {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .yt-frame-container {
+            position: relative;
+            width: 300%;
+            height: 100%;
+            left: -100%; /* Center the 300% wide container */
+        }
+
+        .yt-frame-container iframe {
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id=""loading"">Loading player...</div>
+    <div class=""yt-wrapper"">
+        <div class=""yt-frame-container"">
+            <div id=""player""></div>
+        </div>
+    </div>
+    <script>
+        var tag = document.createElement('script');
+        tag.src = 'https://www.youtube.com/iframe_api';
+        var firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        var player;
+        var isReady = false;
+        var pendingVideoId = null;
+        
+        function log(msg) { window.chrome.webview.postMessage('LOG: ' + msg); }
+
+        function onYouTubeIframeAPIReady() {
+                player = new YT.Player('player', {
+                height: '100%',
+                width: '100%',
+                host: 'https://www.youtube-nocookie.com',
+                playerVars: {
+                    autoplay: 0,
+                    mute: 1,
+                    controls: 0,
+                    disablekb: 1,
+                    fs: 0,
+                    rel: 0,
+                    modestbranding: 1,
+                    showinfo: 0,
+                    iv_load_policy: 3,
+                    playsinline: 1,
+                    loop: 1, /* Helps loops cleaner UI sometimes */
+                    vq: 'hd1080'
+                },
+                events: {
+                    'onReady': onPlayerReady,
+                    'onStateChange': onPlayerStateChange,
+                    'onError': onPlayerError
+                }
+            });
+        }
+        
+        function onPlayerReady(event) {
+            log('Player Ready');
+            isReady = true;
+            try {
+                player.mute(); // Ensure mute initial state
+            } catch (e) {}
+            document.getElementById('loading').style.display = 'none';
+            window.chrome.webview.postMessage('PLAYER_READY');
+            
+            // If a video was requested before ready, load it now
+            if (pendingVideoId) {
+                log('Processing pending video: ' + pendingVideoId);
+                loadVideo(pendingVideoId);
+                pendingVideoId = null;
+            }
+        }
+        
+        function onPlayerStateChange(event) {
+            log('State Change: ' + event.data);
+            if (event.data === YT.PlayerState.PLAYING || event.data === YT.PlayerState.BUFFERING) {
+                applyQualityPreference();
+                window.chrome.webview.postMessage('VIDEO_PLAYING');
+                
+                // UNMUTE after a short delay to ensure playback started
+                if (event.data === YT.PlayerState.PLAYING) {
+                    setTimeout(() => {
+                        try {
+                            log('Unmuting...');
+                            player.unMute();
+                            player.setVolume(100);
+                        } catch(e) {}
+                    }, 500); 
+                }
+            } else if (event.data === YT.PlayerState.ENDED) {
+                window.chrome.webview.postMessage('VIDEO_ENDED');
+            } else if (event.data === -1) {
+                // Sometimes mobile/embedded restrictions prevent auto-start. Force it.
+                log('State is -1 (Unstarted), forcing playVideo()...');
+                player.playVideo();
+            }
+        }
+
+        function onPlayerError(event) {
+             log('Player Error: ' + event.data);
+             window.chrome.webview.postMessage('VIDEO_ERROR');
+        }
+
+        function applyQualityPreference() {
+            if (!player || !isReady) return;
+            try {
+                player.setPlaybackQualityRange('hd1080');
+                player.setPlaybackQuality('hd1080');
+            } catch (e) {
+                // Device/network may limit this; YouTube will fallback automatically.
+            }
+        }
+        
+        // Called from C# to load a video
+        function loadVideo(videoId) {
+            log('loadVideo JS called for: ' + videoId + ' (isReady: ' + isReady + ')');
+            if (!isReady) {
+                pendingVideoId = videoId;
+                log('Player not ready, queuing video.');
+                return;
+            }
+            log('Loading video ID: ' + videoId);
+            player.loadVideoById({
+                videoId: videoId,
+                suggestedQuality: 'hd1080'
+            });
+            setTimeout(applyQualityPreference, 80);
+            setTimeout(applyQualityPreference, 700);
+            try {
+                log('Attempting playVideo()...');
+                player.playVideo();
+            } catch(e) {
+                log('playVideo exception: ' + e);
+            }
+        }
+        
+        // Called from C# to stop playback
+        function stopVideo() {
+            if (player && isReady) {
+                player.stopVideo();
+            }
+        }
+    </script>
+</body>
+</html>";
+        }
+
+        private void CloseTrailerButton_Click(object sender, RoutedEventArgs e)
+        {
+            CloseTrailer();
+        }
+
+        private void TrailerScrim_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            CloseTrailer();
+        }
+
+        private async Task CloseTrailer()
+        {
+            System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] CloseTrailer START.");
+            
+            // Cancel any pending start operations
+            _trailerCts?.Cancel();
+            _trailerCts?.Dispose();
+            _trailerCts = null;
+
+            int closeVersion = Interlocked.Increment(ref _trailerUiVersion);
+            _isTrailerFullscreen = false;
+            // Do NOT reset _isTrailerWebViewInitialized - keep WebView ready for reuse
+            
+            // Stop playback via JS immediately
+            if (_isTrailerWebViewInitialized && TrailerWebView.CoreWebView2 != null)
+            {
+                System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Stopping video via JS...");
+                try 
+                {
+                    await TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();");
+                    // NAVIGATE to blank to ensure audio process is killed
+                    TrailerWebView.CoreWebView2.Navigate("about:blank");
+                    _isTrailerWebViewInitialized = false; // Checkmate.
+                }
+                catch (Exception ex)
+                {
+                     System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] StopJS Error: {ex.Message}");
+                }
+            }
+
+            // Animate Scrim Fade Out
+            if (TrailerScrim != null)
+            {
+                var scrimVisual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerScrim);
+                var fadeOut = _compositor.CreateScalarKeyFrameAnimation();
+                fadeOut.InsertKeyFrame(1f, 0f);
+                fadeOut.Duration = TimeSpan.FromMilliseconds(300);
+                scrimVisual.StartAnimation("Opacity", fadeOut);
+            }
+            
+            // Animate Content Out (Scale Down)
+            if (TrailerContent != null)
+            {
+                var contentVisual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerContent);
+                contentVisual.StopAnimation("Scale");
+                contentVisual.Scale = System.Numerics.Vector3.One;
+                
+                // Capture dimensions BEFORE collapsing
+                float cx = (float)(TrailerContent.ActualWidth > 0 ? TrailerContent.ActualWidth / 2f : 500f);
+                float cy = (float)(TrailerContent.ActualHeight > 0 ? TrailerContent.ActualHeight / 2f : 281f);
+
+                TrailerContent.Opacity = 0;
+                System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Animations started, Opacity=0.");
+
+                await Task.Delay(300);
+
+                if (closeVersion != _trailerUiVersion)
+                {
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Finalizing Close (UI Cleanup).");
+                
+                // Reset Transforms (XAML) - Critical to do BEFORE collapse for coordinates
+                TrailerTransform.TranslateX = 0; TrailerTransform.TranslateY = 0;
+                TrailerTransform.ScaleX = 1; TrailerTransform.ScaleY = 1;
+                TrailerTransform.CenterX = 0; TrailerTransform.CenterY = 0; 
+
+                TrailerOverlay.Visibility = Visibility.Collapsed;
+                TrailerScrim.Opacity = 0;
+                TrailerScrim.Width = double.NaN;
+                TrailerScrim.Height = double.NaN;
+                TrailerOverlay.Width = double.NaN;
+                TrailerOverlay.Height = double.NaN;
+                
+                // Reset State
+                TrailerWebView.Opacity = 0;
+                TrailerLoadingRing.IsActive = false;
+                TrailerLoadingRing.Visibility = Visibility.Collapsed;
+                // Keep _isTrailerWebViewInitialized = true to reuse WebView on next open
+                ApplyTrailerFullscreenLayout(enable: false);
+                
+                // Reset Composition Visual (Double safety)
+                var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerContent);
+                visual.StopAnimation("Scale");
+                visual.StopAnimation("Offset");
+                visual.Scale = new System.Numerics.Vector3(1f, 1f, 1f);
+                visual.Offset = new System.Numerics.Vector3(0, 0, 0);
+                
+                // Use captured center point
+                if (cx > 0) visual.CenterPoint = new System.Numerics.Vector3(cx, cy, 0);
+                else visual.CenterPoint = new System.Numerics.Vector3(500f, 281f, 0); // Absolute fallback
+                
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Close Complete. CenterPoint Reset: {cx},{cy}");
+            }
+        }
+
+        private void RefreshHistoryVisibility()
+        {
+             if (_item == null) return;
+
+             // Logic mirrored from LoadDetailsAsync for refreshing subtexts
+             if (_item is StremioMediaStream stremioItem)
+             {
+                 if (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")
+                 {
+                     _ = RefreshStremioSeriesProgressAsync(stremioItem);
+                 }
+                 else
+                 {
+                     var history = HistoryManager.Instance.GetProgress(stremioItem.Meta.Id);
+                     UpdateMovieHistoryUi(history);
+                 }
+             }
+             else if (_item is SeriesStream series)
+             {
+                 _ = RefreshIptvSeriesProgressAsync(series);
+             }
+             else if (_item is LiveStream live)
+             {
+                 var history = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
+                     UpdateMovieHistoryUi(history);
+             }
+        }
+
+        private void UpdateMovieHistoryUi(HistoryItem history)
+        {
+            if (history != null && history.Position > 0)
+            {
+                double percent = history.Duration > 0 ? (history.Position / history.Duration) * 100 : 0;
+                if (!history.IsFinished && percent < 98)
+                {
+                    string resumeText = "Devam Et";
+                    var remaining = TimeSpan.FromSeconds(history.Duration - history.Position);
+                    string subtext = remaining.TotalHours >= 1 
+                        ? $"{(int)remaining.TotalHours}sa {(int)remaining.Minutes}dk Kaldı"
+                        : $"{(int)remaining.TotalMinutes}dk Kaldı";
+
+                    PlayButtonText.Text = resumeText;
+                    PlayButtonSubtext.Text = subtext;
+                    PlayButtonSubtext.Visibility = Visibility.Visible;
+
+                    StickyPlayButtonText.Text = resumeText;
+                    StickyPlayButtonSubtext.Text = subtext;
+                    StickyPlayButtonSubtext.Visibility = Visibility.Visible;
+
+                    RestartButton.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    PlayButtonText.Text = "Tekrar İzle"; 
+                    PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                    RestartButton.Visibility = Visibility.Visible;
+                }
+            }
+        }
+
+        private async Task RefreshIptvSeriesProgressAsync(SeriesStream series)
+        {
+             var lastWatched = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+             if (lastWatched != null)
+             {
+                 string resumeText = "Devam Et";
+                 int displayEp = lastWatched.EpisodeNumber == 0 ? 1 : lastWatched.EpisodeNumber;
+                 string subtext = $"S{lastWatched.SeasonNumber:D2}E{displayEp:D2}";
+
+                 PlayButtonText.Text = resumeText;
+                 PlayButtonSubtext.Text = subtext;
+                 PlayButtonSubtext.Visibility = Visibility.Visible;
+
+                 StickyPlayButtonText.Text = resumeText;
+                 StickyPlayButtonSubtext.Text = subtext;
+                 StickyPlayButtonSubtext.Visibility = Visibility.Visible;
+                 
+                 RestartButton.Visibility = Visibility.Visible;
+                 
+                 // Refresh Episode List specifically (marks watched etc)
+                 // This assumes EpisodesListView is already populated.
+                 if (EpisodesListView.ItemsSource is List<EpisodeItem> episodes)
+                 {
+                     foreach (var ep in episodes)
+                     {
+                         // We need a way to link IPTV items to history. 
+                         // Usually we use Title/Season/Ep or a specific ID.
+                         // For now let's just refresh the bound properties if they are Observable.
+                         // EpisodeItem usually has logic to check history on creation. 
+                         // We might need to recreate them or refresh them.
+                         ep.RefreshHistoryState();
+                     }
+                 }
+             }
+        }
+
         private async void PlayButton_Click(object sender, RoutedEventArgs e)
         {
             // STREMIO LOGIC
@@ -3365,9 +4161,6 @@ namespace ModernIPTVPlayer
             }
         }
 
-        // Removed local StartDownload logic in favor of global DownloadManager
-
-        private void TrailerButton_Click(object sender, RoutedEventArgs e) { /* ... */ }
         private void BackButton_Click(object sender, RoutedEventArgs e) 
         { 
             ElementSoundPlayer.Play(ElementSoundKind.GoBack);
@@ -4039,6 +4832,25 @@ namespace ModernIPTVPlayer
 
         public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+
+        public void RefreshHistoryState()
+        {
+            var history = HistoryManager.Instance.GetProgress(Id);
+            if (history != null)
+            {
+                IsWatched = history.IsFinished;
+                HasProgress = history.Position > 0 && !history.IsFinished;
+                if (history.Duration > 0)
+                {
+                    ProgressPercent = (history.Position / history.Duration) * 100;
+                    if (ProgressPercent > 98) { IsWatched = true; HasProgress = false; }
+                }
+                
+                OnPropertyChanged(nameof(IsWatched));
+                OnPropertyChanged(nameof(HasProgress));
+                OnPropertyChanged(nameof(ProgressPercent));
+            }
+        }
     }
     
 

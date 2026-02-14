@@ -356,12 +356,12 @@ namespace ModernIPTVPlayer.Services.Stremio
             // 2. Rating
             if (string.IsNullOrEmpty(existing.Rating) && !string.IsNullOrEmpty(current.Rating))
             {
-                existing.Meta.ImdbRating = current.Rating;
+                existing.Meta.ImdbRatingRaw = current.Rating;
             }
             // 3. Year (if existing was empty)
             if (string.IsNullOrEmpty(existing.Year) && !string.IsNullOrEmpty(current.Year))
             {
-                existing.Meta.ReleaseInfo = current.Year;
+                existing.Meta.ReleaseInfoRaw = current.Year;
             }
             // 4. Background
             if (string.IsNullOrEmpty(existing.Banner) && !string.IsNullOrEmpty(current.Banner))

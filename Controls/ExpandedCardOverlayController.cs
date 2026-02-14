@@ -128,16 +128,28 @@ namespace ModernIPTVPlayer.Controls
         public async Task CloseExpandedCardAsync(bool force = false)
         {
             if (_isInCinemaMode && !force) return;
+            // If dragging, don't close unless forced? 
             if (_isPointerOverCard && !force) return;
 
             try
             {
+                // Cancel any pending close
                 _closeCts?.Cancel();
                 _closeCts = new CancellationTokenSource();
                 var token = _closeCts.Token;
 
                 _suppressCinemaAnimations = force;
-                _expandedCard.StopTrailer();
+                _expandedCard.StopTrailer(); // Stops trailer playback
+
+                // Synchronous Close for Navigation/Force
+                if (force)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlay] Force Closing. Stopping Trailer...");
+                    _expandedCard.StopTrailer(forceDestroy: true); // KILL IT
+                    FinalizeCloseVisualState();
+                    return;
+                }
+
                 await Task.Delay(50, token);
                 if (token.IsCancellationRequested) return;
 

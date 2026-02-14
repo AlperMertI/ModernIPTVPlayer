@@ -38,12 +38,13 @@
                   SelectionMode="Single" 
                   IsItemClickEnabled="True" 
                   ItemClick="MediaGridView_ItemClick"
+                  ContainerContentChanging="MediaGridView_ContainerContentChanging"
                   Padding="24,0,24,36"
                   ItemContainerStyle="{StaticResource MediaCardStyle}">
             
             <GridView.ItemContainerTransitions>
                 <TransitionCollection>
-                    <EntranceThemeTransition FromVerticalOffset="100" IsStaggeringEnabled="True"/>
+                    <!-- <EntranceThemeTransition FromVerticalOffset="100" IsStaggeringEnabled="True"/> -->
                 </TransitionCollection>
             </GridView.ItemContainerTransitions>
 

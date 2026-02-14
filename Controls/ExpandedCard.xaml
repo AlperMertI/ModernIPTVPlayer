@@ -97,22 +97,27 @@
 
                     <Grid>
                         <!-- Badge Skeleton (Visible during Probe) -->
-                        <StackPanel x:Name="BadgeSkeleton" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center">
+                        <StackPanel x:Name="BadgeSkeleton" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center" Visibility="Collapsed">
                              <Grid Width="36" Height="16"><local:ShimmerControl/></Grid>
                              <Grid Width="42" Height="16"><local:ShimmerControl/></Grid>
                              <Grid Width="32" Height="16"><local:ShimmerControl/></Grid>
                         </StackPanel>
 
                         <!-- Real Badges (Visible after Probe) -->
-                        <StackPanel x:Name="TechBadgesPanel" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center"/>
+                        <StackPanel x:Name="TechBadgesPanel" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center" Visibility="Collapsed"/>
                     </Grid>
 
                     <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
                         <Border x:Name="MoodTag" Background="#FF009900" CornerRadius="4" Padding="6,2" Visibility="Collapsed">
                             <TextBlock x:Name="MoodText" Text="98% Match" FontSize="11" FontWeight="Bold"/>
                         </Border>
-                        <TextBlock x:Name="RatingText" Text="★ 8.5" Foreground="#FFCC00" FontSize="13" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="RatingText" Text="&#x2605; 8.5" Foreground="#FFCC00" FontSize="13" VerticalAlignment="Center"/>
                         <TextBlock x:Name="YearText" Text="2024" Foreground="#88FFFFFF" FontSize="13" VerticalAlignment="Center"/>
+                        
+                        <!-- Progress Info -->
+                        <StackPanel x:Name="ProgressPanel" Orientation="Horizontal" Spacing="8" Visibility="Collapsed" VerticalAlignment="Center" Margin="4,0,0,0">
+                            <TextBlock x:Name="TimeLeftText" Text="45 dk kaldı" Foreground="#AABBBBBB" FontSize="11" Opacity="0.8"/>
+                        </StackPanel>
                     </StackPanel>
 
                     <TextBlock x:Name="GenresText" Text="" Foreground="#77FFFFFF" FontSize="12" Margin="0,0,0,4"/>
@@ -159,13 +164,25 @@
         <Grid Grid.Row="2" Padding="16" Background="#161616">
             <StackPanel Spacing="8" Orientation="Horizontal">
                 <Button x:Name="PlayButton" Click="PlayButton_Click" Background="White" Foreground="Black" CornerRadius="6" Padding="14,6">
-                    <StackPanel Orientation="Horizontal" Spacing="10">
-                        <FontIcon x:Name="PlayButtonIcon" Glyph="&#xE768;" FontSize="16" VerticalAlignment="Center"/>
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold" FontSize="14" LineHeight="14"/>
-                            <TextBlock x:Name="PlayButtonSubtext" Text="" FontSize="10" Opacity="0.75" FontWeight="SemiBold" Visibility="Collapsed" Margin="0,0,0,0"/>
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,0,0,2">
+                            <FontIcon x:Name="PlayButtonIcon" Glyph="&#xE768;" FontSize="16" VerticalAlignment="Center"/>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold" FontSize="14" LineHeight="14"/>
+                                <TextBlock x:Name="PlayButtonSubtext" Text="" FontSize="10" Opacity="0.75" FontWeight="SemiBold" Visibility="Collapsed" Margin="0,0,0,0"/>
+                            </StackPanel>
                         </StackPanel>
-                    </StackPanel>
+                        
+                        <!-- Premium Integrated Progress Bar -->
+                        <ProgressBar x:Name="PlaybackProgressBar" 
+                                     Maximum="100" 
+                                     Height="2" MinHeight="2"
+                                     Background="Transparent" 
+                                     Foreground="#FF2196F3" 
+                                     VerticalAlignment="Bottom"
+                                     Margin="-14,0,-14,-6"
+                                     Visibility="Collapsed"/>
+                    </Grid>
                 </Button>
                 <Button x:Name="DetailsButton" Click="DetailsButton_Click" Background="#22FFFFFF" Foreground="White" CornerRadius="6" Padding="12,8">
                     <FontIcon Glyph="&#xE946;" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"/> 

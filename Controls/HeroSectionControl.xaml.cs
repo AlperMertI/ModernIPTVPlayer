@@ -141,6 +141,24 @@ namespace ModernIPTVPlayer.Controls
             _heroAutoTimer?.Stop();
             _heroAutoTimer?.Start();
         }
+
+        public void SetLoading(bool isLoading)
+        {
+            if (isLoading)
+            {
+                HeroShimmer.Visibility = Visibility.Visible;
+                HeroTextShimmer.Visibility = Visibility.Visible;
+                HeroRealContent.Opacity = 0;
+            }
+            else
+            {
+                // We don't automatically hide here because UpdateHeroSection handles the transition
+                // effectively when data arrives. But strictly speaking, if we wanted to force hide:
+                // HeroShimmer.Visibility = Visibility.Collapsed;
+                // HeroTextShimmer.Visibility = Visibility.Collapsed;
+                // HeroRealContent.Opacity = 1;
+            }
+        }
         
         private async void UpdateHeroSection(StremioMediaStream item, bool animate = false)
         {

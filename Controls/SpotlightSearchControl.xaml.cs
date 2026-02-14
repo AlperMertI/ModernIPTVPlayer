@@ -37,8 +37,13 @@ namespace ModernIPTVPlayer.Controls
         public async void Hide()
         {
             CloseAnimation.Begin();
-            await Task.Delay(150); // Wait for animation
+            await Task.Delay(250); // Wait for animation (Open is 250ms, Close should be similar)
             this.Visibility = Visibility.Collapsed;
+        }
+
+        private void SearchScrim_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            Hide();
         }
 
         private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)

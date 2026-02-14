@@ -28,6 +28,16 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         public TmdbMovieResult TmdbInfo { get; set; } // Can populate later if needed
 
+        // Technical Metadata (Probe Results)
+        public bool HasMetadata => !string.IsNullOrEmpty(Resolution);
+        public bool IsProbing { get; set; }
+        public bool IsOnline { get; set; }
+        public string Resolution { get; set; }
+        public string Fps { get; set; }
+        public string Codec { get; set; }
+        public long Bitrate { get; set; }
+        public bool IsHdr { get; set; }
+
         // Properties for UI Binding
         public string Year => Meta.ReleaseInfo;
         public string Banner => Meta.Background;

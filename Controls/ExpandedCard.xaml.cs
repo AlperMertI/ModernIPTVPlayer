@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.UI;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Windows.UI;
 using ModernIPTVPlayer;
 using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -31,6 +32,7 @@ namespace ModernIPTVPlayer.Controls
         private string _trailerFolder;
         private string _virtualHost = "trailers.moderniptv.local";
         private Microsoft.UI.Composition.Compositor _compositor;
+        private System.Threading.CancellationTokenSource _trailerCts;
 
         public ExpandedCard()
         {
@@ -145,6 +147,7 @@ namespace ModernIPTVPlayer.Controls
                 player = new YT.Player('player', {
                 height: '100%',
                 width: '100%',
+                host: 'https://www.youtube-nocookie.com',
                 playerVars: {
                     autoplay: 0,
                     mute: 1,
@@ -300,8 +303,46 @@ namespace ModernIPTVPlayer.Controls
         /// <summary>
         /// Public method to stop trailer playback when card is hidden
         /// </summary>
-        public void StopTrailer()
+        public async Task StopTrailer(bool forceDestroy = false)
         {
+            try
+            {
+                // Cancel any pending PlayTrailer or init
+                _trailerCts?.Cancel();
+                _trailerCts?.Dispose();
+                _trailerCts = null;
+
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] StopTrailer called. ForceDestroy={forceDestroy}");
+
+                // Stop the player via JS explicitly before hiding
+                if (_webViewInitialized && TrailerWebView.CoreWebView2 != null)
+                {
+                     try 
+                     {
+                         await TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();");
+                     }
+                     catch(Exception ex) 
+                     {
+                         System.Diagnostics.Debug.WriteLine($"[ExpandedCard] StopJS Error: {ex.Message}");
+                     }
+                }
+
+                if (forceDestroy)
+                {
+                    try
+                    {
+                        // Nuclear option for navigation: Kill the WebView content to ensure no audio persists
+                        TrailerWebView.Source = new Uri("about:blank");
+                        _webViewInitialized = false; // Mark as uninitialized so it reloads next time
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error in StopTrailer: {ex.Message}");
+            }
+
             if (_isCinemaMode) ToggleCinemaMode(false); // Reset mode
             ResetState(isMorphing: false, isStopping: true);
         }
@@ -317,11 +358,7 @@ namespace ModernIPTVPlayer.Controls
             ExpandButton.Visibility = Visibility.Collapsed;
             _isMuted = true;
             UpdateMuteIcon();
-            if (TrailerWebView.CoreWebView2 != null && _webViewInitialized)
-            {
-                // Stop video via JavaScript - don't navigate away to preserve the player
-                _ = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo()");
-            }
+
             
             // Show backdrop container again
             BackdropContainer.Visibility = Visibility.Visible;
@@ -338,22 +375,21 @@ namespace ModernIPTVPlayer.Controls
                     var visualContent = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(RealContentPanel);
                     var visualSkeleton = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(MainSkeleton);
                     
-                    // Ensure Skeleton is visible and ready to fade in
                     MainSkeleton.Visibility = Visibility.Visible;
-                    BadgeSkeleton.Visibility = Visibility.Visible;
-                    
                     visualSkeleton.Opacity = 0f;
 
                     try
                     {
                         var animOut = _compositor.CreateScalarKeyFrameAnimation();
-                        animOut.InsertKeyFrame(1.0f, 0f);
+                        animOut.InsertKeyFrame(1.0f, 0f); // Target value 0
                         animOut.Duration = TimeSpan.FromMilliseconds(200);
-                        
+                        animOut.Target = "Opacity"; // ! IMPORTANT
+
                         var animIn = _compositor.CreateScalarKeyFrameAnimation();
-                        animIn.InsertKeyFrame(1.0f, 1f);
+                        animIn.InsertKeyFrame(1.0f, 1f); // Target value 1
                         animIn.Duration = TimeSpan.FromMilliseconds(200);
-                        
+                        animIn.Target = "Opacity"; // ! IMPORTANT
+
                         visualContent.StartAnimation("Opacity", animOut);
                         visualSkeleton.StartAnimation("Opacity", animIn);
                     }
@@ -370,17 +406,25 @@ namespace ModernIPTVPlayer.Controls
                     // Instant Reset
                     RealContentPanel.Opacity = 0;
                     MainSkeleton.Visibility = Visibility.Visible;
-                    BadgeSkeleton.Visibility = Visibility.Visible;
                     Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(MainSkeleton).Opacity = 1f;
                 }
                 
-            // Reset badges
-            TechBadgesPanel.Children.Clear();
-            
-            // Reset Play Button Subtext
-            PlayButtonSubtext.Visibility = Visibility.Collapsed;
-            PlayButtonSubtext.Text = "";
+                // Reset badges
+                TechBadgesPanel.Children.Clear();
                 
+                // Reset Play Button Subtext
+                PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                PlayButtonSubtext.Text = "";
+
+                // Reset Progress UI
+                PlaybackProgressBar.Visibility = Visibility.Collapsed;
+                ProgressPanel.Visibility = Visibility.Collapsed;
+                TimeLeftText.Text = "";
+                    
+                // Reset tech badges
+                BadgeSkeleton.Visibility = Visibility.Collapsed;
+                TechBadgesPanel.Visibility = Visibility.Collapsed;
+
                 // Reset mood tag
                 MoodTag.Visibility = Visibility.Collapsed;
                 
@@ -392,21 +436,12 @@ namespace ModernIPTVPlayer.Controls
                 
                 // Reset Ambience
                 AmbienceGrid.Visibility = Visibility.Visible;
-            }
-            
-            // Reset loading ring
-            if (!isStopping)
-            {
+                
+                // Reset loading ring
                 LoadingRing.IsActive = true;
                 LoadingRing.Visibility = Visibility.Visible;
             }
-            // Start Shimmers explicitly (Loaded event doesn't fire on Visibility toggle)
-            // UPDATE: Moved logic to ShimmerControl.cs (Loaded/Unloaded) for cleaner approach.
-            // if (!isStopping)
-            // {
-            //    RestartShimmers(FullSkeleton);
-            // }
-            if (isStopping)
+            else
             {
                 LoadingRing.IsActive = false;
                 LoadingRing.Visibility = Visibility.Collapsed;
@@ -442,7 +477,29 @@ namespace ModernIPTVPlayer.Controls
             
             // Initial Tooltip (Static parse)
             UpdateTooltip(stream);
+
+            // Stremio Badge Logic: Hide technical skeleton if no history available
+            if (stream is StremioMediaStream stremio)
+            {
+                var history = HistoryManager.Instance.GetProgress(stremio.IMDbId);
+                if (history == null || string.IsNullOrEmpty(history.StreamUrl))
+                {
+                    // No history or URL yet - hide tech skeleton and panel
+                    BadgeSkeleton.Visibility = Visibility.Collapsed;
+                    TechBadgesPanel.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    TechBadgesPanel.Visibility = Visibility.Visible;
+                }
+            }
+            else
+            {
+                TechBadgesPanel.Visibility = Visibility.Visible;
+            }
+
             UpdatePlayButton(stream);
+            UpdateProgressState(stream);
 
             try
             {
@@ -470,11 +527,14 @@ namespace ModernIPTVPlayer.Controls
                     string displayOverview = tmdb.Overview;
                     string displayBackdrop = tmdb.FullBackdropUrl;
 
-                    // --- EPISODE RESUME LOGIC (Might interact with cache, but usually fast) ---
-                    // If this logic is slow, it should also be separated, but HistoryManager is usually memory/fast disk.
-                    if (stream is SeriesStream series)
+                    // --- EPISODE RESUME LOGIC ---
+                    string? historySeriesId = null;
+                    if (stream is SeriesStream series) historySeriesId = series.SeriesId.ToString();
+                    else if (stream is StremioMediaStream stremioItem && (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")) historySeriesId = stremioItem.Meta.Id;
+
+                    if (historySeriesId != null)
                     {
-                        var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+                        var history = HistoryManager.Instance.GetLastWatchedEpisode(historySeriesId);
                         if (history != null)
                         {
                             var season = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, history.SeasonNumber);
@@ -487,16 +547,24 @@ namespace ModernIPTVPlayer.Controls
                                 if (ep != null)
                                 {
                                     string epName = ep.Name;
-                                    string cleanIptv = TmdbHelper.CleanEpisodeTitle(history.Title);
-                                    bool isGeneric = string.IsNullOrEmpty(epName) || epName.Contains("BÃ¶lÃ¼m") || epName.Contains("Episode") || epName == ep.EpisodeNumber.ToString();
+                                    string cleanTitle = TmdbHelper.CleanEpisodeTitle(history.Title);
+                                    
+                                    // Logic for better title display
+                                    bool isGeneric = string.IsNullOrEmpty(epName) || 
+                                                    epName.Contains("Bölüm") || 
+                                                    epName.Contains("Episode") || 
+                                                    epName == ep.EpisodeNumber.ToString();
 
-                                    if (isGeneric && !string.IsNullOrEmpty(cleanIptv) && cleanIptv.Length > 2)
-                                        displayTitle = cleanIptv;
+                                    if (isGeneric && !string.IsNullOrEmpty(cleanTitle) && cleanTitle.Length > 2)
+                                        displayTitle = cleanTitle;
                                     else
-                                        displayTitle = !string.IsNullOrEmpty(epName) ? epName : $"BÃ¶lÃ¼m {ep.EpisodeNumber}";
+                                        displayTitle = !string.IsNullOrEmpty(epName) ? epName : $"Bölüm {ep.EpisodeNumber}";
 
                                     if (!string.IsNullOrEmpty(ep.Overview)) displayOverview = ep.Overview;
                                     if (!string.IsNullOrEmpty(ep.StillUrl)) displayBackdrop = ep.StillUrl;
+                                    
+                                    // Add "S01E05" prefix to title for clarity
+                                    displayTitle = $"S{history.SeasonNumber:D2}E{history.EpisodeNumber:D2} - {displayTitle}";
                                 }
                             }
                         }
@@ -510,7 +578,7 @@ namespace ModernIPTVPlayer.Controls
                     if (loadNonce != _loadNonce) return;
                     if (!string.IsNullOrEmpty(trailerKey))
                     {
-                         PlayTrailer(trailerKey);
+                         await PlayTrailer(videoKey: trailerKey);
                     }
                     else
                     {
@@ -611,13 +679,31 @@ namespace ModernIPTVPlayer.Controls
                     }
                 }
             }
+            else if (stream is StremioMediaStream stremioItem)
+            {
+                HistoryItem? history = null;
+                if (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")
+                    history = HistoryManager.Instance.GetLastWatchedEpisode(stremioItem.IMDbId);
+                else
+                    history = HistoryManager.Instance.GetProgress(stremioItem.IMDbId);
 
-            if (string.IsNullOrEmpty(url)) return;
+                if (history != null)
+                {
+                    url = history.StreamUrl;
+                }
+            }
+
+            if (string.IsNullOrEmpty(url)) 
+            {
+                DispatcherQueue.TryEnqueue(() => BadgeSkeleton.Visibility = Visibility.Collapsed);
+                return;
+            }
 
             try
             {
                 // 1. Check Cache
-                if (Services.ProbeCacheService.Instance.Get(url) is Services.ProbeData cached)
+                var cached = Services.ProbeCacheService.Instance.Get(url);
+                if (cached != null)
                 {
                     Services.CacheLogger.Success(Services.CacheLogger.Category.Probe, "ExpandedCard Cache Hit", url);
                     if (loadNonce == _loadNonce)
@@ -628,7 +714,14 @@ namespace ModernIPTVPlayer.Controls
                     return;
                 }
 
-                // 2. Probe Network
+                // 2. URL changed check: If this specific stream object already has metadata 
+                // but the URL we are probing is DIFFERENT, it means the source changed.
+                // We should clear old data if the stream object is the same but URL is new.
+                // Actually, ProbeData is URL-keyed, so if URL is new, it's already a 'miss'.
+                // The task is to ensure we DON'T use old data if URL changed.
+                // Since Get(url) returned null, we are good. 
+
+                // 3. Probe Network
                 SetProbing(stream, true);
                 Services.CacheLogger.Info(Services.CacheLogger.Category.Probe, "Probing Network (ExpandedCard)", url);
                 
@@ -668,6 +761,22 @@ namespace ModernIPTVPlayer.Controls
         {
             if (stream is LiveStream live) live.IsProbing = isProbing;
             else if (stream is SeriesStream series) series.IsProbing = isProbing;
+            else if (stream is StremioMediaStream stremio) stremio.IsProbing = isProbing;
+            
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (isProbing)
+                {
+                    BadgeSkeleton.Visibility = Visibility.Visible;
+                    TechBadgesPanel.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    // Always ensure skeleton is hidden when probing stops
+                    if (BadgeSkeleton.Visibility == Visibility.Visible)
+                        BadgeSkeleton.Visibility = Visibility.Collapsed;
+                }
+            });
         }
 
         private void ApplyProbeResult(IMediaStream stream, Services.ProbeData result, long loadNonce)
@@ -692,6 +801,15 @@ namespace ModernIPTVPlayer.Controls
                 series.IsOnline = true;
                 series.IsHdr = result.IsHdr;
             }
+            else if (stream is StremioMediaStream stremio)
+            {
+                stremio.Resolution = result.Resolution;
+                stremio.Fps = result.Fps;
+                stremio.Codec = result.Codec;
+                stremio.Bitrate = result.Bitrate;
+                stremio.IsOnline = true;
+                stremio.IsHdr = result.IsHdr;
+            }
 
             DispatcherQueue.TryEnqueue(() =>
             {
@@ -699,35 +817,47 @@ namespace ModernIPTVPlayer.Controls
                 BadgeSkeleton.Visibility = Visibility.Collapsed;
                 UpdateTooltip(stream);
                 UpdatePlayButton(stream);
+                UpdateProgressState(stream);
             });
         }
 
         private void UpdateTooltip(ModernIPTVPlayer.Models.IMediaStream stream)
         {
             TechBadgesPanel.Children.Clear();
+
+            // Stremio Specific: Hide TechBadgesPanel if no selected stream in history
+            if (stream is StremioMediaStream stremio)
+            {
+                HistoryItem? history = null;
+                if (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv")
+                    history = HistoryManager.Instance.GetLastWatchedEpisode(stremio.IMDbId);
+                else
+                    history = HistoryManager.Instance.GetProgress(stremio.IMDbId);
+
+                if (history == null || string.IsNullOrEmpty(history.StreamUrl))
+                {
+                    TechBadgesPanel.Visibility = Visibility.Collapsed;
+                    // Only collapse skeleton if we aren't currently probing (shimmer active)
+                    if (BadgeSkeleton.Visibility != Visibility.Visible)
+                        BadgeSkeleton.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    TechBadgesPanel.Visibility = Visibility.Visible;
+                }
+            }
+            else
+            {
+                TechBadgesPanel.Visibility = Visibility.Visible;
+            }
             
             // 1. Logic moved to Play Button subtext for premium look
             if (stream is LiveStream live)
             {
-                 var hist = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
-                 if (hist != null && !hist.IsFinished && hist.Duration > 0)
-                 {
-                     double pct = (hist.Position / hist.Duration) * 100;
-                     if (pct > 2) 
-                     {
-                         var remaining = TimeSpan.FromSeconds(hist.Duration - hist.Position);
-                         string timeLeft = remaining.TotalHours >= 1 
-                             ? $"{remaining.Hours}sa {remaining.Minutes}dk KaldÄ±"
-                             : $"{remaining.Minutes}dk KaldÄ±";
-                             
-                         AddBadge(timeLeft, Colors.Crimson);
-                     }
-                 }
-
                  // Probing Results - Handled in Dedup sections below
             }
 
-            // Fallback / Additional Guesses from Name
+            // Metadata Extraction (Unified)
             string name = stream.Title.ToUpperInvariant();
 
             // 2. Metadata Extraction (Unified)
@@ -749,6 +879,13 @@ namespace ModernIPTVPlayer.Controls
                 codecLabel = s.Codec;
                 isHdrMetadata = s.IsHdr;
                 hasMetadata = s.HasMetadata;
+            }
+            else if (stream is StremioMediaStream st)
+            {
+                res = st.Resolution;
+                codecLabel = st.Codec;
+                isHdrMetadata = st.IsHdr;
+                hasMetadata = st.HasMetadata;
             }
 
             // 2. RESOLUTION & 4K (DEDUPLICATION)
@@ -826,25 +963,36 @@ namespace ModernIPTVPlayer.Controls
              TechBadgesPanel.Children.Add(border);
         }
 
-        private async void PlayTrailer(string videoKey)
+        private async Task PlayTrailer(string videoKey)
         {
+            // Cancel previous Play requests
+            _trailerCts?.Cancel();
+            _trailerCts?.Dispose();
+            _trailerCts = new System.Threading.CancellationTokenSource();
+            var token = _trailerCts.Token;
+
             try 
             {
-                // Wait for pre-initialization if not ready
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Requested: {videoKey}");
+
+                // Only reinitialize if not already ready
                 if (!_webViewInitialized)
                 {
                     await PreInitializeWebViewAsync();
                 }
                 
+                if (token.IsCancellationRequested) return;
+
                 // Just call JavaScript to load the video - player is already ready
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Loading video: {videoKey}");
                 await TrailerWebView.CoreWebView2.ExecuteScriptAsync($"loadVideo('{videoKey}')");
                 
+                if (token.IsCancellationRequested) return;
+
                 // Hide Ambience during trailer
                 AmbienceGrid.Visibility = Visibility.Collapsed;
                 
                 // Show WebView, hide backdrop and loading IMMEDIATELY
-                // Waiting for message is too risky if API doesn't report it soon enough
                 BackdropContainer.Visibility = Visibility.Collapsed;
                 TrailerWebView.Visibility = Visibility.Visible;
                 LoadingRing.IsActive = false;
@@ -853,6 +1001,10 @@ namespace ModernIPTVPlayer.Controls
                 _isMuted = true;
                 UpdateMuteIcon();
                 _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
+            }
+            catch (TaskCanceledException)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Cancelled for {videoKey}");
             }
             catch (Exception ex)
             {
@@ -1009,7 +1161,7 @@ namespace ModernIPTVPlayer.Controls
             GenresText.Text = overrideSubtitle ?? tmdb.GetGenreNames();
             DescText.Text = overrideOverview ?? tmdb.Overview;
 
-            RatingText.Text = $"â˜… {tmdb.VoteAverage:F1}";
+            RatingText.Text = $"\u2605 {tmdb.VoteAverage:F1}";
             YearText.Text = tmdb.DisplayDate?.Split('-')[0] ?? "";
             
             // Hide skeleton and reveal description with staggered reveal
@@ -1100,14 +1252,26 @@ namespace ModernIPTVPlayer.Controls
                 if (history != null) 
                 {
                     isResume = true;
-                    // Fix: If it's 0, display as 01 for the label (or keep 00 if provider really has 0)
-                    // But usually 0 means "start". Let's use D2 and if 0, maybe shift.
-                    // Actually, let's keep it raw but if it was 0, and we show it as episode 1 in title, 
-                    // maybe we should be consistent.
-                    int displayEp = history.EpisodeNumber;
-                    if (displayEp == 0) displayEp = 1; // User said "BÃ¶lÃ¼m 1'deyim" but it showed 0.
-                    
+                    int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
                     subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
+                }
+            }
+            else if (stream is StremioMediaStream stremio)
+            {
+                if (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv")
+                {
+                    var history = HistoryManager.Instance.GetLastWatchedEpisode(stremio.Meta.Id);
+                    if (history != null)
+                    {
+                        isResume = true;
+                        int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
+                        subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
+                    }
+                }
+                else
+                {
+                    var history = HistoryManager.Instance.GetProgress(stremio.Meta.Id);
+                    if (history != null && !history.IsFinished && (history.Position / history.Duration) > 0.05) isResume = true;
                 }
             }
 
@@ -1169,5 +1333,65 @@ namespace ModernIPTVPlayer.Controls
         }
 
         private void FavButton_Click(object sender, RoutedEventArgs e) => AddListClicked?.Invoke(this, EventArgs.Empty);
+
+        private void UpdateProgressState(IMediaStream stream)
+        {
+            if (stream == null) return;
+
+            HistoryItem? history = null;
+            if (stream is LiveStream live)
+            {
+                history = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
+            }
+            else if (stream is SeriesStream series)
+            {
+                history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
+            }
+            else if (stream is StremioMediaStream stremio)
+            {
+                if (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv")
+                    history = HistoryManager.Instance.GetLastWatchedEpisode(stremio.Meta.Id);
+                else
+                    history = HistoryManager.Instance.GetProgress(stremio.Meta.Id);
+            }
+
+            if (history != null && !history.IsFinished && history.Duration > 0)
+            {
+                double pct = (history.Position / history.Duration) * 100;
+                if (pct > 1) // Only show if more than 1% watched
+                {
+                    PlaybackProgressBar.Value = pct;
+                    PlaybackProgressBar.Visibility = Visibility.Visible;
+
+                    var remaining = TimeSpan.FromSeconds(history.Duration - history.Position);
+                    string timeLeft = remaining.TotalHours >= 1
+                        ? $"{(int)remaining.TotalHours}sa {remaining.Minutes}dk kaldı"
+                        : $"{remaining.Minutes}dk kaldı";
+
+                    // Premium Placement: Integrate into Play Button subtext
+                    if (PlayButtonText.Text == "Devam Et")
+                    {
+                        string baseText = PlayButtonSubtext.Text;
+                        if (!string.IsNullOrEmpty(baseText) && !baseText.Contains(timeLeft))
+                        {
+                             // If it already has S01E05, append.
+                             PlayButtonSubtext.Text = $"{baseText} • {timeLeft}";
+                        }
+                        else if (string.IsNullOrEmpty(baseText))
+                        {
+                            PlayButtonSubtext.Text = timeLeft;
+                        }
+                        PlayButtonSubtext.Visibility = Visibility.Visible;
+                    }
+
+                    TimeLeftText.Text = timeLeft;
+                    ProgressPanel.Visibility = Visibility.Visible;
+                    return;
+                }
+            }
+
+            PlaybackProgressBar.Visibility = Visibility.Collapsed;
+            ProgressPanel.Visibility = Visibility.Collapsed;
+        }
     }
 }

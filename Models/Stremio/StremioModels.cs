@@ -106,10 +106,16 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Description { get; set; }
 
         [JsonPropertyName("releaseInfo")]
-        public string ReleaseInfo { get; set; } // Year
+        public object ReleaseInfoRaw { get; set; } // Can be string or int
+
+        [JsonIgnore]
+        public string ReleaseInfo => ReleaseInfoRaw?.ToString();
 
         [JsonPropertyName("imdbRating")]
-        public string ImdbRating { get; set; }
+        public object ImdbRatingRaw { get; set; } // Can be string or double
+
+        [JsonIgnore]
+        public string ImdbRating => ImdbRatingRaw?.ToString();
 
         [JsonPropertyName("genres")]
         public List<string> Genres { get; set; }

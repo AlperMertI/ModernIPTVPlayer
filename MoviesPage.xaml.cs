@@ -29,7 +29,7 @@ namespace ModernIPTVPlayer
     public sealed partial class MoviesPage : Page
     {
         private enum ContentSource { IPTV, Stremio }
-        private ContentSource _currentSource = ContentSource.IPTV;
+        private ContentSource _currentSource = ContentSource.Stremio;
 
         private LoginParams? _loginInfo;
         private HttpClient _httpClient;
@@ -98,6 +98,13 @@ namespace ModernIPTVPlayer
         {
             base.OnNavigatedTo(e);
 
+            if (e.NavigationMode == NavigationMode.Back)
+            {
+                // Ensure it is absolutely closed and collapsed
+                _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
+                if (ActiveExpandedCard != null) ActiveExpandedCard.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+            }
+
             if (e.Parameter is LoginParams p)
             {
                 if (_loginInfo != null && _loginInfo.PlaylistUrl != p.PlaylistUrl)
@@ -118,6 +125,10 @@ namespace ModernIPTVPlayer
                 {
                     await LoadIptvDataAsync();
                 }
+                else if (_currentSource == ContentSource.Stremio)
+                {
+                    await StremioControl.LoadDiscoveryAsync("movie");
+                }
             }
             
             // Ensure layout matches mode (Vital for collapsing OverlayCanvas)
@@ -126,9 +137,9 @@ namespace ModernIPTVPlayer
 
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
-            base.OnNavigatedFrom(e);
-            // Stop any playing trailer in ExpandedCard when leaving the page
+            // Stop any playing trailer in ExpandedCard when leaving the page - DO IT IMMEDIATELY
             _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
+            base.OnNavigatedFrom(e);
         }
 
         // ==========================================
@@ -158,7 +169,10 @@ namespace ModernIPTVPlayer
                 else
                 {
                     // Trigger load on control
-                     await StremioControl.LoadDiscoveryAsync("movie");
+                    if (!StremioControl.HasContent)
+                    {
+                         await StremioControl.LoadDiscoveryAsync("movie");
+                    }
                 }
             }
         }
@@ -170,7 +184,7 @@ namespace ModernIPTVPlayer
                 _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);
 
                 // Sidebar Mode
-                MainSplitView.IsPaneOpen = true; 
+                MainSplitView.IsPaneOpen = false; 
                 MainSplitView.DisplayMode = SplitViewDisplayMode.Inline;
                 SidebarToggle.Visibility = Visibility.Visible;
                 MediaGrid.Visibility = Visibility.Visible;
@@ -203,7 +217,8 @@ namespace ModernIPTVPlayer
         {
             try
             {
-                LoadingRing.IsActive = true;
+                LoadingRing.IsActive = false;
+                MediaGrid.IsLoading = true;
                 
                 // Return cached if available
                 if (_iptvCategories.Count > 0 && _allIptvMovies.Count > 0)
@@ -268,17 +283,60 @@ namespace ModernIPTVPlayer
             finally
             {
                 LoadingRing.IsActive = false;
+                if (_iptvCategories.Count == 0) MediaGrid.IsLoading = false;
             }
         }
 
         private async Task DisplayCategories(List<LiveCategory> categories)
         {
             IptvCategoryList.ItemsSource = categories; // Binds to Sidebar List
-            if (categories.Count > 0)
+            
+            // Restore last selection if available
+            LiveCategory? toSelect = null;
+            if (!string.IsNullOrEmpty(Services.PageStateProvider.LastMovieCategoryId))
             {
-                // Restore last selection or pick first
-                IptvCategoryList.SelectedItem = categories[0];
-                await LoadIptvStreams(categories[0]);
+                toSelect = categories.FirstOrDefault(c => c.CategoryId == Services.PageStateProvider.LastMovieCategoryId);
+            }
+
+            if (toSelect == null && categories.Count > 0)
+            {
+                toSelect = categories[0];
+            }
+
+            if (toSelect != null)
+            {
+                bool selectionChanged = IptvCategoryList.SelectedItem != toSelect;
+                IptvCategoryList.SelectedItem = toSelect;
+
+                if (selectionChanged || MediaGrid.ItemsSource == null)
+                {
+                    await LoadIptvStreams(toSelect);
+                }
+            }
+        }
+
+        private void CategorySearch_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_currentSource != ContentSource.IPTV) return;
+
+            string query = CategorySearchBox.Text.Trim().ToLower();
+            
+            // 1. Filter Category Names
+            var filteredCats = string.IsNullOrEmpty(query) 
+                ? _iptvCategories 
+                : _iptvCategories.Where(c => c.CategoryName.ToLower().Contains(query)).ToList();
+            
+            IptvCategoryList.ItemsSource = filteredCats;
+
+            // 2. Filter Content within the currently selected category
+            if (IptvCategoryList.SelectedItem is LiveCategory selectedCat)
+            {
+                var baseItems = _allIptvMovies.Where(m => m.CategoryId == selectedCat.CategoryId);
+                var filteredItems = string.IsNullOrEmpty(query)
+                    ? baseItems
+                    : baseItems.Where(m => m.Name.ToLower().Contains(query));
+                    
+                MediaGrid.ItemsSource = new List<IMediaStream>(filteredItems);
             }
         }
 
@@ -335,6 +393,9 @@ namespace ModernIPTVPlayer
         {
             if (e.ClickedItem is LiveCategory category)
             {
+                // Save selection
+                Services.PageStateProvider.LastMovieCategoryId = category.CategoryId;
+
                 if (_currentSource == ContentSource.IPTV)
                     await LoadIptvStreams(category);
                 else
@@ -345,6 +406,7 @@ namespace ModernIPTVPlayer
 
         private void MediaGrid_ItemClicked(object sender, IMediaStream e)
         {
+             _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
              Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
         }
 
@@ -363,6 +425,7 @@ namespace ModernIPTVPlayer
 
         private void MediaGrid_DetailsAction(object sender, MediaNavigationArgs e)
         {
+             _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
              Frame.Navigate(typeof(MediaInfoPage), e, new SuppressNavigationTransitionInfo());
         }
 
@@ -413,13 +476,15 @@ namespace ModernIPTVPlayer
         // ==========================================
         // EXPANDED CARD PROXY EVENTS
         // ==========================================
-        private void StremioExpandedCardOverlay_PlayRequested(object sender, IMediaStream e)
+        private async void StremioExpandedCardOverlay_PlayRequested(object sender, IMediaStream e)
         {
-             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+             await _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);
+             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e, autoResume: true), new SuppressNavigationTransitionInfo());
         }
 
-        private void StremioExpandedCardOverlay_DetailsRequested(object sender, (IMediaStream Stream, TmdbMovieResult Tmdb) e)
+        private async void StremioExpandedCardOverlay_DetailsRequested(object sender, (IMediaStream Stream, TmdbMovieResult Tmdb) e)
         {
+             await _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);
              Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e.Stream), new SuppressNavigationTransitionInfo());
         }
 
@@ -434,7 +499,10 @@ namespace ModernIPTVPlayer
         private bool _isSearchActive = false;
         private void SearchButton_Click(object sender, RoutedEventArgs e)
         {
-            SpotlightSearch.Show();
+            if (SpotlightSearch.Visibility == Visibility.Visible)
+                SpotlightSearch.Hide();
+            else
+                SpotlightSearch.Show();
         }
 
         private void SpotlightSearch_ItemClicked(object sender, StremioMediaStream e)
@@ -480,6 +548,19 @@ namespace ModernIPTVPlayer
                 if (_currentSource == ContentSource.Stremio)
                 {
                     SpotlightSearch.Show();
+                    e.Handled = true;
+                }
+            }
+            else if (e.Key == Windows.System.VirtualKey.Escape)
+            {
+                if (SpotlightSearch.Visibility == Visibility.Visible)
+                {
+                    SpotlightSearch.Hide();
+                    e.Handled = true;
+                }
+                else if (_isSearchActive)
+                {
+                    HandleBackRequest();
                     e.Handled = true;
                 }
             }

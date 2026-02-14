@@ -41,10 +41,6 @@
                     <VisualState.StateTriggers>
                         <AdaptiveTrigger MinWindowWidth="1100" />
                     </VisualState.StateTriggers>
-                    <VisualState.Setters>
-                        <Setter Target="MainSplitView.DisplayMode" Value="Inline"/>
-                        <Setter Target="MainSplitView.IsPaneOpen" Value="True"/>
-                    </VisualState.Setters>
                 </VisualState>
                 <VisualState x:Name="Narrow">
                     <VisualState.StateTriggers>
@@ -120,7 +116,8 @@
                                              Foreground="White" PlaceholderForeground="#80FFFFFF" FontSize="13" 
                                              VerticalAlignment="Stretch" VerticalContentAlignment="Center"
                                              Padding="34,8,12,0"
-                                             HorizontalAlignment="Stretch"/> 
+                                             HorizontalAlignment="Stretch"
+                                             TextChanged="CategorySearch_TextChanged"/> 
                                 </Grid>
                             </Border>
                         </Grid>
@@ -210,11 +207,12 @@
                             
                             <RadioButton x:Name="SourceIPTV" Content="Kütüphanem" 
                                          Style="{StaticResource PillRadioButtonStyle}" 
-                                         IsChecked="True" 
+                                         IsChecked="False" 
                                          Checked="Source_Checked" Tag="IPTV"/>
                             
                             <RadioButton x:Name="SourceStremio" Content="Stremio" 
                                          Style="{StaticResource PillRadioButtonStyle}" 
+                                         IsChecked="True"
                                          Checked="Source_Checked" Tag="Stremio"/>
                         </StackPanel>
 
