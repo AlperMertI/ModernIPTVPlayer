@@ -58,6 +58,48 @@
             <Grid>
                 <local:ShimmerCard x:Name="PosterShimmer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
                 <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
+                
+                <!-- Title Overlay (Premium) -->
+                <Grid VerticalAlignment="Bottom" 
+                      Height="60" 
+                      IsHitTestVisible="False"
+                      Visibility="{x:Bind IsTitleVisible, Mode=OneWay}">
+                    <Grid.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                            <GradientStop Color="Transparent" Offset="0"/>
+                            <GradientStop Color="#99000000" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Grid.Background>
+                    <TextBlock Text="{x:Bind Title, Mode=OneWay}" 
+                               Foreground="White" 
+                               FontSize="12" 
+                               FontWeight="SemiBold"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"
+                               Margin="8,0,8,0"/>
+                </Grid>
+
+                <!-- Progress Bar -->
+                <ProgressBar VerticalAlignment="Bottom" Height="3" 
+                             Value="{x:Bind ProgressValue, Mode=OneWay}" 
+                             Maximum="100"
+                             Foreground="{ThemeResource SystemAccentColor}"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Visibility="{x:Bind ShowProgress, Mode=OneWay}"/>
+                
+                <!-- Status Badge (Top Right) -->
+                <Border HorizontalAlignment="Right" VerticalAlignment="Top" 
+                        Margin="8" CornerRadius="4" 
+                        Padding="6,2"
+                        Visibility="{x:Bind ShowBadge, Mode=OneWay}">
+                    <Border.Background>
+                        <AcrylicBrush TintColor="Black" TintOpacity="0.6" FallbackColor="Black"/>
+                    </Border.Background>
+                    <TextBlock Text="{x:Bind BadgeText, Mode=OneWay}" 
+                               Foreground="White" FontSize="10" FontWeight="Bold"/>
+                </Border>
             </Grid>
         </Border>
 

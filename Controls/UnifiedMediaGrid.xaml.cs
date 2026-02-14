@@ -5,6 +5,7 @@ using ModernIPTVPlayer.Models;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Windows.Input;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -16,6 +17,18 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<IMediaStream>? AddListAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)>? ColorExtracted;
         public event EventHandler? HoverEnded;
+
+        public static readonly DependencyProperty ItemClickCommandProperty =
+            DependencyProperty.Register("ItemClickCommand", typeof(ICommand), typeof(UnifiedMediaGrid), new PropertyMetadata(null));
+
+        public static readonly DependencyProperty ShowTitlesProperty =
+            DependencyProperty.Register("ShowTitles", typeof(bool), typeof(UnifiedMediaGrid), new PropertyMetadata(false));
+
+        public bool ShowTitles
+        {
+            get => (bool)GetValue(ShowTitlesProperty);
+            set => SetValue(ShowTitlesProperty, value);
+        }
 
         private readonly ExpandedCardOverlayController _expandedCardOverlay;
         private List<IMediaStream>? _items;

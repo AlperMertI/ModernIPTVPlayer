@@ -9,6 +9,16 @@ namespace ModernIPTVPlayer.Models
         string PosterUrl { get; }
         string Rating { get; }
         TmdbMovieResult TmdbInfo { get; set; }
+        
+        // Technical Metadata properties for polymorphism
+        string Resolution { get; set; }
+        string Fps { get; set; }
+        string Codec { get; set; }
+        long Bitrate { get; set; }
+        bool IsHdr { get; set; }
+        bool IsProbing { get; set; }
+        bool? IsOnline { get; set; }
+        bool HasMetadata { get; }
         // We can add more common properties as needed for the Details Page
     }
 

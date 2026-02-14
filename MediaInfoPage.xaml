@@ -384,6 +384,9 @@
                          <Button x:Name="CopyLinkButton" Click="CopyLinkButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0">
                              <FontIcon Glyph="&#xE71B;" FontSize="18"/>
                          </Button>
+                         <Button x:Name="WatchlistButton" Click="WatchlistButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0" ToolTipService.ToolTip="İzleme Listesine Ekle">
+                             <FontIcon Glyph="&#xE710;" FontSize="20"/>
+                         </Button>
                     </StackPanel>
                     
                     <!-- Shimmer -->
@@ -391,7 +394,8 @@
                         <ctl:ShimmerControl Width="140" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
                         <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
                         <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
-                        <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
+                         <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
+                         <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
                     </StackPanel>
                 </Grid>
 

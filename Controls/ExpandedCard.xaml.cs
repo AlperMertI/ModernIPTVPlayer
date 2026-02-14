@@ -256,9 +256,50 @@ namespace ModernIPTVPlayer.Controls
         private FFmpegProber _prober = new FFmpegProber();
         private long _loadNonce = 0;
 
-        private void ExpandButton_Click(object sender, RoutedEventArgs e)
+        private async void FavButton_Click(object sender, RoutedEventArgs e)
         {
-            ToggleCinemaMode(!_isCinemaMode);
+            if (_stream == null) return;
+
+            var manager = Services.WatchlistManager.Instance;
+            bool isInList = manager.IsOnWatchlist(_stream);
+
+            if (isInList)
+            {
+                await manager.RemoveFromWatchlist(_stream);
+            }
+            else
+            {
+                await manager.AddToWatchlist(_stream);
+            }
+
+            // Animate Icon
+            UpdateWatchlistIcon(!isInList, animate: true);
+        }
+
+        private void UpdateWatchlistIcon(bool isAdded, bool animate = false)
+        {
+            var icon = (FontIcon)FavButton.Content;
+            string newGlyph = isAdded ? "\uE73E" : "\uE710"; // Checkmark vs Plus
+
+            if (animate)
+            {
+                var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(icon);
+                var compositor = visual.Compositor;
+
+                var scaleAnim = compositor.CreateVector3KeyFrameAnimation();
+                scaleAnim.InsertKeyFrame(0f, new System.Numerics.Vector3(1f, 1f, 1f));
+                scaleAnim.InsertKeyFrame(0.5f, new System.Numerics.Vector3(1.4f, 1.4f, 1f));
+                scaleAnim.InsertKeyFrame(1f, new System.Numerics.Vector3(1f, 1f, 1f));
+                scaleAnim.Duration = TimeSpan.FromMilliseconds(300);
+                scaleAnim.Target = "Scale";
+
+                visual.StartAnimation("Scale", scaleAnim);
+            }
+
+            icon.Glyph = newGlyph;
+            FavButton.Background = isAdded 
+                ? new SolidColorBrush(Windows.UI.Color.FromArgb(255, 33, 150, 243)) // Blue when added
+                : new SolidColorBrush(Windows.UI.Color.FromArgb(34, 255, 255, 255)); // Transparent white
         }
 
         public void ToggleCinemaMode(bool enable)
@@ -299,6 +340,8 @@ namespace ModernIPTVPlayer.Controls
 
             CinemaModeToggled?.Invoke(this, _isCinemaMode);
         }
+
+        private void ExpandButton_Click(object sender, RoutedEventArgs e) => ToggleCinemaMode(!_isCinemaMode);
 
         /// <summary>
         /// Public method to stop trailer playback when card is hidden
@@ -500,6 +543,10 @@ namespace ModernIPTVPlayer.Controls
 
             UpdatePlayButton(stream);
             UpdateProgressState(stream);
+            
+            // Check Watchlist State
+            await Services.WatchlistManager.Instance.InitializeAsync();
+            UpdateWatchlistIcon(Services.WatchlistManager.Instance.IsOnWatchlist(stream), animate: false);
 
             try
             {
@@ -692,6 +739,20 @@ namespace ModernIPTVPlayer.Controls
                     url = history.StreamUrl;
                 }
             }
+            else if (stream is WatchlistItem w)
+            {
+                if (w.Type == "series")
+                {
+                    var history = HistoryManager.Instance.GetLastWatchedEpisode(w.Id);
+                    if (history != null) url = history.StreamUrl;
+                }
+                else
+                {
+                    var history = HistoryManager.Instance.GetProgress(w.Id);
+                    if (history != null) url = history.StreamUrl;
+                    else if (!string.IsNullOrEmpty(w.StreamUrl)) url = w.StreamUrl;
+                }
+            }
 
             if (string.IsNullOrEmpty(url)) 
             {
@@ -759,9 +820,7 @@ namespace ModernIPTVPlayer.Controls
 
         private void SetProbing(IMediaStream stream, bool isProbing)
         {
-            if (stream is LiveStream live) live.IsProbing = isProbing;
-            else if (stream is SeriesStream series) series.IsProbing = isProbing;
-            else if (stream is StremioMediaStream stremio) stremio.IsProbing = isProbing;
+            stream.IsProbing = isProbing;
             
             DispatcherQueue.TryEnqueue(() =>
             {
@@ -783,33 +842,12 @@ namespace ModernIPTVPlayer.Controls
         {
             if (loadNonce != _loadNonce) return;
 
-            if (stream is LiveStream live)
-            {
-                live.Resolution = result.Resolution;
-                live.Fps = result.Fps;
-                live.Codec = result.Codec;
-                live.Bitrate = result.Bitrate;
-                live.IsOnline = true; // Cached implies success
-                live.IsHdr = result.IsHdr;
-            }
-            else if (stream is SeriesStream series)
-            {
-                series.Resolution = result.Resolution;
-                series.Fps = result.Fps;
-                series.Codec = result.Codec;
-                series.Bitrate = result.Bitrate;
-                series.IsOnline = true;
-                series.IsHdr = result.IsHdr;
-            }
-            else if (stream is StremioMediaStream stremio)
-            {
-                stremio.Resolution = result.Resolution;
-                stremio.Fps = result.Fps;
-                stremio.Codec = result.Codec;
-                stremio.Bitrate = result.Bitrate;
-                stremio.IsOnline = true;
-                stremio.IsHdr = result.IsHdr;
-            }
+            stream.Resolution = result.Resolution;
+            stream.Fps = result.Fps;
+            stream.Codec = result.Codec;
+            stream.Bitrate = result.Bitrate;
+            stream.IsOnline = true;
+            stream.IsHdr = result.IsHdr;
 
             DispatcherQueue.TryEnqueue(() =>
             {
@@ -860,33 +898,11 @@ namespace ModernIPTVPlayer.Controls
             // Metadata Extraction (Unified)
             string name = stream.Title.ToUpperInvariant();
 
-            // 2. Metadata Extraction (Unified)
-            string res = null;
-            string codecLabel = null;
-            bool? isHdrMetadata = null;
-            bool hasMetadata = false;
-
-            if (stream is LiveStream l)
-            {
-                res = l.Resolution;
-                codecLabel = l.Codec;
-                isHdrMetadata = l.IsHdr;
-                hasMetadata = l.HasMetadata;
-            }
-            else if (stream is SeriesStream s)
-            {
-                res = s.Resolution;
-                codecLabel = s.Codec;
-                isHdrMetadata = s.IsHdr;
-                hasMetadata = s.HasMetadata;
-            }
-            else if (stream is StremioMediaStream st)
-            {
-                res = st.Resolution;
-                codecLabel = st.Codec;
-                isHdrMetadata = st.IsHdr;
-                hasMetadata = st.HasMetadata;
-            }
+            // Metadata Extraction (Unified)
+            string res = stream.Resolution;
+            string codecLabel = stream.Codec;
+            bool? isHdrMetadata = stream.IsHdr;
+            bool hasMetadata = stream.HasMetadata;
 
             // 2. RESOLUTION & 4K (DEDUPLICATION)
             bool is4K = name.Contains("4K") || name.Contains("UHD");
@@ -1244,7 +1260,7 @@ namespace ModernIPTVPlayer.Controls
             if (stream is LiveStream live)
             {
                 var hist = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
-                if (hist != null && !hist.IsFinished && (hist.Position / (double)hist.Duration) > 0.05) isResume = true;
+                if (hist != null && !hist.IsFinished && (hist.Position / (double)hist.Duration) > 0.005) isResume = true;
             }
             else if (stream is SeriesStream series)
             {
@@ -1271,7 +1287,25 @@ namespace ModernIPTVPlayer.Controls
                 else
                 {
                     var history = HistoryManager.Instance.GetProgress(stremio.Meta.Id);
-                    if (history != null && !history.IsFinished && (history.Position / history.Duration) > 0.05) isResume = true;
+                    if (history != null && !history.IsFinished && (history.Position / (double)history.Duration) > 0.005) isResume = true;
+                }
+            }
+            else if (stream is WatchlistItem w)
+            {
+                if (w.Type == "series")
+                {
+                    var history = HistoryManager.Instance.GetLastWatchedEpisode(w.Id);
+                    if (history != null)
+                    {
+                        isResume = true;
+                        int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
+                        subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
+                    }
+                }
+                else
+                {
+                    var history = HistoryManager.Instance.GetProgress(w.Id);
+                    if (history != null && !history.IsFinished && (history.Position / (double)history.Duration) > 0.005) isResume = true;
                 }
             }
 
@@ -1332,7 +1366,7 @@ namespace ModernIPTVPlayer.Controls
                 .PrepareToAnimate("ForwardConnectedAnimation", BackdropImage);
         }
 
-        private void FavButton_Click(object sender, RoutedEventArgs e) => AddListClicked?.Invoke(this, EventArgs.Empty);
+
 
         private void UpdateProgressState(IMediaStream stream)
         {
@@ -1354,11 +1388,18 @@ namespace ModernIPTVPlayer.Controls
                 else
                     history = HistoryManager.Instance.GetProgress(stremio.Meta.Id);
             }
+            else if (stream is WatchlistItem w)
+            {
+                if (w.Type == "series")
+                    history = HistoryManager.Instance.GetLastWatchedEpisode(w.Id);
+                else
+                    history = HistoryManager.Instance.GetProgress(w.Id);
+            }
 
             if (history != null && !history.IsFinished && history.Duration > 0)
             {
                 double pct = (history.Position / history.Duration) * 100;
-                if (pct > 1) // Only show if more than 1% watched
+                if (pct > 0.5) // Show if more than 0.5% watched
                 {
                     PlaybackProgressBar.Value = pct;
                     PlaybackProgressBar.Visibility = Visibility.Visible;

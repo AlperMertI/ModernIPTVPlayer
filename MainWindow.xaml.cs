@@ -108,7 +108,9 @@ namespace ModernIPTVPlayer
                     "MoviesPage" => typeof(MoviesPage), 
                     "SeriesPage" => typeof(SeriesPage),
                     "MultiPlayerPage" => typeof(MultiPlayerPage),
+
                     "AddonsPage" => typeof(Pages.AddonsPage),
+                    "WatchlistPage" => typeof(WatchlistPage),
                     _ => null
                 };
 
@@ -186,6 +188,13 @@ namespace ModernIPTVPlayer
                 NavView.IsPaneVisible = true;
                 NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
                     .FirstOrDefault(i => i.Tag.ToString() == "AddonsPage");
+            }
+            else if (ContentFrame.SourcePageType == typeof(WatchlistPage))
+            {
+                NavView.Header = "İzleme Listesi";
+                NavView.IsPaneVisible = true;
+                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
+                    .FirstOrDefault(i => i.Tag.ToString() == "WatchlistPage");
             }
             else if (ContentFrame.SourcePageType == typeof(PlayerPage))
             {

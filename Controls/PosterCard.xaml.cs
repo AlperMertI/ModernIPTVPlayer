@@ -39,6 +39,60 @@ namespace ModernIPTVPlayer.Controls
             set { SetValue(IsTiltEnabledProperty, value); }
         }
 
+        public static readonly DependencyProperty TitleProperty =
+            DependencyProperty.Register("Title", typeof(string), typeof(PosterCard), new PropertyMetadata(string.Empty));
+
+        public string Title
+        {
+            get { return (string)GetValue(TitleProperty); }
+            set { SetValue(TitleProperty, value); }
+        }
+
+        public static readonly DependencyProperty ProgressValueProperty =
+            DependencyProperty.Register("ProgressValue", typeof(double), typeof(PosterCard), new PropertyMetadata(0.0));
+
+        public double ProgressValue
+        {
+            get { return (double)GetValue(ProgressValueProperty); }
+            set { SetValue(ProgressValueProperty, value); }
+        }
+
+        public static readonly DependencyProperty BadgeTextProperty =
+            DependencyProperty.Register("BadgeText", typeof(string), typeof(PosterCard), new PropertyMetadata(string.Empty));
+
+        public string BadgeText
+        {
+            get { return (string)GetValue(BadgeTextProperty); }
+            set { SetValue(BadgeTextProperty, value); }
+        }
+
+        public static readonly DependencyProperty ShowProgressProperty =
+            DependencyProperty.Register("ShowProgress", typeof(bool), typeof(PosterCard), new PropertyMetadata(false));
+
+        public bool ShowProgress
+        {
+            get { return (bool)GetValue(ShowProgressProperty); }
+            set { SetValue(ShowProgressProperty, value); }
+        }
+
+        public static readonly DependencyProperty ShowBadgeProperty =
+            DependencyProperty.Register("ShowBadge", typeof(bool), typeof(PosterCard), new PropertyMetadata(false));
+
+        public bool ShowBadge
+        {
+            get { return (bool)GetValue(ShowBadgeProperty); }
+            set { SetValue(ShowBadgeProperty, value); }
+        }
+
+        public static readonly DependencyProperty IsTitleVisibleProperty =
+            DependencyProperty.Register("IsTitleVisible", typeof(bool), typeof(PosterCard), new PropertyMetadata(false));
+
+        public bool IsTitleVisible
+        {
+            get { return (bool)GetValue(IsTitleVisibleProperty); }
+            set { SetValue(IsTitleVisibleProperty, value); }
+        }
+
         private static void OnImageUrlChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
             if (d is PosterCard card)

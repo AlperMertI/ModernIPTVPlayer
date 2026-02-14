@@ -45,6 +45,7 @@ namespace ModernIPTVPlayer
         private EpisodeItem _selectedEpisode;
         private SeasonItem _selectedSeason;
         private TmdbMovieResult _cachedTmdb;
+        private SolidColorBrush _themeTintBrush;
         private bool _isInitializingSeriesUi;
         private readonly Dictionary<string, StremioSourcesCacheEntry> _stremioSourcesCache = new();
         private int _sourcesRequestVersion;
@@ -737,7 +738,11 @@ namespace ModernIPTVPlayer
                         this.UpdateLayout(); // Force re-measure height
                         AdjustOverviewShimmer(details.Overview);
                     }
+
                 }
+                
+                // Watchlist State Update
+                UpdateWatchlistState();
 
                 // Fetch Cast
                 try
@@ -1370,6 +1375,10 @@ namespace ModernIPTVPlayer
                 DownloadButton.Background = tintBrush;
                 CopyLinkButton.Background = tintBrush;
                 RestartButton.Background = tintBrush;
+                _themeTintBrush = tintBrush;
+                
+                // Sync WatchlistButton if not in list
+                UpdateWatchlistState(false);
                 
                 // Play Button Tint (Premium Glass-Vivid)
                 // Design: Same glass base as others, but slightly higher alpha and colored border
@@ -4777,8 +4786,55 @@ namespace ModernIPTVPlayer
                 ep.HasProgress = false;
             }
         }
-    }
 
+        private async void WatchlistButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_item == null) return;
+            
+            bool alreadyIn = Services.WatchlistManager.Instance.IsOnWatchlist(_item);
+            if (alreadyIn)
+                await Services.WatchlistManager.Instance.RemoveFromWatchlist(_item);
+            else
+                await Services.WatchlistManager.Instance.AddToWatchlist(_item);
+
+            UpdateWatchlistState(true);
+        }
+
+        private void UpdateWatchlistState(bool animate = false)
+        {
+            if (_item == null || WatchlistButton == null) return;
+
+            bool isInList = Services.WatchlistManager.Instance.IsOnWatchlist(_item);
+            var icon = (FontIcon)WatchlistButton.Content;
+            string newGlyph = isInList ? "\uE73E" : "\uE710"; // Checkmark vs Plus
+            
+            if (animate)
+            {
+                var visual = ElementCompositionPreview.GetElementVisual(icon);
+                var compositor = visual.Compositor;
+
+                var scaleAnim = compositor.CreateVector3KeyFrameAnimation();
+                scaleAnim.InsertKeyFrame(0f, new System.Numerics.Vector3(1f, 1f, 1f));
+                scaleAnim.InsertKeyFrame(0.5f, new System.Numerics.Vector3(1.4f, 1.4f, 1f));
+                scaleAnim.InsertKeyFrame(1f, new System.Numerics.Vector3(1f, 1f, 1f));
+                scaleAnim.Duration = TimeSpan.FromMilliseconds(300);
+                scaleAnim.Target = "Scale";
+
+                visual.StartAnimation("Scale", scaleAnim);
+            }
+
+            icon.Glyph = newGlyph;
+            icon.Foreground = isInList 
+                ? new SolidColorBrush(Windows.UI.Color.FromArgb(255, 33, 150, 243)) // Blue Icon when added
+                : new SolidColorBrush(Microsoft.UI.Colors.White);
+
+            WatchlistButton.Background = isInList 
+                ? new SolidColorBrush(Windows.UI.Color.FromArgb(50, 33, 150, 243)) // Subtle Blue Tint
+                : (_themeTintBrush ?? new SolidColorBrush(Windows.UI.Color.FromArgb(37, 255, 255, 255))); // Use Theme Tint if available
+            
+            ToolTipService.SetToolTip(WatchlistButton, isInList ? "İzleme Listesinden Çıkar" : "İzleme Listesine Ekle");
+        }
+    }
     public class SeasonItem
     {
         public string Name { get; set; }

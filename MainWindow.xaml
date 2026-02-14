@@ -39,6 +39,12 @@
                         <FontIcon Glyph="&#xE77B;"/> <!-- User/Account -->
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
+                
+                <NavigationViewItem Content="İzleme Listesi" Tag="WatchlistPage">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE734;"/> <!-- Star/Favorite -->
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
 
                 <NavigationViewItemSeparator/>
 

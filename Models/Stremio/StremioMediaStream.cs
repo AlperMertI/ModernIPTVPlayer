@@ -31,7 +31,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         // Technical Metadata (Probe Results)
         public bool HasMetadata => !string.IsNullOrEmpty(Resolution);
         public bool IsProbing { get; set; }
-        public bool IsOnline { get; set; }
+        public bool? IsOnline { get; set; }
         public string Resolution { get; set; }
         public string Fps { get; set; }
         public string Codec { get; set; }
