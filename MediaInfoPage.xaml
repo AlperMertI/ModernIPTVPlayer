@@ -517,11 +517,13 @@
                                      </ListView.ItemContainerStyle>
                                      <ListView.ItemTemplate>
                                          <DataTemplate x:DataType="local:EpisodeItem">
-                                             <Grid Height="Auto" Background="Transparent" Padding="0,4" CornerRadius="8">
+                                             <Grid Height="88" Background="Transparent" Padding="0,4" CornerRadius="8">
                                                  <Grid.ContextFlyout>
                                                      <MenuFlyout>
                                                          <MenuFlyoutItem Text="İzlendi Olarak İşaretle" Click="MarkWatched_Click" Tag="{x:Bind}"/>
                                                          <MenuFlyoutItem Text="İzlenmedi Olarak İşaretle" Click="MarkUnwatched_Click" Tag="{x:Bind}"/>
+                                                         <MenuFlyoutSeparator/>
+                                                         <MenuFlyoutItem Text="Buradan Sonrasını İzlendi İşaretle" Click="MarkRemainingWatched_Click" Tag="{x:Bind}"/>
                                                      </MenuFlyout>
                                                  </Grid.ContextFlyout>
                                                  
@@ -531,13 +533,24 @@
                                                  </Grid.ColumnDefinitions>
                                                  
                                                  <!-- Thumbnail -->
-                                                 <Grid CornerRadius="10,0,0,10">
-                                                     <Image Source="{x:Bind ImageUrl, Converter={StaticResource StringToImage}}" Stretch="UniformToFill"/>
-                                                     
-                                                     <!-- Dark Gradient Overlay -->
-                                                     <Grid Background="#33000000"/>
+                                                <Grid CornerRadius="10,0,0,10" Height="80">
+                                                    <Image Source="{x:Bind ImageUrl, Converter={StaticResource StringToImage}}" Stretch="UniformToFill"/>
+                                                    
+                                                    <!-- Dark Gradient Overlay -->
+                                                    <Grid Background="#33000000"/>
+
+                                                    <!-- Premium Watched Overlay -->
+                                                     <Grid Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                                                           Background="#B3000000" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
+                                                           <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Left" 
+                                                                       Spacing="4" Padding="6,3" Background="#99000000" CornerRadius="0,6,0,10">
+                                                                <FontIcon Glyph="&#xE73E;" FontSize="10" Foreground="{StaticResource GoldGradient}"/>
+                                                                <TextBlock Text="İZLENDİ" FontSize="9" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
+                                                           </StackPanel>
+                                                           <Border BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" CornerRadius="10,0,0,10"/>
+                                                     </Grid>
  
-                                                     <!-- Play Overlay ON SELECTED -->
+                                                    <!-- Play Overlay ON SELECTED -->
                                                      <Button Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
                                                              Style="{StaticResource GlassButtonStyle}" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                              Width="48" Height="48" CornerRadius="24"
@@ -772,6 +785,7 @@
                                       </ListView.ItemContainerStyle>
                                       <ListView.ItemTemplate>
                                           <DataTemplate>
+                                              <Grid CornerRadius="10">
                                                <Grid Padding="8,10" Background="#1AFFFFFF" CornerRadius="10" BorderThickness="1" BorderBrush="#10FFFFFF">
                                                   <Grid.ColumnDefinitions>
                                                       <ColumnDefinition Width="70"/>
@@ -807,6 +821,11 @@
                                                       <!-- Metadata Info -->
                                                       <TextBlock Text="{Binding Name}" FontSize="12" Foreground="#CCC" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
                                                   </StackPanel>
+                                              </Grid>
+                                              
+                                              <!-- Active State Overlay -->
+                                              <Border CornerRadius="10" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" 
+                                                      Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False"/>
                                               </Grid>
                                           </DataTemplate>
                                       </ListView.ItemTemplate>

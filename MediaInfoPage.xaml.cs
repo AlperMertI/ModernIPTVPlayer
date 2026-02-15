@@ -1313,7 +1313,7 @@ namespace ModernIPTVPlayer
                     var epList = new List<EpisodeItem>();
                     foreach (var e in s.Episodes)
                     {
-                        epList.Add(new EpisodeItem
+                        var epItem = new EpisodeItem
                         {
                             Id = e.Id,
                             SeasonNumber = e.SeasonNumber,
@@ -1325,7 +1325,9 @@ namespace ModernIPTVPlayer
                             ReleaseDate = e.AirDate,
                             IsReleased = e.AirDate.HasValue ? e.AirDate.Value <= DateTime.Now : true,
                             StreamUrl = e.StreamUrl // For IPTV, this might be pre-filled. For Stremio, it's empty until source search.
-                        });
+                        };
+                        epItem.RefreshHistoryState();
+                        epList.Add(epItem);
                     }
 
                     if (epList.Count > 0)
@@ -1486,7 +1488,7 @@ namespace ModernIPTVPlayer
                          var newEpList = new List<EpisodeItem>();
                          foreach (var e in unifiedSeason.Episodes)
                          {
-                             newEpList.Add(new EpisodeItem
+                             var epItem = new EpisodeItem
                              {
                                  Id = e.Id,
                                  SeasonNumber = e.SeasonNumber,
@@ -1499,7 +1501,9 @@ namespace ModernIPTVPlayer
                                  ReleaseDate = e.AirDate,
                                  IsReleased = (e.AirDate ?? DateTime.MinValue) <= DateTime.Now,
                                  DurationFormatted = (!string.IsNullOrEmpty(e.RuntimeFormatted)) ? e.RuntimeFormatted : ""
-                             });
+                             };
+                             epItem.RefreshHistoryState();
+                             newEpList.Add(epItem);
                          }
 
                          uiSeason.Episodes = newEpList;
@@ -3091,6 +3095,9 @@ namespace ModernIPTVPlayer
 
                 System.Diagnostics.Debug.WriteLine($"[Stremio] Fetching sources for {videoId} ({type}) from {addons.Count} addons.");
 
+                // Get Last Played Stream for "Active" Indication
+                string lastStreamUrl = HistoryManager.Instance.GetProgress(videoId)?.StreamUrl;
+
                 var tasks = new List<Task>();
                 
                 for (int i = 0; i < addons.Count; i++)
@@ -3189,6 +3196,8 @@ namespace ModernIPTVPlayer
                                            .Trim(' ', '•');
                                     }
                                     
+                                    bool isActive = !string.IsNullOrEmpty(lastStreamUrl) && s.Url == lastStreamUrl;
+
                                     processedStreams.Add(new StremioStreamViewModel
                                     {
                                         Title = finalTitle,
@@ -3200,7 +3209,8 @@ namespace ModernIPTVPlayer
                                         Quality = ParseQuality(rawName + " " + rawTitle + " " + rawDesc),
                                         Size = sizeInfo,
                                         IsCached = isCached,
-                                        OriginalStream = s
+                                        OriginalStream = s,
+                                        IsActive = isActive
                                     });
                                 }
 
@@ -3392,7 +3402,8 @@ namespace ModernIPTVPlayer
                 Quality = source.Quality,
                 Size = source.Size,
                 IsCached = source.IsCached,
-                OriginalStream = source.OriginalStream
+                OriginalStream = source.OriginalStream,
+                IsActive = source.IsActive
             };
         }
 
@@ -3542,6 +3553,21 @@ namespace ModernIPTVPlayer
         {
             if (e.ClickedItem is StremioStreamViewModel vm)
             {
+                // Update Active State
+                if (_addonResults != null)
+                {
+                    foreach(var addon in _addonResults)
+                    {
+                        if (addon.Streams != null)
+                        {
+                            foreach(var stream in addon.Streams)
+                            {
+                                stream.IsActive = (stream == vm);
+                            }
+                        }
+                    }
+                }
+
                 string title = _selectedEpisode?.Title ?? _item.Title;
                 string videoId = _selectedEpisode?.Id ?? (_item as Models.Stremio.StremioMediaStream).Meta.Id;
 
@@ -4248,7 +4274,7 @@ namespace ModernIPTVPlayer
             SetupAnticipationPulse(StickyPlayButton, StickyPlayButtonIcon);
             
             // 3. Action Bar Buttons
-            var actionButtons = new Button[] { DownloadButton, TrailerButton, CopyLinkButton, RestartButton };
+            var actionButtons = new Button[] { DownloadButton, TrailerButton, CopyLinkButton, RestartButton, WatchlistButton };
             foreach (var btn in actionButtons)
             {
                 if (btn != null) SetupAnticipationPulse(btn, (FrameworkElement)btn.Content);
@@ -4261,27 +4287,76 @@ namespace ModernIPTVPlayer
         private void SetupAnticipationPulse(Button btn, FrameworkElement content)
         {
             if (btn == null || content == null) return;
-            var visual = ElementCompositionPreview.GetElementVisual(content);
+            
+            // 1. Content Visual (Scale Pulse)
+            var contentVisual = ElementCompositionPreview.GetElementVisual(content);
+            
+            // 2. Button Visual (Magnetic Positional Tracking)
+            var btnVisual = ElementCompositionPreview.GetElementVisual(btn);
+            ElementCompositionPreview.SetIsTranslationEnabled(btn, true);
 
-            content.SizeChanged += (s, e) => {
-                visual.CenterPoint = new Vector3((float)content.ActualWidth / 2, (float)content.ActualHeight / 2, 0);
+            void UpdateCenter()
+            {
+                contentVisual.CenterPoint = new Vector3((float)content.ActualWidth / 2f, (float)content.ActualHeight / 2f, 0);
+            }
+
+            content.SizeChanged += (s, e) => UpdateCenter();
+            if (content.ActualWidth > 0) UpdateCenter();
+
+            btn.PointerMoved += (s, e) => 
+            {
+                try
+                {
+                    // Calculate Magnetic Offset
+                    var ptr = e.GetCurrentPoint(btn);
+                    var center = new Windows.Foundation.Point(btn.ActualWidth / 2, btn.ActualHeight / 2);
+                    var deltaX = (float)(ptr.Position.X - center.X);
+                    var deltaY = (float)(ptr.Position.Y - center.Y);
+                    
+                    // Limit movement (Magnetic strength)
+                    float limit = 12f;
+                    float moveX = Math.Clamp(deltaX * 0.35f, -limit, limit);
+                    float moveY = Math.Clamp(deltaY * 0.35f, -limit, limit);
+
+                    // Stop any reset animation and apply direct offset from Pointer
+                    btnVisual.StopAnimation("Translation"); 
+                    btnVisual.Properties.InsertVector3("Translation", new Vector3(moveX, moveY, 0));
+                }
+                catch {}
             };
 
             btn.PointerEntered += (s, e) => {
-                var pulse = _compositor.CreateVector3KeyFrameAnimation();
-                pulse.InsertKeyFrame(0.2f, new Vector3(0.85f, 0.85f, 1f));
-                pulse.InsertKeyFrame(0.6f, new Vector3(1.25f, 1.25f, 1f));
-                pulse.InsertKeyFrame(1f, new Vector3(1.15f, 1.15f, 1f));
-                pulse.Duration = TimeSpan.FromMilliseconds(500);
-                visual.StartAnimation("Scale", pulse);
+                try {
+                    // Pulse Scale on Content
+                    contentVisual.StopAnimation("Scale");
+                    var pulse = _compositor.CreateVector3KeyFrameAnimation();
+                    pulse.InsertKeyFrame(0.2f, new Vector3(0.85f, 0.85f, 1f));
+                    pulse.InsertKeyFrame(0.6f, new Vector3(1.25f, 1.25f, 1f));
+                    pulse.InsertKeyFrame(1f, new Vector3(1.15f, 1.15f, 1f));
+                    pulse.Duration = TimeSpan.FromMilliseconds(500);
+                    contentVisual.StartAnimation("Scale", pulse);
+                } catch {}
             };
 
             btn.PointerExited += (s, e) => {
-                var reset = _compositor.CreateSpringVector3Animation();
-                reset.FinalValue = new Vector3(1f, 1f, 1f);
-                reset.DampingRatio = 0.5f;
-                reset.Period = TimeSpan.FromMilliseconds(40);
-                visual.StartAnimation("Scale", reset);
+                try {
+                    // Reset Scale
+                    contentVisual.StopAnimation("Scale");
+                    var resetScale = _compositor.CreateVector3KeyFrameAnimation();
+                    resetScale.InsertKeyFrame(1f, new Vector3(1f, 1f, 1f));
+                    resetScale.Duration = TimeSpan.FromMilliseconds(300);
+                    contentVisual.StartAnimation("Scale", resetScale);
+                    
+                    // Reset Position (Spring back)
+                    btnVisual.StopAnimation("Translation");
+                    var resetPos = _compositor.CreateVector3KeyFrameAnimation();
+                    resetPos.InsertKeyFrame(1f, Vector3.Zero);
+                    resetPos.Duration = TimeSpan.FromMilliseconds(400);
+                    // Use Cubic Bezier for smooth return
+                    resetPos.InsertKeyFrame(0.5f, Vector3.Zero, _compositor.CreateCubicBezierEasingFunction(new Vector2(0.3f, 0f), new Vector2(0f, 1f))); 
+                    // Actually simple keyframe to 0 is fine
+                    btnVisual.StartAnimation("Translation", resetPos);
+                } catch {}
             };
         }
 
@@ -4304,7 +4379,7 @@ namespace ModernIPTVPlayer
             visual.StartAnimation("Scale", breath);
         }
 
-        private void MarkWatched_Click(object sender, RoutedEventArgs e)
+        private async void MarkWatched_Click(object sender, RoutedEventArgs e)
         {
             if (sender is MenuFlyoutItem item && item.Tag is EpisodeItem ep)
             {
@@ -4339,13 +4414,68 @@ namespace ModernIPTVPlayer
 
                  // Update UI
                  ep.IsWatched = true;
-                 ep.ProgressPercent = 100;
-                 ep.ProgressText = "100%";
-                 ep.HasProgress = true;
+                 ep.ProgressPercent = 0;
+                 ep.ProgressText = "";
+                 ep.HasProgress = false;
+                 
+                 await HistoryManager.Instance.SaveAsync();
+            }
+        }
+        
+        private async void MarkRemainingWatched_Click(object sender, RoutedEventArgs e)
+        {
+            // Determine start episode from context menu context
+            EpisodeItem startEpisode = null;
+            if (sender is MenuFlyoutItem item && item.Tag is EpisodeItem epTag)
+            {
+                startEpisode = epTag;
+            }
+            
+            if (EpisodesListView.ItemsSource is IEnumerable<EpisodeItem> episodes)
+            {
+                 string seriesId = "";
+                 string seriesName = "";
+                 
+                 if (_item is SeriesStream iptv)
+                 {
+                     seriesId = iptv.SeriesId.ToString();
+                     seriesName = iptv.Name;
+                 }
+                 else if (_item is StremioMediaStream st)
+                 {
+                     seriesId = st.IMDbId ?? st.Id.ToString();
+                     seriesName = st.Title;
+                 }
+                 
+                 bool shouldMark = (startEpisode == null); // If no specific start, mark all (fallback)
+                 
+                 foreach (var ep in episodes)
+                 {
+                     if (ep == startEpisode) shouldMark = true;
+                     
+                     if (shouldMark && !ep.IsWatched)
+                     {
+                         HistoryManager.Instance.UpdateProgress(ep.Id, 
+                             ep.Title, 
+                             ep.StreamUrl ?? "", 
+                             1000, 1000, 
+                             seriesId,
+                             seriesName,
+                             ep.SeasonNumber, 
+                             ep.EpisodeNumber);
+                             
+                         ep.IsWatched = true;
+                         ep.ProgressPercent = 0;
+                         ep.ProgressText = "";
+                         ep.HasProgress = false;
+                     }
+                 }
+                 
+                 await HistoryManager.Instance.SaveAsync();
             }
         }
 
-        private void MarkUnwatched_Click(object sender, RoutedEventArgs e)
+        private async void MarkUnwatched_Click(object sender, RoutedEventArgs e)
         {
              if (sender is MenuFlyoutItem item && item.Tag is EpisodeItem ep)
             {
@@ -4379,6 +4509,8 @@ namespace ModernIPTVPlayer
                 ep.ProgressPercent = 0;
                 ep.ProgressText = "";
                 ep.HasProgress = false;
+                
+                await HistoryManager.Instance.SaveAsync();
             }
         }
 
@@ -4460,11 +4592,27 @@ namespace ModernIPTVPlayer
         public bool IsReleased { get; set; } = true;
         public DateTime? ReleaseDate { get; set; }
         public string ReleaseDateFormatted => ReleaseDate.HasValue ? ReleaseDate.Value.ToString("d MMMM yyyy", new System.Globalization.CultureInfo("tr-TR")) : "";
-        public bool IsWatched { get; set; }
+        private bool _isWatched;
+        public bool IsWatched
+        {
+            get => _isWatched;
+            set { if (_isWatched != value) { _isWatched = value; OnPropertyChanged(nameof(IsWatched)); } }
+        }
         
         // Progress UI
-        public bool HasProgress { get; set; }
-        public double ProgressPercent { get; set; }
+        private bool _hasProgress;
+        public bool HasProgress
+        {
+            get => _hasProgress;
+            set { if (_hasProgress != value) { _hasProgress = value; OnPropertyChanged(nameof(HasProgress)); } }
+        }
+
+        private double _progressPercent;
+        public double ProgressPercent
+        {
+            get => _progressPercent;
+            set { if (Math.Abs(_progressPercent - value) > 0.01) { _progressPercent = value; OnPropertyChanged(nameof(ProgressPercent)); } }
+        }
         public string ProgressText { get; set; }
 
         private bool _isSelected;
@@ -4531,6 +4679,20 @@ namespace ModernIPTVPlayer
         public bool HasSize => !string.IsNullOrEmpty(Size);
         public bool IsCached { get; set; }
         public ModernIPTVPlayer.Models.Stremio.StremioStream OriginalStream { get; set; }
+
+        private bool _isActive;
+        public bool IsActive 
+        { 
+            get => _isActive; 
+            set 
+            { 
+                if (_isActive != value) 
+                { 
+                    _isActive = value; 
+                    OnPropertyChanged(nameof(IsActive)); 
+                } 
+            } 
+        }
 
         public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
