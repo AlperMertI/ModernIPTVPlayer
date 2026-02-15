@@ -753,7 +753,15 @@ namespace ModernIPTVPlayer
                     }
                     catch (Exception ex)
                     {
-                        await ShowMessageDialog("MPV Oynatıcı Hatası", $"MPV başlatılamadı. \n\nHata: {ex.Message}");
+                        Debug.WriteLine($"[PlayerPage] MPV Error: {ex}");
+                        if (_mpvPlayer == null)
+                        {
+                            await ShowMessageDialog("Oynatıcı Hatası", "Video oynatıcı başlatılamadı.");
+                        }
+                        else
+                        {
+                            await ShowMessageDialog("MPV Oynatıcı Hatası", $"MPV başlatılamadı. \n\nHata: {ex.Message}");
+                        }
                     }
                 }
             }

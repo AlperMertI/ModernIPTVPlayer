@@ -604,9 +604,80 @@
                                              </Grid>
                                          </DataTemplate>
                                      </ListView.ItemTemplate>
-                                 </ListView>
-                             </Grid>
-                         </Border>
+                                  </ListView>
+                                  
+                                  <!-- Episodes Loading Shimmer -->
+                                  <Grid x:Name="EpisodesShimmerPanel" Grid.Row="1" Visibility="Collapsed" Padding="16,0,16,20">
+                                      <StackPanel Spacing="12">
+                                          <!-- Episode Item Shimmer 1 -->
+                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
+                                              <Grid.ColumnDefinitions>
+                                                  <ColumnDefinition Width="100"/>
+                                                  <ColumnDefinition Width="*"/>
+                                              </Grid.ColumnDefinitions>
+                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
+                                                  <ctl:ShimmerControl Width="120" Height="16" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="200" Height="14" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="150" Height="12" CornerRadius="4"/>
+                                              </StackPanel>
+                                          </Grid>
+                                          <!-- Episode Item Shimmer 2 -->
+                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
+                                              <Grid.ColumnDefinitions>
+                                                  <ColumnDefinition Width="100"/>
+                                                  <ColumnDefinition Width="*"/>
+                                              </Grid.ColumnDefinitions>
+                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
+                                                  <ctl:ShimmerControl Width="140" Height="16" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="180" Height="14" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="160" Height="12" CornerRadius="4"/>
+                                              </StackPanel>
+                                          </Grid>
+                                          <!-- Episode Item Shimmer 3 -->
+                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
+                                              <Grid.ColumnDefinitions>
+                                                  <ColumnDefinition Width="100"/>
+                                                  <ColumnDefinition Width="*"/>
+                                              </Grid.ColumnDefinitions>
+                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
+                                                  <ctl:ShimmerControl Width="100" Height="16" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="220" Height="14" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="140" Height="12" CornerRadius="4"/>
+                                              </StackPanel>
+                                          </Grid>
+                                          <!-- Episode Item Shimmer 4 -->
+                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
+                                              <Grid.ColumnDefinitions>
+                                                  <ColumnDefinition Width="100"/>
+                                                  <ColumnDefinition Width="*"/>
+                                              </Grid.ColumnDefinitions>
+                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
+                                                  <ctl:ShimmerControl Width="130" Height="16" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="190" Height="14" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="170" Height="12" CornerRadius="4"/>
+                                              </StackPanel>
+                                          </Grid>
+                                          <!-- Episode Item Shimmer 5 -->
+                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
+                                              <Grid.ColumnDefinitions>
+                                                  <ColumnDefinition Width="100"/>
+                                                  <ColumnDefinition Width="*"/>
+                                              </Grid.ColumnDefinitions>
+                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
+                                                  <ctl:ShimmerControl Width="110" Height="16" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="200" Height="14" CornerRadius="4"/>
+                                                  <ctl:ShimmerControl Width="150" Height="12" CornerRadius="4"/>
+                                              </StackPanel>
+                                          </Grid>
+                                      </StackPanel>
+                                  </Grid>
+                              </Grid>
+                          </Border>
                     </Grid>
 
                     <!-- SOURCES PANEL (Stremio Streams) -->

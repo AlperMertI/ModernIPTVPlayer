@@ -266,6 +266,44 @@ namespace ModernIPTVPlayer
             System.Diagnostics.Debug.WriteLine($"[LayoutDebug] SyncWideHeights: Grid={targetHeight}, Panel={EpisodesPanel?.Height}, ListMax={EpisodesListView?.MaxHeight}");
         }
 
+        private void RestoreUIVisibility()
+        {
+            // Force restore visibility of key UI elements in case cached page has them hidden
+            try
+            {
+                if (RootScrollViewer != null) RootScrollViewer.Visibility = Visibility.Visible;
+                
+                // Restore buttons
+                if (PlayButton != null) PlayButton.Visibility = Visibility.Visible;
+                if (TrailerButton != null) TrailerButton.Visibility = Visibility.Visible;
+                if (DownloadButton != null) DownloadButton.Visibility = Visibility.Visible;
+                if (CopyLinkButton != null) CopyLinkButton.Visibility = Visibility.Visible;
+                
+                // Restore panels (sources should be hidden initially)
+                if (SourcesPanel != null) SourcesPanel.Visibility = Visibility.Collapsed;
+                if (NarrowSourcesSection != null) NarrowSourcesSection.Visibility = Visibility.Collapsed;
+                if (EpisodesPanel != null) EpisodesPanel.Visibility = Visibility.Collapsed;
+                if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Collapsed;
+                
+                System.Diagnostics.Debug.WriteLine("[MediaInfoPage] UI Visibility restored.");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] RestoreUIVisibility Error: {ex.Message}");
+            }
+        }
+
+        private bool IsSameItem(IMediaStream item1, IMediaStream item2)
+        {
+            if (item1 == null || item2 == null) return false;
+            
+            // Compare by ID
+            string id1 = item1.IMDbId ?? item1.Id.ToString();
+            string id2 = item2.IMDbId ?? item2.Id.ToString();
+            
+            return id1 == id2;
+        }
+
         private void UpdateLayoutState(bool isWide)
         {
             try
@@ -401,22 +439,33 @@ namespace ModernIPTVPlayer
                 }
             } catch {}
 
-            // Detach player to prevent D3D surface loss
+            // Detach player - but only cleanup if NOT handing off to PlayerPage
             if (MediaInfoPlayer != null && PlayerHost != null)
             {
-                 try
+                 // If we're handing off to PlayerPage, don't cleanup - let PlayerPage use it
+                 if (App.HandoffPlayer != null)
                  {
+                     // Just detach from visual tree, don't destroy
                      PlayerHost.Content = null;
-                     await MediaInfoPlayer.CleanupAsync(); 
+                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Detached player for handoff (not cleaning up).");
                  }
-                 catch (Exception ex)
+                 else
                  {
-                     System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] CleanupAsync Error: {ex.Message}");
-                 }
-                 finally
-                 {
-                     MediaInfoPlayer = null;
-                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Cleaned up MpvPlayer on exit.");
+                     // No handoff - safe to cleanup
+                     try
+                     {
+                         PlayerHost.Content = null;
+                         await MediaInfoPlayer.CleanupAsync(); 
+                     }
+                     catch (Exception ex)
+                     {
+                         System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] CleanupAsync Error: {ex.Message}");
+                     }
+                     finally
+                     {
+                         MediaInfoPlayer = null;
+                         System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Cleaned up MpvPlayer on exit.");
+                     }
                  }
             }
         }
@@ -426,6 +475,25 @@ namespace ModernIPTVPlayer
             try
             {
                 base.OnNavigatedTo(e);
+
+                // IMMEDIATE CLEANUP - Clear all UI state BEFORE rendering to avoid showing stale data
+                // This runs BEFORE any async operations so cached page doesn't show old content
+                System.Diagnostics.Debug.WriteLine("[MediaInfoPage] IMMEDIATE CLEANUP - Clearing cached UI state");
+                _addonResults?.Clear();
+                SourcesPanel.Visibility = Visibility.Collapsed;
+                NarrowSourcesSection.Visibility = Visibility.Collapsed;
+                EpisodesPanel.Visibility = Visibility.Collapsed;
+                NarrowEpisodesSection.Visibility = Visibility.Collapsed;
+                _currentStremioVideoId = null;
+                _areSourcesVisible = false;
+                if (SourcesListView != null) SourcesListView.ItemsSource = null;
+                if (NarrowSourcesListView != null) NarrowSourcesListView.ItemsSource = null;
+                if (AddonSelectorList != null) AddonSelectorList.ItemsSource = null;
+                if (NarrowAddonSelector != null) NarrowAddonSelector.ItemsSource = null;
+                
+                // Debug: log current item state
+                string cachedItemId = _item?.IMDbId ?? _item?.Id.ToString();
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Current cached _item ID: {cachedItemId}");
 
                 bool isBackNav = e.NavigationMode == NavigationMode.Back;
 
@@ -484,17 +552,24 @@ namespace ModernIPTVPlayer
                 _isHandoffInProgress = false;
 
                 // RE-ATTACH: If the player was handed off, it might be detached from its original host.
-                if (MediaInfoPlayer == null && PlayerHost != null)
+                if (App.HandoffPlayer != null)
                 {
-                     // CRITICAL FIX: If player was cleaned up (Exit -> Return), we MUST recreate it 
-                     // because the old D3D Surface is permanently disposed.
-                     MediaInfoPlayer = new MpvPlayer();
-                     MediaInfoPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
-                     MediaInfoPlayer.VerticalAlignment = VerticalAlignment.Stretch;
-                     MediaInfoPlayer.Opacity = 0; // Start hidden
-                     MediaInfoPlayer.IsHitTestVisible = false;
-                     PlayerHost.Content = MediaInfoPlayer;
-                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Created NEW MpvPlayer instance for re-entry.");
+                    // Use the player returned from PlayerPage
+                    MediaInfoPlayer = App.HandoffPlayer;
+                    App.HandoffPlayer = null;
+                    if (PlayerHost != null)
+                    {
+                        PlayerHost.Content = MediaInfoPlayer;
+                        MediaInfoPlayer.Visibility = Visibility.Visible;
+                        MediaInfoPlayer.Opacity = 1;
+                        System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Re-attached returned HandoffPlayer.");
+                    }
+                }
+                else if (MediaInfoPlayer == null && PlayerHost != null)
+                {
+                     // Only create new player if no handoff player exists
+                     // Skip this for now - let user manually play again
+                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Skipping player recreation (user can play again).");
                 }
                 else if (MediaInfoPlayer != null && MediaInfoPlayer.Parent == null && PlayerHost != null)
                 {
@@ -507,10 +582,36 @@ namespace ModernIPTVPlayer
                 
                 await CloseTrailer(); // Ensure trailer is closed on navigation
 
-                if (isBackNav && _item != null)
+                // Force restore UI visibility in case cached page has hidden elements
+                RestoreUIVisibility();
+
+                // Determine the new item from navigation parameters
+                IMediaStream newItem = null;
+                if (e.Parameter is MediaNavigationArgs navArgs)
+                    newItem = navArgs.Stream;
+                else if (e.Parameter is IMediaStream mediaStream)
+                    newItem = mediaStream;
+
+                // Check if this is a NEW item (different from cached _item)
+                string newItemId = newItem?.IMDbId ?? newItem?.Id.ToString();
+                string currentItemId = _item?.IMDbId ?? _item?.Id.ToString();
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Navigation check: _item={currentItemId}, newItem={newItemId}");
+                
+                // Always do full load - the minimal refresh path doesn't load UI content properly
+                // This simplifies the logic and ensures consistent behavior
+                bool isNewItem = true;
+
+                if (isNewItem)
                 {
-                    // BACK NAVIGATION: Refresh UI State without full reload
-                    System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Back Navigation Detected - Refreshing Progress Only");
+                    // NEW ITEM - do full load
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] New item detected: {newItem?.Title}");
+                    _item = newItem;
+                    await LoadDetailsAsync(newItem);
+                }
+                else if (_item != null)
+                {
+                    // Same item - just refresh state
+                    System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Refreshing UI state for existing item");
                     
                     if (_item is Models.Stremio.StremioMediaStream stremioItem)
                     {
@@ -527,69 +628,20 @@ namespace ModernIPTVPlayer
                                 PlayButtonSubtext.Visibility = Visibility.Visible;
                                 RestartButton.Visibility = Visibility.Visible;
                                 
-                                 _streamUrl = history.StreamUrl;
-                                 InitializePrebufferPlayer(_streamUrl, history.Position);
-                                 _ = UpdateTechnicalBadgesAsync(_streamUrl);
+                                _streamUrl = history.StreamUrl;
+                                // Don't auto-start prebuffer on return - user can play manually
                              }
                              else
                              {
                                  UpdateTechnicalSectionVisibility(false);
                                  PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                                 RestartButton.Visibility = Visibility.Collapsed;
                              }
-                         }
-                        else if (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")
-                        {
-                            // Refresh Series Progress
-                            await RefreshStremioSeriesProgressAsync(stremioItem);
                         }
-                    }
-                    else if (_item is SeriesStream ss)
-                    {
-                        // Refresh IPTV Series
-                         var lastWatched = HistoryManager.Instance.GetLastWatchedEpisode(ss.SeriesId.ToString());
-                         if (lastWatched != null)
-                         {
-                             PlayButtonText.Text = "Devam Et";
-                             PlayButtonSubtext.Visibility = Visibility.Visible;
-                             // Update List Selection if needed
-                             if (CurrentEpisodes != null)
-                             {
-                                 var ep = CurrentEpisodes.FirstOrDefault(x => x.EpisodeNumber == lastWatched.EpisodeNumber && x.SeasonNumber == lastWatched.SeasonNumber);
-                                 if (ep != null) 
-                                 {
-                                     _selectedEpisode = ep;
-                                     EpisodesListView.SelectedItem = ep;
-                                     // Re-bind to update progress bars
-                                     // (ObservableCollection updates might generally handle this if properties notify, but full replace is safer for List)
-                                 }
-                             }
-                         }
                     }
 
                     // Restore Visuals
                     StartHeroConnectedAnimation();
-                    return; 
-                }
-
-                // NEW NAVIGATION
-                if (e.Parameter is MediaNavigationArgs navArgs)
-                {
-                    _item = navArgs.Stream;
-                    await LoadDetailsAsync(navArgs.Stream, navArgs.TmdbInfo);
-
-                    if (navArgs.AutoResume)
-                    {
-                        PlayButton_Click(PlayButton, new RoutedEventArgs());
-                    }
-                }
-                else if (e.Parameter is IMediaStream item)
-                {
-                    _item = item;
-                    await LoadDetailsAsync(item);
-                }
-                else if (e.Parameter is string stremioId) 
-                {
-                    // Direct Link Support
                 }
             }
             catch (Exception ex)
@@ -615,8 +667,19 @@ namespace ModernIPTVPlayer
 
         private async Task LoadDetailsAsync(IMediaStream item, TmdbMovieResult preFetchedTmdb = null)
         {
-            // 1. Centralized Reset (Synchronous) - REMOVED: Handled by OnNavigatedFrom (Exit Cleanup)
-            // ResetPageState(); 
+            // Clear sources panel immediately to avoid showing stale data
+            _addonResults?.Clear();
+            SourcesPanel.Visibility = Visibility.Collapsed;
+            NarrowSourcesSection.Visibility = Visibility.Collapsed;
+            _currentStremioVideoId = null;
+            _stremioSourcesCache.Clear();
+            _areSourcesVisible = false; // Reset sources visibility flag
+            
+            // Clear list views to avoid showing stale data
+            if (SourcesListView != null) SourcesListView.ItemsSource = null;
+            if (NarrowSourcesListView != null) NarrowSourcesListView.ItemsSource = null;
+            if (AddonSelectorList != null) AddonSelectorList.ItemsSource = null;
+            if (NarrowAddonSelector != null) NarrowAddonSelector.ItemsSource = null;
 
             // 2. Determine if we already have data
             var existingTmdb = preFetchedTmdb ?? item.TmdbInfo;
@@ -1230,6 +1293,10 @@ namespace ModernIPTVPlayer
         {
             try
             {
+                // Show shimmer while loading
+                if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Visible;
+                if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Collapsed;
+                
                 // 1. Clear UI Lists
                 Seasons.Clear();
                 CurrentEpisodes.Clear();
@@ -1303,6 +1370,10 @@ namespace ModernIPTVPlayer
                 }
 
                 System.Diagnostics.Debug.WriteLine($"[SERIES] Data Loaded. Seasons: {Seasons.Count}, Provider: {unified.DataSource}");
+                
+                // Hide shimmer, show actual list
+                if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Collapsed;
+                if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Visible;
             }
             catch (Exception ex)
             {
@@ -2906,7 +2977,11 @@ namespace ModernIPTVPlayer
         {
             if (string.IsNullOrWhiteSpace(videoId)) return;
 
-            if (_currentStremioVideoId == videoId)
+            // Check if we're viewing the same video AND same item
+            string currentItemId = _item is Models.Stremio.StremioMediaStream sms ? sms.Meta.Id : null;
+            bool isSameItem = currentItemId != null && _currentStremioVideoId == videoId;
+
+            if (isSameItem)
             {
                 bool hasVisibleSources = _addonResults != null &&
                                          _addonResults.Any(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0);
@@ -2918,6 +2993,13 @@ namespace ModernIPTVPlayer
                     if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
                     return;
                 }
+            }
+            else
+            {
+                // New item - clear old sources to avoid showing stale data
+                _addonResults?.Clear();
+                SourcesPanel.Visibility = Visibility.Collapsed;
+                NarrowSourcesSection.Visibility = Visibility.Collapsed;
             }
 
             int requestVersion = Interlocked.Increment(ref _sourcesRequestVersion);

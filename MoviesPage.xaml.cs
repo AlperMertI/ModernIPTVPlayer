@@ -106,8 +106,6 @@ namespace ModernIPTVPlayer
 
             if (e.NavigationMode == NavigationMode.Back)
             {
-                // Defer to allow layout to settle, then run robust animation logic
-                DispatcherQueue.TryEnqueue(async () => await AnimateBackAsync());
                 return; // SKIP full reload on back navigation
             }
 
@@ -599,13 +597,6 @@ namespace ModernIPTVPlayer
             }
             
             return false;
-        }
-
-
-        private Task AnimateBackAsync()
-        {
-            System.Diagnostics.Debug.WriteLine("[MoviesPage] Back navigation with custom slide animation.");
-            return Task.CompletedTask;
         }
     }
 }
