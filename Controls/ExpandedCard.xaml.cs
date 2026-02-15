@@ -34,6 +34,8 @@ namespace ModernIPTVPlayer.Controls
         private Microsoft.UI.Composition.Compositor _compositor;
         private System.Threading.CancellationTokenSource _trailerCts;
 
+        public Image BannerImage => BackdropImage;
+
         public ExpandedCard()
         {
             this.InitializeComponent();
@@ -550,42 +552,29 @@ namespace ModernIPTVPlayer.Controls
 
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Searching TMDB for: {stream.Title}");
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Fetching Metadata for: {stream.Title}");
                 
-                string extractedYear = TmdbHelper.ExtractYear(stream.Title);
-                Task<TmdbMovieResult?> tmdbTask = (stream is SeriesStream) 
-                    ? TmdbHelper.SearchTvAsync(stream.Title, extractedYear)
-                    : TmdbHelper.SearchMovieAsync(stream.Title, extractedYear);
-                
-                // Fire and forget probing (or await it later) BUT don't block TMDB UI update
-                // Current issue: The user waits for 5s probe before seeing ANY text.
-                // Fix: Await TMDB, Update UI, THEN await Probe.
-                
-                var tmdb = await tmdbTask;
+                var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream);
                 if (loadNonce != _loadNonce) return;
-                
-                if (tmdb != null)
+
+                if (unified != null)
                 {
-                    _tmdbInfo = tmdb;
-                    if (stream != null) stream.TmdbInfo = tmdb;
+                    _tmdbInfo = unified.TmdbInfo; // Keep for DetailsClicked compatibility
+                    if (stream != null) stream.TmdbInfo = unified.TmdbInfo;
 
-                    string displayTitle = tmdb.DisplayTitle;
-                    string displaySubtitle = tmdb.GetGenreNames();
-                    string displayOverview = tmdb.Overview;
-                    string displayBackdrop = tmdb.FullBackdropUrl;
+                    string displayTitle = unified.Title;
+                    string displaySubtitle = unified.Genres;
+                    string displayOverview = unified.Overview;
+                    string displayBackdrop = unified.BackdropUrl;
 
-                    // --- EPISODE RESUME LOGIC ---
-                    string? historySeriesId = null;
-                    if (stream is SeriesStream series) historySeriesId = series.SeriesId.ToString();
-                    else if (stream is StremioMediaStream stremioItem && (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")) historySeriesId = stremioItem.Meta.Id;
-
-                    if (historySeriesId != null)
+                    // --- EPISODE RESUME LOGIC (Enhanced with UnifiedMetadata) ---
+                    if (unified.IsSeries)
                     {
-                        var history = HistoryManager.Instance.GetLastWatchedEpisode(historySeriesId);
-                        if (history != null)
+                        var history = HistoryManager.Instance.GetLastWatchedEpisode(unified.MetadataId);
+                        if (history != null && unified.Seasons != null)
                         {
-                            var season = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, history.SeasonNumber);
-                            if (season?.Episodes != null)
+                            var season = unified.Seasons.FirstOrDefault(s => s.SeasonNumber == history.SeasonNumber);
+                            if (season != null)
                             {
                                 var ep = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == history.EpisodeNumber);
                                 if (ep == null && history.EpisodeNumber == 0)
@@ -593,10 +582,9 @@ namespace ModernIPTVPlayer.Controls
 
                                 if (ep != null)
                                 {
-                                    string epName = ep.Name;
+                                    string epName = ep.Title;
                                     string cleanTitle = TmdbHelper.CleanEpisodeTitle(history.Title);
                                     
-                                    // Logic for better title display
                                     bool isGeneric = string.IsNullOrEmpty(epName) || 
                                                     epName.Contains("Bölüm") || 
                                                     epName.Contains("Episode") || 
@@ -608,20 +596,27 @@ namespace ModernIPTVPlayer.Controls
                                         displayTitle = !string.IsNullOrEmpty(epName) ? epName : $"Bölüm {ep.EpisodeNumber}";
 
                                     if (!string.IsNullOrEmpty(ep.Overview)) displayOverview = ep.Overview;
-                                    if (!string.IsNullOrEmpty(ep.StillUrl)) displayBackdrop = ep.StillUrl;
+                                    if (!string.IsNullOrEmpty(ep.ThumbnailUrl)) displayBackdrop = ep.ThumbnailUrl;
                                     
-                                    // Add "S01E05" prefix to title for clarity
                                     displayTitle = $"S{history.SeasonNumber:D2}E{history.EpisodeNumber:D2} - {displayTitle}";
                                 }
                             }
                         }
                     }
 
-                    // Update UI IMMEDIATELY with TMDB info
-                    UpdateUiWithTmdb(tmdb, displayTitle, displaySubtitle, displayOverview, displayBackdrop);
+                    // Update UI IMMEDIATELY
+                    UpdateUiFromUnified(unified, displayTitle, displaySubtitle, displayOverview, displayBackdrop);
 
-                    // NOW Fetch Trailer (Async)
-                    var trailerKey = await TmdbHelper.GetTrailerKeyAsync(tmdb.Id, stream is SeriesStream);
+                    // NOW Fetch Trailer (Provider might have pre-filled this from TMDB if enabled)
+                    string trailerKey = unified.TrailerUrl;
+                    
+                    // If provider didn't find one but we have TMDB info, try a quick lookup fallback?
+                    // Usually MetadataProvider handles this, but for ExpandedCard we want speed.
+                    if (string.IsNullOrEmpty(trailerKey) && unified.TmdbInfo != null)
+                    {
+                         trailerKey = await TmdbHelper.GetTrailerKeyAsync(unified.TmdbInfo.Id, unified.IsSeries);
+                    }
+
                     if (loadNonce != _loadNonce) return;
                     if (!string.IsNullOrEmpty(trailerKey))
                     {
@@ -686,14 +681,7 @@ namespace ModernIPTVPlayer.Controls
                 {
                     try
                     {
-                        var loginParams = new Services.LoginParams
-                        {
-                            Host = App.CurrentLogin.Host,
-                            Username = App.CurrentLogin.Username,
-                            Password = App.CurrentLogin.Password,
-                            PlaylistUrl = App.CurrentLogin.PlaylistUrl
-                        };
-                        var info = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, loginParams);
+                        var info = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, App.CurrentLogin);
                         if (info != null && info.Episodes != null && info.Episodes.Count > 0)
                         {
                              // Find First Season
@@ -1001,6 +989,31 @@ namespace ModernIPTVPlayer.Controls
 
                 // Just call JavaScript to load the video - player is already ready
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Loading video: {videoKey}");
+
+                // Check if it is a full URL or ID
+                if (videoKey.StartsWith("http") && (videoKey.Contains("youtube.com") || videoKey.Contains("youtu.be")))
+                {
+                     // Extract ID from URL
+                     try 
+                     {
+                        var uri = new Uri(videoKey);
+                        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+                        if (query.AllKeys.Contains("v"))
+                        {
+                            videoKey = query["v"];
+                        }
+                        else if (videoKey.Contains("youtu.be"))
+                        {
+                            videoKey = uri.Segments.Last();
+                        }
+                        System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Extracted ID from URL: {videoKey}");
+                     }
+                     catch
+                     {
+                        System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Failed to extract ID from URL: {videoKey}");
+                     }
+                }
+
                 await TrailerWebView.CoreWebView2.ExecuteScriptAsync($"loadVideo('{videoKey}')");
                 
                 if (token.IsCancellationRequested) return;
@@ -1169,16 +1182,16 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void UpdateUiWithTmdb(TmdbMovieResult tmdb, string? overrideTitle = null, string? overrideSubtitle = null, string? overrideOverview = null, string? overrideBackdrop = null)
+        private void UpdateUiFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified, string? overrideTitle = null, string? overrideSubtitle = null, string? overrideOverview = null, string? overrideBackdrop = null)
         {
-            if (tmdb == null) return;
+            if (unified == null) return;
             
-            TitleText.Text = overrideTitle ?? tmdb.DisplayTitle;
-            GenresText.Text = overrideSubtitle ?? tmdb.GetGenreNames();
-            DescText.Text = overrideOverview ?? tmdb.Overview;
+            TitleText.Text = overrideTitle ?? unified.Title;
+            GenresText.Text = overrideSubtitle ?? unified.Genres;
+            DescText.Text = overrideOverview ?? unified.Overview;
 
-            RatingText.Text = $"\u2605 {tmdb.VoteAverage:F1}";
-            YearText.Text = tmdb.DisplayDate?.Split('-')[0] ?? "";
+            RatingText.Text = unified.Rating > 0 ? $"\u2605 {unified.Rating:F1}" : "";
+            YearText.Text = unified.Year;
             
             // Hide skeleton and reveal description with staggered reveal
             MainSkeleton.Visibility = Visibility.Collapsed;
@@ -1191,14 +1204,14 @@ namespace ModernIPTVPlayer.Controls
 
             StaggeredRevealContent();
             
-            string backdropUrl = overrideBackdrop ?? tmdb.FullBackdropUrl;
+            string backdropUrl = overrideBackdrop ?? unified.BackdropUrl;
             if (!string.IsNullOrEmpty(backdropUrl))
             {
                 BackdropImage.Source = new BitmapImage(new Uri(backdropUrl));
             }
 
             // Mood Tag Logic (Mock)
-            if (tmdb.VoteAverage > 8.0)
+            if (unified.Rating > 8.0)
             {
                 MoodTag.Visibility = Visibility.Visible;
                 MoodText.Text = "Top Rated";
@@ -1425,8 +1438,8 @@ namespace ModernIPTVPlayer.Controls
                         PlayButtonSubtext.Visibility = Visibility.Visible;
                     }
 
-                    TimeLeftText.Text = timeLeft;
-                    ProgressPanel.Visibility = Visibility.Visible;
+                    // TimeLeftText.Text = timeLeft;
+                    // ProgressPanel.Visibility = Visibility.Visible;
                     return;
                 }
             }

@@ -8,127 +8,166 @@
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
     <Grid Padding="30">
-        <StackPanel Spacing="20" MaxWidth="600" HorizontalAlignment="Left">
-            <TextBlock Text="Ayarlar" FontSize="32" FontWeight="Bold" Margin="0,0,0,10"/>
+        <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid Padding="0,0,20,20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="20"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/> <!-- Title -->
+                    <RowDefinition Height="Auto"/> <!-- Content -->
+                </Grid.RowDefinitions>
 
-            <!-- CACHE SETTINGS GROUP -->
-            <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                <StackPanel Orientation="Horizontal" Spacing="10">
-                    <FontIcon Glyph="&#xE7F3;" FontSize="20"/>
-                    <TextBlock Text="Önbellek &amp; Veri Yönetimi" FontSize="20" FontWeight="SemiBold"/>
+                <TextBlock Text="Ayarlar" FontSize="32" FontWeight="Bold" Margin="0,0,0,20" Grid.ColumnSpan="3"/>
+
+                <!-- LEFT COLUMN -->
+                <StackPanel Grid.Row="1" Grid.Column="0" Spacing="20">
+                     <!-- CACHE SETTINGS GROUP -->
+                    <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE7F3;" FontSize="20"/>
+                            <TextBlock Text="Önbellek &amp; Veri Yönetimi" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
+
+                        <!-- Auto Update Toggle -->
+                        <ToggleSwitch x:Name="AutoCacheToggle" Header="Otomatik Arka Plan Güncellemesi" 
+                                      OnContent="Açık" OffContent="Kapalı" 
+                                      IsOn="{x:Bind ViewModel.IsAutoCacheEnabled, Mode=TwoWay}"
+                                      Toggled="AutoCacheToggle_Toggled"/>
+                        
+                        <TextBlock Text="Bu özellik açıksa, uygulama her 15 dakikada bir verilerinizi kontrol eder ve gerekirse arka planda günceller."
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap"/>
+
+                        <!-- Update Interval -->
+                        <ComboBox x:Name="IntervalCombo" Header="Güncelleme Kontrol Sıklığı" HorizontalAlignment="Stretch" SelectionChanged="IntervalCombo_SelectionChanged">
+                            <ComboBoxItem Content="15 Dakika (Test)" Tag="15"/>
+                            <ComboBoxItem Content="1 Saat" Tag="60"/>
+                            <ComboBoxItem Content="6 Saat" Tag="360"/>
+                            <ComboBoxItem Content="12 Saat" Tag="720"/>
+                            <ComboBoxItem Content="24 Saat (Önerilen)" Tag="1440"/>
+                        </ComboBox>
+
+                        <!-- Actions -->
+                        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,15,0,0">
+                            <Button x:Name="BtnClearCache" Click="BtnClearCache_Click">
+                                <Button.Content>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE74D;"/>
+                                        <TextBlock Text="Önbelleği Temizle"/>
+                                    </StackPanel>
+                                </Button.Content>
+                            </Button>
+                            
+                            <Button x:Name="BtnRefreshNow" Style="{StaticResource AccentButtonStyle}" Click="BtnRefreshNow_Click">
+                                 <Button.Content>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE72C;"/>
+                                        <TextBlock Text="Şimdi Güncelle"/>
+                                    </StackPanel>
+                                </Button.Content>
+                            </Button>
+                        </StackPanel>
+
+                        <TextBlock x:Name="TxtStatus" Text="Hazır" Margin="0,10,0,0" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+
+                    <!-- PROBE CACHE GROUP -->
+                    <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                         <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE9D9;" FontSize="20"/>
+                            <TextBlock Text="Akış Analiz Verileri (Probe)" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
+                        
+                        <TextBlock Text="Yayınların çözünürlük ve codec bilgileri daha hızlı açılış için cihazınızda saklanır."
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,5"/>
+
+                        <ToggleSwitch x:Name="AutoProbeToggle" Header="Otomatik Kanal Analizi" 
+                                       OnContent="Açık" OffContent="Kapalı" 
+                                       Toggled="AutoProbeToggle_Toggled"/>
+                        
+                        <TextBlock Text="Bu özellik açıksa, kanal listesinde gezerken yayınların kaliteleri arka planda otomatik olarak kontrol edilir."
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                        
+                         <Button Content="Analiz Verilerini Temizle" Click="BtnClearProbe_Click"/>
+                    </StackPanel>
                 </StackPanel>
-                <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
 
-                <!-- Auto Update Toggle -->
-                <ToggleSwitch x:Name="AutoCacheToggle" Header="Otomatik Arka Plan Güncellemesi" 
-                              OnContent="Açık" OffContent="Kapalı" 
-                              IsOn="{x:Bind ViewModel.IsAutoCacheEnabled, Mode=TwoWay}"
-                              Toggled="AutoCacheToggle_Toggled"/>
-                
-                <TextBlock Text="Bu özellik açıksa, uygulama her 15 dakikada bir verilerinizi kontrol eder ve gerekirse arka planda günceller."
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap"/>
+                <!-- RIGHT COLUMN -->
+                <StackPanel Grid.Row="1" Grid.Column="2" Spacing="20">
+                     <!-- PLAYER SETTINGS GROUP -->
+                    <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE768;" FontSize="20"/>
+                            <TextBlock Text="Oynatıcı Ayarları" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
 
-                <!-- Update Interval -->
-                <ComboBox x:Name="IntervalCombo" Header="Güncelleme Kontrol Sıklığı" Width="200" SelectionChanged="IntervalCombo_SelectionChanged">
-                    <ComboBoxItem Content="15 Dakika (Test)" Tag="15"/>
-                    <ComboBoxItem Content="1 Saat" Tag="60"/>
-                    <ComboBoxItem Content="6 Saat" Tag="360"/>
-                    <ComboBoxItem Content="12 Saat" Tag="720"/>
-                    <ComboBoxItem Content="24 Saat (Önerilen)" Tag="1440"/>
-                </ComboBox>
+                        <!-- Pre-buffer Toggle -->
+                        <ToggleSwitch x:Name="PrebufferToggle" Header="Hızlı Başlat (Pre-buffer)" 
+                                       OnContent="Açık" OffContent="Kapalı" 
+                                       Toggled="PrebufferToggle_Toggled"/>
+                        
+                        <TextBlock Text="İçerik detay sayfasındayken videoyu arka planda yüklemeye başlar. Oynat dediğinizde bekleme süresini azaltır."
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,5"/>
+                        
+                        <!-- Pre-buffer Slider -->
+                        <Grid Margin="0,5,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            
+                            <TextBlock Text="Hızlı Başlat Süresi (Saniye)" Margin="0,0,0,5"/>
+                            <Slider x:Name="PrebufferSlider" Minimum="5" Maximum="60" StepFrequency="5" 
+                                    TickFrequency="5" TickPlacement="Outside"
+                                    Grid.Row="1" ValueChanged="PrebufferSlider_ValueChanged"/>
+                        </Grid>
 
-                <!-- Actions -->
-                <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,15,0,0">
-                    <Button x:Name="BtnClearCache" Click="BtnClearCache_Click">
-                        <Button.Content>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <FontIcon Glyph="&#xE74D;"/>
-                                <TextBlock Text="Önbelleği Temizle"/>
-                            </StackPanel>
-                        </Button.Content>
-                    </Button>
-                    
-                    <Button x:Name="BtnRefreshNow" Style="{StaticResource AccentButtonStyle}" Click="BtnRefreshNow_Click">
-                         <Button.Content>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <FontIcon Glyph="&#xE72C;"/>
-                                <TextBlock Text="Şimdi Güncelle"/>
-                            </StackPanel>
-                        </Button.Content>
-                    </Button>
+                         <!-- Main Buffer Slider -->
+                         <Grid Margin="0,15,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            
+                            <TextBlock Text="Player Buffer Süresi (Saniye)" Margin="0,0,0,5"/>
+                            <Slider x:Name="BufferSlider" Minimum="30" Maximum="300" StepFrequency="10" 
+                                    TickFrequency="30" TickPlacement="Outside"
+                                    Grid.Row="1" ValueChanged="BufferSlider_ValueChanged"/>
+                            
+                            <TextBlock Text="Oynatıcı açıldığında videonun ne kadar süre ileriye doğru yükleneceğini belirler. Yüksek değerler, yavaş internet bağlantılarında donmayı azaltabilir ancak RAM kullanımını artırır."
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Grid.Row="2" Margin="0,5,0,0"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- METADATA SETTINGS GROUP -->
+                    <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE12B;" FontSize="20"/>
+                            <TextBlock Text="Metadata &amp; İçerik" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
+
+                        <TextBlock Text="TMDB API Anahtarı (Opsiyonel)" FontWeight="SemiBold"/>
+                        <TextBlock Text="Türkçe içerik, yüksek kaliteli görseller ve detaylı bilgiler için kendi API anahtarınızı kullanın."
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap"/>
+                        
+                        <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,5,0,0">
+                            <PasswordBox x:Name="TmdbApiKeyBox" PlaceholderText="API Anahtarınızı buraya yapıştırın" Width="300"
+                                         PasswordChanged="TmdbApiKeyBox_PasswordChanged"/>
+                            <Button Content="Kaydet" Click="BtnSaveTmdb_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TmdbStatusText" Text="API Anahtarı girilmedi." Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" Margin="0,5,0,0"/>
+
+                    </StackPanel>
                 </StackPanel>
-
-                <TextBlock x:Name="TxtStatus" Text="Hazır" Margin="0,10,0,0" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-            </StackPanel>
-
-            <!-- PROBE CACHE GROUP -->
-            <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                 <StackPanel Orientation="Horizontal" Spacing="10">
-                    <FontIcon Glyph="&#xE9D9;" FontSize="20"/>
-                    <TextBlock Text="Akış Analiz Verileri (Probe)" FontSize="20" FontWeight="SemiBold"/>
-                </StackPanel>
-                <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
-                
-                <TextBlock Text="Yayınların çözünürlük ve codec bilgileri daha hızlı açılış için cihazınızda saklanır."
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,5"/>
-
-                <ToggleSwitch x:Name="AutoProbeToggle" Header="Otomatik Kanal Analizi" 
-                               OnContent="Açık" OffContent="Kapalı" 
-                               Toggled="AutoProbeToggle_Toggled"/>
-                
-                <TextBlock Text="Bu özellik açıksa, kanal listesinde gezerken yayınların kaliteleri arka planda otomatik olarak kontrol edilir."
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10"/>
-                
-                 <Button Content="Analiz Verilerini Temizle" Click="BtnClearProbe_Click"/>
-            </StackPanel>
-
-            <!-- PLAYER SETTINGS GROUP -->
-            <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                <StackPanel Orientation="Horizontal" Spacing="10">
-                    <FontIcon Glyph="&#xE768;" FontSize="20"/>
-                    <TextBlock Text="Oynatıcı Ayarları" FontSize="20" FontWeight="SemiBold"/>
-                </StackPanel>
-                <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
-
-                <!-- Pre-buffer Toggle -->
-                <ToggleSwitch x:Name="PrebufferToggle" Header="Hızlı Başlat (Pre-buffer)" 
-                               OnContent="Açık" OffContent="Kapalı" 
-                               Toggled="PrebufferToggle_Toggled"/>
-                
-                <TextBlock Text="İçerik detay sayfasındayken videoyu arka planda yüklemeye başlar. Oynat dediğinizde bekleme süresini azaltır."
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,5"/>
-                
-                <!-- Pre-buffer Slider -->
-                <Grid Margin="0,5,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    
-                    <TextBlock Text="Hızlı Başlat Süresi (Saniye)" Margin="0,0,0,5"/>
-                    <Slider x:Name="PrebufferSlider" Minimum="5" Maximum="60" StepFrequency="5" 
-                            TickFrequency="5" TickPlacement="Outside"
-                            Grid.Row="1" ValueChanged="PrebufferSlider_ValueChanged"/>
-                </Grid>
-
-                 <!-- Main Buffer Slider -->
-                 <Grid Margin="0,15,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-                    
-                    <TextBlock Text="Player Buffer Süresi (Saniye)" Margin="0,0,0,5"/>
-                    <Slider x:Name="BufferSlider" Minimum="30" Maximum="300" StepFrequency="10" 
-                            TickFrequency="30" TickPlacement="Outside"
-                            Grid.Row="1" ValueChanged="BufferSlider_ValueChanged"/>
-                    
-                    <TextBlock Text="Oynatıcı açıldığında videonun ne kadar süre ileriye doğru yükleneceğini belirler. Yüksek değerler, yavaş internet bağlantılarında donmayı azaltabilir ancak RAM kullanımını artırır."
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Grid.Row="2" Margin="0,5,0,0"/>
-                </Grid>
-
-            </StackPanel>
-        </StackPanel>
+            </Grid>
+        </ScrollViewer>
 
         <!-- Notification Area (for visual feedback) -->
         <InfoBar x:Name="StatusInfoBar" VerticalAlignment="Bottom" Margin="0,0,0,20" IsOpen="False"/>

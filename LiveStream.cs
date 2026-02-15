@@ -13,6 +13,7 @@ namespace ModernIPTVPlayer
     {
         // IMediaStream Implementation
         public int Id => StreamId;
+        public string? IMDbId => null;
         public string Title => Name;
         public string PosterUrl => IconUrl;
         
@@ -56,6 +57,12 @@ namespace ModernIPTVPlayer
 
         // Bu alan JSON'dan gelmez, biz oluşturacağız
         public string StreamUrl { get; set; } = "";
+
+        // UI Binding Helpers (Fixing Binding Errors)
+        public double ProgressValue => 0; 
+        public bool ShowProgress => false;
+        public string BadgeText => "";
+        public bool ShowBadge => false;
         
         // Helper for XAML Binding
         public BitmapImage? StreamIcon

@@ -55,6 +55,14 @@ namespace ModernIPTVPlayer
             BufferSlider.Value = AppSettings.BufferSeconds;
             
             UpdateSliderHeaders();
+
+            // TMDB Settings
+            if (!string.IsNullOrEmpty(AppSettings.TmdbApiKey))
+            {
+                TmdbApiKeyBox.Password = AppSettings.TmdbApiKey;
+                TmdbStatusText.Text = "API Anahtarı kayıtlı. TMDB aktif.";
+                TmdbStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.LightGreen);
+            }
         }
 
         private void UpdateSliderHeaders()
@@ -147,6 +155,31 @@ namespace ModernIPTVPlayer
                 timer.Stop();
             };
             timer.Start();
+        }
+
+        private void TmdbApiKeyBox_PasswordChanged(object sender, RoutedEventArgs e)
+        {
+            // Optional: Enable/Disable save button
+        }
+
+        private void BtnSaveTmdb_Click(object sender, RoutedEventArgs e)
+        {
+            if (!string.IsNullOrWhiteSpace(TmdbApiKeyBox.Password))
+            {
+                AppSettings.TmdbApiKey = TmdbApiKeyBox.Password.Trim();
+                AppSettings.IsTmdbEnabled = true;
+                TmdbStatusText.Text = "API Anahtarı kaydedildi ve TMDB aktif edildi.";
+                TmdbStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.LightGreen);
+                ShowStatus("TMDB API Anahtarı kaydedildi.");
+            }
+            else
+            {
+                AppSettings.TmdbApiKey = null;
+                AppSettings.IsTmdbEnabled = false;
+                TmdbStatusText.Text = "API Anahtarı temizlendi. TMDB devre dışı.";
+                TmdbStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange);
+                ShowStatus("TMDB API Anahtarı silindi.");
+            }
         }
     }
 }

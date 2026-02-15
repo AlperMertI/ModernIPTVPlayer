@@ -15,6 +15,7 @@ using ModernIPTVPlayer.Controls;
 using System.Diagnostics;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Stremio;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System.Collections.ObjectModel;
@@ -31,6 +32,8 @@ namespace ModernIPTVPlayer
         private ContentSource _currentSource = ContentSource.Stremio;
 
         private LoginParams? _loginInfo;
+        private IMediaStream? _lastClickedItem;
+        private bool _isLoaded = false;
         private HttpClient _httpClient;
         
         // Data Store
@@ -55,9 +58,9 @@ namespace ModernIPTVPlayer
             MediaGrid.HoverEnded += MediaGrid_HoverEnded;
 
             // Wire up StremioControl events
-            StremioControl.PlayAction += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
-            StremioControl.DetailsAction += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
-            StremioControl.ItemClicked += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
+            StremioControl.PlayAction += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
+            StremioControl.DetailsAction += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
+            StremioControl.ItemClicked += (s, e) => NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream), e.SourceElement);
             StremioControl.BackdropColorChanged += (s, colors) => 
             {
                  _heroColors = colors;
@@ -84,7 +87,7 @@ namespace ModernIPTVPlayer
             };
 
             // Wire Spotlight Search Events
-            SpotlightSearch.ItemClicked += (s, item) => Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SuppressNavigationTransitionInfo());
+            SpotlightSearch.ItemClicked += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
             SpotlightSearch.SeeAllClicked += (s, query) => 
             {
                 Frame.Navigate(typeof(Pages.SearchResultsPage), query, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
@@ -99,10 +102,10 @@ namespace ModernIPTVPlayer
 
             if (e.NavigationMode == NavigationMode.Back)
             {
-                 // Ensure it is absolutely closed and collapsed
-                 _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
-                 ActiveExpandedCard.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed; 
+                System.Diagnostics.Debug.WriteLine("[SeriesPage] Back navigation with custom slide animation.");
+                return;
             }
+            // Controller handles cleanup via NavigatedFrom/Unloaded subscriptions
 
             if (e.Parameter is LoginParams p)
             {
@@ -136,8 +139,6 @@ namespace ModernIPTVPlayer
 
         protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
-            // Stop any playing trailer in ExpandedCard when leaving the page - DO IT IMMEDIATELY
-            _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
             base.OnNavigatedFrom(e);
         }
 
@@ -407,25 +408,20 @@ namespace ModernIPTVPlayer
         }
 
 
-        private void MediaGrid_ItemClicked(object sender, IMediaStream e)
+        private void MediaGrid_ItemClicked(object sender, MediaNavigationArgs e)
         {
-             _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
-             // For Series, we typically go to MediaInfoPage too? Or specific SeriesDetailsPage?
-             // Assuming MediaInfoPage handles series too
-             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+            _lastClickedItem = e.Stream;
+            NavigationService.NavigateToDetails(Frame, e);
         }
 
-        private void MediaGrid_PlayAction(object sender, IMediaStream e)
+        private void MediaGrid_PlayAction(object sender, MediaNavigationArgs e)
         {
-             // Direct Play logic for Series might mean playing S1E1 or resuming
-             // For now navigate to details
-             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
         }
 
         private void MediaGrid_DetailsAction(object sender, MediaNavigationArgs e)
         {
-             _stremioExpandedCardOverlay?.CloseExpandedCardAsync(force: true);
-             Frame.Navigate(typeof(MediaInfoPage), e, new SuppressNavigationTransitionInfo());
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
         }
 
         private void StremioControl_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
@@ -471,20 +467,14 @@ namespace ModernIPTVPlayer
         // ==========================================
         private async void StremioExpandedCardOverlay_PlayRequested(object sender, IMediaStream e)
         {
-             await _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);
-             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e, autoResume: true), new SuppressNavigationTransitionInfo());
+             NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e, autoResume: true, sourceElement: _stremioExpandedCardOverlay.ActiveExpandedCard.BannerImage));
         }
 
         private async void StremioExpandedCardOverlay_DetailsRequested(object sender, (IMediaStream Stream, TmdbMovieResult Tmdb) e)
         {
-            if (e.Stream is IMediaStream stream) // e.Stream IS the IMediaStream
+            if (e.Stream is IMediaStream stream)
             {
-                System.Diagnostics.Debug.WriteLine($"[SeriesPage] Details Requested. Closing Card...");
-                // Just use Force close synchronously now
-                await _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);
-                
-                System.Diagnostics.Debug.WriteLine($"[SeriesPage] Card Closed. Navigating...");
-                Frame.Navigate(typeof(MediaInfoPage), stream, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
+                NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(stream, e.Tmdb, false, _stremioExpandedCardOverlay.ActiveExpandedCard.BannerImage));
             }
         }
 private void StremioExpandedCardOverlay_AddListRequested(object sender, IMediaStream e)
@@ -506,7 +496,7 @@ private void StremioExpandedCardOverlay_AddListRequested(object sender, IMediaSt
 
         private void SpotlightSearch_ItemClicked(object sender, StremioMediaStream e)
         {
-            Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e), new SuppressNavigationTransitionInfo());
+            NavigationService.NavigateToDetailsDirect(Frame, e);
         }
 
         private async void SpotlightSearch_SeeAllClicked(object sender, string query)

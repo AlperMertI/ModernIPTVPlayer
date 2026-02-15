@@ -46,6 +46,7 @@ namespace ModernIPTVPlayer.Controls
 
         public bool IsInCinemaMode => _isInCinemaMode;
         public bool IsCardVisible => _expandedCard.Visibility == Visibility.Visible;
+        public ExpandedCard ActiveExpandedCard => _expandedCard;
 
         public ExpandedCardOverlayController(
             FrameworkElement hostElement,
@@ -69,6 +70,7 @@ namespace ModernIPTVPlayer.Controls
 
             _hostElement.PointerExited += (s, e) => _ = CloseExpandedCardAsync();
             _overlayCanvas.Visibility = Visibility.Collapsed;
+            
             if (_cinemaScrim != null)
             {
                 _cinemaScrim.Opacity = 0;
@@ -79,6 +81,11 @@ namespace ModernIPTVPlayer.Controls
             _expandedCard.Width = CardWidth;
             _expandedCard.Height = CardHeight;
             _hostElement.SizeChanged += HostElement_SizeChanged;
+
+            // CENTRALIZED LIFECYCLE MANAGEMENT
+            // Auto-clean on unload to prevent card persistence or audio leaks.
+            // In WinUI Page, Unloaded fires when navigating away even if cached.
+            _hostElement.Unloaded += (s, e) => ForceClose();
         }
 
         public void PrepareForTrailer() => _expandedCard.PrepareForTrailer();
@@ -128,27 +135,25 @@ namespace ModernIPTVPlayer.Controls
         public async Task CloseExpandedCardAsync(bool force = false)
         {
             if (_isInCinemaMode && !force) return;
-            // If dragging, don't close unless forced? 
             if (_isPointerOverCard && !force) return;
+
+            if (force)
+            {
+                ForceClose();
+                return;
+            }
 
             try
             {
-                // Cancel any pending close
                 _closeCts?.Cancel();
                 _closeCts = new CancellationTokenSource();
                 var token = _closeCts.Token;
 
-                _suppressCinemaAnimations = force;
-                _expandedCard.StopTrailer(); // Stops trailer playback
-
-                // Synchronous Close for Navigation/Force
-                if (force)
+                System.Diagnostics.Debug.WriteLine("[ExpandedCardOverlayController] CloseExpandedCardAsync: Stopping trailer.");
+                if (_expandedCard.Visibility == Visibility.Visible)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlay] Force Closing. Stopping Trailer...");
-                    _expandedCard.StopTrailer(forceDestroy: true); // KILL IT
-                    FinalizeCloseVisualState();
-                    return;
-                }
+                    _expandedCard.StopTrailer(); 
+                } 
 
                 await Task.Delay(50, token);
                 if (token.IsCancellationRequested) return;
@@ -180,12 +185,34 @@ namespace ModernIPTVPlayer.Controls
 
                 FinalizeCloseVisualState();
             }
-            catch (TaskCanceledException)
+            catch (TaskCanceledException) { }
+        }
+
+        /// <summary>
+        /// Synchronously and immediately clears the expanded card state.
+        /// Ideal for navigation and page switches.
+        /// </summary>
+        public void ForceClose()
+        {
+            try
             {
+                _closeCts?.Cancel();
+                _closeCts = null;
+                _hoverTimer?.Stop();
+                _flightTimer?.Stop();
+                
+                if (_expandedCard.Visibility == Visibility.Visible)
+                {
+                    System.Diagnostics.Debug.WriteLine("[ExpandedCardOverlayController] ForceClose: Stopping trailer.");
+                    _expandedCard.StopTrailer();
+                }
+                FinalizeCloseVisualState();
+                
+                System.Diagnostics.Debug.WriteLine("[ExpandedCardOverlayController] ForceClose executed.");
             }
-            finally
+            catch (Exception ex)
             {
-                _suppressCinemaAnimations = false;
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlayController] ForceClose Error: {ex.Message}");
             }
         }
 

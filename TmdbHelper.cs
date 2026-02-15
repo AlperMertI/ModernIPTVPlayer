@@ -12,7 +12,7 @@ namespace ModernIPTVPlayer
 {
     public class TmdbHelper
     {
-        private const string API_KEY = "d0562d9c2a8b502d37d30b91963dd329";
+        private static string API_KEY => AppSettings.TmdbApiKey;
         private const string BASE_URL = "https://api.themoviedb.org/3";
         private static HttpClient _client = new HttpClient();
         
@@ -20,6 +20,7 @@ namespace ModernIPTVPlayer
 
         public static async Task<TmdbMovieResult?> SearchMovieAsync(string title, string year = null)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 System.Diagnostics.Debug.WriteLine($"[TMDB] SearchMovie Input: '{title}'");
@@ -87,6 +88,7 @@ namespace ModernIPTVPlayer
 
         public static async Task<TmdbMovieResult?> SearchTvAsync(string title, string year = null)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 System.Diagnostics.Debug.WriteLine($"[TMDB] SearchTV Input: '{title}'");
@@ -161,6 +163,7 @@ namespace ModernIPTVPlayer
                 // Get all videos without language filter to find English trailers as fallback
                 var url = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}";
                 var json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW VIDEOS JSON for {tmdbId}:\n{json}");
                 var result = JsonSerializer.Deserialize<TmdbVideosResponse>(json);
 
                 if (result?.Results != null)
@@ -198,6 +201,7 @@ namespace ModernIPTVPlayer
 
                 var url = $"{BASE_URL}/{type}/{id}/credits?api_key={API_KEY}&language=tr-TR";
                 var json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW CREDITS JSON for {id}:\n{json}");
                 var result = JsonSerializer.Deserialize<TmdbCreditsResponse>(json);
                 if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
                 return result;
@@ -217,7 +221,7 @@ namespace ModernIPTVPlayer
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Details Request: {url}");
 
                 var json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TMDB] Details Response (Raw): {json.Substring(0, Math.Min(json.Length, 500))}..."); 
+                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW DETAILS JSON for {id}:\n{json}"); 
 
                 var result = JsonSerializer.Deserialize<TmdbMovieDetails>(json);
                 
@@ -250,6 +254,7 @@ namespace ModernIPTVPlayer
                 var url = $"{BASE_URL}/tv/{tvId}/season/{seasonNumber}?api_key={API_KEY}&language=tr-TR&include_image_language=tr,en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Season Details Request: {url}");
                 var json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW SEASON DETAILS JSON for TV ID {tvId}, Season {seasonNumber}:\n{json}");
                 var result = JsonSerializer.Deserialize<TmdbSeasonDetails>(json);
                 if (result?.Episodes != null)
                 {
@@ -267,6 +272,7 @@ namespace ModernIPTVPlayer
 
         public static async Task<TmdbMovieResult?> GetTvByIdAsync(int tvId)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 if (TmdbCacheService.Instance.Get<TmdbMovieResult>($"tv_id_{tvId}") is TmdbMovieResult cached) return cached;
@@ -286,11 +292,13 @@ namespace ModernIPTVPlayer
 
         public static async Task<TmdbMovieResult?> GetTvByExternalIdAsync(string externalId)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language=tr-TR";
                 var json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW EXTERNAL FIND JSON for {externalId}:\n{json}");
                 
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
@@ -319,6 +327,7 @@ namespace ModernIPTVPlayer
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language=tr-TR";
                 var json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW EXTERNAL FIND JSON for {externalId}:\n{json}");
                 
                 // We need a specific response model for Find, or use dynamic/JsonElement
                 using var doc = JsonDocument.Parse(json);
@@ -373,33 +382,30 @@ namespace ModernIPTVPlayer
             
             string clean = input;
 
-            // 1. Remove quality tags and common IPTV noise first
-            string[] noise = { "4K", "FHD", "HD", "SD", "HEVC", "H265", "X264", "WEB-DL", "BLURAY", "HDTV", "TOP", "VIP", "DUAL", "MULTI", "TR", "EN" };
-            foreach (var tag in noise)
-            {
-                clean = System.Text.RegularExpressions.Regex.Replace(clean, @"(?i)\b" + tag + @"\b", "");
-            }
+            // 1. Remove common IPTV prefixes/brackets like "[TR]", "[DE]", "[Dual]", "VIP |", "(4K)"
+            clean = System.Text.RegularExpressions.Regex.Replace(clean, @"(?i)\[.*?\]|\(.*?\)", "");
+            clean = System.Text.RegularExpressions.Regex.Replace(clean, @"(?i)(tr|ger|eng|dual|vip|top|fhd|hd|sd|uhd|4k|hevc|x265|x264|web-dl|bluray)\b", "");
 
-            // 2. Remove Year patterns: (2024), [2024], 2024
-            clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\s*[\(\[]?(19|20)\d{2}[\)\]]?", "");
+            // 2. Remove common IPTV separators and noise
+            clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\s*[:|/-]\s*", " ");
 
-            // 3. Handle specific IPTV prefix patterns like "Something - Title" or "Something | Title"
-            int lastIndex = Math.Max(clean.LastIndexOf(" - "), clean.LastIndexOf(" | "));
+            // 3. Remove Year patterns: 2024
+            clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\b(19|20)\d{2}\b", "");
+
+            // 4. Handle specific IPTV prefix patterns like "Something - Title"
+            int lastIndex = Math.Max(clean.LastIndexOf("  "), clean.LastIndexOf(" - "));
             if (lastIndex != -1)
             {
-                var potential = clean.Substring(lastIndex + 3).Trim();
+                var potential = clean.Substring(lastIndex + 1).Trim();
                 if (potential.Length > 2) clean = potential;
             }
-
-            // 4. Final regex for any remaining brackets/parentheses content
-            clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\s*[\(\[].*?[\)\]]", "");
 
             // 5. Cleanup punctuation and extra spaces
             clean = System.Text.RegularExpressions.Regex.Replace(clean, @"[._\-|]+", " ");
             
             string final = clean.Trim();
 
-            // Fallback
+            // Fallback: If cleaning was too aggressive, use a lighter version
             if (final.Length < 3)
             {
                 final = System.Text.RegularExpressions.Regex.Replace(input, @"\s*[\(\[].*?[\)\]]", "").Trim();
@@ -463,6 +469,9 @@ namespace ModernIPTVPlayer
 
         [JsonPropertyName("images")]
         public TmdbImages Images { get; set; }
+
+        [JsonPropertyName("seasons")]
+        public List<TmdbSeason> Seasons { get; set; }
 
         public string GetGenreNames()
         {
@@ -557,6 +566,21 @@ namespace ModernIPTVPlayer
     {
         [JsonPropertyName("name")]
         public string Name { get; set; }
+    }
+
+    public class TmdbSeason
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; set; }
+
+        [JsonPropertyName("season_number")]
+        public int SeasonNumber { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("episode_count")]
+        public int EpisodeCount { get; set; }
     }
 
     public class TmdbSeasonDetails

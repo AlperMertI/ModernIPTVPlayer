@@ -1,7 +1,9 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.UI.Xaml.Media.Animation;
 using ModernIPTVPlayer.Controls;
+using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Models;
 using System;
 using System.Collections.Generic;
@@ -20,6 +22,25 @@ namespace ModernIPTVPlayer
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
             base.OnNavigatedTo(e);
+            
+            if (e.NavigationMode == NavigationMode.Back)
+            {
+                // Start return animation if available
+                var anim = ConnectedAnimationService.GetForCurrentView().GetAnimation("BackConnectedAnimation");
+                if (anim != null)
+                {
+                    // For Watchlist, we check both grids
+                    if (ContinueWatchingGrid.ActiveExpandedCard != null && ContinueWatchingGrid.ActiveExpandedCard.Visibility == Visibility.Visible)
+                    {
+                        anim.TryStart(ContinueWatchingGrid.ActiveExpandedCard.BannerImage);
+                    }
+                    else if (WatchlistGrid.ActiveExpandedCard != null && WatchlistGrid.ActiveExpandedCard.Visibility == Visibility.Visible)
+                    {
+                        anim.TryStart(WatchlistGrid.ActiveExpandedCard.BannerImage);
+                    }
+                }
+                return; // SKIP reload
+            }
             await LoadWatchlistAsync();
 
             // Subscribe to external changes
@@ -260,19 +281,19 @@ namespace ModernIPTVPlayer
             // BackdropControl.TransitionTo(Windows.UI.Color.FromArgb(255, 13, 13, 13), Windows.UI.Color.FromArgb(255, 13, 13, 13));
         }
 
-        private void WatchlistGrid_ItemClicked(object sender, IMediaStream e)
+        private void WatchlistGrid_ItemClicked(object sender, MediaNavigationArgs e)
         {
-             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e));
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
         }
         
         private void WatchlistGrid_DetailsAction(object sender, MediaNavigationArgs e)
         {
-             Frame.Navigate(typeof(MediaInfoPage), e);
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
         }
 
-        private void WatchlistGrid_PlayAction(object sender, IMediaStream e)
+        private void WatchlistGrid_PlayAction(object sender, MediaNavigationArgs e)
         {
-             Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(e, null, true));
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
         }
 
         private async void WatchlistGrid_AddListAction(object sender, IMediaStream e)

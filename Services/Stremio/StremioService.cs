@@ -24,7 +24,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         {
             _client = new HttpClient();
             _client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            _client.Timeout = TimeSpan.FromSeconds(10); // Fast timeout
+            _client.Timeout = TimeSpan.FromSeconds(30); // Robust timeout for slow addons
             _jsonOptions = new JsonSerializerOptions 
             { 
                 PropertyNameCaseInsensitive = true,
@@ -89,7 +89,9 @@ namespace ModernIPTVPlayer.Services.Stremio
                     var result = new List<StremioMediaStream>();
                     foreach (var meta in response.Metas)
                     {
-                        result.Add(new StremioMediaStream(meta));
+                        var stream = new StremioMediaStream(meta);
+                        stream.SourceAddon = baseUrl;
+                        result.Add(stream);
                     }
                     
                     _catalogCache[cacheKey] = result; // Cache it
@@ -114,6 +116,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 // Format: /meta/{type}/{id}.json
                 string url = $"{baseUrl.TrimEnd('/')}/meta/{type}/{id}.json";
                 string json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[StremioService] RAW META JSON from {baseUrl}:\n{json}");
                 var response = JsonSerializer.Deserialize<StremioMetaResponse>(json, _jsonOptions);
                 return response?.Meta;
             }

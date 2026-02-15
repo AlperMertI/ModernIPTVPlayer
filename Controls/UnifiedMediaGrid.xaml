@@ -35,7 +35,7 @@
 
     <Grid>
         <!-- Main Media Grid -->
-        <GridView x:Name="MediaGridView" 
+        <GridView x:Name="MediaGridView" x:FieldModifier="public"
                   SelectionMode="Single" 
                   IsItemClickEnabled="True" 
                   ItemClick="MediaGridView_ItemClick"
@@ -89,7 +89,7 @@
         <!-- Flying Panel Overlay -->
         <Canvas x:Name="OverlayCanvas" Visibility="Collapsed">
             <Rectangle x:Name="CinemaScrim" Fill="#FF000000" Opacity="0" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="0"/>
-            <local:ExpandedCard x:Name="ActiveExpandedCard" Visibility="Collapsed" Canvas.ZIndex="1"/>
+            <local:ExpandedCard x:Name="ActiveExpandedCard" x:FieldModifier="public" Visibility="Collapsed" Canvas.ZIndex="1"/>
         </Canvas>
 
         <!-- Empty State -->

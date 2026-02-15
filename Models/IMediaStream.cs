@@ -5,10 +5,18 @@ namespace ModernIPTVPlayer.Models
     public interface IMediaStream
     {
         int Id { get; }
+        string? IMDbId { get; }
         string Title { get; }
         string PosterUrl { get; }
         string Rating { get; }
+        string StreamUrl { get; set; }
         TmdbMovieResult TmdbInfo { get; set; }
+
+        // UI Binding properties for PosterCard
+        double ProgressValue { get; }
+        bool ShowProgress { get; }
+        string BadgeText { get; }
+        bool ShowBadge { get; }
         
         // Technical Metadata properties for polymorphism
         string Resolution { get; set; }
@@ -26,14 +34,15 @@ namespace ModernIPTVPlayer.Models
     {
         public IMediaStream Stream { get; set; }
         public TmdbMovieResult TmdbInfo { get; set; }
-
         public bool AutoResume { get; set; }
+        public Microsoft.UI.Xaml.UIElement SourceElement { get; set; }
 
-        public MediaNavigationArgs(IMediaStream stream, TmdbMovieResult tmdbInfo = null, bool autoResume = false)
+        public MediaNavigationArgs(IMediaStream stream, TmdbMovieResult tmdbInfo = null, bool autoResume = false, Microsoft.UI.Xaml.UIElement sourceElement = null)
         {
             Stream = stream;
             TmdbInfo = tmdbInfo ?? stream.TmdbInfo;
             AutoResume = autoResume;
+            SourceElement = sourceElement;
         }
     }
 }

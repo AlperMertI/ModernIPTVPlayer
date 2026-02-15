@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Media.Animation;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Stremio;
 using System;
 using System.Collections.Generic;
@@ -75,14 +76,11 @@ namespace ModernIPTVPlayer.Pages
         {
             if (e.ClickedItem is IMediaStream item)
             {
-                NavigateToDetails(item);
+                var args = new MediaNavigationArgs(item);
+                NavigationService.NavigateToDetails(Frame, args, sender as UIElement);
             }
         }
 
-        private void NavigateToDetails(IMediaStream item)
-        {
-            Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(item), new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
-        }
 
         private void BackButton_Click(object sender, RoutedEventArgs e)
         {

@@ -25,6 +25,13 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string PosterUrl => Meta.Poster;
         public string Rating => Meta.ImdbRating;
         public string Type => Meta.Type?.ToUpper();
+        public string StreamUrl { get; set; } = "";
+
+        // UI Binding Implementation
+        public double ProgressValue => 0;
+        public bool ShowProgress => false;
+        public string BadgeText => "";
+        public bool ShowBadge => false;
 
         public TmdbMovieResult TmdbInfo { get; set; } // Can populate later if needed
 

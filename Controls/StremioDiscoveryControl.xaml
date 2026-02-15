@@ -20,8 +20,16 @@
                 <local:HeroSectionControl x:Name="HeroControl" />
 
                 <!-- DYNAMIC CATALOG ROWS -->
-                <ItemsControl x:Name="DiscoveryRows">
-                    <ItemsControl.ItemTemplate>
+                <ListView x:Name="DiscoveryRows" SelectionMode="None" IsItemClickEnabled="False">
+                    <ListView.ItemContainerStyle>
+                        <Style TargetType="ListViewItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0"/>
+                            <Setter Property="MinWidth" Value="0"/>
+                        </Style>
+                    </ListView.ItemContainerStyle>
+                    <ListView.ItemTemplate>
                         <DataTemplate>
                             <local:CatalogRow CatalogName="{Binding CatalogName}" 
                                               ItemsSource="{Binding Items}" 
@@ -32,8 +40,8 @@
                                               ScrollStarted="CatalogRow_ScrollStarted"
                                               ScrollEnded="CatalogRow_ScrollEnded"/>
                         </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+                    </ListView.ItemTemplate>
+                </ListView>
                 
             </StackPanel>
         </ScrollViewer>

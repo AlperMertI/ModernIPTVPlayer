@@ -8,6 +8,7 @@ namespace ModernIPTVPlayer.Models
     public class WatchlistItem : IMediaStream
     {
         public string Id { get; set; }
+        public string? IMDbId => Id; // For Stremio, Id is the IMDb ID
         public string Title { get; set; }
 
         [JsonIgnore]

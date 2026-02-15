@@ -16,6 +16,7 @@ namespace ModernIPTVPlayer.Controls
     public sealed partial class PosterCard : UserControl
     {
         public bool IsHovered { get; private set; }
+        public Image ImageElement => PosterImage;
 
         public event EventHandler<(Color Primary, Color Secondary)> ColorsExtracted;
         public event EventHandler HoverStarted;

@@ -38,8 +38,16 @@ namespace ModernIPTVPlayer
 
         // IMediaStream Implementation
         public int Id => SeriesId;
+        public string? IMDbId => null;
         public string Title => Name;
         public string PosterUrl => Cover;
+        public string StreamUrl { get; set; } = "";
+
+        // UI Binding Implementation
+        public double ProgressValue => 0;
+        public bool ShowProgress => false;
+        public string BadgeText => "";
+        public bool ShowBadge => false;
         
         [JsonIgnore]
         public TmdbMovieResult TmdbInfo { get; set; }

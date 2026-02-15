@@ -168,5 +168,21 @@ namespace ModernIPTVPlayer
             get => (Settings.Values[BufferSecondsKey] as int?) ?? 60;
             set => Settings.Values[BufferSecondsKey] = value;
         }
+
+        // TMDB Settings
+        private const string TmdbApiKeyKey = "TmdbApiKey";
+        private const string IsTmdbEnabledKey = "IsTmdbEnabled";
+
+        public static string TmdbApiKey
+        {
+            get => (Settings.Values[TmdbApiKeyKey] as string) ?? "";
+            set => Settings.Values[TmdbApiKeyKey] = value;
+        }
+
+        public static bool IsTmdbEnabled
+        {
+            get => (Settings.Values[IsTmdbEnabledKey] as bool?) ?? false;
+            set => Settings.Values[IsTmdbEnabledKey] = value;
+        }
     }
 }

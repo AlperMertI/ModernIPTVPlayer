@@ -157,7 +157,7 @@
         <!-- 1. CINEMATIC BACKGROUND -->
         <Grid x:Name="HeroContainer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Image x:Name="HeroImage2" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
-            <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="1"/>
+            <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
             
 
             <!-- Readability Scrim (Softened) -->
@@ -430,13 +430,21 @@
                                 <DataTemplate>
                                     <Grid Width="110">
                                         <Grid.RowDefinitions>
-                                            <RowDefinition Height="140"/>
+                                            <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
-                                        <Border CornerRadius="8" Height="140" Width="110">
-                                            <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
+                                        
+                                        <!-- Profile Image or Placeholder -->
+                                        <Border CornerRadius="8" Height="140" Width="110" Background="#1AFFFFFF">
+                                            <Grid>
+                                                <!-- Fallback Icon if Image is missing -->
+                                                <FontIcon Glyph="&#xE77B;" FontSize="40" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                <!-- Image -->
+                                                <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
+                                            </Grid>
                                         </Border>
+                                        
                                         <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
                                         <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="11" Foreground="#AAA" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
@@ -553,16 +561,27 @@
                                                          </Grid.RowDefinitions>
                                                          
                                                          <!-- Top Row: Episode Number & Duration & Watched Status -->
-                                                         <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.7">
-                                                              <TextBlock Text="{x:Bind EpisodeNumberFormatted}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource GoldGradient}"/>
-                                                              <TextBlock Text="•" FontSize="11" Foreground="#666" Visibility="{x:Bind DurationFormatted, Converter={StaticResource StringToVis}}"/>
-                                                              <TextBlock Text="{x:Bind DurationFormatted}" FontSize="11" Foreground="#DDD"/>
-                                                              
-                                                              <!-- Watched Icon -->
-                                                              <FontIcon Glyph="&#xE73E;" FontSize="11" Foreground="{StaticResource GoldGradient}" 
-                                                                        Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
-                                                                        Margin="4,0,0,0" ToolTipService.ToolTip="İzlendi"/>
-                                                         </StackPanel>
+                                                         <Grid Opacity="0.7">
+                                                             <Grid.ColumnDefinitions>
+                                                                 <ColumnDefinition Width="Auto"/>
+                                                                 <ColumnDefinition Width="*"/>
+                                                                 <ColumnDefinition Width="Auto"/>
+                                                             </Grid.ColumnDefinitions>
+                                                             
+                                                             <StackPanel Orientation="Horizontal" Spacing="8">
+                                                                 <TextBlock Text="{x:Bind EpisodeNumberFormatted}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource GoldGradient}"/>
+                                                                 <TextBlock Text="•" FontSize="11" Foreground="#666" Visibility="{x:Bind DurationFormatted, Converter={StaticResource StringToVis}}"/>
+                                                                 <TextBlock Text="{x:Bind DurationFormatted}" FontSize="11" Foreground="#DDD"/>
+                                                                  <!-- Watched Icon -->
+                                                                  <FontIcon Glyph="&#xE73E;" FontSize="11" Foreground="{StaticResource GoldGradient}" 
+                                                                            Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                                                                            Margin="4,0,0,0" ToolTipService.ToolTip="İzlendi"/>
+                                                             </StackPanel>
+                                                             
+                                                             <!-- Air Date (Right Aligned) -->
+                                                             <TextBlock Grid.Column="2" Text="{x:Bind ReleaseDateFormatted}" FontSize="11" Foreground="#DDD" 
+                                                                        Visibility="{x:Bind ReleaseDateFormatted, Converter={StaticResource StringToVis}}"/>
+                                                         </Grid>
      
                                                          <!-- Title -->
                                                          <TextBlock Grid.Row="1" Text="{x:Bind Title}" FontWeight="Bold" FontSize="15" 
@@ -570,18 +589,16 @@
     
                                                          <!-- Unreleased / Overview -->
                                                          <StackPanel Grid.Row="2" Margin="0,2,0,0">
-                                                             <!-- Release Date (if unreleased) -->
-                                                             <TextBlock Text="{x:Bind ReleaseDateFormatted}" FontSize="12" Foreground="#E50914" FontWeight="SemiBold"
-                                                                        Visibility="{x:Bind IsReleased, Mode=OneWay, Converter={StaticResource BoolInverseToVis}}"/>
+                                                             <!-- Release Date Redundant -> REMOVED because it's now in the header -->
+                                                             <!-- <TextBlock Text="{x:Bind ReleaseDateFormatted}" ... /> -->
                                                              
-                                                             <!-- Overview (only if released) -->
+                                                             <!-- Overview (only if released or generally) -->
                                                              <TextBlock Text="{x:Bind Overview}" FontSize="12" Foreground="#C8C8C8"
-                                                                        TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
-                                                                        Visibility="{x:Bind IsReleased, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
+                                                                        TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
                                                          </StackPanel>
                                                          
                                                          <!-- Progress Text -->
-                                                         <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA" 
+                                                         <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA"
                                                                     Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
                                                      </Grid>
                                              </Grid>

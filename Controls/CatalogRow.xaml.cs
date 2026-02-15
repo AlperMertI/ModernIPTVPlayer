@@ -64,9 +64,11 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        public ListView ListView => ItemsListView;
 
 
-        public event EventHandler<IMediaStream> ItemClicked;
+
+        public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> ItemClicked;
         public event EventHandler<PosterCard> HoverStarted;
         public event EventHandler<PosterCard> HoverEnded;
         public event EventHandler ScrollStarted;
@@ -98,10 +100,11 @@ namespace ModernIPTVPlayer.Controls
 
         private void PosterCard_Tapped(object sender, TappedRoutedEventArgs e)
         {
-            if (sender is FrameworkElement fe && fe.DataContext is IMediaStream stream)
+            if (sender is PosterCard card && card.DataContext is IMediaStream stream)
             {
                 ElementSoundPlayer.Play(ElementSoundKind.Invoke);
-                ItemClicked?.Invoke(this, stream);
+                // Pass the internal ImageElement for ConnectedAnimation
+                ItemClicked?.Invoke(this, (stream, card.ImageElement));
             }
         }
 

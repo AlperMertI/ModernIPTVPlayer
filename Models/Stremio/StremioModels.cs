@@ -131,12 +131,27 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         [JsonPropertyName("videos")]
         public List<StremioVideo> Videos { get; set; }
+
+        [JsonPropertyName("trailers")]
+        public List<StremioMetaTrailer> Trailers { get; set; }
+    }
+
+    public class StremioMetaTrailer
+    {
+        [JsonPropertyName("source")]
+        public string Source { get; set; } // YouTube ID
+
+        [JsonPropertyName("type")]
+        public string Type { get; set; }
     }
 
     public class StremioVideo
     {
         [JsonPropertyName("id")]
         public string Id { get; set; } // "tt1234:1:1"
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
 
         [JsonPropertyName("title")]
         public string Title { get; set; }

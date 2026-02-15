@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Windows.Storage;
+using ModernIPTVPlayer;
 
 namespace ModernIPTVPlayer.Services
 {
@@ -92,53 +93,58 @@ namespace ModernIPTVPlayer.Services
             string fileName = $"cache_{playlistId}_{category}.json.gz";
             try
             {
-                var folder = ApplicationData.Current.LocalFolder;
-                
-                // 1. Serialize to buffer to calc Hash + GZip
-                using var ms = new MemoryStream();
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                await JsonSerializer.SerializeAsync(ms, data, options);
-                ms.Position = 0;
-
-                // 2. Calculate Hash
-                string newHash = ComputeHash(ms);
-                ms.Position = 0;
-
-                // 3. Compare with Old Hash
-                string hashFile = fileName + HASH_EXT;
-                string oldHash = await ReadTextAsync(hashFile);
-
-                if (newHash != oldHash)
+                // Run heavy serialization & hashing on background thread to prevent UI freeze
+                await Task.Run(async () =>
                 {
-                    // DATA CHANGED
-                    System.Diagnostics.Debug.WriteLine($"[ContentCache] Data Changed for {category}. New Hash: {newHash}");
+                    var folder = ApplicationData.Current.LocalFolder;
                     
-                    // Save Data
-                    using var fileStream = await folder.OpenStreamForWriteAsync(fileName, CreationCollisionOption.ReplaceExisting);
-                    using var gzip = new GZipStream(fileStream, CompressionLevel.Fastest);
-                    await ms.CopyToAsync(gzip); // Copy JSON bytes -> GZip -> File
+                    // 1. Serialize to buffer to calc Hash + GZip
+                    using var ms = new MemoryStream();
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    await JsonSerializer.SerializeAsync(ms, data, options);
+                    ms.Position = 0;
 
-                    // Save Hash
-                    await WriteTextAsync(hashFile, newHash);
-                    
-                    // Notify User if not first run (OldHash exists)
-                    if (!string.IsNullOrEmpty(oldHash))
+                    // 2. Calculate Hash
+                    string newHash = ComputeHash(ms);
+                    ms.Position = 0;
+
+                    // 3. Compare with Old Hash
+                    string hashFile = fileName + HASH_EXT;
+                    string oldHash = await ReadTextAsync(hashFile);
+
+                    if (newHash != oldHash)
                     {
-                        UpdateAvailable?.Invoke(this, $"Yeni {category} İçeriği Mevcut!");
-                    }
+                        // DATA CHANGED
+                        System.Diagnostics.Debug.WriteLine($"[ContentCache] Data Changed for {category}. New Hash: {newHash}");
+                        
+                        // Save Data
+                        using var fileStream = await folder.OpenStreamForWriteAsync(fileName, CreationCollisionOption.ReplaceExisting);
+                        using var gzip = new GZipStream(fileStream, CompressionLevel.Fastest);
+                        await ms.CopyToAsync(gzip); // Copy JSON bytes -> GZip -> File
 
-                    // Update Timestamp
-                    if (category == "live") AppSettings.LastLiveCacheTime = DateTime.Now;
-                    else if (category == "vod") AppSettings.LastVodCacheTime = DateTime.Now;
-                    else if (category == "series") AppSettings.LastSeriesCacheTime = DateTime.Now;
-                }
-                else
-                {
-                     System.Diagnostics.Debug.WriteLine($"[ContentCache] No Changes for {category}. (Hash Match)");
-                     if (category == "live") AppSettings.LastLiveCacheTime = DateTime.Now;
-                     else if (category == "vod") AppSettings.LastVodCacheTime = DateTime.Now;
-                     else if (category == "series") AppSettings.LastSeriesCacheTime = DateTime.Now;
-                }
+                        // Save Hash
+                        await WriteTextAsync(hashFile, newHash);
+                        
+                        // Notify User if not first run (OldHash exists)
+                        // Note: Events should be invoked on UI thread if they touch UI, but string message is safe
+                        if (!string.IsNullOrEmpty(oldHash))
+                        {
+                            UpdateAvailable?.Invoke(this, $"Yeni {category} İçeriği Mevcut!");
+                        }
+
+                        // Update Timestamp
+                        if (category == "live") AppSettings.LastLiveCacheTime = DateTime.Now;
+                        else if (category == "vod") AppSettings.LastVodCacheTime = DateTime.Now;
+                        else if (category == "series") AppSettings.LastSeriesCacheTime = DateTime.Now;
+                    }
+                    else
+                    {
+                         System.Diagnostics.Debug.WriteLine($"[ContentCache] No Changes for {category}. (Hash Match)");
+                         if (category == "live") AppSettings.LastLiveCacheTime = DateTime.Now;
+                         else if (category == "vod") AppSettings.LastVodCacheTime = DateTime.Now;
+                         else if (category == "series") AppSettings.LastSeriesCacheTime = DateTime.Now;
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -253,7 +259,7 @@ namespace ModernIPTVPlayer.Services
                 var json = await client.GetStringAsync(url);
                 sw.Stop();
                 Services.CacheLogger.Info(Services.CacheLogger.Category.Content, "Network Fetch", $"{sw.ElapsedMilliseconds}ms | {json.Length} bytes");
-
+                
                 var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
                 var result = JsonSerializer.Deserialize<SeriesInfoResult>(json, options);
 
@@ -309,10 +315,55 @@ namespace ModernIPTVPlayer.Services
              catch { }
         }
 
-        // Helper Overload for Singular Load
-        private async Task<List<T>> LoadSingularAsList<T>(string playlistId, string key)
+        // VOD INFO CACHING
+        public async Task<MovieInfoResult> GetMovieInfoAsync(int streamId, LoginParams login)
         {
-             return null; 
+            string cacheKey = $"vod_info_{streamId}";
+            string playlistId = login.PlaylistUrl ?? "default";
+
+            // 0. SEARCH MEMORY CACHE
+            if (_memoryCache.TryGetValue(cacheKey, out var memEntry))
+            {
+                _memoryCache[cacheKey] = (memEntry.Data, DateTime.UtcNow);
+                Services.CacheLogger.Info(Services.CacheLogger.Category.Content, "RAM HIT", cacheKey);
+                return memEntry.Data as MovieInfoResult;
+            }
+            
+            // 1. Try Disk Cache
+            var cached = await LoadCacheObjectAsync<MovieInfoResult>(playlistId, cacheKey);
+            if (cached != null) 
+            {
+                Services.CacheLogger.Info(Services.CacheLogger.Category.Content, "DISK HIT", cacheKey);
+                _memoryCache[cacheKey] = (cached, DateTime.UtcNow);
+                return cached;
+            }
+            
+            // 2. Fetch Network
+            try
+            {
+                string url = $"{login.Host.TrimEnd('/')}/player_api.php?username={login.Username}&password={login.Password}&action=get_vod_info&vod_id={streamId}";
+                using var client = new System.Net.Http.HttpClient();
+                var json = await client.GetStringAsync(url);
+                
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
+                var result = JsonSerializer.Deserialize<MovieInfoResult>(json, options);
+
+                if (result != null)
+                {
+                    Services.CacheLogger.Success(Services.CacheLogger.Category.Content, "Fetch Success", $"Movie: {result.Info?.Name ?? "Unknown"}");
+                    
+                    // Save Disk + RAM
+                    _memoryCache[cacheKey] = (result, DateTime.UtcNow);
+                    await SaveSingularCacheAsync(playlistId, cacheKey, result);
+                    return result;
+                }
+            }
+            catch (Exception ex)
+            {
+                Services.CacheLogger.Error(Services.CacheLogger.Category.Content, "VodFetch Error", ex.Message);
+            }
+
+            return null;
         }
 
         public async Task<T> LoadCacheObjectAsync<T>(string playlistId, string key)
@@ -383,6 +434,9 @@ namespace ModernIPTVPlayer.Services
         
         [System.Text.Json.Serialization.JsonPropertyName("director")]
         public string Director { get; set; }
+
+        [System.Text.Json.Serialization.JsonPropertyName("rating")]
+        public string Rating { get; set; }
         
         [System.Text.Json.Serialization.JsonPropertyName("releaseDate")]
         public string ReleaseDate { get; set; }
@@ -421,11 +475,48 @@ namespace ModernIPTVPlayer.Services
         public string Duration { get; set; }
     }
 
-    public class LoginParams
+    public class MovieInfoResult
     {
-        public string Host { get; set; }
-        public string Username { get; set; }
-        public string Password { get; set; }
-        public string PlaylistUrl { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("info")]
+        public MovieInfoDetails Info { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("movie_data")]
+        public MovieDataDetails MovieData { get; set; }
+    }
+
+    public class MovieInfoDetails
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("name")]
+        public string Name { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("movie_image")]
+        public string MovieImage { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("plot")]
+        public string Plot { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("cast")]
+        public string Cast { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("genre")]
+        public string Genre { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("director")]
+        public string Director { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("rating")]
+        public string Rating { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("releasedate")]
+        public string ReleaseDate { get; set; }
+    }
+    
+    public class MovieDataDetails
+    {
+        [System.Text.Json.Serialization.JsonPropertyName("stream_id")]
+        public int StreamId { get; set; }
+        
+        [System.Text.Json.Serialization.JsonPropertyName("container_extension")]
+        public string ContainerExtension { get; set; }
     }
 }

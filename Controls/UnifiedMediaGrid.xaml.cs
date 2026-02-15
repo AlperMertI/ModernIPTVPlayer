@@ -11,8 +11,8 @@ namespace ModernIPTVPlayer.Controls
 {
     public sealed partial class UnifiedMediaGrid : UserControl
     {
-        public event EventHandler<IMediaStream>? ItemClicked;
-        public event EventHandler<IMediaStream>? PlayAction;
+        public event EventHandler<MediaNavigationArgs>? ItemClicked;
+        public event EventHandler<MediaNavigationArgs>? PlayAction;
         public event EventHandler<MediaNavigationArgs>? DetailsAction;
         public event EventHandler<IMediaStream>? AddListAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)>? ColorExtracted;
@@ -78,8 +78,8 @@ namespace ModernIPTVPlayer.Controls
             InitializeComponent();
 
             _expandedCardOverlay = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim);
-            _expandedCardOverlay.PlayRequested += (_, stream) => PlayAction?.Invoke(this, stream);
-            _expandedCardOverlay.DetailsRequested += (_, args) => DetailsAction?.Invoke(this, new MediaNavigationArgs(args.Stream, args.Tmdb));
+            _expandedCardOverlay.PlayRequested += (_, stream) => PlayAction?.Invoke(this, new MediaNavigationArgs(stream, null, true, ActiveExpandedCard.BannerImage));
+            _expandedCardOverlay.DetailsRequested += (_, args) => DetailsAction?.Invoke(this, new MediaNavigationArgs(args.Stream, args.Tmdb, false, ActiveExpandedCard.BannerImage));
             _expandedCardOverlay.AddListRequested += (_, stream) => AddListAction?.Invoke(this, stream);
 
             PointerExited += UnifiedMediaGrid_PointerExited;
@@ -144,12 +144,10 @@ namespace ModernIPTVPlayer.Controls
             if (e.ClickedItem is IMediaStream stream)
             {
                 var container = MediaGridView.ContainerFromItem(e.ClickedItem) as GridViewItem;
-                if (container?.ContentTemplateRoot is PosterCard poster)
-                {
-                    poster.PrepareConnectedAnimation();
-                }
-
-                ItemClicked?.Invoke(this, stream);
+                UIElement source = (container?.ContentTemplateRoot as PosterCard)?.ImageElement;
+                
+                System.Diagnostics.Debug.WriteLine($"[UnifiedMediaGrid] Item Clicked. SourceElement Found: {source != null}");
+                ItemClicked?.Invoke(this, new MediaNavigationArgs(stream, null, false, source));
             }
         }
 
