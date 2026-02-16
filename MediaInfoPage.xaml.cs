@@ -761,6 +761,13 @@ namespace ModernIPTVPlayer
             // Reveal Technical Sections if already probed or available
             if (_streamUrl != null) UpdateTechnicalSectionVisibility(true);
 
+            // Initial History UI Update for Movies
+            if (metadataType == "movie")
+            {
+                var history = HistoryManager.Instance.GetProgress(metadataId);
+                UpdateMovieHistoryUi(history);
+            }
+
             // For non-series IPTV, trigger technical probe immediately
             if (item is LiveStream live)
             {
@@ -1346,14 +1353,60 @@ namespace ModernIPTVPlayer
 
                 // 3. Handle Resume Logic (Initial Season Selection)
                 int targetSeasonIndex = 0;
+                EpisodeItem episodeToSelect = null;
                 var lastWatched = HistoryManager.Instance.GetLastWatchedEpisode(unified.MetadataId);
+                
                 if (lastWatched != null)
                 {
-                    var foundSeason = Seasons.FirstOrDefault(s => s.SeasonNumber == lastWatched.SeasonNumber);
-                    if (foundSeason != null)
+                    // Find actual episode in unified data to check progress
+                    var lastEpUnified = unified.Seasons.SelectMany(s => s.Episodes).FirstOrDefault(e => e.Id == lastWatched.Id);
+                    
+                    if (lastWatched.IsFinished)
                     {
-                        targetSeasonIndex = Seasons.IndexOf(foundSeason);
+                        // Logic for "Next Episode"
+                        var nextEp = unified.Seasons
+                            .SelectMany(s => s.Episodes)
+                            .OrderBy(e => e.SeasonNumber)
+                            .ThenBy(e => e.EpisodeNumber)
+                            .FirstOrDefault(e => 
+                                (e.SeasonNumber == lastWatched.SeasonNumber && e.EpisodeNumber > lastWatched.EpisodeNumber) ||
+                                (e.SeasonNumber > lastWatched.SeasonNumber));
+                        
+                        if (nextEp != null)
+                        {
+                            var foundSeason = Seasons.FirstOrDefault(s => s.SeasonNumber == nextEp.SeasonNumber);
+                            if (foundSeason != null)
+                            {
+                                targetSeasonIndex = Seasons.IndexOf(foundSeason);
+                                episodeToSelect = foundSeason.Episodes.FirstOrDefault(e => e.Id == nextEp.Id);
+                            }
+                        }
+                        else
+                        {
+                            // No next episode, stick to last watched if nothing else
+                            var foundSeason = Seasons.FirstOrDefault(s => s.SeasonNumber == lastWatched.SeasonNumber);
+                            if (foundSeason != null)
+                            {
+                                targetSeasonIndex = Seasons.IndexOf(foundSeason);
+                                episodeToSelect = foundSeason.Episodes.FirstOrDefault(e => e.Id == lastWatched.Id);
+                            }
+                        }
                     }
+                    else
+                    {
+                        // Not finished, resume the same one
+                        var foundSeason = Seasons.FirstOrDefault(s => s.SeasonNumber == lastWatched.SeasonNumber);
+                        if (foundSeason != null)
+                        {
+                            targetSeasonIndex = Seasons.IndexOf(foundSeason);
+                            episodeToSelect = foundSeason.Episodes.FirstOrDefault(e => e.Id == lastWatched.Id);
+                        }
+                    }
+                }
+
+                if (episodeToSelect != null)
+                {
+                    _pendingAutoSelectEpisode = episodeToSelect;
                 }
 
                 if (Seasons.Count > 0)
@@ -1426,24 +1479,29 @@ namespace ModernIPTVPlayer
                     }
                 }
                 
-                if (_pendingAutoSelectEpisode != null && season.Episodes.Contains(_pendingAutoSelectEpisode))
+                if (_pendingAutoSelectEpisode != null)
                 {
-                    _isProgrammaticSelection = true;
-                    try
+                    var matchingEpisode = season.Episodes.FirstOrDefault(e => e.Id == _pendingAutoSelectEpisode.Id);
+                     
+                    if (matchingEpisode != null)
                     {
-                        EpisodesListView.SelectedItem = _pendingAutoSelectEpisode;
-                        if (NarrowEpisodesListView != null)
+                        _isProgrammaticSelection = true;
+                        try
                         {
-                            NarrowEpisodesListView.SelectedItem = _pendingAutoSelectEpisode;
-                            NarrowEpisodesListView.ScrollIntoView(_pendingAutoSelectEpisode);
+                            EpisodesListView.SelectedItem = matchingEpisode;
+                            if (NarrowEpisodesListView != null)
+                            {
+                                NarrowEpisodesListView.SelectedItem = matchingEpisode;
+                                NarrowEpisodesListView.ScrollIntoView(matchingEpisode);
+                            }
+                            EpisodesListView.ScrollIntoView(matchingEpisode);
+                            _pendingAutoSelectEpisode = null;
                         }
-                        EpisodesListView.ScrollIntoView(_pendingAutoSelectEpisode);
-                        _pendingAutoSelectEpisode = null;
-                    }
-                    catch {} // List might not be ready
-                    finally
-                    {
-                        _isProgrammaticSelection = false;
+                        catch {} // List might not be ready
+                        finally
+                        {
+                            _isProgrammaticSelection = false;
+                        }
                     }
                 }
                 else if (CurrentEpisodes.Count > 0)
@@ -2841,6 +2899,9 @@ namespace ModernIPTVPlayer
                     PlayButtonText.Text = "Tekrar İzle"; 
                     PlayButtonSubtext.Visibility = Visibility.Collapsed;
                     RestartButton.Visibility = Visibility.Visible;
+                    
+                    if (StickyPlayButtonText != null) StickyPlayButtonText.Text = "Tekrar İzle";
+                    if (StickyPlayButtonSubtext != null) StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
                 }
             }
         }
@@ -2906,7 +2967,15 @@ namespace ModernIPTVPlayer
                 // Otherwise show sources or auto-play
                 if (stremioItem.Meta.Type == "movie")
                 {
-                    await PlayStremioContent(stremioItem.Meta.Id, showGlobalLoading: false, autoPlay: true);
+                    // Check history for resume
+                    var history = HistoryManager.Instance.GetProgress(stremioItem.Meta.Id);
+                    double startSeconds = -1;
+                    if (history != null && !history.IsFinished && history.Position > 0)
+                    {
+                        startSeconds = history.Position;
+                    }
+                    
+                    await PlayStremioContent(stremioItem.Meta.Id, showGlobalLoading: false, autoPlay: true, startSeconds: startSeconds);
                 }
                 else if (_selectedEpisode != null)
                 {
@@ -2977,7 +3046,7 @@ namespace ModernIPTVPlayer
             }
         }
         
-        private async Task PlayStremioContent(string videoId, bool showGlobalLoading = true, bool autoPlay = false)
+        private async Task PlayStremioContent(string videoId, bool showGlobalLoading = true, bool autoPlay = false, double startSeconds = -1)
         {
             if (string.IsNullOrWhiteSpace(videoId)) return;
 
@@ -3046,7 +3115,7 @@ namespace ModernIPTVPlayer
                         var firstStream = firstAddon?.Streams?.FirstOrDefault(s => !string.IsNullOrEmpty(s.Url));
                         if (firstStream != null)
                         {
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId));
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, StartSeconds: startSeconds));
                             return;
                         }
                     }
@@ -4643,11 +4712,20 @@ namespace ModernIPTVPlayer
                 {
                     ProgressPercent = (history.Position / history.Duration) * 100;
                     if (ProgressPercent > 98) { IsWatched = true; HasProgress = false; }
+                    
+                    if (HasProgress)
+                    {
+                        var remaining = TimeSpan.FromSeconds(history.Duration - history.Position);
+                        ProgressText = remaining.TotalHours >= 1 
+                            ? $"{(int)remaining.TotalHours}sa {(int)remaining.Minutes}dk Kaldı"
+                            : $"{(int)remaining.TotalMinutes}dk Kaldı";
+                    }
                 }
                 
                 OnPropertyChanged(nameof(IsWatched));
                 OnPropertyChanged(nameof(HasProgress));
                 OnPropertyChanged(nameof(ProgressPercent));
+                OnPropertyChanged(nameof(ProgressText));
             }
         }
     }

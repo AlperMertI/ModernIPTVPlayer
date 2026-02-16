@@ -750,6 +750,30 @@ namespace ModernIPTVPlayer
 
                         _statsTimer?.Start();
                         SetupProfessionalAnimations();
+
+                        // [FRESH START SEEK LOGIC]
+                        if (_navArgs != null && _navArgs.StartSeconds > 0)
+                        {
+                            Debug.WriteLine($"[PlayerPage:Fresh] Enforcing Start Position: {_navArgs.StartSeconds}");
+                            bool seekSuccess = false;
+                            int retries = 0;
+                            while (retries < 30) // 3 seconds max
+                            {
+                                try 
+                                {
+                                    var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
+                                    if (seekable == "yes")
+                                    {
+                                        await _mpvPlayer.ExecuteCommandAsync("seek", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
+                                        seekSuccess = true;
+                                        break;
+                                    }
+                                }
+                                catch (Exception ex) { Debug.WriteLine($"[PlayerPage:Fresh] Seek Failed: {ex.Message}"); }
+                                await Task.Delay(100);
+                                retries++;
+                            }
+                        }
                     }
                     catch (Exception ex)
                     {
