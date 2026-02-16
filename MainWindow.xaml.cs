@@ -27,9 +27,24 @@ namespace ModernIPTVPlayer
             ExtendsContentIntoTitleBar = true;
             SetTitleBar(AppTitleBar);
 
-            // Default navigation
-            NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>().First();
-            ContentFrame.Navigate(typeof(LoginPage));
+            // Default navigation based on settings
+            string startupPageTag = AppSettings.DefaultStartupPage;
+            Type startupPageType = GetPageTypeFromTag(startupPageTag);
+
+            // Find and select the corresponding menu item
+            var menuItem = NavView.MenuItems.OfType<NavigationViewItem>()
+                                 .FirstOrDefault(m => m.Tag?.ToString() == startupPageTag);
+            
+            if (menuItem != null)
+            {
+                NavView.SelectedItem = menuItem;
+            }
+            else
+            {
+                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>().FirstOrDefault();
+            }
+
+            ContentFrame.Navigate(startupPageType, App.CurrentLogin);
 
             NavView.Loaded += (s, e) => AnimateSidebarWaterfall();
             
@@ -532,6 +547,21 @@ namespace ModernIPTVPlayer
                 Services.DownloadManager.Instance.CancelDownload(item);
                 // Card removal is handled by OnDownloadChanged logic
             }
+        }
+
+        private Type? GetPageTypeFromTag(string tag)
+        {
+            return tag switch
+            {
+                "LoginPage" => typeof(LoginPage),
+                "LiveTVPage" => typeof(LiveTVPage),
+                "MoviesPage" => typeof(MoviesPage),
+                "SeriesPage" => typeof(SeriesPage),
+                "MultiPlayerPage" => typeof(MultiPlayerPage),
+                "AddonsPage" => typeof(Pages.AddonsPage),
+                "WatchlistPage" => typeof(WatchlistPage),
+                _ => typeof(MoviesPage) // Default fallback
+            };
         }
     }
     

@@ -38,6 +38,9 @@ namespace ModernIPTVPlayer.Models
         [JsonIgnore]
         public bool ShowBadge => !string.IsNullOrEmpty(BadgeText);
 
+        public string SourceBadgeText { get; set; }
+        public bool ShowSourceBadge { get; set; }
+
         [JsonIgnore]
         public TmdbMovieResult TmdbInfo { get; set; }
 
@@ -89,6 +92,9 @@ namespace ModernIPTVPlayer.Models
                 Id = ss.SeriesId.ToString();
                 Type = "series";
             }
+
+            SourceBadgeText = stream.SourceBadgeText;
+            ShowSourceBadge = stream.ShowSourceBadge;
 
             // Sync Metadata
             if (stream is LiveStream l2)

@@ -184,5 +184,12 @@ namespace ModernIPTVPlayer
             get => (Settings.Values[IsTmdbEnabledKey] as bool?) ?? false;
             set => Settings.Values[IsTmdbEnabledKey] = value;
         }
+
+        private const string DefaultStartupPageKey = "DefaultStartupPage";
+        public static string DefaultStartupPage
+        {
+            get => (Settings.Values[DefaultStartupPageKey] as string) ?? "MoviesPage";
+            set => Settings.Values[DefaultStartupPageKey] = value;
+        }
     }
 }

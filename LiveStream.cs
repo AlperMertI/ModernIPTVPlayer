@@ -63,6 +63,9 @@ namespace ModernIPTVPlayer
         public bool ShowProgress => false;
         public string BadgeText => "";
         public bool ShowBadge => false;
+
+        public string SourceBadgeText => "IPTV";
+        public bool ShowSourceBadge => true;
         
         // Helper for XAML Binding
         public BitmapImage? StreamIcon

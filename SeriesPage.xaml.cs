@@ -90,7 +90,8 @@ namespace ModernIPTVPlayer
             SpotlightSearch.ItemClicked += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
             SpotlightSearch.SeeAllClicked += (s, query) => 
             {
-                Frame.Navigate(typeof(Pages.SearchResultsPage), query, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
+                var args = new Pages.SearchArgs { Query = query, PreferredSource = _currentSource.ToString() };
+                Frame.Navigate(typeof(Pages.SearchResultsPage), args, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
             };
 
         }
@@ -119,22 +120,25 @@ namespace ModernIPTVPlayer
                 }
                 _loginInfo = p;
             }
+            
+            // Ensure layout matches mode (Vital for collapsing OverlayCanvas)
+            UpdateLayoutForMode();
 
-            // Initial Load (Default to IPTV if first time)
-            if (_loginInfo != null && !string.IsNullOrEmpty(_loginInfo.Host))
+            // Initial Load
+            if (_currentSource == ContentSource.IPTV && _loginInfo != null && !string.IsNullOrEmpty(_loginInfo.Host))
             {
-                if (_currentSource == ContentSource.IPTV && _iptvCategories.Count == 0)
+                if (_iptvCategories.Count == 0)
                 {
                     await LoadIptvDataAsync();
                 }
-                else if (_currentSource == ContentSource.Stremio)
+            }
+            else if (_currentSource == ContentSource.Stremio)
+            {
+                if (!StremioControl.HasContent)
                 {
                     await StremioControl.LoadDiscoveryAsync("series");
                 }
             }
-            
-            // Ensure layout matches mode (Vital for collapsing OverlayCanvas)
-            UpdateLayoutForMode();
         }
 
         protected override void OnNavigatedFrom(NavigationEventArgs e)
@@ -179,6 +183,20 @@ namespace ModernIPTVPlayer
 
         private void UpdateLayoutForMode()
         {
+            // Landing/Startup logic: If no IPTV login, force Stremio and hide toggle
+            if (_loginInfo == null || string.IsNullOrEmpty(_loginInfo.Host))
+            {
+                _currentSource = ContentSource.Stremio;
+                SourceStremio.IsChecked = true;
+                SourceSwitcherPanel.Visibility = Visibility.Collapsed;
+                SidebarToggle.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                SourceSwitcherPanel.Visibility = Visibility.Visible;
+                // SidebarToggle visibility is handled inside the source branches below
+            }
+
             if (_currentSource == ContentSource.IPTV)
             {
                 _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);

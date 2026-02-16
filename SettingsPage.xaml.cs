@@ -56,6 +56,17 @@ namespace ModernIPTVPlayer
             
             UpdateSliderHeaders();
 
+            // Set Startup Page Selection
+            var currentPage = AppSettings.DefaultStartupPage;
+            foreach (ComboBoxItem item in StartupPageCombo.Items)
+            {
+                if (item.Tag.ToString() == currentPage)
+                {
+                    StartupPageCombo.SelectedItem = item;
+                    break;
+                }
+            }
+
             // TMDB Settings
             if (!string.IsNullOrEmpty(AppSettings.TmdbApiKey))
             {
@@ -79,6 +90,15 @@ namespace ModernIPTVPlayer
                     AppSettings.CacheIntervalMinutes = minutes;
                     ShowStatus("Güncelleme sıklığı değiştirildi.");
                 }
+            }
+        }
+
+        private void StartupPageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (StartupPageCombo.SelectedItem is ComboBoxItem item)
+            {
+                AppSettings.DefaultStartupPage = item.Tag.ToString();
+                ShowStatus("Açılış sayfası ayarlandı: " + item.Content);
             }
         }
 

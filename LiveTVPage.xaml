@@ -440,6 +440,22 @@
                 <FontIcon Glyph="&#xE721;" FontSize="56" Foreground="#FFDDDDDD"/>
                 <TextBlock Text="Kanal bulunamadı." FontSize="18" Foreground="#FFDDDDDD" HorizontalAlignment="Center"/>
             </StackPanel>
+
+            <!-- Login Required Overlay -->
+            <StackPanel x:Name="LoginRequiredPanel" 
+                        Grid.Row="1" Grid.RowSpan="2"
+                        Visibility="Collapsed" 
+                        HorizontalAlignment="Center" 
+                        VerticalAlignment="Center" 
+                        Spacing="20">
+                <FontIcon Glyph="&#xE72E;" FontSize="64" Foreground="#66FFFFFF"/>
+                <TextBlock Text="IPTV Girişi Gerekli" FontSize="24" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center"/>
+                <TextBlock Text="Canlı TV kanallarını izlemek için lütfen bir IPTV hesabı ekleyin." 
+                           FontSize="16" Foreground="#99FFFFFF" TextWrapping="Wrap" MaxWidth="300" TextAlignment="Center"/>
+                <Button Content="Playlist Ekle" Click="AddPlaylist_Click" 
+                        HorizontalAlignment="Center" Padding="24,8"
+                        Style="{ThemeResource AccentButtonStyle}" CornerRadius="20"/>
+            </StackPanel>
         </Grid>
                 </Grid>
             </SplitView.Content>

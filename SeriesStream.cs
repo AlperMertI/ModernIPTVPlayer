@@ -48,6 +48,9 @@ namespace ModernIPTVPlayer
         public bool ShowProgress => false;
         public string BadgeText => "";
         public bool ShowBadge => false;
+
+        public string SourceBadgeText => "IPTV";
+        public bool ShowSourceBadge => true;
         
         [JsonIgnore]
         public TmdbMovieResult TmdbInfo { get; set; }

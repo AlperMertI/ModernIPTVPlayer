@@ -202,7 +202,7 @@
                         </StackPanel>
                         
                         <!-- Center: Source Switcher -->
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" 
+                        <StackPanel x:Name="SourceSwitcherPanel" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" 
                                     Background="#15FFFFFF" Padding="4" CornerRadius="20" VerticalAlignment="Center">
                             
                             <RadioButton x:Name="SourceIPTV" Content="Kütüphanem" 

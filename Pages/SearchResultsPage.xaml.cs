@@ -12,9 +12,15 @@ using System.Linq;
 
 namespace ModernIPTVPlayer.Pages
 {
+    public class SearchArgs
+    {
+        public string Query { get; set; }
+        public string PreferredSource { get; set; } // "Stremio" or "IPTV"
+    }
+
     public sealed partial class SearchResultsPage : Page
     {
-        private string _query;
+        private SearchArgs _args;
 
         public SearchResultsPage()
         {
@@ -26,16 +32,40 @@ namespace ModernIPTVPlayer.Pages
         {
             base.OnNavigatedTo(e);
 
-            if (e.Parameter is string query)
+            if (e.Parameter is SearchArgs args)
             {
-                // If query changed OR it's a new navigation, fetch.
-                // If Back/Forward and query matches, existing results are preserved by CacheMode.
-                if (_query != query || e.NavigationMode == NavigationMode.New)
+                if (_args?.Query != args.Query || _args?.PreferredSource != args.PreferredSource || e.NavigationMode == NavigationMode.New)
                 {
-                    _query = query;
-                     PageTitle.Text = $"Arama Sonuçları: '{_query}'";
+                    _args = args;
+                    PageTitle.Text = $"Arama Sonuçları: '{_args.Query}'";
+                    
+                    // Reorder sections based on preference
+                    if (_args.PreferredSource == "IPTV")
+                    {
+                        if (ResultsStack.Children.Contains(IptvSection) && ResultsStack.Children.IndexOf(IptvSection) > 0)
+                        {
+                            ResultsStack.Children.Remove(IptvSection);
+                            ResultsStack.Children.Insert(0, IptvSection);
+                        }
+                    }
+                    else
+                    {
+                        if (ResultsStack.Children.Contains(StremioSection) && ResultsStack.Children.IndexOf(StremioSection) > 0)
+                        {
+                            ResultsStack.Children.Remove(StremioSection);
+                            ResultsStack.Children.Insert(0, StremioSection);
+                        }
+                    }
+
                     await PerformSearchAsync();
                 }
+            }
+            else if (e.Parameter is string query)
+            {
+                // Fallback for string query
+                _args = new SearchArgs { Query = query, PreferredSource = "Stremio" };
+                PageTitle.Text = $"Arama Sonuçları: '{_args.Query}'";
+                await PerformSearchAsync();
             }
         }
 
@@ -45,20 +75,39 @@ namespace ModernIPTVPlayer.Pages
             {
                 LoadingRing.IsActive = true;
                 LoadingRing.Visibility = Visibility.Visible;
-                ResultsGrid.Visibility = Visibility.Collapsed;
+                StremioSection.Visibility = Visibility.Collapsed;
+                IptvSection.Visibility = Visibility.Collapsed;
                 EmptyPanel.Visibility = Visibility.Collapsed;
 
-                var results = await StremioService.Instance.SearchAsync(_query);
+                // Parallel Search
+                var stremioTask = StremioService.Instance.SearchAsync(_args.Query);
+                var iptvTask = SearchIptvAsync(_args.Query);
+
+                await System.Threading.Tasks.Task.WhenAll(stremioTask, iptvTask);
+
+                var stremioResults = await stremioTask;
+                var iptvResults = await iptvTask;
 
                 LoadingRing.IsActive = false;
                 LoadingRing.Visibility = Visibility.Collapsed;
 
-                if (results != null && results.Any())
+                // Update Stremio UI
+                if (stremioResults != null && stremioResults.Any())
                 {
-                    ResultsGrid.ItemsSource = results.Cast<IMediaStream>().ToList();
-                    ResultsGrid.Visibility = Visibility.Visible;
+                    StremioGrid.ItemsSource = stremioResults;
+                    TxtStremioCount.Text = stremioResults.Count.ToString();
+                    StremioSection.Visibility = Visibility.Visible;
                 }
-                else
+
+                // Update IPTV UI
+                if (iptvResults != null && iptvResults.Any())
+                {
+                    IptvGrid.ItemsSource = iptvResults;
+                    TxtIptvCount.Text = iptvResults.Count.ToString();
+                    IptvSection.Visibility = Visibility.Visible;
+                }
+
+                if ((stremioResults == null || !stremioResults.Any()) && (iptvResults == null || !iptvResults.Any()))
                 {
                     EmptyPanel.Visibility = Visibility.Visible;
                 }
@@ -68,8 +117,32 @@ namespace ModernIPTVPlayer.Pages
                 System.Diagnostics.Debug.WriteLine($"Search Error: {ex.Message}");
                 LoadingRing.IsActive = false;
                 LoadingRing.Visibility = Visibility.Collapsed;
-                EmptyPanel.Visibility = Visibility.Visible; // Show empty as fallback
+                EmptyPanel.Visibility = Visibility.Visible;
             }
+        }
+
+        private async System.Threading.Tasks.Task<List<IMediaStream>> SearchIptvAsync(string query)
+        {
+            var results = new List<IMediaStream>();
+            var login = App.CurrentLogin;
+            if (login == null) return results;
+
+            string playlistId = login.PlaylistUrl ?? "default";
+
+            // We can search VOD and Series
+            var movies = await ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "vod_streams");
+            if (movies != null)
+            {
+                results.AddRange(movies.Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            var series = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series_streams");
+            if (series != null)
+            {
+                results.AddRange(series.Where(s => s.Name.Contains(query, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            return results;
         }
 
         private void ResultsGrid_ItemClick(object sender, ItemClickEventArgs e)

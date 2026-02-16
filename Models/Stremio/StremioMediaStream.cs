@@ -33,6 +33,9 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string BadgeText => "";
         public bool ShowBadge => false;
 
+        public string SourceBadgeText => "";
+        public bool ShowSourceBadge => false;
+
         public TmdbMovieResult TmdbInfo { get; set; } // Can populate later if needed
 
         // Technical Metadata (Probe Results)

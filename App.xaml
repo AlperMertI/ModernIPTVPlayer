@@ -10,6 +10,8 @@
                 <ResourceDictionary Source="ms-appx:///Mpv.UI/Themes/Generic.xaml"/>
 
             </ResourceDictionary.MergedDictionaries>
+
+            <local:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
             
             <Style x:Key="GlassButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="#1AFFFFFF"/>

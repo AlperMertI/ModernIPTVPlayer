@@ -176,6 +176,22 @@ namespace ModernIPTVPlayer
         {
             base.OnNavigatedTo(e);
 
+            if (App.CurrentLogin == null || string.IsNullOrEmpty(App.CurrentLogin.Host))
+            {
+                // NO IPTV LOGIN
+                LoginRequiredPanel.Visibility = Visibility.Visible;
+                HeroSection.Visibility = Visibility.Collapsed;
+                MainLoadingRing.Visibility = Visibility.Collapsed;
+                SidebarLoadingRing.Visibility = Visibility.Collapsed;
+                EmptyStatePanel.Visibility = Visibility.Collapsed; // Hide search empty state too
+                return;
+            }
+            else
+            {
+                LoginRequiredPanel.Visibility = Visibility.Collapsed;
+                HeroSection.Visibility = Visibility.Visible;
+            }
+
             if (e.Parameter is LoginParams loginParams)
             {
                 // Detect if the playlist has changed
@@ -982,6 +998,11 @@ namespace ModernIPTVPlayer
         private void ToggleSidebar_Click(object sender, RoutedEventArgs e)
         {
             MainSplitView.IsPaneOpen = !MainSplitView.IsPaneOpen;
+        }
+
+        private void AddPlaylist_Click(object sender, RoutedEventArgs e)
+        {
+            Frame.Navigate(typeof(LoginPage));
         }
     }
 }

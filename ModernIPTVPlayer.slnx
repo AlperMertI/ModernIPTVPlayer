@@ -15,6 +15,7 @@
     </Project>
   </Folder>
   <Project Path="ModernIPTVPlayer.csproj">
+    <BuildDependency Project="Libs/mpv-winui/src/Mpv.Core/Mpv.Core.csproj" />
     <Platform Solution="*|ARM64" Project="ARM64" />
     <Platform Solution="*|x64" Project="x64" />
     <Platform Solution="*|x86" Project="x86" />

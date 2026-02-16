@@ -24,6 +24,26 @@
 
                 <!-- LEFT COLUMN -->
                 <StackPanel Grid.Row="1" Grid.Column="0" Spacing="20">
+                    <!-- GENERAL SETTINGS GROUP -->
+                    <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE71D;" FontSize="20"/>
+                            <TextBlock Text="Genel Ayarlar" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
+
+                        <!-- Default Startup Page -->
+                        <ComboBox x:Name="StartupPageCombo" Header="Açılış Sayfası" HorizontalAlignment="Stretch" SelectionChanged="StartupPageCombo_SelectionChanged">
+                            <ComboBoxItem Content="Filmler (Stremio)" Tag="MoviesPage"/>
+                            <ComboBoxItem Content="Diziler (Stremio)" Tag="SeriesPage"/>
+                            <ComboBoxItem Content="Canlı TV (IPTV)" Tag="LiveTVPage"/>
+                            <ComboBoxItem Content="Playlistlerim" Tag="LoginPage"/>
+                        </ComboBox>
+                        
+                        <TextBlock Text="Uygulama açıldığında varsayılan olarak hangi ekranın gösterileceğini seçin."
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap"/>
+                    </StackPanel>
+
                      <!-- CACHE SETTINGS GROUP -->
                     <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                         <StackPanel Orientation="Horizontal" Spacing="10">

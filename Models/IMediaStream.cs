@@ -18,6 +18,10 @@ namespace ModernIPTVPlayer.Models
         string BadgeText { get; }
         bool ShowBadge { get; }
         
+        // Source Identification
+        string SourceBadgeText { get; }
+        bool ShowSourceBadge { get; }
+        
         // Technical Metadata properties for polymorphism
         string Resolution { get; set; }
         string Fps { get; set; }

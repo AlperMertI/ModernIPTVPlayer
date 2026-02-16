@@ -1,4 +1,7 @@
+using System.Collections.Generic;
 using Microsoft.UI.Xaml;
+using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Services;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using ModernIPTVPlayer.Models.Stremio;
@@ -11,7 +14,7 @@ namespace ModernIPTVPlayer.Controls
 {
     public sealed partial class SpotlightSearchControl : UserControl
     {
-        public event EventHandler<StremioMediaStream> ItemClicked;
+        public event EventHandler<IMediaStream> ItemClicked;
         public event EventHandler<string> SeeAllClicked;
 
         private DispatcherTimer _debounceTimer;
@@ -66,19 +69,15 @@ namespace ModernIPTVPlayer.Controls
         {
             if (e.Key == Windows.System.VirtualKey.Enter)
             {
-                // If results exist and first one is selected/highlighted, verify.
-                // For now, if "See All" is visible, trigger that? Or pick first result?
-                // Let's implement: Pick first result if list has items.
                 if (ResultsList.Items.Count > 0)
                 {
-                   var first = ResultsList.Items[0] as StremioMediaStream;
+                   var first = ResultsList.Items[0] as IMediaStream;
                    ItemClicked?.Invoke(this, first);
                    Hide();
                 }
                 else
                 {
-                     // Trigger See All
-                     SeeAllButton_Click(null, null);
+                      SeeAllButton_Click(null, null);
                 }
             }
             else if (e.Key == Windows.System.VirtualKey.Escape)
@@ -111,15 +110,26 @@ namespace ModernIPTVPlayer.Controls
             SeeAllText.Text = $"Tüm sonuçları gör: '{query}'";
             SeeAllButton.Visibility = Visibility.Visible;
 
-            // Perform Search
-            var results = await StremioService.Instance.SearchAsync(query);
+            // Perform Hybrid Search
+            var stremioTask = StremioService.Instance.SearchAsync(query);
+            var iptvTask = SearchIptvAsync(query);
 
+            await Task.WhenAll(stremioTask, iptvTask);
+
+            var stremioResults = await stremioTask;
+            var iptvResults = await iptvTask;
+
+            // Combine Results
+            var combined = new List<IMediaStream>();
+            combined.AddRange(iptvResults.Take(2)); // Limit IPTV in spotlight for quick look
+            combined.AddRange(stremioResults);
+            
             // Update UI State -> Result
             ShimmerPanel.Visibility = Visibility.Collapsed;
             
-            if (results != null && results.Any())
+            if (combined.Any())
             {
-                ResultsList.ItemsSource = results.Take(6); // Show top 6 inline
+                ResultsList.ItemsSource = combined.Take(7); // Show top 7 inline
                 ResultsList.Visibility = Visibility.Visible;
             }
             else
@@ -128,9 +138,36 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private async Task<List<IMediaStream>> SearchIptvAsync(string query)
+        {
+            var results = new List<IMediaStream>();
+            var login = App.CurrentLogin;
+            if (login == null) return results;
+
+            string playlistId = login.PlaylistUrl ?? "default";
+            
+            // Search Movies
+            var movies = await ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "vod");
+            if (movies != null)
+            {
+                var filtered = movies.Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(5);
+                results.AddRange(filtered);
+            }
+
+            // Search Series
+            var series = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
+            if (series != null)
+            {
+                var filtered = series.Where(s => s.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(5);
+                results.AddRange(filtered);
+            }
+
+            return results;
+        }
+
         private void ResultsList_ItemClick(object sender, ItemClickEventArgs e)
         {
-            if (e.ClickedItem is StremioMediaStream item)
+            if (e.ClickedItem is IMediaStream item)
             {
                 ItemClicked?.Invoke(this, item);
                 Hide();
