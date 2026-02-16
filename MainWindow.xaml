@@ -9,20 +9,29 @@
     mc:Ignorable="d">
 
     <Grid x:Name="RootGrid" Background="#FF000000" PointerMoved="RootGrid_PointerMoved">
-        <Grid.RowDefinitions>
-            <RowDefinition x:Name="TitleBarRow" Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
 
-        <Border x:Name="AppTitleBar"
-                Height="32"
-                Grid.Row="0"
-                IsHitTestVisible="True"
-                VerticalAlignment="Top"
-                Background="Transparent"
-                Canvas.ZIndex="9999" />
+        <Grid x:Name="AppTitleBar"
+              Height="48"
+              VerticalAlignment="Top"
+              Background="Transparent"
+              Opacity="0"
+              IsHitTestVisible="False"
+              Canvas.ZIndex="9999"
+              PointerEntered="AppTitleBar_PointerEntered"
+              PointerExited="AppTitleBar_PointerExited">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/> <!-- Icon/Title -->
+                <ColumnDefinition Width="*"/>    <!-- Drag Region -->
+                <ColumnDefinition Width="Auto"/> <!-- System Buttons Placeholder -->
+            </Grid.ColumnDefinitions>
 
-        <Grid Grid.Row="1">
+            <!-- App Title / Icon Area - REMOVED -->
+
+            <!-- Drag Region -->
+            <Grid Grid.Column="1" Background="Transparent" IsHitTestVisible="True"/>
+        </Grid>
+
+        <Grid>
             <!-- Compact Glassmorphism Sidebar (Floats over content) -->
             <Grid x:Name="CustomNavContainer" 
                   HorizontalAlignment="Left"
@@ -156,7 +165,7 @@
                     MaxHeight="450"
                     HorizontalAlignment="Right" 
                     VerticalAlignment="Top" 
-                    Margin="0,24,24,0" 
+                    Margin="0,96,24,0" 
                     Visibility="Collapsed"
                     Background="#F0141414"
                     BorderBrush="#33FFFFFF"

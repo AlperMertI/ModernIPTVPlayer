@@ -7,6 +7,7 @@ using System.Linq;
 using System.Numerics;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Windowing;
 
 namespace ModernIPTVPlayer
 {
@@ -30,6 +31,9 @@ namespace ModernIPTVPlayer
 
             // Default navigation based on settings
             string startupPageTag = AppSettings.DefaultStartupPage;
+            UpdateTitleBar();
+
+            // Default navigation based on settings
             Type startupPageType = GetPageTypeFromTag(startupPageTag);
 
             // Navigate initial
@@ -51,12 +55,20 @@ namespace ModernIPTVPlayer
 
         private DispatcherTimer _sidebarHideTimer;
         private bool _isSidebarVisible = true;
+        
+        private DispatcherTimer _titleBarHideTimer;
+        private bool _isTitleBarVisible = false;
 
         private void InitializeSidebarBehavior()
         {
             _sidebarHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
             _sidebarHideTimer.Tick += (s, e) => HideSidebar();
             _sidebarHideTimer.Start();
+
+            _titleBarHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            _titleBarHideTimer.Tick += (s, e) => HideTitleBar();
+            // Start hidden per XAML defaults? Or start timer?
+            // User requested default hidden. XAML has Opacity=0.
         }
 
         private Compositor _compositor;
@@ -64,10 +76,17 @@ namespace ModernIPTVPlayer
         private void RootGrid_PointerMoved(object sender, PointerRoutedEventArgs e)
         {
             var point = e.GetCurrentPoint(RootGrid).Position;
-            // Show if mouse is near left edge ( < 10px ) and sidebar is hidden
+            
+            // Sidebar Trigger
             if (!_isSidebarVisible && point.X < 10)
             {
                 ShowSidebar();
+            }
+
+            // TitleBar Trigger
+            if (!_isTitleBarVisible && point.Y < 50)
+            {
+                ShowTitleBar();
             }
         }
 
@@ -111,6 +130,93 @@ namespace ModernIPTVPlayer
             sb.Begin();
             
             // Restart timer only when mouse leaves
+        }
+
+        private void ShowTitleBar()
+        {
+            if (_isTitleBarVisible) return;
+            _isTitleBarVisible = true;
+            AppTitleBar.IsHitTestVisible = true;
+            _titleBarHideTimer.Stop();
+
+            // Show System Buttons
+            if (AppWindowTitleBar.IsCustomizationSupported())
+            {
+                var titleBar = this.AppWindow.TitleBar;
+                titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+                titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.Black;
+                titleBar.ButtonHoverBackgroundColor = Microsoft.UI.Colors.White;
+            }
+            
+            // Restore Border and TitleBar
+            if (AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.SetBorderAndTitleBar(true, true);
+            }
+
+            var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+            var anim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                To = 1.0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(200)),
+                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.SineEase()
+            };
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(anim, AppTitleBar);
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(anim, "Opacity");
+            sb.Children.Add(anim);
+            sb.Begin();
+
+            _titleBarHideTimer.Start();
+        }
+
+        private void HideTitleBar()
+        {
+            if (!_isTitleBarVisible) return;
+            _isTitleBarVisible = false;
+            AppTitleBar.IsHitTestVisible = false;
+            _titleBarHideTimer.Stop();
+
+            // Hide System Buttons
+            if (AppWindowTitleBar.IsCustomizationSupported())
+            {
+                var titleBar = this.AppWindow.TitleBar;
+                titleBar.ButtonForegroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonInactiveForegroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonHoverBackgroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.Transparent;
+            }
+
+            // Remove Border and TitleBar completely
+            if (AppWindow.Presenter is OverlappedPresenter presenter)
+            {
+                presenter.SetBorderAndTitleBar(false, false);
+            }
+
+            var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+            var anim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                To = 0.0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(200)),
+                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.SineEase()
+            };
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(anim, AppTitleBar);
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(anim, "Opacity");
+            sb.Children.Add(anim);
+            sb.Begin();
+        }
+
+        private void AppTitleBar_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            _titleBarHideTimer.Stop();
+        }
+
+        private void AppTitleBar_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            if (_isTitleBarVisible)
+            {
+                _titleBarHideTimer.Start();
+            }
         }
 
         private RadioButton GetActiveButton()
@@ -227,11 +333,37 @@ namespace ModernIPTVPlayer
             }
         }
 
+
         private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
         {
             if (args.WindowActivationState != WindowActivationState.Deactivated)
             {
                 if (RootGrid.Opacity < 1.0) SetWindowOpacity(1.0);
+                App.Current.Resources["WindowCaptionForeground"] = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White);
+            }
+            else
+            {
+                 App.Current.Resources["WindowCaptionForeground"] = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray);
+            }
+        }
+
+        private void UpdateTitleBar()
+        {
+            if (AppWindowTitleBar.IsCustomizationSupported())
+            {
+                var titleBar = this.AppWindow.TitleBar;
+                titleBar.ExtendsContentIntoTitleBar = true;
+                
+                titleBar.ButtonBackgroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonInactiveBackgroundColor = Microsoft.UI.Colors.Transparent;
+                titleBar.ButtonForegroundColor = Microsoft.UI.Colors.White;
+                titleBar.ButtonInactiveForegroundColor = Microsoft.UI.Colors.Gray;
+                
+                titleBar.ButtonHoverBackgroundColor = Microsoft.UI.Colors.White;
+                titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.Black;
+
+                titleBar.ButtonPressedBackgroundColor = Microsoft.UI.Colors.LightGray;
+                titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.Black;
             }
         }
 

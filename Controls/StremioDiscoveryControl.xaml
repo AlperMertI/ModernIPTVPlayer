@@ -14,7 +14,7 @@
                       VerticalScrollBarVisibility="Hidden" 
                       HorizontalScrollBarVisibility="Disabled"
                       ViewChanged="ScrollViewer_ViewChanged">
-            <StackPanel Spacing="36" Padding="0,0,0,48">
+            <StackPanel Spacing="0" Padding="0,0,0,48">
                 
                 <!-- HERO SECTION -->
                 <local:HeroSectionControl x:Name="HeroControl" />
