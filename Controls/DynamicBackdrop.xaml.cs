@@ -26,9 +26,9 @@ namespace ModernIPTVPlayer.Controls
         private void InitializeBrushes()
         {
             // Create brushes initial state
-            AmbientLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.0, 0.0, 1.2, 1.0);
-            PrimaryGlowLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.5, 0.3, 0.9, 0.7);
-            BloomLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.5, 0.1, 0.7, 0.5);
+            AmbientLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.5, 1.0, 2.0, 1.5);
+            PrimaryGlowLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.5, 1.0, 1.5, 1.0);
+            BloomLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.5, 0.9, 1.0, 0.8);
         }
 
         private void StartBreathingAnimation()
@@ -101,9 +101,9 @@ namespace ModernIPTVPlayer.Controls
                 byte avgB = (byte)((bL + bR) / 2);
 
                 // FORCE UPDATE: Create NEW brushes to bypass PropertyChanged optimization
-                AmbientLayer.Background = CreateRadialBrush(rL, gL, bL, 200, 0, 0.0, 0.0, 1.2, 1.0);
-                PrimaryGlowLayer.Background = CreateRadialBrush(rR, gR, bR, 220, 0, 0.5, 0.3, 0.9, 0.7);
-                BloomLayer.Background = CreateRadialBrush(avgR, avgG, avgB, 150, 0, 0.5, 0.1, 0.7, 0.5);
+                AmbientLayer.Background = CreateRadialBrush(rL, gL, bL, 200, 0, 0.5, 1.0, 2.0, 1.5);
+                PrimaryGlowLayer.Background = CreateRadialBrush(rR, gR, bR, 220, 0, 0.5, 1.0, 1.5, 1.0);
+                BloomLayer.Background = CreateRadialBrush(avgR, avgG, avgB, 150, 0, 0.5, 0.9, 1.0, 0.8);
 
                 // Floating accent
                 FloatingStop.Color = Windows.UI.Color.FromArgb(120, avgR, avgG, avgB);
@@ -137,11 +137,12 @@ namespace ModernIPTVPlayer.Controls
 
         public void SetVerticalShift(double offset)
         {
-            AmbientLayer.RenderTransform = new TranslateTransform { Y = -offset * 0.05 };
-            PrimaryGlowLayer.RenderTransform = new TranslateTransform { Y = -offset * 0.12 };
-            BloomLayer.RenderTransform = new TranslateTransform { Y = -offset * 0.22 };
+            // Parallax disabled to keep bottom light source fixed
+            // AmbientLayer.RenderTransform = new TranslateTransform { Y = -offset * 0.05 };
+            // PrimaryGlowLayer.RenderTransform = new TranslateTransform { Y = -offset * 0.12 };
+            // BloomLayer.RenderTransform = new TranslateTransform { Y = -offset * 0.22 };
             
-            FloatingTransform.Y = -offset * 0.18;
+            // FloatingTransform.Y = -offset * 0.18;
         }
     }
 }

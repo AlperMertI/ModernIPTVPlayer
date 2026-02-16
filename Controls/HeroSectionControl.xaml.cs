@@ -87,9 +87,8 @@ namespace ModernIPTVPlayer.Controls
             _heroAlphaMask.StartPoint = new Vector2(0, 0);
             _heroAlphaMask.EndPoint = new Vector2(0, 1);
             _heroAlphaMask.ColorStops.Add(compositor.CreateColorGradientStop(0.0f, Windows.UI.Color.FromArgb(255, 255, 255, 255)));
-            _heroAlphaMask.ColorStops.Add(compositor.CreateColorGradientStop(0.40f, Windows.UI.Color.FromArgb(255, 255, 255, 255)));
-            _heroAlphaMask.ColorStops.Add(compositor.CreateColorGradientStop(0.65f, Windows.UI.Color.FromArgb(140, 255, 255, 255)));
-            _heroAlphaMask.ColorStops.Add(compositor.CreateColorGradientStop(0.85f, Windows.UI.Color.FromArgb(30, 255, 255, 255)));
+            _heroAlphaMask.ColorStops.Add(compositor.CreateColorGradientStop(0.75f, Windows.UI.Color.FromArgb(255, 255, 255, 255)));
+            _heroAlphaMask.ColorStops.Add(compositor.CreateColorGradientStop(0.90f, Windows.UI.Color.FromArgb(100, 255, 255, 255)));
             _heroAlphaMask.ColorStops.Add(compositor.CreateColorGradientStop(1.0f, Windows.UI.Color.FromArgb(0, 255, 255, 255)));
 
             // 3. Mask brush
