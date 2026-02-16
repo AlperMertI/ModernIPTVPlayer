@@ -141,6 +141,156 @@
                 </Setter>
             </Style>
 
+            <Style x:Key="SidebarPillRadioButtonStyle" TargetType="RadioButton">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Foreground" Value="#CCFFFFFF"/>
+                <Setter Property="FontSize" Value="14"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Padding" Value="12,10"/>
+                <Setter Property="Margin" Value="4,2"/>
+                <Setter Property="CornerRadius" Value="24"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Grid x:Name="RootGrid" Background="Transparent" Height="44">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="ExpansionStates">
+                                        <VisualState x:Name="Collapsed">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.2"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Expanded">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.1" Duration="0:0:0.2"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.15" Duration="0:0:0.1"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="CheckStates">
+                                        <VisualState x:Name="Unchecked">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="IconPresenter" Storyboard.TargetProperty="(FontIcon.Foreground).(SolidColorBrush.Color)" To="#E6FFFFFF" Duration="0:0:0.3"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Checked">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="IconPresenter" Storyboard.TargetProperty="(FontIcon.Foreground).(SolidColorBrush.Color)" To="#FFFFFF" Duration="0:0:0.3"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+
+                                <!-- Circular Hover Overlay centered behind icon -->
+                                <Border x:Name="HoverOverlay" 
+                                        Background="White" 
+                                        Opacity="0" 
+                                        Width="36" Height="36"
+                                        CornerRadius="18"
+                                        HorizontalAlignment="Left"
+                                        Margin="8,0,0,0"/>
+
+                                <StackPanel Orientation="Horizontal" Padding="4,0,0,0">
+                                    <Grid Width="44" Height="44" HorizontalAlignment="Center">
+                                        <FontIcon x:Name="IconPresenter"
+                                                  Glyph="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=(local:NavProperties.Icon)}"
+                                                  FontSize="18"
+                                                  Foreground="{TemplateBinding Foreground}"
+                                                  HorizontalAlignment="Center"
+                                                  VerticalAlignment="Center"/>
+                                    </Grid>
+                                    <ContentPresenter x:Name="ContentPresenter"
+                                                      Content="{TemplateBinding Content}"
+                                                      Foreground="{TemplateBinding Foreground}"
+                                                      FontSize="{TemplateBinding FontSize}"
+                                                      FontWeight="{TemplateBinding FontWeight}"
+                                                      VerticalAlignment="Center"
+                                                      Margin="12,0,0,0"
+                                                      Opacity="0"/>
+                                </StackPanel>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <Style x:Key="MainPillRadioButtonStyle" TargetType="RadioButton">
+                <Setter Property="Background" Value="Transparent"/>
+                <Setter Property="Foreground" Value="#CCFFFFFF"/>
+                <Setter Property="FontSize" Value="14"/>
+                <Setter Property="FontWeight" Value="SemiBold"/>
+                <Setter Property="Padding" Value="16,6"/>
+                <Setter Property="Margin" Value="0"/>
+                <Setter Property="CornerRadius" Value="17"/>
+                <Setter Property="BorderThickness" Value="0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Grid x:Name="RootGrid" Background="Transparent">
+                                <VisualStateManager.VisualStateGroups>
+                                    <VisualStateGroup x:Name="CommonStates">
+                                        <VisualState x:Name="Normal"/>
+                                        <VisualState x:Name="PointerOver">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.1" Duration="0:0:0.2"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Pressed">
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.2" Duration="0:0:0.1"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                    <VisualStateGroup x:Name="CheckStates">
+                                        <VisualState x:Name="Unchecked">
+                                            <Storyboard>
+                                                <ColorAnimation Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="(ContentPresenter.Foreground).(SolidColorBrush.Color)" To="#CCFFFFFF" Duration="0:0:0.2"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                        <VisualState x:Name="Checked">
+                                            <Storyboard>
+                                                <!-- We don't animate background here because the NavIndicator slides behind -->
+                                                <ColorAnimation Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="(ContentPresenter.Foreground).(SolidColorBrush.Color)" To="#111111" Duration="0:0:0.2"/>
+                                            </Storyboard>
+                                        </VisualState>
+                                    </VisualStateGroup>
+                                </VisualStateManager.VisualStateGroups>
+
+                                <Border x:Name="ContentBorder" 
+                                        Background="Transparent" 
+                                        CornerRadius="{TemplateBinding CornerRadius}">
+                                    <Grid>
+                                        <Border x:Name="HoverOverlay" Background="White" Opacity="0" CornerRadius="{TemplateBinding CornerRadius}"/>
+                                        <ContentPresenter x:Name="ContentPresenter"
+                                                          Content="{TemplateBinding Content}"
+                                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                          Foreground="{TemplateBinding Foreground}"
+                                                          Padding="{TemplateBinding Padding}"
+                                                          HorizontalAlignment="Center"
+                                                          VerticalAlignment="Center"
+                                                          AutomationProperties.AccessibilityView="Raw"/>
+                                    </Grid>
+                                </Border>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
             <Style x:Key="PillRadioButtonStyle" TargetType="RadioButton">
                 <Setter Property="Background" Value="Transparent"/>
                 <Setter Property="Foreground" Value="#CCFFFFFF"/>

@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.UI.Xaml.Input;
 using System;
 using System.Linq;
 using System.Numerics;
@@ -13,13 +14,13 @@ namespace ModernIPTVPlayer
     {
         public new static MainWindow Current { get; private set; }
         
-        // Expose NavView for PiP mode access from PlayerPage
-        public NavigationView NavigationViewControl => NavView;
         public UIElement TitleBarElement => AppTitleBar;
         public MainWindow()
         {
             Current = this;
             this.InitializeComponent();
+
+            _compositor = ElementCompositionPreview.GetElementVisual(this.Content).Compositor;
 
             InitializeDownloadManager();
             
@@ -31,36 +32,206 @@ namespace ModernIPTVPlayer
             string startupPageTag = AppSettings.DefaultStartupPage;
             Type startupPageType = GetPageTypeFromTag(startupPageTag);
 
-            // Find and select the corresponding menu item
-            var menuItem = NavView.MenuItems.OfType<NavigationViewItem>()
-                                 .FirstOrDefault(m => m.Tag?.ToString() == startupPageTag);
+            // Navigate initial
+            ContentFrame.Navigate(startupPageType, App.CurrentLogin);
+
+            // Sync initial button and pill
+            this.SizeChanged += (s, e) => UpdatePillPosition(GetActiveButton());
             
-            if (menuItem != null)
+            // Initialize sidebar state
+            RootGrid.Loaded += (s, e) => AnimateSidebar(60);
+
+            _compositor = ElementCompositionPreview.GetElementVisual(this.Content).Compositor;
+
+            // Auto-Restore Opacity when Window is Activated
+            this.Activated += MainWindow_Activated;
+
+           InitializeSidebarBehavior();
+        }
+
+        private DispatcherTimer _sidebarHideTimer;
+        private bool _isSidebarVisible = true;
+
+        private void InitializeSidebarBehavior()
+        {
+            _sidebarHideTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+            _sidebarHideTimer.Tick += (s, e) => HideSidebar();
+            _sidebarHideTimer.Start();
+        }
+
+        private Compositor _compositor;
+
+        private void RootGrid_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            var point = e.GetCurrentPoint(RootGrid).Position;
+            // Show if mouse is near left edge ( < 10px ) and sidebar is hidden
+            if (!_isSidebarVisible && point.X < 10)
             {
-                NavView.SelectedItem = menuItem;
+                ShowSidebar();
+            }
+        }
+
+        private void HideSidebar()
+        {
+            if (!_isSidebarVisible) return;
+            _isSidebarVisible = false;
+            
+            _sidebarHideTimer.Stop();
+
+            var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+            var anim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                To = -80, // Hide completely (Width 60 + Margin)
+                Duration = new Duration(TimeSpan.FromMilliseconds(400)),
+                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.QuinticEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseIn }
+            };
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(anim, SidebarTranslate);
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(anim, "X");
+            sb.Children.Add(anim);
+            sb.Begin();
+        }
+
+        private void ShowSidebar()
+        {
+            if (_isSidebarVisible) return;
+            _isSidebarVisible = true;
+            
+            _sidebarHideTimer.Stop(); // Wait for interaction before restarting text
+            
+            var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+            var anim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                To = 0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(400)),
+                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.QuinticEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut }
+            };
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(anim, SidebarTranslate);
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(anim, "X");
+            sb.Children.Add(anim);
+            sb.Begin();
+            
+            // Restart timer only when mouse leaves
+        }
+
+        private RadioButton GetActiveButton()
+        {
+            if (ContentFrame.Content == null) return null;
+            string tag = ContentFrame.Content.GetType().Name;
+            // Handle some tag/name mismatches if any
+            if (tag == "AddonsPage") tag = "AddonsPage"; // Namespace check?
+
+            return NavButtonsStack.Children.OfType<RadioButton>()
+                .FirstOrDefault(b => b.Tag?.ToString() == tag);
+        }
+
+        private void NavButton_Checked(object sender, RoutedEventArgs e)
+        {
+            if (sender is RadioButton btn && btn.Tag is string tag)
+            {
+                Type? pageType = GetPageTypeFromTag(tag);
+                if (pageType != null && ContentFrame.CurrentSourcePageType != pageType)
+                {
+                    ContentFrame.Navigate(pageType, App.CurrentLogin);
+                }
+                UpdatePillPosition(btn);
+            }
+        }
+
+        private void UpdatePillPosition(RadioButton target)
+        {
+            if (target == null || _compositor == null) return;
+
+            // Ensure layout is updated to get positions
+            target.UpdateLayout();
+
+            // Transform relative to NavIndicator's parent
+            var transform = target.TransformToVisual((UIElement)NavIndicator.Parent);
+            var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
+
+            double targetY = point.Y;
+
+            // Use Composition animation for perfect smoothness
+            var indicatorVisual = ElementCompositionPreview.GetElementVisual(NavIndicator);
+            
+            if (NavIndicator.Opacity == 0)
+            {
+                NavIndicator.Opacity = 1;
+                // Note: Offset is a Vector3
+                indicatorVisual.Offset = new Vector3(indicatorVisual.Offset.X, (float)targetY, 0);
             }
             else
             {
-                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>().FirstOrDefault();
+                var animation = _compositor.CreateScalarKeyFrameAnimation();
+                
+                // Use CubicBezier for premium feel
+                var easing = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.23f, 1.0f), new Vector2(0.32f, 1.0f));
+                
+                animation.InsertKeyFrame(1.0f, (float)targetY, easing);
+                animation.Duration = TimeSpan.FromMilliseconds(450);
+                animation.StopBehavior = AnimationStopBehavior.SetToFinalValue;
+                
+                indicatorVisual.StartAnimation("Offset.Y", animation);
             }
+        }
 
-            ContentFrame.Navigate(startupPageType, App.CurrentLogin);
 
-            NavView.Loaded += (s, e) => AnimateSidebarWaterfall();
+        private void AnimateSidebar(double targetWidth)
+        {
+            var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
             
-            // Auto-Restore Opacity when Window is Activated (e.g. user clicks taskbar)
-            this.Activated += MainWindow_Activated;
+            var animContainer = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                To = targetWidth,
+                Duration = new Duration(TimeSpan.FromMilliseconds(350)),
+                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.QuinticEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut }
+            };
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(animContainer, CustomNavContainer);
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(animContainer, "Width");
+
+            var animGlassW = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                To = targetWidth,
+                Duration = new Duration(TimeSpan.FromMilliseconds(350)),
+                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.QuinticEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut }
+            };
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(animGlassW, GlassBorder);
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(animGlassW, "Width");
+
+            sb.Children.Add(animContainer);
+            sb.Children.Add(animGlassW);
+            sb.Begin();
+
+            // Toggle expansion state for buttons
+            string state = targetWidth > 100 ? "Expanded" : "Collapsed";
+            foreach (var child in NavButtonsStack.Children)
+            {
+                if (child is Control control)
+                {
+                    VisualStateManager.GoToState(control, state, true);
+                }
+            }
+        }
+
+        private void CustomNavContainer_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            _sidebarHideTimer.Stop();
+            AnimateSidebar(220);
+        }
+
+        private void CustomNavContainer_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            AnimateSidebar(60);
+            if (_isSidebarVisible)
+            {
+                _sidebarHideTimer.Start();
+            }
         }
 
         private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
         {
             if (args.WindowActivationState != WindowActivationState.Deactivated)
             {
-                // specific check: if opacity is 0, restore it
-                if (RootGrid.Opacity < 1.0)
-                {
-                    SetWindowOpacity(1.0);
-                }
+                if (RootGrid.Opacity < 1.0) SetWindowOpacity(1.0);
             }
         }
 
@@ -69,74 +240,38 @@ namespace ModernIPTVPlayer
             RootGrid.Opacity = opacity;
         }
 
-        private void AnimateSidebarWaterfall()
+        private void NavButtonsStack_ManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
         {
-            var compositor = ElementCompositionPreview.GetElementVisual(NavView).Compositor;
-            var items = NavView.MenuItems.OfType<NavigationViewItem>().ToList();
+            // Allow manual dragging of the scrollviewer content
+            NavScrollViewer.ChangeView(NavScrollViewer.HorizontalOffset - e.Delta.Translation.X, null, null, true);
+        }
 
-            for (int i = 0; i < items.Count; i++)
+
+        private void ContentFrame_Navigated(object sender, NavigationEventArgs e)
+        {
+            // Reset Default State
+            AppTitleBar.Visibility = Visibility.Visible;
+            CustomNavContainer.Visibility = Visibility.Visible;
+
+            // Sync Button Selection
+            var activeBtn = NavButtonsStack.Children.OfType<RadioButton>()
+                .FirstOrDefault(b => b.Tag != null && GetPageTypeFromTag(b.Tag.ToString()) == e.SourcePageType);
+            
+            if (activeBtn != null)
             {
-                var item = items[i];
-                var visual = ElementCompositionPreview.GetElementVisual(item);
-                ElementCompositionPreview.SetIsTranslationEnabled(item, true);
+                activeBtn.IsChecked = true;
+                UpdatePillPosition(activeBtn);
+            }
 
-                // Initial State
-                visual.Opacity = 0;
-                visual.Properties.InsertVector3("Translation", new Vector3(-20, 0, 0));
-
-                // Slide Animation
-                var slide = compositor.CreateVector3KeyFrameAnimation();
-                slide.InsertKeyFrame(1f, new Vector3(0, 0, 0));
-                slide.Duration = TimeSpan.FromMilliseconds(800);
-                slide.DelayTime = TimeSpan.FromMilliseconds(i * 80);
-                
-                // Spring-like easing
-                var cubic = compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1f));
-                slide.IterationBehavior = AnimationIterationBehavior.Count;
-                slide.IterationCount = 1;
-
-                // Fade Animation
-                var fade = compositor.CreateScalarKeyFrameAnimation();
-                fade.InsertKeyFrame(1f, 1f);
-                fade.Duration = TimeSpan.FromMilliseconds(600);
-                fade.DelayTime = TimeSpan.FromMilliseconds(i * 80);
-
-                visual.StartAnimation("Translation", slide);
-                visual.StartAnimation("Opacity", fade);
+            if (ContentFrame.SourcePageType == typeof(PlayerPage))
+            {
+                AppTitleBar.Visibility = Visibility.Collapsed;
+                CustomNavContainer.Visibility = Visibility.Collapsed;
             }
         }
 
-        private void NavView_ItemInvoked(NavigationView sender, NavigationViewItemInvokedEventArgs args)
-        {
-            if (args.IsSettingsInvoked)
-            {
-                ContentFrame.Navigate(typeof(SettingsPage));
-                return;
-            }
-
-            if (args.InvokedItemContainer?.Tag is string tag)
-            {
-                Type? pageType = tag switch
-                {
-                    "LoginPage" => typeof(LoginPage),
-                    "LiveTVPage" => typeof(LiveTVPage),
-                    "MoviesPage" => typeof(MoviesPage), 
-                    "SeriesPage" => typeof(SeriesPage),
-                    "MultiPlayerPage" => typeof(MultiPlayerPage),
-
-                    "AddonsPage" => typeof(Pages.AddonsPage),
-                    "WatchlistPage" => typeof(WatchlistPage),
-                    _ => null
-                };
-
-                if (pageType != null && ContentFrame.CurrentSourcePageType != pageType)
-                {
-                    ContentFrame.Navigate(pageType, App.CurrentLogin);
-                }
-            }
-        }
-
-        private void NavView_BackRequested(NavigationView sender, NavigationViewBackRequestedEventArgs args)
+        // Global Back Handler logic (Can be called from a Back Button if added, or keyboard shortcut)
+        public void TryGoBack()
         {
             // Check if current page handles back request (e.g. Closing Search)
             if (ContentFrame.Content is MoviesPage moviesPage)
@@ -154,74 +289,6 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void ContentFrame_Navigated(object sender, NavigationEventArgs e)
-        {
-            NavView.IsBackEnabled = ContentFrame.CanGoBack;
-            NavView.IsBackEnabled = ContentFrame.CanGoBack;
-            NavView.IsBackEnabled = ContentFrame.CanGoBack;
-            NavView.IsPaneVisible = true; // Default to visible, special cases below
-            NavView.AlwaysShowHeader = false; // Default to hide header for minimalist look
-
-            // Reset Default State
-            AppTitleBar.Visibility = Visibility.Visible;
-            ContentFrame.Margin = new Thickness(0, 4, 0, 0);
-
-            // Make sure the header reflects the current page
-            if (ContentFrame.SourcePageType == typeof(LoginPage))
-            {
-                NavView.Header = null;
-                NavView.AlwaysShowHeader = false;
-                NavView.IsPaneVisible = true;
-                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
-                    .FirstOrDefault(i => i.Tag.ToString() == "LoginPage");
-            }
-            else if (ContentFrame.SourcePageType == typeof(LiveTVPage))
-            {
-                NavView.Header = null; // Custom Header in Page
-                NavView.AlwaysShowHeader = false; 
-                NavView.IsPaneVisible = true;
-                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
-                    .FirstOrDefault(i => i.Tag.ToString() == "LiveTVPage");
-            }
-            else if (ContentFrame.SourcePageType == typeof(MoviesPage))
-            {
-                NavView.Header = "Filmler";
-                NavView.IsPaneVisible = true;
-                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
-                    .FirstOrDefault(i => i.Tag.ToString() == "MoviesPage");
-            }
-            else if (ContentFrame.SourcePageType == typeof(SeriesPage))
-            {
-                NavView.Header = "Diziler";
-                NavView.IsPaneVisible = true;
-                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
-                    .FirstOrDefault(i => i.Tag.ToString() == "SeriesPage");
-            }
-            else if (ContentFrame.SourcePageType == typeof(Pages.AddonsPage))
-            {
-                NavView.Header = "Eklentiler";
-                NavView.IsPaneVisible = true;
-                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
-                    .FirstOrDefault(i => i.Tag.ToString() == "AddonsPage");
-            }
-            else if (ContentFrame.SourcePageType == typeof(WatchlistPage))
-            {
-                NavView.Header = "İzleme Listesi";
-                NavView.IsPaneVisible = true;
-                NavView.SelectedItem = NavView.MenuItems.OfType<NavigationViewItem>()
-                    .FirstOrDefault(i => i.Tag.ToString() == "WatchlistPage");
-            }
-            else if (ContentFrame.SourcePageType == typeof(PlayerPage))
-            {
-                NavView.Header = null; // Hide header for player
-                NavView.IsPaneVisible = false;
-                NavView.AlwaysShowHeader = false;
-                
-                // Hide TitleBar and Remove Margins for Full Immersion
-                AppTitleBar.Visibility = Visibility.Collapsed;
-                ContentFrame.Margin = new Thickness(0);
-            }
-        }
         public void SetFullScreen(bool isFullScreen)
         {
             if (this.AppWindow != null)
@@ -229,29 +296,16 @@ namespace ModernIPTVPlayer
                 if (isFullScreen)
                 {
                     this.AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen);
-                    
-                    // Immersive mode adjustments
-                    NavView.IsPaneVisible = false;
+                    CustomNavContainer.Visibility = Visibility.Collapsed;
                     AppTitleBar.Visibility = Visibility.Collapsed;
-                    ContentFrame.Margin = new Thickness(0);
                 }
                 else
                 {
                     this.AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Default);
-                    
-                    // Restore navigation & UI (Based on current page logic)
                     if (ContentFrame.SourcePageType != typeof(PlayerPage))
                     {
-                        NavView.IsPaneVisible = true;
+                        CustomNavContainer.Visibility = Visibility.Visible;
                         AppTitleBar.Visibility = Visibility.Visible;
-                        ContentFrame.Margin = new Thickness(0, 4, 0, 0);
-                    }
-                    else
-                    {
-                        // PlayerPage default state
-                        NavView.IsPaneVisible = false;
-                        AppTitleBar.Visibility = Visibility.Collapsed; 
-                        ContentFrame.Margin = new Thickness(0);
                     }
                 }
             }
@@ -560,9 +614,11 @@ namespace ModernIPTVPlayer
                 "MultiPlayerPage" => typeof(MultiPlayerPage),
                 "AddonsPage" => typeof(Pages.AddonsPage),
                 "WatchlistPage" => typeof(WatchlistPage),
+                "SettingsPage" => typeof(SettingsPage),
                 _ => typeof(MoviesPage) // Default fallback
             };
         }
+
     }
     
     // Extensions helper just for this file to make fluent UI building easier without extra class
