@@ -393,5 +393,33 @@ namespace ModernIPTVPlayer.Services.Stremio
             
             return 0; // Other
         }
+
+        // ==========================================
+        // 3. SUBTITLES
+        // ==========================================
+        public async Task<List<StremioSubtitle>> GetSubtitlesAsync(string baseUrl, string type, string id, string extra = "")
+        {
+            try
+            {
+                // Format: /subtitles/{type}/{id}.json OR /subtitles/{type}/{id}/{extra}.json
+                string url = $"{baseUrl.TrimEnd('/')}/subtitles/{type}/{id}.json";
+                if (!string.IsNullOrEmpty(extra))
+                {
+                    // Stremio expects extra as a path segment if provided, e.g. "videoHash=..."
+                    // Addons usually expect: /subtitles/movie/tt1234567/videoHash=...json
+                    url = $"{baseUrl.TrimEnd('/')}/subtitles/{type}/{id}/{extra}.json";
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Fetching subtitles from: {url}");
+                string json = await _client.GetStringAsync(url);
+                var response = JsonSerializer.Deserialize<StremioSubtitleResponse>(json, _jsonOptions);
+                return response?.Subtitles ?? new List<StremioSubtitle>();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Error fetching subtitles from {baseUrl}: {ex.Message}");
+                return new List<StremioSubtitle>();
+            }
+        }
     }
 }

@@ -39,9 +39,22 @@ namespace ModernIPTVPlayer
             // Navigate initial
             ContentFrame.Navigate(startupPageType, App.CurrentLogin);
 
+            // Sync initial nav button selection to match the startup page
+            var initialBtn = NavButtonsStack.Children.OfType<RadioButton>()
+                .FirstOrDefault(b => b.Tag != null && GetPageTypeFromTag(b.Tag.ToString()) == startupPageType);
+            if (initialBtn != null)
+            {
+                initialBtn.IsChecked = true;
+                // Defer pill position to next UI frame when layout is guaranteed to be complete
+                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                {
+                    UpdatePillPosition(initialBtn);
+                });
+            }
+
             // Sync initial button and pill
             this.SizeChanged += (s, e) => UpdatePillPosition(GetActiveButton());
-            
+
             // Initialize sidebar state
             RootGrid.Loaded += (s, e) => AnimateSidebar(60);
 

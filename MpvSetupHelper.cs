@@ -73,10 +73,11 @@ namespace ModernIPTVPlayer
                 else
                 {
                     // Standard High Performance for Main Player
-                    // 250MB buffer
-                    await player.SetPropertyAsync("demuxer-max-bytes", "250MiB");
+                    // Use user-configured buffer seconds from settings
+                    int userBuffer = AppSettings.BufferSeconds;
+                    await player.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
                     await player.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
-                    await player.SetPropertyAsync("demuxer-readahead-secs", "120");
+                    await player.SetPropertyAsync("demuxer-readahead-secs", userBuffer.ToString());
                 }
 
                 // 6. Fixes & Tweaks
@@ -93,7 +94,7 @@ namespace ModernIPTVPlayer
                 await SetPropertySafeAsync(player, "demuxer-mkv-subtitle-preroll-secs", SubtitlePrerollSecs);
                 await SetPropertySafeAsync(player, "demuxer-mkv-subtitle-preroll-secs-index", "3");
                 // Set general cache time window to match readahead, ensuring subtitle data stays in cache
-                await SetPropertySafeAsync(player, "cache-secs", isSecondary ? "20" : "120");
+                await SetPropertySafeAsync(player, "cache-secs", isSecondary ? "20" : AppSettings.BufferSeconds.ToString());
                 await player.SetPropertyAsync("sub-scale-with-window", "yes");
 
                 // Network Stability & Performance

@@ -65,6 +65,7 @@ namespace ModernIPTVPlayer
         private Models.Metadata.UnifiedMetadata _unifiedMetadata;
         private FFmpegProber _ffprober = new();
         private CancellationTokenSource _probeCts;
+        private CancellationTokenSource _prebufferCts;
 
         // Trailer State
         private bool _isTrailerWebViewInitialized = false;
@@ -432,6 +433,13 @@ namespace ModernIPTVPlayer
             try { 
                 _probeCts?.Cancel(); 
                 _probeCts?.Dispose(); 
+            } catch {}
+
+            // Cancel any active prebuffering BEFORE cleanup
+            try { 
+                _prebufferCts?.Cancel(); 
+                _prebufferCts?.Dispose(); 
+                _prebufferCts = null;
             } catch {}
 
             // Close Trailer Overlay
@@ -2921,6 +2929,11 @@ namespace ModernIPTVPlayer
             if (string.IsNullOrEmpty(url)) return;
             if (!AppSettings.IsPrebufferEnabled) return;
 
+            // Cancel any previous prebuffering
+            try { _prebufferCts?.Cancel(); _prebufferCts?.Dispose(); } catch {}
+            _prebufferCts = new CancellationTokenSource();
+            var ct = _prebufferCts.Token;
+
             Debug.WriteLine($"[FastStart] PrebufferingV2: {url} | Resume: {startTime}s | Buffer: {AppSettings.PrebufferSeconds}s");
 
             // 1. Ensure Player Instance Exists & is Attached
@@ -2964,6 +2977,7 @@ namespace ModernIPTVPlayer
 
             try
             {
+                ct.ThrowIfCancellationRequested();
                 // NEW: CHECK IF ALREADY PLAYING THIS CONTENT (Reuse for seamless transition)
                 string currentPath =  await MediaInfoPlayer.GetPropertyAsync("path");
                 // Allow fuzzy match (http vs https, or slight var) or exact match
@@ -2985,6 +2999,7 @@ namespace ModernIPTVPlayer
                 }
 
                 // 3. Configure Player
+                ct.ThrowIfCancellationRequested();
                 await MpvSetupHelper.ConfigurePlayerAsync(MediaInfoPlayer, url, isSecondary: true);
 
                 // 4. PRE-SEEK using 'start' property (Native MPV Feature)
@@ -3043,8 +3058,11 @@ namespace ModernIPTVPlayer
 
                 // 7. Open & Wait (Paused)
                 // We pause immediately so it doesn't advance history, but fills buffer.
+                ct.ThrowIfCancellationRequested();
                 await MediaInfoPlayer.SetPropertyAsync("pause", "yes"); 
+                ct.ThrowIfCancellationRequested();
                 await MediaInfoPlayer.OpenAsync(url);
+                ct.ThrowIfCancellationRequested();
                 await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
                 
                 // Note: Setting pause=yes BEFORE OpenAsync helps, but repeating it after ensures it sticks.
@@ -3052,9 +3070,16 @@ namespace ModernIPTVPlayer
 
                 Debug.WriteLine("[FastStart] Pre-buffering started (PAUSED). Buffer filling in background...");
             }
+            catch (OperationCanceledException)
+            {
+                Debug.WriteLine("[FastStart] Prebuffering CANCELLED (user navigated away).");
+            }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[FastStart] Error: {ex.Message}");
+                if (ct.IsCancellationRequested)
+                    Debug.WriteLine("[FastStart] Prebuffering CANCELLED (user navigated away).");
+                else
+                    Debug.WriteLine($"[FastStart] Error: {ex.Message}");
             }
         }
 

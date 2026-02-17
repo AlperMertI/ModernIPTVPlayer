@@ -26,6 +26,7 @@ namespace ModernIPTVPlayer
 
         public string AudioTrackId { get; set; }
         public string SubtitleTrackId { get; set; }
+        public string SubtitleTrackUrl { get; set; } // For Addon/External subs
     }
 
     public class HistoryManager
@@ -89,7 +90,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null)
+        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null, string subUrl = null)
         {
             if (string.IsNullOrEmpty(id) || dur < 1) return;
 
@@ -121,6 +122,7 @@ namespace ModernIPTVPlayer
 
                 if (!string.IsNullOrEmpty(aid)) item.AudioTrackId = aid;
                 if (!string.IsNullOrEmpty(sid)) item.SubtitleTrackId = sid;
+                if (!string.IsNullOrEmpty(subUrl)) item.SubtitleTrackUrl = subUrl;
             }
             // Fire and forget save (maybe debounce this in real app, but for now direct)
             // Actually better to save on Pause/Stop/Navigation, not every tick.

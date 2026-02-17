@@ -632,13 +632,14 @@ public class D3D11RenderControl : ContentControl
 
         Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] OnUnloaded TRIGGERED");
         _disposed = true;
-        _cts?.Cancel();
-        _resizeEvent.Set();
+        try { _cts?.Cancel(); } catch { }
+        try { _resizeEvent.Set(); } catch { }
     }
 
     public unsafe void DestroyResources()
     {
         lock (_renderLock) {
+            _disposed = true;
             Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DestroyResources STARTED");
             Interlocked.Exchange(ref _atomicBackBuffer, IntPtr.Zero);
             if (_swapChain.Handle != null) _swapChain.Dispose();

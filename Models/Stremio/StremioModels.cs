@@ -222,4 +222,24 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("bingeGroup")]
         public string BingeGroup { get; set; }
     }
+    // ==========================================
+    // 3. SUBTITLES
+    // ==========================================
+    public class StremioSubtitleResponse
+    {
+        [JsonPropertyName("subtitles")]
+        public List<StremioSubtitle> Subtitles { get; set; }
+    }
+
+    public class StremioSubtitle
+    {
+        [JsonPropertyName("id")]
+        public string Id { get; set; }
+
+        [JsonPropertyName("url")]
+        public string Url { get; set; }
+
+        [JsonPropertyName("lang")]
+        public string Lang { get; set; }
+    }
 }

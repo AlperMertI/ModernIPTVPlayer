@@ -233,6 +233,23 @@ public sealed partial class MpvPlayer : Control
         }
     }
 
+    public TimeSpan Duration
+    {
+        get
+        {
+            if (Player == null) return TimeSpan.Zero;
+            try
+            {
+                var val = Player.Client.GetPropertyToDouble("duration");
+                return TimeSpan.FromSeconds(val);
+            }
+            catch 
+            {
+                return TimeSpan.Zero;
+            }
+        }
+    }
+
     // Dönüş: True = Çizim yapıldı, False = Yapılmadı
     private unsafe bool Render(TimeSpan delta)
     {

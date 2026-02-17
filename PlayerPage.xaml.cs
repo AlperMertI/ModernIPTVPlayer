@@ -24,6 +24,8 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml.Input;
+using ModernIPTVPlayer.Services.Stremio;
+using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer
 {
@@ -58,6 +60,61 @@ namespace ModernIPTVPlayer
         private string _cachedResolution = "-";
         private string _cachedFps = "-";
         private string _cachedCodec = "-";
+
+        // ---------- SUBTITLE & SYNC STATE ----------
+        private bool _isAudioDelayMode = false; // true = Audio, false = Subtitle
+        private double _audioDelayMs = 0;
+        private double _subDelayMs = 0;
+        private List<SubtitleLanguageViewModel> _subtitleLanguages = new();
+        private List<SubtitleTrackViewModel> _currentSubtitleTracks = new();
+        private List<SubtitleTrackViewModel> _cachedAddonSubtitles = new(); // Cache for fetched addon subs
+        private string _lastAddonFetchId = null; // Track which ID we cached for
+
+        public class SubtitleLanguageViewModel
+        {
+            public string Code { get; set; }
+            public string Name { get; set; }
+            public int Count { get; set; }
+            public bool IsLoadingItem { get; set; } // For Shimmer
+        }
+
+        public class SubtitleTrackViewModel
+        {
+            public int Id { get; set; } // MPV Track ID
+            public string Text { get; set; }
+            public string Lang { get; set; }
+            public bool IsAddon { get; set; }
+            public string Url { get; set; } // For external/addon subs
+            public bool IsSelected { get; set; }
+            public string AddonName { get; set; } = "ADDON";
+        }
+
+        // Helper class to deserialize MPV track-list
+        private class MpvTrack
+        {
+            [JsonPropertyName("id")]
+            public int Id { get; set; }
+            [JsonPropertyName("type")]
+            public string Type { get; set; } // "video", "audio", "sub"
+            [JsonPropertyName("lang")]
+            public string Lang { get; set; }
+            [JsonPropertyName("title")]
+            public string Title { get; set; }
+            [JsonPropertyName("selected")]
+            public bool Selected { get; set; }
+            [JsonPropertyName("codec")]
+            public string Codec { get; set; }
+            [JsonPropertyName("audio-channels")]
+            public int? AudioChannels { get; set; }
+            [JsonPropertyName("demux-w")]
+            public int? Width { get; set; }
+            [JsonPropertyName("demux-h")]
+            public int? Height { get; set; }
+        }
+
+
+
+
         private string _cachedAudio = "-";
         private string _cachedColorspace = "-";
         private string _cachedHdr = "-";
@@ -616,6 +673,8 @@ namespace ModernIPTVPlayer
 
             StartCursorTimer();
 
+
+
             if (!string.IsNullOrEmpty(_navigationError))
             {
                 await ShowMessageDialog("Hata", _navigationError);
@@ -656,9 +715,9 @@ namespace ModernIPTVPlayer
                     // 2. Apply main buffer settings from user preferences
                     int mainBuffer = AppSettings.BufferSeconds;
                     _ = _mpvPlayer.SetPropertyAsync("cache", "yes");
-                    _ = _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
-                    _ = _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
-                    _ = _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
 
                     // 3. Verify and Fix
                     var pPause = await _mpvPlayer.GetPropertyAsync("pause");
@@ -693,6 +752,9 @@ namespace ModernIPTVPlayer
 
                     // Fast Start prebuffer already sought to the correct position - no need to seek again
                     Debug.WriteLine("[PlayerPage:Handoff] Prebuffer ready, skipping seek logic");
+
+                    // Auto-fetch addon subtitles in background for auto-restore
+                    _ = AutoFetchAndRestoreAddonSubtitleAsync();
                 }
                 else
                 {
@@ -798,6 +860,9 @@ namespace ModernIPTVPlayer
 
                         // [FRESH START SEEK LOGIC]
                         // REMOVED: Replaced with 'start' property before OpenAsync for instant seeking.
+
+                        // Auto-fetch addon subtitles in background for auto-restore
+                        _ = AutoFetchAndRestoreAddonSubtitleAsync();
 
                     }
                     catch (Exception ex)
@@ -1554,6 +1619,7 @@ namespace ModernIPTVPlayer
         }
 
 
+
         private void VolumeButton_Click(object sender, RoutedEventArgs e)
         {
             if (VolumeOverlay.Visibility == Visibility.Visible)
@@ -1993,130 +2059,115 @@ namespace ModernIPTVPlayer
 
 
 
-        private void CloseTracksButton_Click(object sender, RoutedEventArgs e)
-        {
-            HideTracksOverlayAnim.Begin();
-            HideTracksOverlayAnim.Completed += (s, args) =>
-            {
-                TracksOverlay.Visibility = Visibility.Collapsed;
-            };
-        }
-
-
-
-         private async void TracksButton_Click(object sender, RoutedEventArgs e)
-         {
-              if (TracksOverlay.Visibility == Visibility.Visible)
-              {
-                  HideTracksOverlayAnim.Begin();
-                  await Task.Delay(200);
-                  TracksOverlay.Visibility = Visibility.Collapsed;
-              }
-              else
-              {
-                  // Close others
-                  CloseVolumeOverlay();
-                  CloseSpeedOverlay();
-                  
-                  TracksOverlay.Visibility = Visibility.Visible;
-                  ShowTracksOverlayAnim.Begin();
-                  
-                  if (!_isPopulatingTracks)
-                  {
-                      _isPopulatingTracks = true;
-                      await PopulateTracksForOverlay();
-                      _isPopulatingTracks = false;
-                  }
-              }
-         }
-
-
-        private async Task PopulateTracksForOverlay()
+        private async Task LoadTracksAsync()
         {
             if (_mpvPlayer == null) return;
-
-            var audioTracks = new List<TrackItem>();
-            var subTracks = new List<TrackItem>();
             
-            _isPopulatingTracks = true; // Block events
-
-            // Add "None" option for subtitles
-            subTracks.Add(new TrackItem { Text = "Kapalı (Altyazı Yok)", IsNone = true, Type = "sub" });
+            _isPopulatingTracks = true;
+            System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Started (Safe Loop Mode).");
 
             try
             {
-                // Avoid direct GetPropertyLongAsync which crashes if property is ready
-                long trackCount = 0;
+                // 1. Get Track Count
                 string sCount = await _mpvPlayer.GetPropertyAsync("track-list/count");
-                if (long.TryParse(sCount, out long tc)) trackCount = tc;
-
-                for (int i = 0; i < (int)trackCount; i++)
+                if (!int.TryParse(sCount, out int trackCount) || trackCount <= 0)
                 {
+                    System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] No tracks found.");
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[LoadTracksAsync] Count: {trackCount}");
+
+                var audioTracks = new List<TrackItem>();
+                var newSubTracks = new List<SubtitleTrackViewModel>();
+                // _currentSubtitleTracks will be updated at the end, not cleared here
+
+                // 2. Iterate with Safety Delay
+                for (int i = 0; i < trackCount; i++)
+                {
+                    // CRITICAL: Throttle calls to prevent Heap Corruption (0xC0000374)
+                    await Task.Delay(15); 
+
                     string type = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/type");
                     
-                    // Safe ID retrieval
-                    long id = 0;
-                    string sId = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/id");
-                    if (long.TryParse(sId, out long pid)) id = pid;
-                    bool selected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected");
-                    string title = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/title");
-                    string lang = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/lang");
-                    
-                    if (title == "N/A") title = "";
-                    if (lang == "N/A") lang = "";
-
-                    string displayText = "";
-
                     if (type == "audio")
                     {
-                        // Audio: [Lang] Title (Codec Channels)
+                        string sId = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/id");
+                        int.TryParse(sId, out int id);
+                        
+                        bool selected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected");
+                        string title = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/title");
+                        string lang = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/lang");
                         string codec = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/codec-name");
                         string channels = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/audio-channels");
-                        
+
+                        if (title == "N/A") title = "";
+                        if (lang == "N/A") lang = "";
+
                         string details = "";
                         if (!string.IsNullOrEmpty(codec) && codec != "N/A") details += codec.ToUpper();
                         if (!string.IsNullOrEmpty(channels) && channels != "N/A") details += $" {channels}ch";
-                        
+
                         string langStr = !string.IsNullOrEmpty(lang) ? lang.ToUpper() : $"Track {id}";
                         string titleStr = !string.IsNullOrEmpty(title) ? title : "";
-                        
-                        displayText = $"{langStr} {titleStr}".Trim();
+
+                        string displayText = $"{langStr} {titleStr}".Trim();
                         if (!string.IsNullOrEmpty(details)) displayText += $" ({details.Trim()})";
+
+                        audioTracks.Add(new TrackItem 
+                        { 
+                            Id = id, 
+                            Text = displayText, 
+                            IsSelected = selected, 
+                            Type = "audio" 
+                        });
                     }
                     else if (type == "sub")
                     {
-                        // Subtitle: [Lang] Title
-                        string langStr = !string.IsNullOrEmpty(lang) ? lang.ToUpper() : $"Track {id}";
-                        string titleStr = !string.IsNullOrEmpty(title) ? title : "";
-                        displayText = $"{langStr} - {titleStr}".Trim(' ', '-');
-                        if (string.IsNullOrEmpty(displayText)) displayText = $"Track {id}";
+                        string sId = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/id");
+                        int.TryParse(sId, out int id);
+                        
+                        string title = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/title");
+                        string lang = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/lang");
+
+                        if (title == "N/A") title = "";
+                        if (lang == "N/A") lang = "";
+
+                        newSubTracks.Add(new SubtitleTrackViewModel 
+                        { 
+                            Id = id, 
+                            Text = string.IsNullOrEmpty(title) ? $"Track {id}" : title,
+                            Lang = !string.IsNullOrEmpty(lang) ? lang : "und",
+                            IsAddon = false,
+                            IsSelected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected")
+                        });
                     }
-                    else continue;
-
-                    var item = new TrackItem { Id = id, Text = displayText, IsSelected = selected, Type = type };
-                    
-                    if (type == "audio") audioTracks.Add(item);
-                    else if (type == "sub") subTracks.Add(item);
                 }
 
-                // Check "None" selection state for subs
-                if (!subTracks.Any(t => t.IsSelected && !t.IsNone))
-                {
-                     string subId = await _mpvPlayer.GetPropertyAsync("sid");
-                     if (subId == "no") subTracks[0].IsSelected = true;
-                }
-
+                // Update Audio UI
+                System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Updating Audio UI...");
                 AudioListView.ItemsSource = audioTracks;
-                SubtitleListView.ItemsSource = subTracks;
-
-                // Scroll to selected
                 var selectedAudio = audioTracks.FirstOrDefault(t => t.IsSelected);
                 if (selectedAudio != null) AudioListView.SelectedItem = selectedAudio;
 
-                var selectedSub = subTracks.FirstOrDefault(t => t.IsSelected);
-                if (selectedSub != null) SubtitleListView.SelectedItem = selectedSub;
+                // Update Subtitle UI (Merge new tracks, keep addons)
+                System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Updating Subtitle UI...");
+
+                // Preserve addons
+                var existingAddons = _currentSubtitleTracks.Where(t => t.IsAddon).ToList();
+                _currentSubtitleTracks = newSubTracks; 
+                _currentSubtitleTracks.AddRange(existingAddons);
+
+                UpdateLanguageList(isLoading: true);
+                _ = FetchAddonSubtitles();
+                
+                System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Completed Successfully.");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LoadTracksAsync] CRITICAL ERROR: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[LoadTracksAsync] StackTrace: {ex.StackTrace}");
+            }
             finally
             {
                 _isPopulatingTracks = false;
@@ -2127,44 +2178,550 @@ namespace ModernIPTVPlayer
         {
             if (_isPopulatingTracks || _mpvPlayer == null || AudioListView.SelectedItem is not TrackItem item) return;
             
-            // Re-selection guard already mostly handled by _isPopulatingTracks but...
-            // User complained it "re-selects". 
-            // If the item IS selected MPV property, we might not want to re-set. 
-            // But usually explicit click means "switch".
-            
+            // Update models
+            if (AudioListView.ItemsSource is IEnumerable<TrackItem> tracks)
+            {
+                foreach (var t in tracks) t.IsSelected = (t == item);
+            }
+
             await _mpvPlayer.SetPropertyAsync("aid", item.Id.ToString());
             ShowOsd($"Ses: {item.Text}");
         }
 
-        private async void SubtitleListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        private void CloseTracksButton_Click(object sender, RoutedEventArgs e)
         {
-             if (_isPopulatingTracks || _mpvPlayer == null || SubtitleListView.SelectedItem is not TrackItem item) return;
-
-            if (item.IsNone)
+            HideTracksOverlayAnim.Begin();
+            HideTracksOverlayAnim.Completed += (s, args) =>
             {
-                // Altyazıyı kapatmak buffer'ı etkilemez, doğrudan kapat
-                await _mpvPlayer.SetPropertyAsync("sid", "no");
-                ShowOsd("Altyazı Kapalı");
+                TracksOverlay.Visibility = Visibility.Collapsed;
+            };
+        }
+
+        private async void TracksButton_Click(object sender, RoutedEventArgs e)
+        {
+             if (TracksOverlay.Visibility == Visibility.Visible)
+             {
+                 HideTracksOverlayAnim.Begin();
+                 await Task.Delay(200);
+                 TracksOverlay.Visibility = Visibility.Collapsed;
+             }
+             else
+             {
+                 // Close others
+                 CloseVolumeOverlay();
+                 CloseSpeedOverlay();
+                 
+                 TracksOverlay.Visibility = Visibility.Visible;
+                 ShowTracksOverlayAnim.Begin();
+                 
+                 if (!_isPopulatingTracks && (AudioListView.Items.Count == 0 || _currentSubtitleTracks.Count == 0))
+                 {
+                     await LoadTracksAsync();
+                 }
+                 else if (!_isPopulatingTracks)
+                 {
+                     // Just refresh selection state without full reload
+                     await RefreshTrackSelection();
+                 }
+             }
+        }
+
+        private async void SyncButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_mpvPlayer == null) return;
+            
+            HideTracksOverlayAnim.Begin();
+            await Task.Delay(200);
+            TracksOverlay.Visibility = Visibility.Collapsed;
+
+            UnifiedDelayOverlay.Visibility = Visibility.Visible;
+            
+            var aDelay = await _mpvPlayer.GetPropertyAsync("audio-delay");
+            var sDelay = await _mpvPlayer.GetPropertyAsync("sub-delay");
+
+            if (double.TryParse(aDelay, NumberStyles.Any, CultureInfo.InvariantCulture, out double ad)) _audioDelayMs = ad * 1000;
+            if (double.TryParse(sDelay, NumberStyles.Any, CultureInfo.InvariantCulture, out double sd)) _subDelayMs = sd * 1000;
+
+            UpdateDelayUI();
+        }
+
+        private void CloseDelayOverlay_Click(object sender, RoutedEventArgs e)
+        {
+            UnifiedDelayOverlay.Visibility = Visibility.Collapsed;
+        }
+
+        private void DelayTab_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is string tag)
+            {
+                _isAudioDelayMode = tag == "Audio";
+                UpdateDelayUI();
+            }
+        }
+
+        private void UpdateDelayUI()
+        {
+             DelayValueText.Text = _isAudioDelayMode ? $"{_audioDelayMs} ms" : $"{_subDelayMs} ms";
+             if (_isAudioDelayMode)
+             {
+                 DelayTabAudio.Opacity = 1.0;
+                 DelayTabSub.Opacity = 0.5;
+             }
+             else
+             {
+                 DelayTabAudio.Opacity = 0.5;
+                 DelayTabSub.Opacity = 1.0;
+             }
+        }
+
+        private async void DelayMinus_Click(object sender, RoutedEventArgs e)
+        {
+            await AdjustDelay(-50);
+        }
+
+        private async void DelayPlus_Click(object sender, RoutedEventArgs e)
+        {
+            await AdjustDelay(50);
+        }
+
+        private async Task AdjustDelay(double deltaMs)
+        {
+            if (_mpvPlayer == null) return;
+
+            if (_isAudioDelayMode)
+            {
+                _audioDelayMs += deltaMs;
+                await _mpvPlayer.SetPropertyAsync("audio-delay", (_audioDelayMs / 1000.0).ToString(CultureInfo.InvariantCulture));
             }
             else
             {
-                // === Buffer-korumalı altyazı değiştirme ===
-                // MPV Core Patch (v2) sayesinde artık manual seek yapmaya gerek YOKTUR.
-                // Patch, video/audio queue'sunu koruyarak seamless geçiş sağlar.
-                // Proaktif seek (eski workaround) state resetlediği için KALDIRILDI.
+                _subDelayMs += deltaMs;
+                await _mpvPlayer.SetPropertyAsync("sub-delay", (_subDelayMs / 1000.0).ToString(CultureInfo.InvariantCulture));
+            }
+            UpdateDelayUI();
+        }
 
-                // Altyazı track'ini değiştir
-                await _mpvPlayer.SetPropertyAsync("sid", item.Id.ToString());
-                await _mpvPlayer.SetPropertyAsync("sub-visibility", "yes");
+        private async void AddExternalSub_Click(object sender, RoutedEventArgs e)
+        {
+            var picker = new Windows.Storage.Pickers.FileOpenPicker();
+            var window = MainWindow.Current;
+            var hWnd = WinRT.Interop.WindowNative.GetWindowHandle(window);
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, hWnd);
 
-                // [OPTIMIZATION] Index-Based Seek
-                // MPV with `preroll=index` automatically triggers a seek on track change.
-                // We do NOT need to manually seek here, as it causes double-seeking and race conditions.
-                // The native seek combined with `demux.c` patch is sufficient.
+            picker.ViewMode = Windows.Storage.Pickers.PickerViewMode.List;
+            picker.SuggestedStartLocation = Windows.Storage.Pickers.PickerLocationId.Downloads;
+            picker.FileTypeFilter.Add(".srt");
+            picker.FileTypeFilter.Add(".vtt");
+            picker.FileTypeFilter.Add(".ass");
+            picker.FileTypeFilter.Add(".ssa");
 
-                ShowOsd($"Altyazı: {item.Text}");
+            var file = await picker.PickSingleFileAsync();
+            if (file != null)
+            {
+                await _mpvPlayer.ExecuteCommandAsync("sub-add", file.Path);
+                ShowOsd("Altyazı Eklendi");
             }
         }
+
+        private void SubtitleLangListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (SubtitleLangListView.SelectedItem is SubtitleLanguageViewModel lang && !lang.IsLoadingItem)
+            {
+                bool oldState = _isPopulatingTracks;
+                _isPopulatingTracks = true; // Guard the cascade selection
+                
+                try
+                {
+                    var filtered = _currentSubtitleTracks.Where(t => 
+                        t.Lang.Equals(lang.Code, StringComparison.OrdinalIgnoreCase) || 
+                        (lang.Code == "und" && string.IsNullOrEmpty(t.Lang))
+                    ).ToList();
+                    SubtitleListView.ItemsSource = filtered;
+                    
+                    // Restore active subtitle track selection
+                    var selectedTrack = filtered.FirstOrDefault(t => t.IsSelected);
+                    if (selectedTrack != null)
+                    {
+                        SubtitleListView.SelectedItem = selectedTrack;
+                        SubtitleListView.ScrollIntoView(selectedTrack);
+                    }
+                }
+                finally
+                {
+                    _isPopulatingTracks = oldState;
+                }
+            }
+        }
+
+
+
+        private void UpdateLanguageList(bool isLoading)
+        {
+            bool oldState = _isPopulatingTracks;
+            _isPopulatingTracks = true; // Prevent triggering MPV commands during UI rebuild
+
+            try
+            {
+                // Save current selection to restore it after refresh
+                var currentSelection = SubtitleLangListView.SelectedItem as SubtitleLanguageViewModel;
+
+                var grouped = _currentSubtitleTracks
+                    .GroupBy(t => t.Lang)
+                    .Select(g => new SubtitleLanguageViewModel 
+                    { 
+                        Code = g.Key, 
+                        Name = ModernIPTVPlayer.Helpers.LanguageHelpers.GetDisplayName(g.Key),
+                        Count = g.Count(),
+                        IsLoadingItem = false
+                    })
+                    .OrderBy(l => l.Name)
+                    .ToList();
+
+                if (isLoading)
+                {
+                    grouped.Add(new SubtitleLanguageViewModel { Name = "Loading...", IsLoadingItem = true });
+                }
+
+                SubtitleLangListView.ItemsSource = grouped;
+                
+                // 1. Try to restore previous user selection
+                if (currentSelection != null)
+                {
+                    var restore = grouped.FirstOrDefault(l => l.Code == currentSelection.Code);
+                    if (restore != null)
+                    {
+                        SubtitleLangListView.SelectedItem = restore;
+                        return;
+                    }
+                }
+
+                // 2. If nothing selected or restore failed, find the language of the active track
+                var activeSub = _currentSubtitleTracks.FirstOrDefault(t => t.IsSelected);
+                if (activeSub != null)
+                {
+                    var targetLang = grouped.FirstOrDefault(l => l.Code == activeSub.Lang);
+                    if (targetLang != null)
+                    {
+                        SubtitleLangListView.SelectedItem = targetLang;
+                    }
+                }
+                else if (SubtitleLangListView.SelectedItem == null && grouped.Count > 0)
+                {
+                    // Fallback to first language only if absolutely nothing is selected
+                    SubtitleLangListView.SelectedIndex = 0;
+                }
+            }
+            finally
+            {
+                _isPopulatingTracks = oldState;
+            }
+        }
+
+        private async Task FetchAddonSubtitles()
+        {
+            try
+            {
+                // 1. Identify Content
+                string imdbId = null;
+                string type = "movie";
+                string extra = "";
+                
+                // Use _navArgs for all metadata since _item is not available in PlayerPage
+                if (_navArgs != null && !string.IsNullOrEmpty(_navArgs.Id))
+                {
+                    imdbId = _navArgs.Id;
+                    // Guess type based on season presence
+                    type = _navArgs.Season > 0 ? "series" : "movie";
+                }
+
+                if (string.IsNullOrEmpty(imdbId))
+                {
+                    System.Diagnostics.Debug.WriteLine("[FetchAddonSubtitles] No ID found. Skipping addon subtitles.");
+                    DispatcherQueue.TryEnqueue(() => UpdateLanguageList(isLoading: false));
+                    return;
+                }
+
+                // Format ID for series: tt1234567:1:5
+                string queryId = imdbId;
+                if (type == "series" || type == "episode")
+                {
+                    int s = 1, e = 1;
+                    if (_navArgs != null && _navArgs.Season > 0) 
+                    { 
+                        s = _navArgs.Season; 
+                        e = _navArgs.Episode; 
+                    }
+                    
+                    queryId = $"{imdbId}:{s}:{e}";
+                    type = "series"; // Ensure type is series for subtitle query
+                }
+
+                // ID looks like "tt1234567" or "tt1234567:1:5"
+                string currentFetchKey = queryId;
+
+                // 2. Check Cache
+                if (_lastAddonFetchId == currentFetchKey && _cachedAddonSubtitles.Count > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[FetchAddonSubtitles] Using CACHED subtitles for {currentFetchKey}");
+                    DispatcherQueue.TryEnqueue(() => 
+                    {
+                        InjectAddonSubsIntoList(_cachedAddonSubtitles);
+                        UpdateLanguageList(isLoading: false);
+                    });
+                    return;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[FetchAddonSubtitles] Cache miss or new content. Querying for: {type} / {queryId}");
+
+                // 3. Get Addons
+                var addons = StremioAddonManager.Instance.GetAddonsWithManifests()
+                    .Where(a => a.Manifest != null && 
+                                a.Manifest.Resources != null &&
+                                a.Manifest.Resources.Any(r => r.ToString().Contains("subtitles")))
+                    .ToList();
+
+                if (!addons.Any())
+                {
+                    System.Diagnostics.Debug.WriteLine("[FetchAddonSubtitles] No subtitle addons found.");
+                    DispatcherQueue.TryEnqueue(() => UpdateLanguageList(isLoading: false));
+                    return;
+                }
+
+                // 4. Fetch Concurrently (Capturing Addon Names)
+                var fetchTasks = addons.Select(async a => 
+                {
+                    var subs = await StremioService.Instance.GetSubtitlesAsync(a.BaseUrl, type, queryId, extra);
+                    return subs.Select(s => new SubtitleTrackViewModel
+                    {
+                        Id = -1,
+                        Text = $"Addon: {s.Lang ?? "Unknown"} ({s.Id ?? "Ext"})",
+                        Lang = s.Lang ?? "und",
+                        IsAddon = true,
+                        Url = s.Url,
+                        AddonName = a.Manifest?.Name?.ToUpper() ?? "ADDON"
+                    }).ToList();
+                });
+
+                var results = await Task.WhenAll(fetchTasks);
+                var allNewAddonSubs = results.SelectMany(x => x).ToList();
+
+                System.Diagnostics.Debug.WriteLine($"[FetchAddonSubtitles] Found {allNewAddonSubs.Count} subtitles.");
+
+                _cachedAddonSubtitles = allNewAddonSubs;
+                _lastAddonFetchId = currentFetchKey;
+
+                // 2. Update UI
+                DispatcherQueue.TryEnqueue(() => 
+                {
+                    InjectAddonSubsIntoList(allNewAddonSubs);
+                    UpdateLanguageList(isLoading: false);
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FetchAddonSubtitles] Error: {ex.Message}");
+                DispatcherQueue.TryEnqueue(() => UpdateLanguageList(isLoading: false));
+            }
+        }
+
+        /// <summary>
+        /// Called after player init (Handoff or Fresh Start). 
+        /// Waits for MPV to stabilize, loads tracks, fetches addon subtitles, 
+        /// and directly applies the saved subtitle via MPV command.
+        /// </summary>
+        private async Task AutoFetchAndRestoreAddonSubtitleAsync()
+        {
+            try
+            {
+                if (_navArgs == null || _mpvPlayer == null) return;
+
+                // 1. Wait for MPV to fully load the video and have tracks available
+                Debug.WriteLine("[AutoSubRestore] Waiting for player to stabilize...");
+                await Task.Delay(3000);
+                if (_mpvPlayer == null || !_isPageLoaded) return;
+
+                // 2. Load the track list (populates _currentSubtitleTracks with embedded tracks)
+                Debug.WriteLine("[AutoSubRestore] Loading tracks...");
+                await LoadTracksAsync();
+                if (_mpvPlayer == null || !_isPageLoaded) return;
+
+                // 3. FetchAddonSubtitles is already triggered by LoadTracksAsync (line 2154: _ = FetchAddonSubtitles())
+                //    But it's fire-and-forget inside LoadTracksAsync, so we need to wait for it.
+                //    Call it again (cache will be used if it already ran).
+                Debug.WriteLine("[AutoSubRestore] Fetching addon subtitles...");
+                await FetchAddonSubtitles();
+                if (_mpvPlayer == null || !_isPageLoaded) return;
+
+                // 4. InjectAddonSubsIntoList already handles finding the saved URL and calling sub-add.
+                //    It was called by FetchAddonSubtitles -> InjectAddonSubsIntoList.
+                //    So by this point, the subtitle should already be applied.
+                Debug.WriteLine("[AutoSubRestore] Complete.");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[AutoSubRestore] Error: {ex.Message}");
+            }
+        }
+
+        private void InjectAddonSubsIntoList(List<SubtitleTrackViewModel> addonSubs)
+        {
+            var existingUrls = _currentSubtitleTracks.Select(t => t.Url).ToHashSet();
+            int count = 0;
+            foreach (var sub in addonSubs)
+            {
+                if (!string.IsNullOrEmpty(sub.Url) && !existingUrls.Contains(sub.Url))
+                {
+                    _currentSubtitleTracks.Add(sub);
+                    count++;
+                }
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[InjectAddonSubs] Added {count} subtitles to active list.");
+
+            // Attempt to restore last used subtitle if it was an addon sub
+            try
+            {
+                var history = HistoryManager.Instance.GetProgress(_navArgs.Id ?? _navArgs.Title);
+                if (history != null && !string.IsNullOrEmpty(history.SubtitleTrackUrl))
+                {
+                    var match = _currentSubtitleTracks.FirstOrDefault(t => t.Url == history.SubtitleTrackUrl);
+                    if (match != null)
+                    {
+                        // Match found in the newly fetched/existing list
+                        // 1. Mark as selected in model
+                        foreach (var t in _currentSubtitleTracks) t.IsSelected = (t == match);
+                        match.IsSelected = true;
+
+                        // 2. Explicitly apply to MPV (UI binding might not fire if panel is closed)
+                        if (_mpvPlayer != null)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[InjectAddonSubs] Restoring addon subtitle: {match.Text} ({match.Url})");
+                            _ = _mpvPlayer.ExecuteCommandAsync("sub-add", match.Url);
+                            ShowOsd($"Altyazı Yüklendi: {match.Text}");
+                        }
+
+                        // 3. Sync UI Selection (if visible/initialized)
+                        DispatcherQueue.TryEnqueue(() => 
+                        {
+                            SubtitleListView.SelectedItem = match;
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[InjectAddonSubs] Restore Error: {ex.Message}");
+            }
+        }
+
+        private async Task RefreshTrackSelection()
+        {
+            if (_mpvPlayer == null) return;
+            
+            bool safeState = _isPopulatingTracks;
+            _isPopulatingTracks = true;
+            try
+            {
+                string sCount = await _mpvPlayer.GetPropertyAsync("track-list/count");
+                if (int.TryParse(sCount, out int trackCount) && trackCount > 0)
+                {
+                     for (int i = 0; i < trackCount; i++)
+                     {
+                         string type = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/type");
+                         if (type == "audio")
+                         {
+                            string sId = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/id");
+                            int.TryParse(sId, out int id);
+                            bool selected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected");
+                            
+                            if (selected && AudioListView.ItemsSource is IEnumerable<TrackItem> items)
+                            {
+                                var item = items.FirstOrDefault(t => t.Id == id);
+                                if (item != null && AudioListView.SelectedItem != item)
+                                {
+                                    // Manually update item property to reflect selection visually if needed
+                                    foreach(var t in items) t.IsSelected = (t == item);
+                                    AudioListView.SelectedItem = item;
+                                }
+                            }
+                         }
+                         else if (type == "sub")
+                         {
+                            string sId = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/id");
+                            int.TryParse(sId, out int id);
+                            bool selected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected");
+
+                            var sub = _currentSubtitleTracks.FirstOrDefault(s => s.Id == id);
+                            if (sub != null) 
+                            {
+                                sub.IsSelected = selected;
+                            }
+                         }
+                     }
+                }
+                
+                // Update active sub in UI
+                 DispatcherQueue.TryEnqueue(() => 
+                 {
+                    UpdateLanguageList(isLoading: false);
+                 });
+            }
+            finally
+            {
+                _isPopulatingTracks = safeState;
+            }
+        }
+
+        private async void SubtitleListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isPopulatingTracks || _mpvPlayer == null) return;
+            if (SubtitleListView.SelectedItem is SubtitleTrackViewModel track)
+            {
+                // Update internal IsSelected state
+                foreach (var t in _currentSubtitleTracks) t.IsSelected = (t == track);
+
+                if (track.IsAddon)
+                {
+                    await _mpvPlayer.ExecuteCommandAsync("sub-add", track.Url);
+                    ShowOsd($"Altyazı Yüklendi: {track.Text}");
+                    
+                    // SAVE PREFERENCE
+                    double duration = _mpvPlayer.Duration.TotalSeconds; // Get duration from TimeSpan property
+                    HistoryManager.Instance.UpdateProgress(
+                       _navArgs.Id ?? _navArgs.Title, // Use NavArgs ID or Title
+                       _navArgs.Title, 
+                       _streamUrl, 
+                       duration, 
+                       duration,
+                       subUrl: track.Url);
+                }
+                else
+                {
+                    await _mpvPlayer.SetPropertyAsync("sid", track.Id.ToString());
+                    ShowOsd($"Altyazı: {track.Text}");
+                    
+                    // SAVE PREFERENCE (Clear URL if embedded)
+                    double duration = _mpvPlayer.Duration.TotalSeconds;
+                    HistoryManager.Instance.UpdateProgress(
+                       _navArgs.Id ?? _navArgs.Title, 
+                       _navArgs.Title, 
+                       _streamUrl, 
+                       duration, 
+                       duration,
+                       sid: track.Id.ToString(),
+                       subUrl: null);
+                }
+            }
+        }
+
+
+
+
+
+
+
+
+
 
 
 
