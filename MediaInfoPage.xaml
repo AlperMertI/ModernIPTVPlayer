@@ -513,11 +513,12 @@
                                              <Setter Property="Margin" Value="0,6"/>
                                              <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                                              <Setter Property="CornerRadius" Value="8"/>
+                                             <Setter Property="MinHeight" Value="88"/>
                                          </Style>
                                      </ListView.ItemContainerStyle>
                                      <ListView.ItemTemplate>
                                          <DataTemplate x:DataType="local:EpisodeItem">
-                                             <Grid Height="88" Background="Transparent" Padding="0,4" CornerRadius="8">
+                                             <Grid MinHeight="88" Background="Transparent" Padding="0,4" CornerRadius="8">
                                                  <Grid.ContextFlyout>
                                                      <MenuFlyout>
                                                          <MenuFlyoutItem Text="İzlendi Olarak İşaretle" Click="MarkWatched_Click" Tag="{x:Bind}"/>
@@ -1072,35 +1073,39 @@
                                Padding="20,0,20,20">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <Grid CornerRadius="12" Background="#1AFFFFFF" Margin="0,0,0,12" Padding="16">
-                                     <Grid.ColumnDefinitions>
-                                         <ColumnDefinition Width="Auto"/>
-                                         <ColumnDefinition Width="*"/>
-                                     </Grid.ColumnDefinitions>
-                                     <Border Grid.Column="0" Background="#22000000" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1" CornerRadius="8" Padding="8,4" Margin="0,0,12,0" VerticalAlignment="Top" MinWidth="60">
-                                         <TextBlock Text="{Binding ProviderText}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="1"/>
-                                     </Border>
-                                     <StackPanel Grid.Column="1" Spacing="6">
-                                          <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="14" Foreground="White" TextWrapping="Wrap" MaxLines="3"/>
-                                          
-                                          <StackPanel Orientation="Horizontal" Spacing="6">
-                                              <!-- Quality -->
-                                              <Border Background="#26FFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasQuality, Converter={StaticResource BoolToVis}}">
-                                                  <TextBlock Text="{Binding Quality}" FontSize="9" FontWeight="Bold" Foreground="White"/>
-                                              </Border>
-                                              <!-- Size -->
-                                              <Border Background="#1AFFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasSize, Converter={StaticResource BoolToVis}}">
-                                                  <TextBlock Text="{Binding Size}" FontSize="9" FontWeight="Bold" Foreground="#AAA"/>
-                                              </Border>
-                                              <!-- Cached Badge -->
-                                              <Border Background="#1A00FF88" CornerRadius="4" Padding="4,1" Visibility="{Binding IsCached, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
-                                                  <TextBlock Text="⚡ CACHED" FontSize="8" FontWeight="Black" Foreground="#FF00FF88"/>
-                                              </Border>
-                                          </StackPanel>
-                                          
-                                          <TextBlock Text="{Binding Name}" FontSize="11" Foreground="#888" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
-                                     </StackPanel>
-                                </Grid>
+                                 <Grid CornerRadius="12" Background="#1AFFFFFF" Margin="0,0,0,12" Padding="16">
+                                      <Grid.ColumnDefinitions>
+                                          <ColumnDefinition Width="Auto"/>
+                                          <ColumnDefinition Width="*"/>
+                                      </Grid.ColumnDefinitions>
+                                      <Border Grid.Column="0" Background="#22000000" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1" CornerRadius="8" Padding="8,4" Margin="0,0,12,0" VerticalAlignment="Top" MinWidth="60">
+                                          <TextBlock Text="{Binding ProviderText}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                                      </Border>
+                                      <StackPanel Grid.Column="1" Spacing="6">
+                                           <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="14" Foreground="White" TextWrapping="Wrap" MaxLines="3"/>
+                                           
+                                           <StackPanel Orientation="Horizontal" Spacing="6">
+                                               <!-- Quality -->
+                                               <Border Background="#26FFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasQuality, Converter={StaticResource BoolToVis}}">
+                                                   <TextBlock Text="{Binding Quality}" FontSize="9" FontWeight="Bold" Foreground="White"/>
+                                               </Border>
+                                               <!-- Size -->
+                                               <Border Background="#1AFFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasSize, Converter={StaticResource BoolToVis}}">
+                                                   <TextBlock Text="{Binding Size}" FontSize="9" FontWeight="Bold" Foreground="#AAA"/>
+                                               </Border>
+                                               <!-- Cached Badge -->
+                                               <Border Background="#1A00FF88" CornerRadius="4" Padding="4,1" Visibility="{Binding IsCached, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
+                                                   <TextBlock Text="⚡ CACHED" FontSize="8" FontWeight="Black" Foreground="#FF00FF88"/>
+                                               </Border>
+                                           </StackPanel>
+                                           
+                                           <TextBlock Text="{Binding Name}" FontSize="11" Foreground="#888" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
+                                      </StackPanel>
+                                      
+                                      <!-- Active State Overlay -->
+                                      <Border Grid.ColumnSpan="2" CornerRadius="12" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" 
+                                              Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False" Margin="-16"/>
+                                 </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>

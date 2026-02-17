@@ -1,5 +1,6 @@
 using Microsoft.UI;
 using Microsoft.UI.Composition;
+using Windows.Foundation;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
@@ -30,6 +31,7 @@ using System.IO;
 using System.Threading;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using MpvWinUI;
 
 namespace ModernIPTVPlayer
@@ -57,7 +59,8 @@ namespace ModernIPTVPlayer
         private string _currentStremioVideoId;
         private bool _isSourcesFetchInProgress;
         private bool _isCurrentSourcesComplete;
-        private bool _areSourcesVisible; // <--- New Field
+        private bool _areSourcesVisible = false; // <--- New Field
+        private bool _shouldAutoResume = false;
         
         private Models.Metadata.UnifiedMetadata _unifiedMetadata;
         private FFmpegProber _ffprober = new();
@@ -422,7 +425,7 @@ namespace ModernIPTVPlayer
             // CLEANUP ON EXIT: Ensure the cached page is blank for the next movie
             if (e.NavigationMode != NavigationMode.Back)
             {
-                ResetPageState(); 
+                // ResetPageState(); // Removed aggressive clearing to preserve hero image for back nav
             }
             
             // Cancel any active probe
@@ -443,7 +446,7 @@ namespace ModernIPTVPlayer
             if (MediaInfoPlayer != null && PlayerHost != null)
             {
                  // If we're handing off to PlayerPage, don't cleanup - let PlayerPage use it
-                 if (App.HandoffPlayer != null)
+                 if (App.HandoffPlayer != null || _isHandoffInProgress)
                  {
                      // Just detach from visual tree, don't destroy
                      PlayerHost.Content = null;
@@ -454,6 +457,7 @@ namespace ModernIPTVPlayer
                      // No handoff - safe to cleanup
                      try
                      {
+                         System.Diagnostics.Debug.WriteLine("[MediaInfoPage] CLEANUP: Destroying MpvPlayer instance on exit.");
                          PlayerHost.Content = null;
                          await MediaInfoPlayer.CleanupAsync(); 
                      }
@@ -467,6 +471,10 @@ namespace ModernIPTVPlayer
                          System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Cleaned up MpvPlayer on exit.");
                      }
                  }
+            }
+            else 
+            {
+                 System.Diagnostics.Debug.WriteLine("[MediaInfoPage] OnNavigatedFrom: No player to clean up.");
             }
         }
 
@@ -486,6 +494,7 @@ namespace ModernIPTVPlayer
                 NarrowEpisodesSection.Visibility = Visibility.Collapsed;
                 _currentStremioVideoId = null;
                 _areSourcesVisible = false;
+                _shouldAutoResume = false; // Reset auto-resume flag
                 if (SourcesListView != null) SourcesListView.ItemsSource = null;
                 if (NarrowSourcesListView != null) NarrowSourcesListView.ItemsSource = null;
                 if (AddonSelectorList != null) AddonSelectorList.ItemsSource = null;
@@ -510,6 +519,9 @@ namespace ModernIPTVPlayer
                 if (e.Parameter is MediaNavigationArgs args)
                 {
                     _item = args.Stream;
+                    // [FIX] Ignore auto-resume if we are navigating BACK from the player to prevent infinite loop
+                    _shouldAutoResume = args.AutoResume && e.NavigationMode != NavigationMode.Back;
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] OnNavigatedTo: AutoResume={_shouldAutoResume} (NavMode={e.NavigationMode})");
 
                     // --- CINEMATIC SEEDING (CRITICAL FOR ASPECT RATIO) ---
                     // Priority 1: Use Backdrop from Args (if passed)
@@ -629,7 +641,13 @@ namespace ModernIPTVPlayer
                                 RestartButton.Visibility = Visibility.Visible;
                                 
                                 _streamUrl = history.StreamUrl;
-                                // Don't auto-start prebuffer on return - user can play manually
+            // FAST START: Start pre-buffering since we are offering "Continue"
+            // [FIX] Skip pre-buffering if we are in an auto-resume flow to avoid race conditions during handoff
+            if (!_shouldAutoResume)
+            {
+                StartPrebuffering(history.StreamUrl, history.Position);
+            }
+            _ = UpdateTechnicalBadgesAsync(_streamUrl);
                              }
                              else
                              {
@@ -829,6 +847,14 @@ namespace ModernIPTVPlayer
                 List<string> backdrops = new List<string> { unified.BackdropUrl };
                 // Optionally fetch more from TMDB if available
                 StartBackgroundSlideshow(backdrops);
+                
+                // [Fix] Apply Premium Glass Ambience
+                ApplyPremiumAmbience(unified.BackdropUrl ?? unified.PosterUrl ?? "");
+            }
+            else
+            {
+                 // Fallback if no backdrop
+                 ApplyPremiumAmbience(unified.PosterUrl ?? "");
             }
 
             // Resume Logic (Unified for Movies/Live)
@@ -846,12 +872,24 @@ namespace ModernIPTVPlayer
                     
                     _streamUrl = history.StreamUrl;
                     if (item is LiveStream || item is VodStream) 
-                        InitializePrebufferPlayer(_streamUrl, history.Position);
+                        StartPrebuffering(_streamUrl, history.Position);
                 }
                 else
                 {
                     PlayButtonText.Text = metadataType == "movie" && item is Models.Stremio.StremioMediaStream ? "Kaynak Bul" : "Oynat";
                     RestartButton.Visibility = Visibility.Collapsed;
+
+                    // IPTV/VoD: prebuffer immediately (URL is always available)
+                    if (item is LiveStream liveStream && !string.IsNullOrEmpty(liveStream.StreamUrl))
+                    {
+                        _streamUrl = liveStream.StreamUrl;
+                        StartPrebuffering(_streamUrl);
+                    }
+                    else if (item is VodStream vod && !string.IsNullOrEmpty(vod.StreamUrl))
+                    {
+                        _streamUrl = vod.StreamUrl;
+                        StartPrebuffering(_streamUrl);
+                    }
                 }
             }
 
@@ -881,8 +919,24 @@ namespace ModernIPTVPlayer
                    }
 
                    // Trigger fetch regardless of resume state to ensure panel is populated
-                   _ = PlayStremioContent(stremioItem.Meta.Id, showGlobalLoading: false, autoPlay: false);
-                   if (string.IsNullOrEmpty(_streamUrl)) PlayButtonText.Text = "Oynat";
+                   // [FIX] BUT if we are AutoResuming, DO NOT TRIGGER LAYOUT CHANGES that might clear _streamUrl
+                   if (!_shouldAutoResume)
+                   {
+                        _ = PlayStremioContent(stremioItem.Meta.Id, showGlobalLoading: false, autoPlay: false);
+                   }
+                   else
+                   {
+                        System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Skipping auto-fetch sources due to AutoResume pending.");
+                   }
+                    if (string.IsNullOrEmpty(_streamUrl)) PlayButtonText.Text = "Oynat";
+                }
+
+                // AUTO-RESUME TRIGGER (Movies)
+                if (_shouldAutoResume && !unified.IsSeries)
+                {
+                    _shouldAutoResume = false; // Reset to prevent repeated trigger
+                    System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Auto-Resume triggered for movie.");
+                    PlayButton_Click(null, null);
                 }
             }
 
@@ -1254,7 +1308,6 @@ namespace ModernIPTVPlayer
                 
 
                 // 2. Adaptive Glass Tint (Episodes Panel)
-
                 if (EpisodesPanel.Background is SolidColorBrush solid)
                 {
                     // Mix black with primary color
@@ -1328,7 +1381,7 @@ namespace ModernIPTVPlayer
                             Title = e.Title,
                             Name = e.Title,
                             Overview = e.Overview,
-                            ImageUrl = e.ThumbnailUrl,
+                            ImageUrl = !string.IsNullOrEmpty(e.ThumbnailUrl) ? e.ThumbnailUrl : (unified.PosterUrl ?? ""),
                             ReleaseDate = e.AirDate,
                             IsReleased = e.AirDate.HasValue ? e.AirDate.Value <= DateTime.Now : true,
                             StreamUrl = e.StreamUrl // For IPTV, this might be pre-filled. For Stremio, it's empty until source search.
@@ -1554,7 +1607,7 @@ namespace ModernIPTVPlayer
                                  Title = e.Title,
                                  Name = e.Title,
                                  Overview = e.Overview,
-                                 ImageUrl = e.ThumbnailUrl,
+                                 ImageUrl = !string.IsNullOrEmpty(e.ThumbnailUrl) ? e.ThumbnailUrl : (_item?.PosterUrl ?? ""),
                                  StreamUrl = e.StreamUrl,
                                  ReleaseDate = e.AirDate,
                                  IsReleased = (e.AirDate ?? DateTime.MinValue) <= DateTime.Now,
@@ -1605,6 +1658,14 @@ namespace ModernIPTVPlayer
 
                      _selectedEpisode = ep;
                      _streamUrl = ep.StreamUrl;
+
+                     // [Fix] Restore StreamUrl from history if missing (Stremio Series Resume)
+                     var history = HistoryManager.Instance.GetProgress(ep.Id);
+                     if (string.IsNullOrEmpty(_streamUrl) && history != null && !string.IsNullOrEmpty(history.StreamUrl))
+                     {
+                          _streamUrl = history.StreamUrl;
+                          System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored StreamUrl from history: {_streamUrl}");
+                     }
                      
                      // Sync narrow list
                      if (NarrowEpisodesListView != null)
@@ -1644,18 +1705,26 @@ namespace ModernIPTVPlayer
                          }
                          else
                          {
-                             PlayButtonText.Text = "Oynat";
+                             PlayButtonText.Text = _item is StremioMediaStream ? "Kaynak Bul" : "Oynat";
                              if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
                              if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
                          }
                      }
+
+                    // AUTO-RESUME TRIGGER (Series Episode)
+                    if (_shouldAutoResume)
+                    {
+                        _shouldAutoResume = false; // Reset to prevent repeated trigger
+                        System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Auto-Resume triggered for series episode: {ep.Title}");
+                        PlayButton_Click(null, null);
+                    }
      
                      // PREVIEW
-                     var history = HistoryManager.Instance.GetProgress(ep.Id);
-                     InitializePrebufferPlayer(ep.StreamUrl, history?.Position ?? 0);
+                     // History already loaded above
+                     StartPrebuffering(_streamUrl, history?.Position ?? 0);
 
-                     if (!string.IsNullOrEmpty(ep.StreamUrl))
-                          _ = UpdateTechnicalBadgesAsync(ep.StreamUrl);
+                     if (!string.IsNullOrEmpty(_streamUrl))
+                          _ = UpdateTechnicalBadgesAsync(_streamUrl);
                      else if (_item is Models.Stremio.StremioMediaStream && !_isProgrammaticSelection && !_isInitializingSeriesUi)
                           _ = PlayStremioContent(ep.Id, false);
                  }
@@ -1680,6 +1749,13 @@ namespace ModernIPTVPlayer
 
                     _selectedEpisode = ep;
                     _streamUrl = ep.StreamUrl;
+                    
+                    // [Fix] Restore StreamUrl from history if missing (Stremio Series Resume)
+                    var history = HistoryManager.Instance.GetProgress(ep.Id);
+                    if (string.IsNullOrEmpty(_streamUrl) && history != null && !string.IsNullOrEmpty(history.StreamUrl))
+                    {
+                         _streamUrl = history.StreamUrl;
+                    }
                     
                     // Sync selection with main list
                     if (EpisodesListView != null)
@@ -1714,8 +1790,7 @@ namespace ModernIPTVPlayer
                     }
 
                     // PREVIEW
-                    var history = HistoryManager.Instance.GetProgress(ep.Id);
-                    InitializePrebufferPlayer(ep.StreamUrl, history?.Position ?? 0);
+                    StartPrebuffering(_streamUrl, history?.Position ?? 0);
                 }
                 finally
                 {
@@ -1874,95 +1949,7 @@ namespace ModernIPTVPlayer
             };
         }
 
-        private void InitializePrebufferPlayer(string url, double startTime = 0)
-        {
-            if (string.IsNullOrEmpty(url)) return;
 
-             _ = Task.Run(() => 
-             {
-                 DispatcherQueue.TryEnqueue(async () => 
-                 {
-                     try
-                     {
-                         // Suppress crash on cached page if player context is invalid
-                         if (MediaInfoPlayer == null) return;
-
-                         // PRE-BUFFER SETTINGS CHECK
-                         if (!AppSettings.IsPrebufferEnabled)
-                         {
-                             // If disabled, just ensure player is reset/ready but don't load media?
-                             // actually, if we don't load, Handoff might fail if it expects a loaded player?
-                             // For now, let's just RETURN and do nothing. 
-                             // When user clicks Play, we'll have to handle "Cold Start".
-                             // But PerformHandoverAndNavigate expects MediaInfoPlayer to be the carrier.
-                             // If we don't open the file, Handoff will carry an empty player?
-                             // The Handoff logic uses URL. If player is empty, PlayerPage loads it.
-                             return; 
-                         }
-                         
-                         await MediaInfoPlayer.InitializePlayerAsync();
-                         
-                         // Limits
-                         await MediaInfoPlayer.SetPropertyAsync("cache", "yes");
-                         
-                         // DYNAMIC SETTINGS
-                         int preSeconds = AppSettings.PrebufferSeconds;
-                         await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", preSeconds.ToString());
-                         
-                         // Allow sufficient bytes for the seconds duration (e.g. 500MB for 4K)
-                         // 5MiB was causing bottleneck.
-                         await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "500MiB");
-                         await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "50MiB");
-                         await MediaInfoPlayer.SetPropertyAsync("force-window", "yes");
-
-                         // Headers
-                         string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-                         await MediaInfoPlayer.SetPropertyAsync("user-agent", userAgent);
-
-                         // Cookies
-                         try {
-                              var targetUri = new Uri(url);
-                              var cookies = HttpHelper.CookieContainer.GetCookies(targetUri);
-                              if (cookies.Count > 0) {
-                                  string cookieHeader = "";
-                                  foreach (System.Net.Cookie c in cookies) cookieHeader += $"{c.Name}={c.Value}; ";
-                                  await MediaInfoPlayer.SetPropertyAsync("http-header-fields", $"Cookie: {cookieHeader}");
-                              }
-                         } catch {}
-
-                         await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
-                         await MediaInfoPlayer.SetPropertyAsync("pause", "yes"); // Start paused, let it buffer
-                         
-                         // CHECK IF ALREADY PLAYING THIS URL (Preserve Buffer)
-                         string currentPath = await MediaInfoPlayer.GetPropertyAsync("path");
-                         if (!string.IsNullOrEmpty(currentPath) && (currentPath == url || currentPath.EndsWith(url) || url.EndsWith(currentPath)))
-                         {
-                              System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Prebuffer: Already playing {url}. Skipping OpenAsync to preserve buffer.");
-                              PlayerOverlayContainer.Visibility = Visibility.Visible;
-                         }
-                         else
-                         {
-                             if (startTime > 0)
-                             {
-                                 // Use 'start' property instead of seeking after open to avoid "property unavailable" errors
-                                 await MediaInfoPlayer.SetPropertyAsync("start", startTime.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                             }
-                             
-                             PlayerOverlayContainer.Visibility = Visibility.Visible;
-                             PlayerOverlayContainer.Opacity = 0;
-                             await MediaInfoPlayer.OpenAsync(url);
-                         }
-                         
-                         // Optional: Detect media info
-                         //_ = ExtractTechInfoAsync();
-                     }
-                     catch (Exception ex)
-                     {
-                         System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Prebuffer Error: {ex.Message}");
-                     }
-                 });
-             });
-        }
         
         private async Task ExtractTechInfoAsync(string overrideUrl = null)
         {
@@ -2144,55 +2131,18 @@ namespace ModernIPTVPlayer
         
         private async Task RefreshStremioSeriesProgressAsync(Models.Stremio.StremioMediaStream series)
         {
-             // Check History for Series
-             var lastWatched = HistoryManager.Instance.GetLastWatchedEpisode(series.Meta.Id);
-             
-             if (lastWatched != null)
+             // Refresh watched badges/checkmarks on all episodes
+             foreach (var season in Seasons)
              {
-                 // Find Episode in existing lists
-                 // Assuming Episodes are flattened in 'Seasons' collection which drives UI
-                 // Helper to find episode item
-                 EpisodeItem targetEp = null;
-                 foreach(var s in Seasons) {
-                     targetEp = s.Episodes.FirstOrDefault(e => e.Id == lastWatched.Id || (e.SeasonNumber == lastWatched.SeasonNumber && e.EpisodeNumber == lastWatched.EpisodeNumber));
-                     if (targetEp != null) break;
-                 }
-                 
-                 if (targetEp != null)
+                 foreach (var ep in season.Episodes)
                  {
-                     _selectedEpisode = targetEp;
-                     
-                     // Update UI
-                     PlayButtonText.Text = "Devam Et";
-                     string subtext = $"S{lastWatched.SeasonNumber:D2}E{lastWatched.EpisodeNumber:D2} - {targetEp.Title}";
-                     PlayButtonSubtext.Text = subtext;
-                     PlayButtonSubtext.Visibility = Visibility.Visible;
-                     StickyPlayButtonText.Text = "Devam Et";
-                     
-                     // Select in List
-                     SeasonComboBox.SelectedItem = Seasons.FirstOrDefault(s => s.SeasonNumber == lastWatched.SeasonNumber);
-                     // Allow UI update
-                     await Task.Delay(50); 
-                     
-                     _isProgrammaticSelection = true;
-                     if (EpisodesListView != null) EpisodesListView.SelectedItem = targetEp;
-                     _isProgrammaticSelection = false;
-                     
-                     // Pre-buffer
-                     _streamUrl = lastWatched.StreamUrl;
-                     InitializePrebufferPlayer(_streamUrl, lastWatched.Position);
-                     _ = UpdateTechnicalBadgesAsync(_streamUrl);
+                     ep.RefreshHistoryState();
                  }
              }
-             else
-             {
-                  PlayButtonText.Text = "Bölüm Seçin";
-                  PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                  StickyPlayButtonText.Text = "Bölüm Seçin";
-                  
-                  // No episode selected: Hide badges
-                  UpdateTechnicalSectionVisibility(false);
-               }
+
+             // NOTE: Episode auto-selection and prebuffering is handled by:
+             // LoadSeriesDataAsync → SeasonComboBox_SelectionChanged → EpisodesListView_SelectionChanged → StartPrebuffering
+             // We do NOT override selection here to avoid conflicts with the next-episode logic.
         }
 
 
@@ -2871,6 +2821,243 @@ namespace ModernIPTVPlayer
              }
         }
 
+        private async void StartPrebuffering(string url, double startTime = 0)
+        {
+            StartPrebufferingV2(url, startTime); 
+            return; 
+
+            if (string.IsNullOrEmpty(url)) return;
+            if (!AppSettings.IsPrebufferEnabled) return;
+
+            // Don't prebuffer if we already have a valid player with this URL
+            if (MediaInfoPlayer != null && MediaInfoPlayer.Parent != null)
+            {
+                try
+                {
+                    var currentPath = await MediaInfoPlayer.GetPropertyAsync("path");
+                    if (!string.IsNullOrEmpty(currentPath) && 
+                        (currentPath == url || currentPath.EndsWith(url) || url.EndsWith(currentPath)))
+                    {
+                        Debug.WriteLine($"[FastStart] Skipping - already buffering {url}");
+                        return;
+                    }
+                }
+                catch {}
+            }
+
+            Debug.WriteLine($"[FastStart] Prebuffering: {url} | Resume: {startTime}s | Buffer: {AppSettings.PrebufferSeconds}s");
+
+            if (MediaInfoPlayer == null)
+            {
+                MediaInfoPlayer = new MpvWinUI.MpvPlayer();
+                if (PlayerHost != null) PlayerHost.Content = MediaInfoPlayer;
+            }
+
+            try
+            {
+                // 1. Initialize via shared helper (HW accel, cookies, headers, network)
+                await MpvSetupHelper.ConfigurePlayerAsync(MediaInfoPlayer, url, isSecondary: true);
+
+                // 2. Override buffer settings AFTER helper (only limit by seconds, no MB limit)
+                int preSeconds = AppSettings.PrebufferSeconds;
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", preSeconds.ToString());
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "50MiB");
+
+                // 3. Make player host visible (required for rendering on handoff)
+                if (PlayerOverlayContainer != null)
+                {
+                    PlayerOverlayContainer.Visibility = Visibility.Visible;
+                    PlayerOverlayContainer.Opacity = 0;
+                }
+
+                // 4. Open stream first (demuxer needs the stream open to seek)
+                await MediaInfoPlayer.OpenAsync(url);
+
+                // 5. Wait for stream to be ready, then seek if needed
+                if (startTime > 0)
+                {
+                    // Wait for seekability (max 3 seconds, 50ms intervals)
+                    bool seekReady = false;
+                    for (int i = 0; i < 60; i++)
+                    {
+                        var seekable = await MediaInfoPlayer.GetPropertyAsync("seekable");
+                        if (seekable == "yes")
+                        {
+                            seekReady = true;
+                            break;
+                        }
+                        await Task.Delay(50);
+                    }
+
+                    if (seekReady)
+                    {
+                Debug.WriteLine($"[FastStart] Seeking to {startTime}s before buffering");
+                        await MediaInfoPlayer.ExecuteCommandAsync("seek", startTime.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
+                        Debug.WriteLine($"[FastStart] Seek command sent for {startTime}s");
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"[FastStart] Seek NOT READY after wait. Starting at 0.");
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine($"[FastStart] startTime is 0 or less ({startTime}). No seek needed.");
+                }
+
+                // 6. Mute + Start playback (buffer fills while muted)
+                await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
+                await MediaInfoPlayer.SetPropertyAsync("pause", "no");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[FastStart] Error: {ex.Message}");
+            }
+        }
+
+        private async void StartPrebufferingV2(string url, double startTime = 0)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            if (!AppSettings.IsPrebufferEnabled) return;
+
+            Debug.WriteLine($"[FastStart] PrebufferingV2: {url} | Resume: {startTime}s | Buffer: {AppSettings.PrebufferSeconds}s");
+
+            // 1. Ensure Player Instance Exists & is Attached
+            bool isNew = false;
+            // Only create if we don't have one
+            if (MediaInfoPlayer == null)
+            {
+                MediaInfoPlayer = new MpvWinUI.MpvPlayer();
+                isNew = true;
+                if (PlayerHost != null) PlayerHost.Content = MediaInfoPlayer;
+            }
+            else
+            {
+                // If we have one but it's not attached (detached state)
+                if (PlayerHost != null && PlayerHost.Content != MediaInfoPlayer)
+                {
+                    PlayerHost.Content = MediaInfoPlayer;
+                }
+            }
+
+            // 2. WAIT for RenderControl (Critical for Re-entry)
+            if (isNew)
+            {
+                var tcs = new TaskCompletionSource<bool>();
+                RoutedEventHandler handler = null;
+                handler = (s, e) =>
+                {
+                    MediaInfoPlayer.Loaded -= handler;
+                    tcs.TrySetResult(true);
+                };
+                MediaInfoPlayer.Loaded += handler;
+
+                // Safety timeout
+                var timeoutTask = Task.Delay(2000);
+                var completed = await Task.WhenAny(tcs.Task, timeoutTask);
+                if (completed == timeoutTask)
+                {
+                    Debug.WriteLine("[FastStart] Warning: Player Loaded event timed out. Attempting to proceed...");
+                }
+            }
+
+            try
+            {
+                // NEW: CHECK IF ALREADY PLAYING THIS CONTENT (Reuse for seamless transition)
+                string currentPath =  await MediaInfoPlayer.GetPropertyAsync("path");
+                // Allow fuzzy match (http vs https, or slight var) or exact match
+                if (!string.IsNullOrEmpty(currentPath) && currentPath == url)
+                {
+                     Debug.WriteLine($"[FastStart] Player already loaded with {url}. Reusing instance (Paused).");
+                     
+                     // Just ensure state is correct for "background wait"
+                     await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
+                     await MediaInfoPlayer.SetPropertyAsync("pause", "yes"); // User requested PAUSE state
+                     
+                     // Ensure visibility
+                     if (PlayerOverlayContainer != null)
+                     {
+                        PlayerOverlayContainer.Visibility = Visibility.Visible;
+                        PlayerOverlayContainer.Opacity = 0; 
+                     }
+                     return; // SKIP RE-INITIALIZATION
+                }
+
+                // 3. Configure Player
+                await MpvSetupHelper.ConfigurePlayerAsync(MediaInfoPlayer, url, isSecondary: true);
+
+                // 4. PRE-SEEK using 'start' property (Native MPV Feature)
+                if (startTime > 0)
+                {
+                    Debug.WriteLine($"[FastStart] Setting start time to {startTime}s");
+                    await MediaInfoPlayer.SetPropertyAsync("start", startTime.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    await MediaInfoPlayer.SetPropertyAsync("start", "0");
+                }
+
+                // 5. Override buffer settings for fast start
+                int preSeconds = AppSettings.PrebufferSeconds;
+                await MediaInfoPlayer.SetPropertyAsync("cache", "yes"); // Enable cache explicitly
+                await MediaInfoPlayer.SetPropertyAsync("cache-pause", "yes"); // Buffer while paused
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", preSeconds.ToString());
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB"); 
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "5MiB");
+
+                // [RESTORE AUDIO/SUBTITLE PREFERENCES]
+                // Attempt to retrieve history item to restore track preferences.
+                if (_item is Models.Stremio.StremioMediaStream sItem)
+                {
+                     var h = HistoryManager.Instance.GetProgress(sItem.Meta.Id);
+                     // Also check for episode...
+                     if (sItem.Meta.Type == "series" && _selectedEpisode != null)
+                     {
+                         h = HistoryManager.Instance.GetProgress(_selectedEpisode.Id);
+                     }
+
+                     if (h != null)
+                     {
+                         if (!string.IsNullOrEmpty(h.AudioTrackId)) await MediaInfoPlayer.SetPropertyAsync("aid", h.AudioTrackId);
+                         if (!string.IsNullOrEmpty(h.SubtitleTrackId)) await MediaInfoPlayer.SetPropertyAsync("sid", h.SubtitleTrackId);
+                     }
+                }
+                else if (!string.IsNullOrEmpty(url)) // Iptv or explicit URL
+                {
+                     // Try to key by URL
+                     var h = HistoryManager.Instance.GetProgress(url);
+                     if (h != null)
+                     {
+                         if (!string.IsNullOrEmpty(h.AudioTrackId)) await MediaInfoPlayer.SetPropertyAsync("aid", h.AudioTrackId);
+                         if (!string.IsNullOrEmpty(h.SubtitleTrackId)) await MediaInfoPlayer.SetPropertyAsync("sid", h.SubtitleTrackId);
+                     }
+                }
+
+                // 6. Make player host visible
+                if (PlayerOverlayContainer != null)
+                {
+                    PlayerOverlayContainer.Visibility = Visibility.Visible;
+                    PlayerOverlayContainer.Opacity = 0;
+                }
+
+                // 7. Open & Wait (Paused)
+                // We pause immediately so it doesn't advance history, but fills buffer.
+                await MediaInfoPlayer.SetPropertyAsync("pause", "yes"); 
+                await MediaInfoPlayer.OpenAsync(url);
+                await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
+                
+                // Note: Setting pause=yes BEFORE OpenAsync helps, but repeating it after ensures it sticks.
+                await MediaInfoPlayer.SetPropertyAsync("pause", "yes");
+
+                Debug.WriteLine("[FastStart] Pre-buffering started (PAUSED). Buffer filling in background...");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[FastStart] Error: {ex.Message}");
+            }
+        }
+
         private void UpdateMovieHistoryUi(HistoryItem history)
         {
             if (history != null && history.Position > 0)
@@ -2884,6 +3071,9 @@ namespace ModernIPTVPlayer
                         ? $"{(int)remaining.TotalHours}sa {(int)remaining.Minutes}dk Kaldı"
                         : $"{(int)remaining.TotalMinutes}dk Kaldı";
 
+                    Debug.WriteLine($"[ResumeDebug] UpdateMovieHistoryUi: History Position={history.Position}, Duration={history.Duration}");
+                    Debug.WriteLine($"[ResumeDebug] Button Text: {resumeText}, Subtext: {subtext}");
+
                     PlayButtonText.Text = resumeText;
                     PlayButtonSubtext.Text = subtext;
                     PlayButtonSubtext.Visibility = Visibility.Visible;
@@ -2893,7 +3083,22 @@ namespace ModernIPTVPlayer
                     StickyPlayButtonSubtext.Visibility = Visibility.Visible;
 
                     RestartButton.Visibility = Visibility.Visible;
-                }
+                    
+                     // FAST START: Start pre-buffering since we are offering "Continue"
+                     _streamUrl = history.StreamUrl;
+                     Debug.WriteLine($"[ResumeDebug] History position: {history.Position}, AutoResume: {_shouldAutoResume}");
+                     
+                     if (!_shouldAutoResume)
+                     {
+                         Debug.WriteLine($"[ResumeDebug] Triggering StartPrebuffering with URL={_streamUrl} and Position={history.Position}");
+                         StartPrebuffering(history.StreamUrl, history.Position);
+                     }
+                     else
+                     {
+                         Debug.WriteLine("[ResumeDebug] Skipping StartPrebuffering due to AutoResume to avoid race condition.");
+                     }
+                     _ = UpdateTechnicalBadgesAsync(_streamUrl);
+                 }
                 else
                 {
                     PlayButtonText.Text = "Tekrar İzle"; 
@@ -2908,38 +3113,17 @@ namespace ModernIPTVPlayer
 
         private async Task RefreshIptvSeriesProgressAsync(SeriesStream series)
         {
-             var lastWatched = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
-             if (lastWatched != null)
+             // Refresh watched badges/checkmarks on all episodes
+             foreach (var season in Seasons)
              {
-                 string resumeText = "Devam Et";
-                 int displayEp = lastWatched.EpisodeNumber == 0 ? 1 : lastWatched.EpisodeNumber;
-                 string subtext = $"S{lastWatched.SeasonNumber:D2}E{displayEp:D2}";
-
-                 PlayButtonText.Text = resumeText;
-                 PlayButtonSubtext.Text = subtext;
-                 PlayButtonSubtext.Visibility = Visibility.Visible;
-
-                 StickyPlayButtonText.Text = resumeText;
-                 StickyPlayButtonSubtext.Text = subtext;
-                 StickyPlayButtonSubtext.Visibility = Visibility.Visible;
-                 
-                 RestartButton.Visibility = Visibility.Visible;
-                 
-                 // Refresh Episode List specifically (marks watched etc)
-                 // This assumes EpisodesListView is already populated.
-                 if (EpisodesListView.ItemsSource is List<EpisodeItem> episodes)
+                 foreach (var ep in season.Episodes)
                  {
-                     foreach (var ep in episodes)
-                     {
-                         // We need a way to link IPTV items to history. 
-                         // Usually we use Title/Season/Ep or a specific ID.
-                         // For now let's just refresh the bound properties if they are Observable.
-                         // EpisodeItem usually has logic to check history on creation. 
-                         // We might need to recreate them or refresh them.
-                         ep.RefreshHistoryState();
-                     }
+                     ep.RefreshHistoryState();
                  }
              }
+
+             // NOTE: Episode auto-selection and prebuffering is handled by:
+             // LoadSeriesDataAsync → SeasonComboBox_SelectionChanged → EpisodesListView_SelectionChanged → StartPrebuffering
         }
 
         private async void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -2947,6 +3131,20 @@ namespace ModernIPTVPlayer
             // STREMIO LOGIC
             if (_item is Models.Stremio.StremioMediaStream stremioItem)
             {
+                // [FIX] If _streamUrl is missing but we're in an auto-resume flow, try a last-ditch history lookup
+                if (string.IsNullOrEmpty(_streamUrl))
+                {
+                    string historyId = stremioItem.Meta.Id;
+                    if (stremioItem.Meta.Type == "series" && _selectedEpisode != null) historyId = _selectedEpisode.Id;
+                    
+                    var h = HistoryManager.Instance.GetProgress(historyId);
+                    if (h != null && !string.IsNullOrEmpty(h.StreamUrl))
+                    {
+                        _streamUrl = h.StreamUrl;
+                        System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Recovered _streamUrl from history: {_streamUrl}");
+                    }
+                }
+
                 // If we have a cached stream URL (Resume) and user clicked "Continue", prioritize Resume
                 if (!string.IsNullOrEmpty(_streamUrl))
                 {
@@ -2959,8 +3157,16 @@ namespace ModernIPTVPlayer
                          title = $"{_selectedEpisode.SeasonNumber}x{_selectedEpisode.EpisodeNumber} - {_selectedEpisode.Title}";
                      }
                      
+                     
                      // Use Handoff (or Direct Navigate) with the resumed URL
-                     await PerformHandoverAndNavigate(_streamUrl, title, videoId);
+                     double resumeSeconds = -1;
+                     var history = HistoryManager.Instance.GetProgress(videoId);
+                     if (history != null && !history.IsFinished && history.Position > 0)
+                     {
+                         resumeSeconds = history.Position;
+                     }
+
+                     await PerformHandoverAndNavigate(_streamUrl, title, videoId, startSeconds: resumeSeconds);
                      return;
                 }
                 
@@ -3011,37 +3217,66 @@ namespace ModernIPTVPlayer
             // Handoff Logic
             try
             {
-                // Ensure Handoff is set
-                App.HandoffPlayer = MediaInfoPlayer;
-                
                 // CRITICAL SHAKE: Unpause!
+                bool isPlayerActive = false;
                 if (MediaInfoPlayer != null)
                 {
-                    Debug.WriteLine($"[MediaInfoPage:Handoff] Player State BEFORE: Pause={await MediaInfoPlayer.GetPropertyAsync("pause")}, Mute={await MediaInfoPlayer.GetPropertyAsync("mute")}");
-                    
-                    // APPLY MAIN BUFFER SETTINGS
-                    int mainBuffer = AppSettings.BufferSeconds;
-                    await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
-                    await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB"); // 2GB Limit for Main Player
-                    
-                    await MediaInfoPlayer.SetPropertyAsync("pause", "no");
-                    Debug.WriteLine($"[MediaInfoPage:Handoff] Player State AFTER: Pause={await MediaInfoPlayer.GetPropertyAsync("pause")}");
-                    
-                    MediaInfoPlayer.EnableHandoffMode();
-                
-                    // Detach from parent (ContentControl or Panel)
-                    var parent = MediaInfoPlayer.Parent;
-                    if (parent is Panel p) p.Children.Remove(MediaInfoPlayer);
-                    else if (parent is ContentControl cc) cc.Content = null;
-                    Debug.WriteLine("[MediaInfoPage:Handoff] Detached from visual tree.");
+                    try
+                    {
+                        // [FIX] If we are in AutoResume mode, we deliberately skipped StartPrebuffering.
+                        // So the player is likely empty or holds a trailer. DO NOT HANDOFF.
+                        if (_shouldAutoResume)
+                        {
+                             isPlayerActive = false;
+                             Debug.WriteLine("[MediaInfoPage:Handoff] AutoResume active -> Forcing FRESH START (Skipping Handoff).");
+                        }
+                        else
+                        {
+                            var path = await MediaInfoPlayer.GetPropertyAsync("path");
+                            if (!string.IsNullOrEmpty(path) && path != "N/A")
+                            {
+                                isPlayerActive = true;
+                                App.HandoffPlayer = MediaInfoPlayer; // Valid Handoff
+                            
+                            Debug.WriteLine($"[MediaInfoPage:Handoff] Player State BEFORE: Pause={await MediaInfoPlayer.GetPropertyAsync("pause")}, Mute={await MediaInfoPlayer.GetPropertyAsync("mute")}");
+                            
+                            // APPLY MAIN BUFFER SETTINGS
+                            int mainBuffer = AppSettings.BufferSeconds;
+                            await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
+                            await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB"); 
+                            
+                            await MediaInfoPlayer.SetPropertyAsync("pause", "no");
+                            MediaInfoPlayer.EnableHandoffMode();
+                            
+                            // Detach from parent
+                            var parent = MediaInfoPlayer.Parent;
+                            if (parent is Panel p) p.Children.Remove(MediaInfoPlayer);
+                            else if (parent is ContentControl cc) cc.Content = null;
+                            Debug.WriteLine("[MediaInfoPage:Handoff] Detached from visual tree.");
+                            Debug.WriteLine("[MediaInfoPage:Handoff] Detached from visual tree.");
+                        }
+                        // [FIX] Closing the else block added for Handoff prevention
+                    }
+                    }
+                    catch (Exception ex) 
+                    {
+                        Debug.WriteLine($"[MediaInfoPage:Handoff] Player Check Failed: {ex.Message}");
+                    }
+                }
+
+                if (!isPlayerActive)
+                {
+                    Debug.WriteLine("[MediaInfoPage:Handoff] Player is not active or empty. Forcing FRESH START.");
+                    App.HandoffPlayer = null;
                 }
                 
                 // Navigate
-                Debug.WriteLine($"[MediaInfoPage:Handoff] Navigating to PlayerPage for {url}");
+                Debug.WriteLine($"[MediaInfoPage:Handoff] Navigating to PlayerPage for {url} | StartSeconds: {startSeconds} | HasHandoff: {App.HandoffPlayer != null}");
                 Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds));
             }
-            catch
+            catch (Exception ex)
             {
+                Debug.WriteLine($"[MediaInfoPage:Handoff] ERROR: {ex}");
                 Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds));
             }
         }
@@ -3104,8 +3339,14 @@ namespace ModernIPTVPlayer
                     if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
                     if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
 
+                    var activeAddon = _addonResults.FirstOrDefault(a => !a.IsLoading && a.Streams != null && a.Streams.Any(s => s.IsActive));
                     var firstAddon = _addonResults.FirstOrDefault(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0);
-                    if (firstAddon != null && AddonSelectorList.SelectedItem == null)
+                    
+                    if (activeAddon != null)
+                    {
+                         AddonSelectorList.SelectedItem = activeAddon;
+                    }
+                    else if (firstAddon != null && AddonSelectorList.SelectedItem == null)
                     {
                         AddonSelectorList.SelectedItem = firstAddon;
                     }
@@ -3113,7 +3354,6 @@ namespace ModernIPTVPlayer
                     if (autoPlay)
                     {
                         var firstStream = firstAddon?.Streams?.FirstOrDefault(s => !string.IsNullOrEmpty(s.Url));
-                        if (firstStream != null)
                         {
                             Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, StartSeconds: startSeconds));
                             return;
@@ -3180,7 +3420,69 @@ namespace ModernIPTVPlayer
                         {
                             // 1. Get Manifest
                             var manifest = await Services.Stremio.StremioService.Instance.GetManifestAsync(baseUrl);
-                            string addonDisplayName = manifest?.Name ?? baseUrl.Replace("https://", "").Replace("http://", "").Split('/')[0];
+                            if (manifest == null) return;
+
+                            // [FIX] Relaxed check: Only block if we are SURE it doesn't support streams.
+                            // Default to TRUE (supported) if resources is null or complex.
+                            bool handled = true;
+                            
+                            if (manifest.Resources != null && manifest.Resources.Count > 0)
+                            {
+                                // Check if it's a simple list of strings/types and "stream" is missing
+                                // If it contains objects, we assume it MIGHT support streams unless we parse them all.
+                                // For safety, we only filter out if we see a list of resource names and "stream" isn't one of them.
+                                
+                                bool hasStream = false;
+                                bool isSimpleList = true;
+
+                                foreach (var r in manifest.Resources)
+                                {
+                                    if (r is string s)
+                                    {
+                                        if (s == "stream") hasStream = true;
+                                    }
+                                    else if (r is JsonElement je)
+                                    {
+                                        if (je.ValueKind == JsonValueKind.String)
+                                        {
+                                            if (je.GetString() == "stream") hasStream = true;
+                                        }
+                                        else if (je.ValueKind == JsonValueKind.Object)
+                                        {
+                                            // It's a resource object (ResultResource). 
+                                            // We assume complex objects might define "stream" or "name": "stream"
+                                            // Checking deeper is safer:
+                                            if (je.TryGetProperty("name", out var nameProp) && nameProp.GetString() == "stream")
+                                            {
+                                                hasStream = true;
+                                            }
+                                            // If it's an object but not obviously "stream", we mark it as complex/unknown
+                                            // BUT strictly speaking, a resource object MUST have a name. 
+                                            // If we found objects, let's just allow it to be safe unless we are sure.
+                                            isSimpleList = false;
+                                        }
+                                    }
+                                    else
+                                    {
+                                        isSimpleList = false; // Unknown type
+                                    }
+                                }
+
+                                // If it was a simple list of strings and NONE were "stream", then we block.
+                                // If it had complex objects we failed to parse perfectly, we allow.
+                                if (isSimpleList && !hasStream)
+                                {
+                                    handled = false;
+                                }
+                            }
+
+                            if (!handled)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[Stremio] Skipping non-stream addon: {manifest.Name ?? baseUrl}");
+                                return;
+                            }
+
+                            string addonDisplayName = manifest.Name ?? baseUrl.Replace("https://", "").Replace("http://", "").Split('/')[0];
                             addonDisplayName = NormalizeAddonText(addonDisplayName);
                             
                             // 2. Get Streams
@@ -3266,6 +3568,21 @@ namespace ModernIPTVPlayer
                                     }
                                     
                                     bool isActive = !string.IsNullOrEmpty(lastStreamUrl) && s.Url == lastStreamUrl;
+                                    
+                                    // [FIX] Fuzzy match for dynamic Debrid URLs (match by filename)
+                                    if (!isActive && !string.IsNullOrEmpty(lastStreamUrl))
+                                    {
+                                        try
+                                        {
+                                            string lastFileName = System.IO.Path.GetFileName(new Uri(lastStreamUrl).LocalPath);
+                                            string currentFileName = System.IO.Path.GetFileName(new Uri(s.Url).LocalPath);
+                                            if (!string.IsNullOrEmpty(lastFileName) && lastFileName == currentFileName)
+                                            {
+                                                isActive = true;
+                                            }
+                                        }
+                                        catch { /* Ignore Uri parsing errors */ }
+                                    }
 
                                     processedStreams.Add(new StremioStreamViewModel
                                     {
@@ -3358,13 +3675,19 @@ namespace ModernIPTVPlayer
                                                     
                                                     // [FIX] Use direct navigation for new sources that haven't been pre-buffered.
                                                     // PerformHandoverAndNavigate requires the player to already be playing the content.
-                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId));
+                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, StartSeconds: startSeconds));
                                                     return;
                                                 }
                                             }
 
+                                            // Select Active Addon if available
+                                            var activeInUpdate = addonVM.Streams.Any(s => s.IsActive);
+                                            if (activeInUpdate)
+                                            {
+                                                AddonSelectorList.SelectedItem = addonVM;
+                                            }
                                             // If nothing selected (and not just placeholder), select this
-                                            if (AddonSelectorList.SelectedIndex == -1 || (AddonSelectorList.SelectedItem as StremioAddonViewModel)?.IsLoading == true)
+                                            else if (AddonSelectorList.SelectedIndex == -1 || (AddonSelectorList.SelectedItem as StremioAddonViewModel)?.IsLoading == true)
                                             {
                                                 AddonSelectorList.SelectedItem = addonVM;
                                             }
@@ -3615,7 +3938,36 @@ namespace ModernIPTVPlayer
                 // Sync the other list if one changes
                 if (lv == AddonSelectorList) NarrowAddonSelector.SelectedItem = addon;
                 else if (lv == NarrowAddonSelector) AddonSelectorList.SelectedItem = addon;
+
+                // Scroll to active item
+                ScrollToActiveSource();
             }
+        }
+
+        private void ScrollToActiveSource()
+        {
+            DispatcherQueue.TryEnqueue(async () =>
+            {
+                try
+                {
+                    // Allow UI to populate
+                    await Task.Delay(50);
+                    
+                    var list = _isWideModeIndex == 1 ? SourcesListView : NarrowSourcesListView;
+                    System.Diagnostics.Debug.WriteLine($"[Stremio] ScrollToActiveSource: List={list?.Name}, Items={list?.Items?.Count}");
+
+                    if (list.ItemsSource is List<StremioStreamViewModel> streams)
+                    {
+                        var active = streams.FirstOrDefault(s => s.IsActive);
+                        System.Diagnostics.Debug.WriteLine($"[Stremio] Active Item: {active?.Title ?? "NULL"}");
+                        if (active != null)
+                        {
+                            list.ScrollIntoView(active);
+                        }
+                    }
+                }
+                catch { }
+            });
         }
 
         private void SourcesListView_ItemClick(object sender, ItemClickEventArgs e)
@@ -3643,10 +3995,19 @@ namespace ModernIPTVPlayer
                 if (!string.IsNullOrEmpty(vm.Url))
                 {
                     _streamUrl = vm.Url; // Save for return/reuse
+                    
+                    // [FIX] Check history for resume position on manual source select
+                    double resumeSeconds = -1;
+                    var history = HistoryManager.Instance.GetProgress(videoId);
+                    if (history != null && !history.IsFinished && history.Position > 0)
+                    {
+                        resumeSeconds = history.Position;
+                    }
+
                     // [FIX] Direct Navigation for Stremio Sources (No Handoff)
                     // We cannot use Handoff because MediaInfoPlayer has not pre-buffered this specific URL.
                     // Doing Handoff would pass an empty/uninitialized player to PlayerPage.
-                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId));
+                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, StartSeconds: resumeSeconds));
                 }
                 else if (!string.IsNullOrEmpty(vm.ExternalUrl))
                 {
@@ -3710,7 +4071,7 @@ namespace ModernIPTVPlayer
             visual.StartAnimation("Opacity", opacityAnim);
         }
 
-        private void RestartButton_Click(object sender, RoutedEventArgs e)
+        private async void RestartButton_Click(object sender, RoutedEventArgs e)
         {
              if (!string.IsNullOrEmpty(_streamUrl))
             {
@@ -3718,18 +4079,22 @@ namespace ModernIPTVPlayer
                 if (_selectedEpisode != null)
                 {
                      string parentId = _item is SeriesStream ss ? ss.SeriesId.ToString() : null;
-                     PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, 0); // Episode 0? logic needs check
-                     // Actually episode argument is usually integer order.
-                     // The last args are: string seriesName = null, int season = 0, int episode = 0
-                     // But _selectedEpisode doesn't store 'episode number'. CurrentEpisodes list index?
-                     // Let's check PerformHandoverAndNavigate definition.
-                     // line 559: PerformHandoverAndNavigate(string url, string title, string id = null, string parentId = null, string seriesName = null, int season = 0, int episode = 0)
                      
-                     // We need to force PlayerPage to start from 0. 
-                     // PlayerPage automatically checks history on load.
-                     // To FORCE restart, we might need a flag or clear history.
-                     // A better way is to clear history for this ID before navigating.
-                     // RESTART: Explicitly pass startSeconds: 0
+                     // [Fix] Force seek to 0 before handoff
+                     if (MediaInfoPlayer != null)
+                     {
+                         try 
+                         {
+                             var path = await MediaInfoPlayer.GetPropertyAsync("path");
+                             if (!string.IsNullOrEmpty(path))
+                             {
+                                 await MediaInfoPlayer.ExecuteCommandAsync("seek", "0", "absolute");
+                                 System.Diagnostics.Debug.WriteLine("[Restart] Seeked to 0 before handoff.");
+                             }
+                         }
+                         catch {}
+                     }
+                     
                      HistoryManager.Instance.UpdateProgress(_selectedEpisode.Id, _selectedEpisode.Title, _streamUrl, 0, 0, parentId, _item.Title, _selectedEpisode.SeasonNumber);
                      PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, 0, 0);
                 }
@@ -3737,6 +4102,18 @@ namespace ModernIPTVPlayer
                 {
                     // Update History to 0
                     HistoryManager.Instance.UpdateProgress(live.StreamId.ToString(), live.Title, live.StreamUrl, 0, 0, null, null, 0, 0);
+                    
+                     // [Fix] Force seek to 0 before handoff
+                     if (MediaInfoPlayer != null)
+                     {
+                         try 
+                         {
+                             var path = await MediaInfoPlayer.GetPropertyAsync("path");
+                             if (!string.IsNullOrEmpty(path)) await MediaInfoPlayer.ExecuteCommandAsync("seek", "0", "absolute");
+                         }
+                         catch {}
+                     }
+
                     PerformHandoverAndNavigate(_streamUrl, live.Title, live.StreamId.ToString(), startSeconds: 0);
                 }
             }
@@ -4031,6 +4408,7 @@ namespace ModernIPTVPlayer
                 BadgeCodecContainer.Visibility = Visibility.Collapsed;
 
                 // 1. Check Cache
+                await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
                 if (Services.ProbeCacheService.Instance.Get(url) is Services.ProbeData cached)
                 {
                     // SMART SHIMMER: Fast Fade-In if cached

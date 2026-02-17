@@ -154,12 +154,13 @@ namespace ModernIPTVPlayer
                 // Ensuring buffer limits are lifted only after playback truly begins prevent startup race conditions.
                 if (_isHandoff && !_bufferUnlocked && position > 0.1)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[HANDOFF_UNLOCK] Playback started at {position}s. Unlocking buffer limits...");
+                    System.Diagnostics.Debug.WriteLine($"[HANDOFF_UNLOCK] Playback started at {position}s. Applying main buffer settings...");
                     
-                    // FORCE UNLOCK LIMITS
+                    // Apply main buffer settings from user preferences
+                    int bufferSecs = AppSettings.BufferSeconds;
                     await _mpvPlayer.SetPropertyAsync("cache", "yes");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", "120");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "300MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", bufferSecs.ToString());
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
                     await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
                     
                     _bufferUnlocked = true;
@@ -194,7 +195,12 @@ namespace ModernIPTVPlayer
                 if (!isLikelyLive && _navArgs != null && position > 1 && duration > 0)
                 {
                      string id = !string.IsNullOrEmpty(_navArgs.Id) ? _navArgs.Id : _navArgs.Url;
-                     HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode);
+                     
+                     // Capture current Audio and Subtitle Track IDs
+                     string aid = await _mpvPlayer.GetPropertyAsync("aid");
+                     string sid = await _mpvPlayer.GetPropertyAsync("sid");
+
+                     HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, aid, sid);
                 }
 
                 if (!isLikelyLive)
@@ -647,10 +653,11 @@ namespace ModernIPTVPlayer
                     await _mpvPlayer.SetPropertyAsync("pause", "no");
                     await _mpvPlayer.SetPropertyAsync("mute", "no");
 
-                    // 2. Background Opts (Non-blocking)
+                    // 2. Apply main buffer settings from user preferences
+                    int mainBuffer = AppSettings.BufferSeconds;
                     _ = _mpvPlayer.SetPropertyAsync("cache", "yes");
-                    _ = _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", "120");
-                    _ = _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "300MiB");
+                    _ = _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
+                    _ = _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
                     _ = _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
 
                     // 3. Verify and Fix
@@ -660,9 +667,17 @@ namespace ModernIPTVPlayer
                     var pPath = await _mpvPlayer.GetPropertyAsync("path");
                     Debug.WriteLine($"[PlayerPage:Handoff_Verify] State: Pause={pPause}, Mute={pMute}, CoreIdle={pIdle}, Path={pPath}");
 
-                    if (string.IsNullOrEmpty(pPath))
+                    if (string.IsNullOrEmpty(pPath) || pPath == "N/A")
                     {
-                        Debug.WriteLine("[PlayerPage:Handoff] Path is EMPTY! Player lost content. Reloading URL...");
+                        Debug.WriteLine("[PlayerPage:Handoff] Path is EMPTY or INVALID! Player lost content. Reloading URL...");
+                        
+                        // [OPTIMIZATION] Set start time BEFORE OpenAsync to avoid seeking delay (Handoff Recovery)
+                        if (_navArgs != null && _navArgs.StartSeconds > 0)
+                        {
+                            Debug.WriteLine($"[PlayerPage:Handoff] Setting start time for recovery: {_navArgs.StartSeconds}");
+                            await _mpvPlayer.SetPropertyAsync("start", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        }
+
                         await _mpvPlayer.OpenAsync(_navArgs.Url);
                         await _mpvPlayer.SetPropertyAsync("pause", "no");
                     }
@@ -676,35 +691,16 @@ namespace ModernIPTVPlayer
                         _mpvPlayer.Redraw(); // Force redraw after unpause kick
                     }
 
-                    if (_navArgs != null && _navArgs.StartSeconds >= 0)
-                    {
-                        Debug.WriteLine($"[PlayerPage:Handoff] Enforcing Start Position: {_navArgs.StartSeconds}");
-                        bool seekSuccess = false;
-                        int retries = 0;
-                        while (retries < 20) 
-                        {
-                            try 
-                            {
-                                var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
-                                if (seekable == "yes")
-                                {
-                                    await _mpvPlayer.ExecuteCommandAsync("seek", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
-                                    seekSuccess = true;
-                                    break;
-                                }
-                            }
-                            catch (Exception ex) { Debug.WriteLine($"[PlayerPage:Handoff] Seek Failed: {ex.Message}"); }
-                            await Task.Delay(100);
-                            retries++;
-                        }
-                    }
+                    // Fast Start prebuffer already sought to the correct position - no need to seek again
+                    Debug.WriteLine("[PlayerPage:Handoff] Prebuffer ready, skipping seek logic");
                 }
                 else
                 {
                      // FRESH START MODE: SLOW PATH (Delay for socket safety)
                      Debug.WriteLine("[PlayerPage] Starting Fresh Playback...");
                      Services.Streaming.StreamSlotSimulator.Instance.StopAll();
-                     await Task.Delay(1200);
+                     // REMOVED: await Task.Delay(1200); -> Unnecessary delay
+                     await Task.Delay(50); // Minimal safety check
 
                      _mpvPlayer = new MpvWinUI.MpvPlayer();
                      PlayerContainer.Children.Add(_mpvPlayer);
@@ -715,18 +711,47 @@ namespace ModernIPTVPlayer
                      try
                     {
                         ShowOsd("Bağlantı Kontrol Ediliyor...");
-                        var checkResult = await CheckStreamUrlAsync(_streamUrl);
-                        if (!checkResult.Success)
+                        
+                        // [OPTIMIZATION] Skip probe for known fast providers to save ~1-2s
+                        bool isTrusted = _streamUrl.Contains("torbox") || _streamUrl.Contains("real-debrid") || _streamUrl.Contains("alldebrid") || _streamUrl.Contains("premiumize");
+                        
+                        if (!isTrusted)
                         {
-                            await ShowMessageDialog("Yayın Hatası", checkResult.ErrorMsg);
-                            if (Frame.CanGoBack) Frame.GoBack();
-                            return;
+                            var checkResult = await CheckStreamUrlAsync(_streamUrl);
+                            if (!checkResult.Success)
+                            {
+                                await ShowMessageDialog("Yayın Hatası", checkResult.ErrorMsg);
+                                if (Frame.CanGoBack) Frame.GoBack();
+                                return;
+                            }
+                            _streamUrl = checkResult.Url;
+                        }
+                        else
+                        {
+                             Debug.WriteLine("[PlayerPage] Trusted Source detected. Skipping pre-check.");
                         }
 
-                        _streamUrl = checkResult.Url;
+                        // [Fix] Check if player was disposed during check
+                        if (_mpvPlayer == null) return;
 
                         await MpvSetupHelper.ConfigurePlayerAsync(_mpvPlayer, _streamUrl, isSecondary: false);
                         
+                        // [FIX] Apply Buffer Settings (Same as Handoff)
+                        int bufferSecs = AppSettings.BufferSeconds;
+                        await _mpvPlayer.SetPropertyAsync("cache", "yes");
+                        await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", bufferSecs.ToString());
+                        await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
+                        await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
+                        
+                        // [Fix] Double check before OpenAsync
+                        if (_mpvPlayer == null) return; 
+
+                        // [OPTIMIZATION] Set start time BEFORE OpenAsync to avoid seeking delay
+                        if (_navArgs != null && _navArgs.StartSeconds > 0)
+                        {
+                            Debug.WriteLine($"[PlayerPage] Setting start time: {_navArgs.StartSeconds}");
+                            await _mpvPlayer.SetPropertyAsync("start", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                        }
 
                         await _mpvPlayer.OpenAsync(_streamUrl);
 
@@ -751,29 +776,29 @@ namespace ModernIPTVPlayer
                         _statsTimer?.Start();
                         SetupProfessionalAnimations();
 
-                        // [FRESH START SEEK LOGIC]
-                        if (_navArgs != null && _navArgs.StartSeconds > 0)
-                        {
-                            Debug.WriteLine($"[PlayerPage:Fresh] Enforcing Start Position: {_navArgs.StartSeconds}");
-                            bool seekSuccess = false;
-                            int retries = 0;
-                            while (retries < 30) // 3 seconds max
-                            {
-                                try 
-                                {
-                                    var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
-                                    if (seekable == "yes")
-                                    {
-                                        await _mpvPlayer.ExecuteCommandAsync("seek", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
-                                        seekSuccess = true;
-                                        break;
-                                    }
-                                }
-                                catch (Exception ex) { Debug.WriteLine($"[PlayerPage:Fresh] Seek Failed: {ex.Message}"); }
-                                await Task.Delay(100);
-                                retries++;
-                            }
+                        _statsTimer?.Start();
+                        SetupProfessionalAnimations();
+                        
+                        // [RESTORE SAVED AUDIO/SUBTITLE TRACKS]
+                         string contentId = !string.IsNullOrEmpty(_navArgs?.Id) ? _navArgs.Id : _streamUrl;
+                         var history = HistoryManager.Instance.GetProgress(contentId);
+                         if (history != null)
+                         {
+                             if (!string.IsNullOrEmpty(history.AudioTrackId))
+                             {
+                                 Debug.WriteLine($"[PlayerPage] Restoring Audio Track: {history.AudioTrackId}");
+                                 await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
+                             }
+                             if (!string.IsNullOrEmpty(history.SubtitleTrackId))
+                             {
+                                 Debug.WriteLine($"[PlayerPage] Restoring Subtitle Track: {history.SubtitleTrackId}");
+                                 await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
+                             }
                         }
+
+                        // [FRESH START SEEK LOGIC]
+                        // REMOVED: Replaced with 'start' property before OpenAsync for instant seeking.
+
                     }
                     catch (Exception ex)
                     {

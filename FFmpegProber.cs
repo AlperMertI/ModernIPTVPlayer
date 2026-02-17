@@ -13,7 +13,23 @@ namespace ModernIPTVPlayer
     public class FFmpegProber
     {
         // Path to the ffprobe executable found on the system
-        private const string FfprobePath = @"C:\Users\mertg\Documents\Stremio\stremio-community-v5\dist\win-x64\ffprobe.exe";
+        private static string FfprobePath => GetFfprobePath();
+
+        private static string GetFfprobePath()
+        {
+            // 1. Check local application directory (where the .exe is)
+            string localPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ffprobe.exe");
+            if (File.Exists(localPath)) return localPath;
+
+            // 2. Check a "Tools" subfolder
+            string toolsPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Tools", "ffprobe.exe");
+            if (File.Exists(toolsPath)) return toolsPath;
+
+            // 3. Fallback to a common developer path or legacy path (Optional)
+            // For now, let's keep it clean.
+            
+            return "ffprobe.exe"; // Try PATH environment variable as last resort
+        }
 
         public async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr)> ProbeAsync(string url, CancellationToken ct = default, bool force = false)
         {

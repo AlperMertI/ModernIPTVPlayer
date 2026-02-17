@@ -18,12 +18,14 @@ namespace ModernIPTVPlayer
         public DateTime Timestamp { get; set; }
         public bool IsFinished { get; set; } // > 95%
         
-        // Series Specific
         public string SeriesName { get; set; }
         public int SeasonNumber { get; set; }
         public int EpisodeNumber { get; set; }
         // To track "Next Up", we might need to know the parent Series ID
-        public string ParentSeriesId { get; set; } 
+        public string ParentSeriesId { get; set; }
+
+        public string AudioTrackId { get; set; }
+        public string SubtitleTrackId { get; set; }
     }
 
     public class HistoryManager
@@ -78,6 +80,8 @@ namespace ModernIPTVPlayer
                 var folder = ApplicationData.Current.LocalFolder;
                 var file = await folder.CreateFileAsync(FILENAME, CreationCollisionOption.ReplaceExisting);
                 await FileIO.WriteTextAsync(file, json);
+                
+                System.Diagnostics.Debug.WriteLine($"[HistoryManager] Saved {list.Count} items to {file.Path}");
             }
             catch (Exception ex)
             {
@@ -85,7 +89,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0)
+        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null)
         {
             if (string.IsNullOrEmpty(id) || dur < 1) return;
 
@@ -114,8 +118,10 @@ namespace ModernIPTVPlayer
                     item.SeasonNumber = s;
                     item.EpisodeNumber = e;
                 }
+
+                if (!string.IsNullOrEmpty(aid)) item.AudioTrackId = aid;
+                if (!string.IsNullOrEmpty(sid)) item.SubtitleTrackId = sid;
             }
-            
             // Fire and forget save (maybe debounce this in real app, but for now direct)
             // Actually better to save on Pause/Stop/Navigation, not every tick.
             // But we will call SaveAsync() manually from PlayerPage on PageUnload or Pause.

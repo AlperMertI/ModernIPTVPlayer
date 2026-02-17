@@ -38,6 +38,7 @@ namespace ModernIPTVPlayer.Controls
         private bool _pointerExitNeedsRearm;
         private DateTimeOffset _suppressPointerExitUntil;
         private bool _isPointerOverCard;
+        private bool _isClosing;
 
         public event EventHandler<IMediaStream>? PlayRequested;
         public event EventHandler<(IMediaStream Stream, TmdbMovieResult Tmdb)>? DetailsRequested;
@@ -136,6 +137,7 @@ namespace ModernIPTVPlayer.Controls
         {
             if (_isInCinemaMode && !force) return;
             if (_isPointerOverCard && !force) return;
+            if (_isClosing && !force) return;
 
             if (force)
             {
@@ -143,6 +145,7 @@ namespace ModernIPTVPlayer.Controls
                 return;
             }
 
+            _isClosing = true;
             try
             {
                 _closeCts?.Cancel();
@@ -186,6 +189,10 @@ namespace ModernIPTVPlayer.Controls
                 FinalizeCloseVisualState();
             }
             catch (TaskCanceledException) { }
+            finally
+            {
+                _isClosing = false;
+            }
         }
 
         /// <summary>
@@ -293,7 +300,8 @@ namespace ModernIPTVPlayer.Controls
                     offsetAnim.InsertKeyFrame(1.0f, Vector3.Zero, easing);
                     offsetAnim.Duration = TimeSpan.FromMilliseconds(400);
 
-                    visual.StartAnimation("Translation", offsetAnim);
+                    // [FIX] Try-Catch to prevent crash if visuals don't support Translation
+                    try { visual.StartAnimation("Translation", offsetAnim); } catch { }
                     visual.Opacity = 1f;
                     visual.Scale = Vector3.One;
                 }
@@ -619,7 +627,7 @@ namespace ModernIPTVPlayer.Controls
             var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
             visual.Opacity = 1f;
             visual.Scale = Vector3.One;
-            visual.Properties.InsertVector3("Translation", Vector3.Zero);
+            try { visual.Properties.InsertVector3("Translation", Vector3.Zero); } catch { }
 
             HideScrimImmediately();
 
