@@ -74,6 +74,8 @@ namespace ModernIPTVPlayer
                 TmdbStatusText.Text = "API Anahtarı kayıtlı. TMDB aktif.";
                 TmdbStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.LightGreen);
             }
+
+            LoadPlayerSettings();
         }
 
         private void UpdateSliderHeaders()
@@ -199,6 +201,223 @@ namespace ModernIPTVPlayer
                 TmdbStatusText.Text = "API Anahtarı temizlendi. TMDB devre dışı.";
                 TmdbStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange);
                 ShowStatus("TMDB API Anahtarı silindi.");
+            }
+        }
+        private bool _isUpdatingProfile = false;
+
+        private void LoadPlayerSettings()
+        {
+            _isUpdatingProfile = true;
+            try
+            {
+                var settings = AppSettings.PlayerSettings;
+
+                // Set Profile
+                SetComboSelection(PlayerProfileCombo, settings.Profile.ToString());
+                UpdateProfileDescription(settings.Profile);
+
+                // Set Individual Settings
+                SetComboSelection(HwDecCombo, settings.HardwareDecoding.ToString());
+                SetComboSelection(VoCombo, settings.VideoOutput.ToString());
+                SetComboSelection(ScalerCombo, settings.Scaler.ToString());
+                SetComboSelection(ToneMappingCombo, settings.ToneMapping.ToString());
+                SetComboSelection(TargetModeCombo, settings.TargetDisplayMode.ToString());
+                SetComboSelection(TargetPeakCombo, settings.TargetPeak.ToString());
+                SetComboSelection(AudioChannelsCombo, settings.AudioChannels.ToString());
+
+                DebandToggle.IsOn = settings.Deband == Models.DebandMode.Yes;
+                ExclusiveToggle.IsOn = settings.ExclusiveAudio == Models.ExclusiveMode.Yes;
+                CustomConfigBox.Text = settings.CustomConfig ?? "";
+
+                // Update UI state based on profile (e.g. enable/disable custom config if needed, though plan says always editable)
+            }
+            finally
+            {
+                _isUpdatingProfile = false;
+            }
+        }
+
+        private void SetComboSelection(ComboBox combo, string tagValue)
+        {
+            foreach (ComboBoxItem item in combo.Items)
+            {
+                if (item.Tag?.ToString() == tagValue)
+                {
+                    combo.SelectedItem = item;
+                    return;
+                }
+            }
+        }
+
+        private void PlayerProfileCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isUpdatingProfile) return;
+
+            if (PlayerProfileCombo.SelectedItem is ComboBoxItem item && 
+                Enum.TryParse<Models.PlayerProfile>(item.Tag.ToString(), out var profile))
+            {
+                UpdateProfileDescription(profile);
+
+                if (profile != Models.PlayerProfile.Custom)
+                {
+                    // Apply Preset Defaults
+                    var defaults = Models.PlayerSettings.GetDefault(profile);
+                    
+                    // Keep Custom Config even when switching profiles? 
+                    // Usually presets imply standard settings. Let's keep custom config as is but apply preset values for others.
+                    defaults.CustomConfig = CustomConfigBox.Text; 
+
+                    SavePlayerSettings(defaults);
+                    
+                    // Update UI to reflect new defaults
+                    // We must reload UI from these new settings
+                     _isUpdatingProfile = true;
+                    try
+                    {
+                        SetComboSelection(HwDecCombo, defaults.HardwareDecoding.ToString());
+                        SetComboSelection(VoCombo, defaults.VideoOutput.ToString());
+                        SetComboSelection(ScalerCombo, defaults.Scaler.ToString());
+                        SetComboSelection(ToneMappingCombo, defaults.ToneMapping.ToString());
+                        SetComboSelection(TargetModeCombo, defaults.TargetDisplayMode.ToString());
+                        SetComboSelection(TargetPeakCombo, defaults.TargetPeak.ToString());
+                        SetComboSelection(AudioChannelsCombo, defaults.AudioChannels.ToString());
+                        DebandToggle.IsOn = defaults.Deband == Models.DebandMode.Yes;
+                        ExclusiveToggle.IsOn = defaults.ExclusiveAudio == Models.ExclusiveMode.Yes;
+                    }
+                    finally
+                    {
+                        _isUpdatingProfile = false;
+                    }
+                }
+                else
+                {
+                    // Just update the storage that we are now on Custom profile
+                    var current = GetCurrentSettingsFromUI();
+                    current.Profile = Models.PlayerProfile.Custom;
+                    SavePlayerSettings(current);
+                }
+            }
+        }
+
+        private void PlayerSetting_Changed(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isUpdatingProfile) return;
+            OnPlayerSettingChanged();
+        }
+
+        private void PlayerSetting_Toggled(object sender, RoutedEventArgs e)
+        {
+            if (_isUpdatingProfile) return;
+            OnPlayerSettingChanged();
+        }
+
+        private void CustomConfigBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isUpdatingProfile) return;
+            // Delay saving or save on lost focus? For simplicity, save on change but mark as Custom immediately.
+            // TextChanged fires often, maybe don't save to disk every char, but update internal state?
+            // For now, let's just mark as custom. Actual save happens on Nav/App close or explicit action?
+            // We usually save immediately in this app.
+            OnPlayerSettingChanged();
+        }
+
+        private void OnPlayerSettingChanged()
+        {
+            // If we are on a preset, and user changes a setting, switch to Custom.
+            if (PlayerProfileCombo.SelectedItem is ComboBoxItem item && 
+                item.Tag.ToString() != "Custom")
+            {
+                 _isUpdatingProfile = true;
+                SetComboSelection(PlayerProfileCombo, "Custom");
+                UpdateProfileDescription(Models.PlayerProfile.Custom);
+                 _isUpdatingProfile = false;
+            }
+
+            // Save current UI state
+            var settings = GetCurrentSettingsFromUI();
+            SavePlayerSettings(settings);
+        }
+
+        private Models.PlayerSettings GetCurrentSettingsFromUI()
+        {
+            var settings = new Models.PlayerSettings();
+
+            if (PlayerProfileCombo.SelectedItem is ComboBoxItem pItem &&
+                Enum.TryParse(pItem.Tag.ToString(), out Models.PlayerProfile p))
+            {
+                settings.Profile = p;
+            }
+
+            if (HwDecCombo.SelectedItem is ComboBoxItem hwItem &&
+                Enum.TryParse(hwItem.Tag.ToString(), out Models.HardwareDecoding hw))
+            {
+                settings.HardwareDecoding = hw;
+            }
+
+            if (VoCombo.SelectedItem is ComboBoxItem voItem &&
+                Enum.TryParse(voItem.Tag.ToString(), out Models.VideoOutput vo))
+            {
+                settings.VideoOutput = vo;
+            }
+
+            if (ScalerCombo.SelectedItem is ComboBoxItem scItem &&
+                Enum.TryParse(scItem.Tag.ToString(), out Models.Scaler sc))
+            {
+                settings.Scaler = sc;
+            }
+
+            if (ToneMappingCombo.SelectedItem is ComboBoxItem tmItem &&
+                Enum.TryParse(tmItem.Tag.ToString(), out Models.ToneMapping tm))
+            {
+                settings.ToneMapping = tm;
+            }
+            
+             if (TargetModeCombo.SelectedItem is ComboBoxItem tmcItem &&
+                Enum.TryParse(tmcItem.Tag.ToString(), out Models.TargetDisplayMode tmc))
+            {
+                settings.TargetDisplayMode = tmc;
+            }
+
+            if (TargetPeakCombo.SelectedItem is ComboBoxItem tpItem &&
+                Enum.TryParse(tpItem.Tag.ToString(), out Models.TargetPeak tp))
+            {
+                settings.TargetPeak = tp;
+            }
+
+            if (AudioChannelsCombo.SelectedItem is ComboBoxItem acItem &&
+                Enum.TryParse(acItem.Tag.ToString(), out Models.AudioChannels ac))
+            {
+                settings.AudioChannels = ac;
+            }
+
+            settings.Deband = DebandToggle.IsOn ? Models.DebandMode.Yes : Models.DebandMode.No;
+            settings.ExclusiveAudio = ExclusiveToggle.IsOn ? Models.ExclusiveMode.Yes : Models.ExclusiveMode.No;
+            settings.CustomConfig = CustomConfigBox.Text;
+
+            return settings;
+        }
+
+        private void SavePlayerSettings(Models.PlayerSettings settings)
+        {
+            AppSettings.PlayerSettings = settings;
+        }
+
+        private void UpdateProfileDescription(Models.PlayerProfile profile)
+        {
+            switch (profile)
+            {
+                case Models.PlayerProfile.Performance:
+                    ProfileDescriptionText.Text = "Hız öncelikli. Pil ömrünü uzatır, işlemciyi yormaz.";
+                    break;
+                case Models.PlayerProfile.Balanced:
+                    ProfileDescriptionText.Text = "Çoğu kullanıcı için önerilen, dengeli ayarlar.";
+                    break;
+                case Models.PlayerProfile.HighQuality:
+                    ProfileDescriptionText.Text = "En yüksek görüntü kalitesi. Güçlü ekran kartı önerilir.";
+                    break;
+                case Models.PlayerProfile.Custom:
+                    ProfileDescriptionText.Text = "Özelleştirilmiş ayarlar.";
+                    break;
             }
         }
     }

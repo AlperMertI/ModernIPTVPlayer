@@ -118,11 +118,112 @@
 
                 <!-- RIGHT COLUMN -->
                 <StackPanel Grid.Row="1" Grid.Column="2" Spacing="20">
-                     <!-- PLAYER SETTINGS GROUP -->
+                    <!-- ADVANCED PLAYER SETTINGS GROUP -->
+                    <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <FontIcon Glyph="&#xE793;" FontSize="20"/>
+                            <TextBlock Text="Gelişmiş Oynatıcı Ayarları" FontSize="20" FontWeight="SemiBold"/>
+                        </StackPanel>
+                        <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
+
+                        <!-- Profile Selection -->
+                        <ComboBox x:Name="PlayerProfileCombo" Header="Performans Profili" HorizontalAlignment="Stretch" SelectionChanged="PlayerProfileCombo_SelectionChanged">
+                            <ComboBoxItem Content="Performans (Düşük Gecikme)" Tag="Performance" ToolTipService.ToolTip="En hızlı çalışma modu. Eski cihazlar ve pilli kullanım için önerilir."/>
+                            <ComboBoxItem Content="Dengeli (Önerilen)" Tag="Balanced" ToolTipService.ToolTip="Görüntü kalitesi ve performans arasında en iyi denge."/>
+                            <ComboBoxItem Content="Yüksek Kalite (High Quality)" Tag="HighQuality" ToolTipService.ToolTip="En iyi görüntü kalitesi. Güçlü bir ekran kartı gerektirir."/>
+                            <ComboBoxItem Content="Özel (Custom)" Tag="Custom" ToolTipService.ToolTip="Ayarları kendiniz yapılandırın."/>
+                        </ComboBox>
+                        <TextBlock x:Name="ProfileDescriptionText" Text="Seçilen profile göre ayarlar otomatik yapılandırılır." 
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,-5,0,5"/>
+
+                        <!-- Hardware Decoding -->
+                        <ComboBox x:Name="HwDecCombo" Header="Donanım Hızlandırma" HorizontalAlignment="Stretch" SelectionChanged="PlayerSetting_Changed">
+                            <ComboBoxItem Content="Otomatik (Safe)" Tag="AutoSafe" ToolTipService.ToolTip="En uyumlu donanım hızlandırma yöntemini seçer (DXVA2/D3D11)."/>
+                            <ComboBoxItem Content="Otomatik (Copy)" Tag="AutoCopy" ToolTipService.ToolTip="Video belleğini RAM'e kopyalar. Yazılımsal filtreler için gereklidir ama daha yavaştır."/>
+                            <ComboBoxItem Content="Kapalı (Yazılım)" Tag="No" ToolTipService.ToolTip="İşlemciyi (CPU) kullanır. Pil ömrünü azaltabilir."/>
+                        </ComboBox>
+
+                        <!-- Video Output -->
+                        <ComboBox x:Name="VoCombo" Header="Görüntü Motoru (VO)" HorizontalAlignment="Stretch" SelectionChanged="PlayerSetting_Changed">
+                            <ComboBoxItem Content="GPU-Next (Modern)" Tag="GpuNext" ToolTipService.ToolTip="Yeni nesil render motoru. HDR ve Dolby Vision için gereklidir."/>
+                            <ComboBoxItem Content="GPU (Klasik)" Tag="Gpu" ToolTipService.ToolTip="Eski render motoru. Sadece uyumluluk sorunu yaşarsanız seçin."/>
+                        </ComboBox>
+
+                        <!-- Scaler -->
+                        <ComboBox x:Name="ScalerCombo" Header="Upscaling (Ölçekleme)" HorizontalAlignment="Stretch" SelectionChanged="PlayerSetting_Changed">
+                            <ComboBoxItem Content="Bilinear (Hızlı)" Tag="Bilinear" ToolTipService.ToolTip="En az kaynak tüketen yöntem. Görüntü biraz yumuşak olabilir."/>
+                            <ComboBoxItem Content="Spline36 (Dengeli)" Tag="Spline36" ToolTipService.ToolTip="Keskinlik ve performans dengesi. Varsayılan."/>
+                            <ComboBoxItem Content="EWA Lanczos (Keskin)" Tag="EwaLanczos" ToolTipService.ToolTip="Yüksek kaliteli ve keskin görüntü. Güçlü GPU gerektirir."/>
+                        </ComboBox>
+
+                        <!-- Tone Mapping -->
+                        <ComboBox x:Name="ToneMappingCombo" Header="HDR Ton Eşleme" HorizontalAlignment="Stretch" SelectionChanged="PlayerSetting_Changed">
+                            <ComboBoxItem Content="Otomatik" Tag="Auto" ToolTipService.ToolTip="MPV en uygun yöntemi seçer."/>
+                            <ComboBoxItem Content="Spline (Standart)" Tag="Spline" ToolTipService.ToolTip="Standart parlaklık dengelemesi."/>
+                            <ComboBoxItem Content="BT.2446a (Modern)" Tag="Bt2446a" ToolTipService.ToolTip="Gelişmiş renk koruması sağlayan modern standart."/>
+                            <ComboBoxItem Content="ST.2094-40 (Uzman)" Tag="St2094_40" ToolTipService.ToolTip="Dinamik metadata üretir. En iyi HDR->SDR dönüşümü sağlar ama çok kaynak tüketir."/>
+                            <ComboBoxItem Content="Clip (Kırpma)" Tag="Clip" ToolTipService.ToolTip="Parlak alanları kırparak detay kaybına yol açabilir."/>
+                        </ComboBox>
+
+                        <!-- Target Display Mode -->
+                        <ComboBox x:Name="TargetModeCombo" Header="HDR Hedef Modu" HorizontalAlignment="Stretch" SelectionChanged="PlayerSetting_Changed">
+                            <ComboBoxItem Content="Otomatik (Önerilen)" Tag="Auto" ToolTipService.ToolTip="Windows HDR açıksa HDR sinyali gönderir, kapalıysa SDR'a dönüştürür."/>
+                            <ComboBoxItem Content="SDR (Zorla)" Tag="SdrForce" ToolTipService.ToolTip="HDR içerikleri her zaman SDR renklere dönüştürür."/>
+                            <ComboBoxItem Content="HDR (Passthrough)" Tag="HdrPassthrough" ToolTipService.ToolTip="Her zaman HDR sinyali gönderir. SDR içerikler soluk görünebilir!"/>
+                        </ComboBox>
+
+                        <!-- Target Peak -->
+                        <ComboBox x:Name="TargetPeakCombo" Header="Hedef Parlaklık (Nits)" HorizontalAlignment="Stretch" SelectionChanged="PlayerSetting_Changed">
+                            <ComboBoxItem Content="Otomatik" Tag="Auto"/>
+                            <ComboBoxItem Content="SDR (100 nits)" Tag="Sdr100"/>
+                            <ComboBoxItem Content="SDR Parlak (203 nits)" Tag="Sdr203"/>
+                            <ComboBoxItem Content="HDR Düşük (400 nits)" Tag="Hdr400"/>
+                            <ComboBoxItem Content="HDR Yüksek (1000 nits)" Tag="Hdr1000"/>
+                        </ComboBox>
+
+                        <!-- Audio Channels -->
+                        <ComboBox x:Name="AudioChannelsCombo" Header="Ses Kanalları" HorizontalAlignment="Stretch" SelectionChanged="PlayerSetting_Changed">
+                            <ComboBoxItem Content="Otomatik" Tag="AutoSafe" ToolTipService.ToolTip="Sistem yapılandırmasını algılar."/>
+                            <ComboBoxItem Content="Stereo (2.0)" Tag="Stereo"/>
+                            <ComboBoxItem Content="5.1 Surround" Tag="Surround51"/>
+                            <ComboBoxItem Content="7.1 Surround" Tag="Surround71"/>
+                        </ComboBox>
+
+                        <!-- Toggles Grid -->
+                        <Grid ColumnSpacing="10" Margin="0,5,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <ToggleSwitch x:Name="DebandToggle" Header="Deband (Renk Düzeltme)" 
+                                          OnContent="Açık" OffContent="Kapalı"
+                                          Toggled="PlayerSetting_Toggled" Grid.Column="0"
+                                          ToolTipService.ToolTip="Renk geçişlerindeki bozulmaları (banding) düzeltir."/>
+
+                            <ToggleSwitch x:Name="ExclusiveToggle" Header="Özel Ses Modu (Exclusive)" 
+                                          OnContent="Açık" OffContent="Kapalı"
+                                          Toggled="PlayerSetting_Toggled" Grid.Column="1"
+                                          ToolTipService.ToolTip="Sesi diğer uygulamalara kapatarak en temiz ses çıkışını sağlar."/>
+                        </Grid>
+
+                        <!-- Raw Config Expander -->
+                        <Expander Header="Gelişmiş MPV Yapılandırması" HorizontalAlignment="Stretch" Margin="0,10,0,0">
+                            <StackPanel Spacing="10" Padding="0,10,0,0">
+                                <TextBlock Text="Buraya MPV'nin desteklediği diğer parametreleri ekleyebilirsiniz. (örn: video-sync=display-resample)" 
+                                           FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
+                                <TextBox x:Name="CustomConfigBox" AcceptsReturn="True" Height="100" 
+                                         PlaceholderText="config-param=value&#x0a;config-param2=value"
+                                         TextChanged="CustomConfigBox_TextChanged"/>
+                            </StackPanel>
+                        </Expander>
+                    </StackPanel>
+
+                     <!-- PLAYER BUFFER SETTINGS GROUP -->
                     <StackPanel Spacing="10" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" Padding="20" CornerRadius="8" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                         <StackPanel Orientation="Horizontal" Spacing="10">
                             <FontIcon Glyph="&#xE768;" FontSize="20"/>
-                            <TextBlock Text="Oynatıcı Ayarları" FontSize="20" FontWeight="SemiBold"/>
+                            <TextBlock Text="Önbellek (Buffer) Stratejisi" FontSize="20" FontWeight="SemiBold"/>
                         </StackPanel>
                         <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,5,0,5"/>
 
@@ -155,7 +256,7 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
                             
-                            <TextBlock Text="Player Buffer Süresi (Saniye)" Margin="0,0,0,5"/>
+                            <TextBlock Text="Oynatıcı Tampon Süresi (Saniye)" Margin="0,0,0,5"/>
                             <Slider x:Name="BufferSlider" Minimum="30" Maximum="300" StepFrequency="10" 
                                     TickFrequency="30" TickPlacement="Outside"
                                     Grid.Row="1" ValueChanged="BufferSlider_ValueChanged"/>

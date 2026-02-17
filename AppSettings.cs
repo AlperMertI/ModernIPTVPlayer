@@ -191,5 +191,34 @@ namespace ModernIPTVPlayer
             get => (Settings.Values[DefaultStartupPageKey] as string) ?? "MoviesPage";
             set => Settings.Values[DefaultStartupPageKey] = value;
         }
+
+        // Player Settings
+        private const string PlayerSettingsKey = "PlayerSettingsJson";
+        
+        public static ModernIPTVPlayer.Models.PlayerSettings PlayerSettings
+        {
+            get
+            {
+                var json = Settings.Values[PlayerSettingsKey] as string;
+                if (string.IsNullOrEmpty(json))
+                {
+                    // Return default Balanced profile if nothing saved
+                    return ModernIPTVPlayer.Models.PlayerSettings.GetDefault(ModernIPTVPlayer.Models.PlayerProfile.Balanced);
+                }
+                try
+                {
+                    return System.Text.Json.JsonSerializer.Deserialize<ModernIPTVPlayer.Models.PlayerSettings>(json);
+                }
+                catch
+                {
+                    return ModernIPTVPlayer.Models.PlayerSettings.GetDefault(ModernIPTVPlayer.Models.PlayerProfile.Balanced);
+                }
+            }
+            set
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(value);
+                Settings.Values[PlayerSettingsKey] = json;
+            }
+        }
     }
 }

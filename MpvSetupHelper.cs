@@ -51,29 +51,127 @@ namespace ModernIPTVPlayer
                     await player.SetPropertyAsync("http-header-fields", headers);
                 }
 
-                // 3. Hardware Acceleration
-                // Prioritize 'auto-safe' which usually maps to d3d11va (Zero-Copy) on Windows
-                await player.SetPropertyAsync("hwdec", "auto-safe");
 
-                // 4. Performance Profile
-                await player.SetPropertyAsync("profile", "fast"); // Low latency profile
+                // 3. Apply Player Settings from AppSettings
+                var pSettings = AppSettings.PlayerSettings;
 
-                // 5. Buffering & Cache (Optimized for Multi-View vs Single View)
+                // Force D3D11 usage for Windows
+                // We rely on the internal D3D11RenderControl to handle the SwapChain and Context.
+                // Do NOT manually set gpu-context or gpu-api as it conflicts with the wrapper's initialization.
+                
+                // Force Performance Settings for Secondary Player (PiP/Preview) to save resources
+                if (isSecondary)
+                {
+                    pSettings = Models.PlayerSettings.GetDefault(Models.PlayerProfile.Performance);
+                }
+
+                // Hardware Decoding
+                // CRITICAL: WinUI/SwapChainPanel + gpu-next often fails with zero-copy (d3d11va).
+                // We must use 'auto-copy' (d3d11va-copy) to ensure the texture is readable by libplacebo shaders.
+                string hwdecValue = pSettings.HardwareDecoding switch
+                {
+                    Models.HardwareDecoding.AutoSafe => "auto-safe", // Force copy for safety with gpu-next
+                    Models.HardwareDecoding.AutoCopy => "auto-copy",
+                    Models.HardwareDecoding.No => "no",
+                    _ => "auto-copy"
+                };
+                
+                // If user explicitly chose 'gpu' (legacy), we can try auto-safe, but for gpu-next, auto-copy is safer.
+                if (pSettings.VideoOutput == Models.VideoOutput.Gpu)
+                {
+                     hwdecValue = pSettings.HardwareDecoding == Models.HardwareDecoding.AutoSafe ? "auto-safe" : hwdecValue;
+                }
+
+                await player.SetPropertyAsync("hwdec", hwdecValue);
+                await player.SetPropertyAsync("hwdec-codecs", "all");
+
+                // 4. Performance Profile & Video Settings
+                await player.SetPropertyAsync("profile", "fast"); // Always start with fast base for low latency
+                
+                // Video Output
+                // CRITICAL: Do NOT set 'vo' manually for this custom C# backend.
+                // The 'MpvPlayer' wrapper initializes the context with 'libmpv' (or equivalent).
+                // Changing 'vo' to 'gpu' after initialization causes the window to detach.
+
+                // Scaler
+                // 'ewa_lanczos' is very heavy on 'gpu' backend, prefer 'spline36' for high quality
+                string scalerValue = pSettings.Scaler switch
+                {
+                    Models.Scaler.Bilinear => "bilinear",
+                    Models.Scaler.EwaLanczos => "spline36", // Fallback to spline36 for stability
+                    _ => "spline36"
+                };
+                await player.SetPropertyAsync("scale", scalerValue);
+                if (scalerValue != "bilinear")
+                {
+                     await SetPropertySafeAsync(player, "cscale", scalerValue);
+                     await SetPropertySafeAsync(player, "dscale", "mitchell");
+                }
+
+                // Deband
+                await player.SetPropertyAsync("deband", pSettings.Deband == Models.DebandMode.Yes ? "yes" : "no");
+
+                // Tone Mapping
+                string tmValue = pSettings.ToneMapping switch
+                {
+                    Models.ToneMapping.Clip => "clip",
+                    Models.ToneMapping.Spline => "auto", // Spline is not supported on vo=gpu
+                    Models.ToneMapping.Bt2446a => "reinhard", // Fallback for vo=gpu
+                    Models.ToneMapping.St2094_40 => "hable", // Fallback for vo=gpu
+                    _ => "auto" // Default to auto as requested
+                };
+                await SetPropertySafeAsync(player, "tone-mapping", tmValue);
+
+                // Target Peak
+                if (pSettings.TargetPeak != Models.TargetPeak.Auto)
+                {
+                    string tpValue = pSettings.TargetPeak switch
+                    {
+                        Models.TargetPeak.Sdr100 => "100",
+                        Models.TargetPeak.Sdr203 => "203",
+                        Models.TargetPeak.Hdr400 => "400",
+                        Models.TargetPeak.Hdr1000 => "1000",
+                        _ => "auto"
+                    };
+                    await SetPropertySafeAsync(player, "target-peak", tpValue);
+                }
+                else
+                {
+                    await SetPropertySafeAsync(player, "target-peak", "auto");
+                }
+
+                // Target Display Mode (HDR/SDR Control)
+                switch (pSettings.TargetDisplayMode)
+                {
+                    case Models.TargetDisplayMode.SdrForce:
+                        await SetPropertySafeAsync(player, "target-colorspace-hint", "no");
+                        await SetPropertySafeAsync(player, "target-trc", "srgb");
+                        break;
+                    case Models.TargetDisplayMode.HdrPassthrough:
+                        await SetPropertySafeAsync(player, "target-colorspace-hint", "yes");
+                        await SetPropertySafeAsync(player, "target-trc", "pq");
+                        await SetPropertySafeAsync(player, "target-prim", "bt.2020");
+                        break;
+                    default: // Auto
+                        await SetPropertySafeAsync(player, "target-colorspace-hint", "auto");
+                        break;
+                }
+
+                // 5. Buffering & Cache
                 await player.SetPropertyAsync("cache", "yes");
-                await player.SetPropertyAsync("cache-pause", "no"); // Don't pause if cache runs low
+                // IMPORTANT: For network streams, pause if cache runs out. 'no' causes skipping/issues.
+                await player.SetPropertyAsync("cache-pause", "yes");
+                await player.SetPropertyAsync("cache-pause-wait", "1"); // Wait 1s buffer before resume
+                await player.SetPropertyAsync("cache-pause-initial", "yes"); // Wait for initial buffer
 
                 if (isSecondary)
                 {
-                    // Aggressive RAM saving but still enough for 4K streams
-                    // 64MB max buffer (increased from 15MB to prevent demuxer overflow in 4K)
                     await player.SetPropertyAsync("demuxer-max-bytes", "64MiB");
                     await player.SetPropertyAsync("demuxer-max-back-bytes", "16MiB");
                     await player.SetPropertyAsync("demuxer-readahead-secs", "20");
                 }
                 else
                 {
-                    // Standard High Performance for Main Player
-                    // Use user-configured buffer seconds from settings
                     int userBuffer = AppSettings.BufferSeconds;
                     await player.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
                     await player.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
@@ -99,24 +197,57 @@ namespace ModernIPTVPlayer
 
                 // Network Stability & Performance
                 await SetPropertySafeAsync(player, "network-timeout", "20");
-                await SetPropertySafeAsync(player, "stream-buffer-size", "512KiB");
+                await SetPropertySafeAsync(player, "stream-buffer-size", "4MiB"); // Increased buffering for 4K streams
 
                 // HTTP Reconnect Logic (Crucial for unstable IPTV servers)
                 // The correct property name is 'demuxer-lavf-o'
                 // Added reconnect_on_network_error and increased robustness
                 Debug.WriteLine($"[MpvSetupHelper] Applied Headers: {headers.Replace("\n", " | ")}");
-                await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=30,reconnect_on_network_error=1");
+                // reconnect_on_http_error=4xx,5xx: Handle temporary server errors
+                // reconnect_at_eof=1: vital for some live streams that close cleanly but aren't done
+                await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=30,reconnect_on_network_error=1,reconnect_on_http_error=4xx,5xx,reconnect_at_eof=1");
 
                 await SetPropertySafeAsync(player, "vd-lavc-fast", "yes"); // Speed up hardware decoding
                 await SetPropertySafeAsync(player, "vd-lavc-dr", "yes");   // Direct rendering
 
-                // 7. Audio (If secondary, maybe mute by default? Let caller handle that.)
-                // But we can ensure correct audio output driver
+                // 7. Audio Settings
+                string acValue = pSettings.AudioChannels switch
+                {
+                    Models.AudioChannels.Stereo => "stereo",
+                    Models.AudioChannels.Surround51 => "5.1",
+                    Models.AudioChannels.Surround71 => "7.1",
+                    _ => "auto-safe"
+                };
+                await SetPropertySafeAsync(player, "audio-channels", acValue);
+                
+                // Ensure WASAPI is used
                 await player.SetPropertyAsync("ao", "wasapi");
-                // Allow some audio/video desync instead of freezing
+                await SetPropertySafeAsync(player, "audio-exclusive", pSettings.ExclusiveAudio == Models.ExclusiveMode.Yes ? "yes" : "no");
+                
                 await SetPropertySafeAsync(player, "video-sync", "audio");
                 await SetPropertySafeAsync(player, "audio-pitch-correction", "yes");
-                Debug.WriteLine($"[MpvSetupHelper] Configuration Complete. Secondary Mode: {isSecondary}");
+
+                // 8. Custom Config Overlay
+                if (!string.IsNullOrWhiteSpace(pSettings.CustomConfig))
+                {
+                    var lines = pSettings.CustomConfig.Split(new[] { '\r', '\n', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var line in lines)
+                    {
+                        var parts = line.Split('=', 2);
+                        if (parts.Length == 2)
+                        {
+                            var key = parts[0].Trim();
+                            var val = parts[1].Trim();
+                            if (!string.IsNullOrEmpty(key))
+                            {
+                                await SetPropertySafeAsync(player, key, val);
+                                Debug.WriteLine($"[MpvSetupHelper] Applied custom config: {key}={val}");
+                            }
+                        }
+                    }
+                }
+
+                Debug.WriteLine($"[MpvSetupHelper] Configuration Complete. Profile: {pSettings.Profile}, Secondary: {isSecondary}");
             }
             catch (Exception ex)
             {
