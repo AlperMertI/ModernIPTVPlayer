@@ -200,10 +200,10 @@ namespace ModernIPTVPlayer
                 titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.Transparent;
             }
 
-            // Remove Border and TitleBar completely
+            // Remove TitleBar but keep Border to avoid "white line" artifact
             if (AppWindow.Presenter is OverlappedPresenter presenter)
             {
-                presenter.SetBorderAndTitleBar(false, false);
+                presenter.SetBorderAndTitleBar(true, false);
             }
 
             var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
