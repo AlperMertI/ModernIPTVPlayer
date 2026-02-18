@@ -45,6 +45,8 @@ v_build_error.txt
 *.o
 *.obj
 *.p/
+*.bak
+*.wraplock
 
 
 ## Code Coverage
@@ -86,7 +88,24 @@ Libs/mpv-0.41.0/*
 !Libs/mpv-0.41.0/sub/
 !Libs/mpv-0.41.0/filters/
 !Libs/mpv-0.41.0/osdep/
+!Libs/mpv-0.41.0/input/
+!Libs/mpv-0.41.0/ta/
+!Libs/mpv-0.41.0/misc/
+!Libs/mpv-0.41.0/libmpv/
+!Libs/mpv-0.41.0/etc/
+!Libs/mpv-0.41.0/TOOLS/
+!Libs/mpv-0.41.0/MPV_VERSION
+!Libs/mpv-0.41.0/build-msys2.sh
+!Libs/mpv-0.41.0/mpv_talloc.h
 !Libs/mpv-0.41.0/meson.build
 !Libs/mpv-0.41.0/meson.options
 !Libs/mpv-0.41.0/subprojects/
 Libs/mpv-0.41.0/subprojects/*/
+!Libs/mpv-0.41.0/subprojects/libplacebo/
+Libs/mpv-0.41.0/subprojects/libplacebo/*
+!Libs/mpv-0.41.0/subprojects/libplacebo/src/
+Libs/mpv-0.41.0/subprojects/libplacebo/src/*
+!Libs/mpv-0.41.0/subprojects/libplacebo/src/d3d11/
+Libs/mpv-0.41.0/subprojects/libplacebo/src/d3d11/*
+!Libs/mpv-0.41.0/subprojects/libplacebo/src/d3d11/gpu_tex.c
+Libs/mpv-0.41.0/build/

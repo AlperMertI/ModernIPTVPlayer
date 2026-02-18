@@ -6,12 +6,15 @@
 #include "video/out/libmpv.h"
 #include "osdep/timer.h"
 
+extern const struct libmpv_gpu_context_fns libmpv_gpu_context_d3d11_next;
+
 static const struct libmpv_gpu_context_fns *context_backends[] = {
 #if HAVE_GL
     &libmpv_gpu_context_gl,
 #endif
 #if HAVE_D3D11
     &libmpv_gpu_context_d3d11,
+    &libmpv_gpu_context_d3d11_next, // New gpu-next backend
 #endif
     NULL
 };
@@ -252,6 +255,8 @@ static void perfdata(struct render_backend *ctx,
 static void destroy(struct render_backend *ctx)
 {
     struct priv *p = ctx->priv;
+    if (!p)
+        return;
 
     if (p->renderer)
         gl_video_uninit(p->renderer);
@@ -259,8 +264,9 @@ static void destroy(struct render_backend *ctx)
     hwdec_devices_destroy(ctx->hwdec_devs);
 
     if (p->context) {
-        p->context->fns->destroy(p->context);
-        talloc_free(p->context->priv);
+        // The backend context might have its own cleanup logic
+        if (p->context->fns->destroy)
+            p->context->fns->destroy(p->context);
         talloc_free(p->context);
     }
 }

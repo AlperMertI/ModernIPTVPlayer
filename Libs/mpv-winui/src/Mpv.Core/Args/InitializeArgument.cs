@@ -44,4 +44,9 @@ public sealed class InitializeArgument
     /// 获取OpenGL函数指针.
     /// </summary>
     public Func<string, IntPtr>? OpenGLGetProcAddress { get; }
+
+    /// <summary>
+    /// Render API ("dxgi" for legacy, "d3d11" for gpu-next).
+    /// </summary>
+    public string RenderApi { get; set; } = "dxgi";
 }

@@ -22,6 +22,15 @@ public sealed partial class MpvPlayer : Control
         DefaultStyleKey = typeof(MpvPlayer);
     }
 
+    public static readonly DependencyProperty RenderApiProperty =
+        DependencyProperty.Register("RenderApi", typeof(string), typeof(MpvPlayer), new PropertyMetadata("dxgi"));
+
+    public string RenderApi
+    {
+        get => (string)GetValue(RenderApiProperty);
+        set => SetValue(RenderApiProperty, value);
+    }
+
     protected override void OnApplyTemplate()
     {
         _renderControl = (D3D11RenderControl)GetTemplateChild("RenderControl");
@@ -48,8 +57,8 @@ public sealed partial class MpvPlayer : Control
             Player.Client.SetProperty("vo", "libmpv");
             Player.Client.RequestLogMessage(MpvLogLevel.Info);
             Player.LogMessageReceived += OnLogMessageReceived;
-            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle);
-            Debug.WriteLine("[LOG] MPV Player Initialized Successfully.");
+            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, RenderApi);
+            Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
 

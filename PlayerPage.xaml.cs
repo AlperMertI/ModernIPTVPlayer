@@ -403,7 +403,9 @@ namespace ModernIPTVPlayer
                     TxtSpeed.Text = FormatSpeedLong(speedVal);
 
                     var hwdec = await _mpvPlayer.GetPropertyAsync("hwdec-current");
-                    TxtHardware.Text = (hwdec != "no" && !string.IsNullOrEmpty(hwdec)) ? hwdec.ToUpper() : "SOFTWARE";
+                    var vo = await _mpvPlayer.GetPropertyAsync("vo-configured");
+                    TxtHardware.Text = (hwdec != "no" && !string.IsNullOrEmpty(hwdec)) ? $"{hwdec.ToUpper()} ({vo})" : $"SOFTWARE ({vo})";
+                    TxtRenderer.Text = _mpvPlayer.RenderApi == "d3d11" ? "GPU-NEXT (Placebo)" : "GPU (Legacy DXGI)";
 
                     // Drops & AV Sync
                     try 
@@ -765,6 +767,27 @@ namespace ModernIPTVPlayer
                      await Task.Delay(50); // Minimal safety check
 
                      _mpvPlayer = new MpvWinUI.MpvPlayer();
+
+                     // [GPU-NEXT Integration] Select backend based on settings
+                     try 
+                     {
+                         var pSettings = AppSettings.PlayerSettings;
+                         if (pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
+                         {
+                             _mpvPlayer.RenderApi = "d3d11";
+                         }
+                         else
+                         {
+                             _mpvPlayer.RenderApi = "dxgi";
+                         }
+                         Debug.WriteLine($"[PlayerPage] Selected Render API: {_mpvPlayer.RenderApi}");
+                     }
+                     catch (Exception ex)
+                     {
+                         Debug.WriteLine($"[PlayerPage] Failed to load settings for RenderApi: {ex.Message}");
+                         _mpvPlayer.RenderApi = "d3d11"; // Default to gpu-next
+                     }
+
                      PlayerContainer.Children.Add(_mpvPlayer);
                      _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
                      _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;

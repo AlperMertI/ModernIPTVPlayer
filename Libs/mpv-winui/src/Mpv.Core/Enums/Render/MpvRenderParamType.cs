@@ -294,4 +294,10 @@ public enum MpvRenderParamType
     /// Type: mpv_dxgi_fbo*
     /// </summary>
     DXGIFbo = 22,
+    
+    /// <summary>
+    /// D3D11 device pointer. Valid for mpv_render_context_create().
+    /// Type: ID3D11Device*
+    /// </summary>
+    D3D11Device = 24,
 }

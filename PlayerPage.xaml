@@ -303,10 +303,14 @@
                     <TextBlock x:Name="TxtBuffer" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <!-- Performance Group -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
                     <TextBlock Text="Hardware:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtHardware" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Renderer:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtRenderer" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">

@@ -66,21 +66,15 @@ namespace ModernIPTVPlayer
                 }
 
                 // Hardware Decoding
-                // CRITICAL: WinUI/SwapChainPanel + gpu-next often fails with zero-copy (d3d11va).
-                // We must use 'auto-copy' (d3d11va-copy) to ensure the texture is readable by libplacebo shaders.
                 string hwdecValue = pSettings.HardwareDecoding switch
                 {
-                    Models.HardwareDecoding.AutoSafe => "auto-safe", // Force copy for safety with gpu-next
+                    Models.HardwareDecoding.AutoSafe => "auto-safe",
                     Models.HardwareDecoding.AutoCopy => "auto-copy",
                     Models.HardwareDecoding.No => "no",
                     _ => "auto-copy"
                 };
                 
-                // If user explicitly chose 'gpu' (legacy), we can try auto-safe, but for gpu-next, auto-copy is safer.
-                if (pSettings.VideoOutput == Models.VideoOutput.Gpu)
-                {
-                     hwdecValue = pSettings.HardwareDecoding == Models.HardwareDecoding.AutoSafe ? "auto-safe" : hwdecValue;
-                }
+
 
                 await player.SetPropertyAsync("hwdec", hwdecValue);
                 await player.SetPropertyAsync("hwdec-codecs", "all");
@@ -98,7 +92,7 @@ namespace ModernIPTVPlayer
                 string scalerValue = pSettings.Scaler switch
                 {
                     Models.Scaler.Bilinear => "bilinear",
-                    Models.Scaler.EwaLanczos => "spline36", // Fallback to spline36 for stability
+                    Models.Scaler.EwaLanczos => "ewa_lanczossharp", // Supported by gpu-next!
                     _ => "spline36"
                 };
                 await player.SetPropertyAsync("scale", scalerValue);
@@ -115,10 +109,10 @@ namespace ModernIPTVPlayer
                 string tmValue = pSettings.ToneMapping switch
                 {
                     Models.ToneMapping.Clip => "clip",
-                    Models.ToneMapping.Spline => "auto", // Spline is not supported on vo=gpu
-                    Models.ToneMapping.Bt2446a => "reinhard", // Fallback for vo=gpu
-                    Models.ToneMapping.St2094_40 => "hable", // Fallback for vo=gpu
-                    _ => "auto" // Default to auto as requested
+                    Models.ToneMapping.Spline => "spline", // Native spline supported!
+                    Models.ToneMapping.Bt2446a => "bt.2446a", // Native bt.2446a supported!
+                    Models.ToneMapping.St2094_40 => "st2094-40", // Native st2094-40 supported!
+                    _ => "auto"
                 };
                 await SetPropertySafeAsync(player, "tone-mapping", tmValue);
 

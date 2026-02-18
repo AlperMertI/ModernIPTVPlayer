@@ -113,70 +113,74 @@ public sealed partial class Player
 
             var glParamsPtr = Marshal.AllocHGlobal(Marshal.SizeOf(glParams));
             Marshal.StructureToPtr(glParams, glParamsPtr, false);
-            var glStringPtr = Marshal.StringToCoTaskMemUTF8("opengl");
+            var apiString = argument?.RenderApi == "d3d11" ? "d3d11" : "dxgi";
+            var apiStringPtr = Marshal.StringToCoTaskMemUTF8(apiString);
+            
             RenderContext = new MpvRenderContextNative(
                 Client.Handle,
                 [
-                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = glStringPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = apiStringPtr },
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.OpenGLInitParams, Data = glParamsPtr },
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero },
                 ]);
 
             Marshal.FreeHGlobal(glParamsPtr);
-            Marshal.FreeCoTaskMem(glStringPtr);
+            Marshal.FreeCoTaskMem(apiStringPtr);
         }
     }
 
-    public async Task InitializeDXGIAsync(IntPtr device, IntPtr context)
+    public async Task InitializeDXGIAsync(IntPtr device, IntPtr context, string api = "dxgi")
     {
         if (Client.IsInitialized)
         {
             return;
         }
 
-        Debug.WriteLine($"[LOG] InitializeDXGIAsync - Using Persistent D3D11 Handles (Dev: {device:X})");
+        Debug.WriteLine($"[LOG] InitializeAsync (API: {api}) - Using Persistent D3D11 Handles (Dev: {device:X})");
         await Client.InitializeAsync();
         
         // vo=libmpv kullanıyoruz ki MPV bizim SwapChainPanel'imize render etsin
         Client.SetProperty("vo", "libmpv");
         Client.SetProperty("gpu-api", "d3d11");
-        Client.SetProperty("hwdec", "d3d11va");
         
         // MPV UI/OSD'yi tamamen kapat - bizim kendi UI'ımız var
-        // MPV UI/OSD'yi tamamen kapat - bizim kendi UI'ımız var
-        // Client.SetProperty("osc", "no");           // osc özelliği yoksa hata verir, kapattık
         Client.SetProperty("osd-level", "0");      // OSD mesajları kapalı
         Client.SetProperty("input-default-bindings", "no"); // Varsayılan tuş atamaları kapalı
         Client.SetProperty("input-vo-keyboard", "no");      // VO keyboard input kapalı
         
         RerunEventLoop();
 
-        var dxgiStringPtr = Marshal.StringToCoTaskMemUTF8("dxgi");
+        var apiStringPtr = Marshal.StringToCoTaskMemUTF8(api);
         var dxgiParamsPtr = Marshal.AllocHGlobal(16);
         Marshal.WriteIntPtr(dxgiParamsPtr, device);
         Marshal.WriteIntPtr(dxgiParamsPtr + 8, context);
 
         var advControlPtr = Marshal.AllocHGlobal(sizeof(int));
         Marshal.WriteInt32(advControlPtr, 1);
+        
+        var d3d11DevPtr = Marshal.AllocHGlobal(IntPtr.Size);
+        Marshal.WriteIntPtr(d3d11DevPtr, device);
 
         try {
             RenderContext = new MpvRenderContextNative(
                 Client.Handle,
                 [
-                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = dxgiStringPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = apiStringPtr },
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIInitParams, Data = dxgiParamsPtr },
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.AdvancedControl, Data = advControlPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.D3D11Device, Data = d3d11DevPtr },
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero }
                 ]);
-            Debug.WriteLine("[LOG] DXGI RenderContext created SUCCESSFULLY with AdvancedControl!");
+            Debug.WriteLine($"[LOG] {api} RenderContext created SUCCESSFULLY!");
         } catch (Exception ex) {
-            Debug.WriteLine($"[FATAL] DXGI failed: {ex.Message}");
+            Debug.WriteLine($"[FATAL] {api} failed: {ex.Message}");
             throw;
         }
 
         Marshal.FreeHGlobal(dxgiParamsPtr);
-        Marshal.FreeCoTaskMem(dxgiStringPtr);
+        Marshal.FreeCoTaskMem(apiStringPtr);
         Marshal.FreeHGlobal(advControlPtr);
+        Marshal.FreeHGlobal(d3d11DevPtr);
     }
 
     public void RenderGL(int width, int height, int fboInt)
