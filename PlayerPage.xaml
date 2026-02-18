@@ -287,11 +287,6 @@
                     <TextBlock x:Name="TxtHdr" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="Tone Mapping:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtToneMapping" Text="-" Foreground="White" FontWeight="SemiBold"/>
-                </StackPanel>
-
                 <!-- Connection Group -->
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
                     <TextBlock Text="Download Speed:" Foreground="#AAAAAA" Width="135"/>
