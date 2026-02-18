@@ -129,6 +129,8 @@ namespace ModernIPTVPlayer
         private bool _isPiPMode = false;
 
         
+        private bool _isMpvStatsVisible = false;
+        
         // [PiP] Single Window State Preservation
         private Windows.Graphics.RectInt32 _savedWindowBounds;
         private bool _savedIsFullScreen;
@@ -539,6 +541,104 @@ namespace ModernIPTVPlayer
                 // Seek Forward 30s
                 ShowOsd("+30 SN");
                 await _mpvPlayer.ExecuteCommandAsync("seek", "30", "relative");
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.I)
+            {
+                // Toggle MPV stats overlay via script-binding (correct method for stats.lua)
+                // stats.lua registers: mp.add_key_binding(nil, "display-stats-toggle", ...)
+                // Triggered via: script-binding stats/display-stats-toggle
+                _isMpvStatsVisible = !_isMpvStatsVisible;
+                await _mpvPlayer.ExecuteCommandAsync("script-binding", "stats/display-stats-toggle");
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number1 || e.Key == Windows.System.VirtualKey.NumberPad1)
+            {
+                if (_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("script-binding", "stats/display-page-1");
+                else
+                    await _mpvPlayer.ExecuteCommandAsync("add", "contrast", "-1"); // Default MPV: 1 decreases contrast
+                
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number2 || e.Key == Windows.System.VirtualKey.NumberPad2)
+            {
+                if (_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("script-binding", "stats/display-page-2");
+                else
+                    await _mpvPlayer.ExecuteCommandAsync("add", "contrast", "1"); // Default MPV: 2 increases contrast
+
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number3 || e.Key == Windows.System.VirtualKey.NumberPad3)
+            {
+                if (_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("script-binding", "stats/display-page-3");
+                else
+                    await _mpvPlayer.ExecuteCommandAsync("add", "brightness", "-1"); // Default MPV: 3 decreases brightness
+
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number4 || e.Key == Windows.System.VirtualKey.NumberPad4)
+            {
+                if (_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("script-binding", "stats/display-page-4");
+                else
+                    await _mpvPlayer.ExecuteCommandAsync("add", "brightness", "1"); // Default MPV: 4 increases brightness
+
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number5 || e.Key == Windows.System.VirtualKey.NumberPad5)
+            {
+                if (_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("script-binding", "stats/display-page-5");
+                else
+                    await _mpvPlayer.ExecuteCommandAsync("add", "gamma", "-1"); // Default MPV: 5 decreases gamma
+
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number6 || e.Key == Windows.System.VirtualKey.NumberPad6)
+            {
+                if (!_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("add", "gamma", "1"); // Default MPV: 6 increases gamma
+                
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number7 || e.Key == Windows.System.VirtualKey.NumberPad7)
+            {
+                if (!_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("add", "saturation", "-1"); // Default MPV: 7 decreases saturation
+                
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number8 || e.Key == Windows.System.VirtualKey.NumberPad8)
+            {
+                if (!_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("add", "saturation", "1"); // Default MPV: 8 increases saturation
+                
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number9 || e.Key == Windows.System.VirtualKey.NumberPad9)
+            {
+                if (!_isMpvStatsVisible)
+                    await _mpvPlayer.ExecuteCommandAsync("add", "volume", "-2"); // Default MPV: 9 decreases volume
+                
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.Number0 || e.Key == Windows.System.VirtualKey.NumberPad0)
+            {
+                if (_isMpvStatsVisible)
+                    // Stats page 0 often used for keybindings list or internal stats
+                    await _mpvPlayer.ExecuteCommandAsync("script-binding", "stats/display-page-0"); 
+                else
+                    await _mpvPlayer.ExecuteCommandAsync("add", "volume", "2"); // Default MPV: 0 increases volume
+
+                e.Handled = true;
+            }
+            else if (e.Key == Windows.System.VirtualKey.S)
+            {
+                // Toggle Custom Stats Overlay
+                StatsOverlay.Visibility = StatsOverlay.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
                 e.Handled = true;
             }
         }

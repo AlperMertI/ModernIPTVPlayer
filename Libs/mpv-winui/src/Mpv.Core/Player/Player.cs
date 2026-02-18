@@ -4,6 +4,7 @@ using Mpv.Core.Args;
 using Mpv.Core.Interop;
 using Mpv.Core.Structs.Render;
 using Mpv.Core.Structs.RenderGL;
+using Mpv.Core.Enums.Client;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Diagnostics;
@@ -137,16 +138,75 @@ public sealed partial class Player
         }
 
         Debug.WriteLine($"[LOG] InitializeAsync (API: {api}) - Using Persistent D3D11 Handles (Dev: {device:X})");
+        
+        // CrITICAL: Set options BEFORE initialization to ensure scripts and OSD load correctly.
+        // Enable built-in scripts (osc, stats) via explicit loading.
+        // Must use SetOption with correct types (bool/long) for pre-init configuration!
+        Client.SetOption("load-scripts", true);
+        Client.SetOption("input-default-bindings", true);
+        Client.SetOption("input-vo-keyboard", false); // We handle keyboard input in WinUI
+        
+        // Increase log level to debug script loading issues
+        Client.RequestLogMessage(MpvLogLevel.Info);
+
         await Client.InitializeAsync();
         
-        // vo=libmpv kullanıyoruz ki MPV bizim SwapChainPanel'imize render etsin
         Client.SetProperty("vo", "libmpv");
         Client.SetProperty("gpu-api", "d3d11");
-        
-        // MPV UI/OSD'yi tamamen kapat - bizim kendi UI'ımız var
-        Client.SetProperty("osd-level", "0");      // OSD mesajları kapalı
-        Client.SetProperty("input-default-bindings", "no"); // Varsayılan tuş atamaları kapalı
-        Client.SetProperty("input-vo-keyboard", "no");      // VO keyboard input kapalı
+
+        // Enable OSD level 1 for stats/osc visibility (Must be set as property AFTER init)
+        Client.SetProperty("osd-level", 1L); 
+
+        // Load scripts manually using robust command execution
+        // We use ExecuteWithResultAsync with an array to ensure paths with spaces are handled correctly by libmpv
+        try
+        {
+            var appPath = AppDomain.CurrentDomain.BaseDirectory;
+            var scriptDir = System.IO.Path.Combine(appPath, "scripts");
+            
+            // Normalize paths to forward slashes for MPV compatibility
+            var statsPath = System.IO.Path.Combine(scriptDir, "stats.lua").Replace("\\", "/");
+            var oscPath = System.IO.Path.Combine(scriptDir, "osc.lua").Replace("\\", "/");
+            
+            Debug.WriteLine($"[MpvPlayer] Loading scripts from: {scriptDir}");
+            Debug.WriteLine($"[MpvPlayer] Stats Path: {statsPath}");
+
+            if (System.IO.File.Exists(statsPath))
+            {
+                try 
+                {
+                    Debug.WriteLine($"[MpvPlayer] Loading stats.lua...");
+                    await Client.ExecuteWithResultAsync(new[] { "load-script", statsPath });
+                    Debug.WriteLine($"[MpvPlayer] stats.lua loaded successfully.");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[MpvPlayer] ERROR loading stats.lua: {ex.Message}");
+                }
+            }
+            else
+            {
+                 Debug.WriteLine($"[MpvPlayer] stats.lua NOT FOUND at {statsPath}");
+            }
+
+            if (System.IO.File.Exists(oscPath))
+            {
+                try
+                {
+                    Debug.WriteLine($"[MpvPlayer] Loading osc.lua...");
+                    await Client.ExecuteWithResultAsync(new[] { "load-script", oscPath });
+                    Debug.WriteLine($"[MpvPlayer] osc.lua loaded successfully.");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[MpvPlayer] ERROR loading osc.lua: {ex.Message}");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[MpvPlayer] General Script loading error: {ex}");
+        }
         
         RerunEventLoop();
 

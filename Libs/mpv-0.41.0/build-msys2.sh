@@ -35,6 +35,7 @@ pacman -S --noconfirm --needed \
     mingw-w64-clang-x86_64-gperf \
     mingw-w64-clang-x86_64-vulkan-loader \
     mingw-w64-clang-x86_64-vulkan-headers \
+    mingw-w64-clang-x86_64-luajit \
     git
 
 # 2. Cleanup broken wrap redirects (chicken-and-egg issues)
@@ -109,13 +110,16 @@ EOF
         -Dgpl=true \
         -Dd3d11=enabled \
         -Dvulkan=enabled \
-        -Dlua=disabled \
+        -Dlua=enabled \
         -Djavascript=disabled \
         -Dshaderc=enabled \
         -Dspirv-cross=enabled \
         -Dlcms2=disabled \
         -Diconv=disabled \
         -Dtests=false
+else
+    message "Reconfiguring existing build to ensure Lua (LuaJIT) is enabled..."
+    meson configure build -Dlua=enabled
 fi
 
 # 3. Final build step

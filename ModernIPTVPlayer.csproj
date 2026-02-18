@@ -107,6 +107,16 @@
     </Page>
   </ItemGroup>
   <ItemGroup>
+    <Content Include="Libs\mpv-0.41.0\player\lua\stats.lua">
+      <Link>scripts\stats.lua</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Libs\mpv-0.41.0\player\lua\osc.lua">
+      <Link>scripts\osc.lua</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
     <Page Update="LoginPage.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
