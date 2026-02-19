@@ -99,6 +99,7 @@ namespace ModernIPTVPlayer
                 Frame.Navigate(typeof(Pages.SearchResultsPage), args, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
             };
 
+            InitializeGenreOverlay();
         }
 
 
@@ -223,6 +224,7 @@ namespace ModernIPTVPlayer
                 StremioControl.Visibility = Visibility.Visible;
                 OverlayCanvas.Visibility = Visibility.Visible;
                 SearchButton.Visibility = Visibility.Visible;
+                GenreFilterButton.Visibility = Visibility.Visible;
             }
         }
 
@@ -603,6 +605,12 @@ namespace ModernIPTVPlayer
                 return true;
             }
 
+            if (GenreOverlay.Visibility == Visibility.Visible)
+            {
+                GenreOverlay.Hide();
+                return true;
+            }
+
             if (_isSearchActive)
             {
                 // Exit Search Mode
@@ -616,6 +624,39 @@ namespace ModernIPTVPlayer
             }
             
             return false;
+        }
+
+        // ==========================================
+        // GENRE FILTER LOGIC
+        // ==========================================
+        private void GenreFilterButton_Click(object sender, RoutedEventArgs e)
+        {
+            GenreOverlay.Show("movie");
+        }
+
+        private void GenreOverlay_SelectionMade(object sender, GenreSelectionArgs args)
+        {
+            // Navigate to Search Results with pinpoint args
+            var searchArgs = new Pages.SearchArgs 
+            { 
+                Query = args.GenreValue,
+                PreferredSource = "Stremio",
+                Genre = args.GenreValue,
+                Type = "movie",
+                GenreArgs = args
+            };
+            Frame.Navigate(typeof(Pages.SearchResultsPage), searchArgs, new DrillInNavigationTransitionInfo());
+        }
+
+        private void GenreOverlay_CloseRequested(object sender, EventArgs e)
+        {
+            // Handled by Overlay internally hiding itself, just ensure focus returns or whatever
+        }
+
+        private void InitializeGenreOverlay()
+        {
+            GenreOverlay.SelectionMade += GenreOverlay_SelectionMade;
+            GenreOverlay.CloseRequested += GenreOverlay_CloseRequested;
         }
     }
 }

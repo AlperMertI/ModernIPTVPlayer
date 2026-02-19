@@ -24,7 +24,8 @@ namespace ModernIPTVPlayer
             _client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             _client.DefaultRequestHeaders.Add("Accept", "*/*");
             _client.DefaultRequestHeaders.Add("Connection", "keep-alive");
-            _client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+            var language = System.Globalization.CultureInfo.CurrentUICulture.Name;
+            _client.DefaultRequestHeaders.Add("Accept-Language", $"{language},{language.Split('-')[0]};q=0.9,en-US;q=0.8,en;q=0.7");
         }
 
         public static HttpClient Client => _client;

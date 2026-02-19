@@ -98,7 +98,6 @@ namespace ModernIPTVPlayer.Controls
         {
             if (d is PosterCard card)
             {
-                System.Diagnostics.Debug.WriteLine($"[PosterCard] ImageUrl changed to: {e.NewValue} for Title: {card.Title}");
                 card.UpdateImage();
             }
         }

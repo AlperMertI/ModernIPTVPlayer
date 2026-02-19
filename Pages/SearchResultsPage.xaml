@@ -63,17 +63,27 @@
                     <FontIcon Glyph="&#xE72B;" FontSize="18"/>
                 </Button>
                 <TextBlock x:Name="PageTitle" Text="Arama Sonuçları" FontSize="24" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                
+                <!-- Genre Filter Button (Visible if Genre Search compatible) -->
+                <Button x:Name="GenreFilterButton" Click="GenreFilterButton_Click" 
+                        Visibility="Collapsed" Margin="12,0,0,0"
+                        Background="#1AFFFFFF" BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="16" Padding="12,4" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock x:Name="GenreButtonText" Text="Türler" FontSize="13" Foreground="White"/>
+                        <FontIcon Glyph="&#xE70D;" FontSize="10" Opacity="0.7" Foreground="White"/>
+                    </StackPanel>
+                </Button>
             </StackPanel>
         </Grid>
 
         <!-- Main Content -->
-        <ScrollViewer Grid.Row="1" Padding="24,0,24,24">
+        <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1" Padding="24,0,24,24" ViewChanged="MainScrollViewer_ViewChanged">
             <StackPanel x:Name="ResultsStack" Spacing="30">
                 
                 <!-- Section 1: Stremio Results -->
                 <StackPanel x:Name="StremioSection" Spacing="12" Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal" Spacing="12">
-                        <TextBlock Text="Stremio Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9"/>
+                        <TextBlock x:Name="StremioSectionTitle" Text="Stremio Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9"/>
                         <Border x:Name="StremioCountBadge" Background="#1AFFFFFF" CornerRadius="12" Padding="8,2" VerticalAlignment="Center">
                             <TextBlock x:Name="TxtStremioCount" Text="0" FontSize="12" Opacity="0.7"/>
                         </Border>
@@ -102,16 +112,22 @@
                               ItemsPanel="{StaticResource SearchGridPanelTemplate}"/>
                 </StackPanel>
 
+                <!-- Load More Indicator -->
+                <ProgressBar x:Name="LoadMoreProgress" IsIndeterminate="True" Visibility="Collapsed" Height="4" HorizontalAlignment="Stretch" Margin="0,20"/>
+
             </StackPanel>
         </ScrollViewer>
         
         <!-- Loading -->
         <ProgressRing x:Name="LoadingRing" Grid.Row="1" IsActive="False" Width="50" Height="50" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed"/>
         
-        <!-- Empty State (handled by UnifiedMediaGrid mostly, but explicit check good) -->
+        <!-- Empty State -->
         <StackPanel x:Name="EmptyPanel" Grid.Row="1" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="16">
             <FontIcon Glyph="&#xE773;" FontSize="48" Foreground="#44FFFFFF"/>
             <TextBlock Text="Sonuç Bulunamadı" FontSize="18" Foreground="#88FFFFFF"/>
         </StackPanel>
+
+        <!-- GENRE OVERLAY -->
+        <controls:GenreSelectionOverlay x:Name="GenreOverlay" Grid.RowSpan="2" Canvas.ZIndex="998"/>
     </Grid>
 </Page>

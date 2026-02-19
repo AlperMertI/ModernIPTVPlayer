@@ -22,9 +22,7 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         private StremioService()
         {
-            _client = new HttpClient();
-            _client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            _client.Timeout = TimeSpan.FromSeconds(30); // Robust timeout for slow addons
+            _client = HttpHelper.Client;
             _jsonOptions = new JsonSerializerOptions 
             { 
                 PropertyNameCaseInsensitive = true,
@@ -250,6 +248,109 @@ namespace ModernIPTVPlayer.Services.Stremio
             return DeduplicateAndRank(allResults, query);
         }
 
+        // ==========================================
+        // 6. GENRE DISCOVERY
+        // ==========================================
+        public async Task<List<StremioMediaStream>> DiscoverByGenreAsync(string type, string genre, int skip = 0)
+        {
+            if (string.IsNullOrWhiteSpace(genre) || genre == "All") return new List<StremioMediaStream>();
+            
+            // Standard aggregated discovery logic (kept for backward compatibility or global search)
+            // ... (rest of existing logic) ...
+            return await DiscoverAggregatedAsync(type, genre, skip);
+        }
+
+        public async Task<List<StremioMediaStream>> DiscoverAsync(GenreSelectionArgs args, int skip = 0)
+        {
+            if (args == null) return new List<StremioMediaStream>();
+
+            try
+            {
+                string encodedGenre = Uri.EscapeDataString(args.GenreValue);
+                string filterKey = args.FilterKey ?? "genre";
+                string pathParams = $"{filterKey}={encodedGenre}";
+                if (skip > 0) pathParams += $"&skip={skip}";
+
+                string url = $"{args.AddonId.TrimEnd('/')}/catalog/{args.CatalogType}/{args.CatalogId}/{pathParams}.json";
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Pinpoint Discover URL: {url}");
+
+                var root = await GetCatalogAsync(url);
+                var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = args.DisplayName }).ToList() ?? new List<StremioMediaStream>();
+                
+                // No need for validation here since the user manually clicked this option from the manifest!
+                return items;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Pinpoint Discover error: {ex.Message}");
+                return new List<StremioMediaStream>();
+            }
+        }
+
+        private async Task<List<StremioMediaStream>> DiscoverAggregatedAsync(string type, string genre, int skip = 0)
+        {
+            if (string.IsNullOrWhiteSpace(genre) || genre == "All") return new List<StremioMediaStream>();
+
+            var addons = StremioAddonManager.Instance.GetAddonsWithManifests();
+            var tasks = new List<Task<List<StremioMediaStream>>>();
+            
+            foreach (var (baseUrl, manifest) in addons)
+            {
+                if (manifest?.Catalogs == null) continue;
+
+                string queryGenre = genre; 
+                string encodedGenre = Uri.EscapeDataString(queryGenre);
+
+                var relevantCatalogs = manifest.Catalogs.Where(c => 
+                    c.Type == type && 
+                    c.Extra != null && 
+                    c.Extra.Any(e => e.Name == "genre") // Relaxed check: we strive to fetch even if exact match isn't perfect, relying on our resolved queryGenre
+                ).ToList();
+
+                foreach (var catalog in relevantCatalogs)
+                {
+                    // Check if this catalog ACTUALLY supports our resolved queryGenre
+                    var extra = catalog.Extra.First(e => e.Name == "genre");
+                    // If options are restrictive and don't contain our resolved string, skip it.
+                    if (extra.Options != null && !extra.Options.Any(o => o.Equals(queryGenre, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        continue;
+                    }
+
+                    // Construct URL: /catalog/{type}/{id}/genre={genre}&skip={skip}.json
+                    string pathParams = $"genre={encodedGenre}";
+                    if (skip > 0)
+                    {
+                        pathParams += $"&skip={skip}";
+                    }
+                    
+                    string url = $"{baseUrl.TrimEnd('/')}/catalog/{catalog.Type}/{catalog.Id}/{pathParams}.json";
+                    System.Diagnostics.Debug.WriteLine($"[StremioService] Discover URL: {url} (Query: {queryGenre})");
+
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var root = await GetCatalogAsync(url);
+                            var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = manifest.Name ?? "Unknown Addon" }).ToList() ?? new List<StremioMediaStream>();
+                            return items;
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[StremioService] Genre fetch error on {url}: {ex.Message}");
+                            return new List<StremioMediaStream>();
+                        }
+                    }));
+                }
+            }
+
+            var resultsArray = await Task.WhenAll(tasks);
+            var allResults = resultsArray.SelectMany(x => x).ToList();
+
+            // Deduplicate (Zero Logic ranking)
+            return DeduplicateAndRank(allResults, ""); 
+        }
+
         private async Task<StremioCatalogRoot> GetCatalogAsync(string url)
         {
             string json = await _client.GetStringAsync(url);
@@ -279,14 +380,8 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
             }
 
-            // Smart Ranking
-            return uniqueItems
-                .Select(x => new { Item = x, Score = GetScore(x, query) })
-                .Where(x => x.Score > 0)
-                .OrderByDescending(x => x.Score)
-                .ThenByDescending(x => x.Item.Year)
-                .Select(x => x.Item)
-                .ToList();
+            // Returning unique items exactly as they came from addons (Zero Logic)
+            return uniqueItems;
         }
 
         private string NormalizeTitle(string title)

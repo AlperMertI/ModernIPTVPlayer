@@ -12,7 +12,6 @@
     <Page.Resources>
         <ThemeShadow x:Key="SharedShadow"/>
         
-        <!-- Simplified Container Style: Let PosterCard handle the visuals -->
         <Style x:Key="MovieCardStyle" TargetType="GridViewItem">
             <Setter Property="Margin" Value="0"/>
             <Setter Property="Padding" Value="0"/>
@@ -174,6 +173,8 @@
                             </ListView.ItemTemplate>
                         </ListView>
                     </Grid>
+                    
+
                 </Grid>
             </SplitView.Pane>
 
@@ -182,7 +183,6 @@
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/> <!-- Header -->
-                        <RowDefinition Height="Auto"/> <!-- Stremio Filters (Visible only in Stremio) -->
                         <RowDefinition Height="*"/>    <!-- Media Grid -->
                     </Grid.RowDefinitions>
 
@@ -198,6 +198,16 @@
                         <StackPanel Orientation="Horizontal" Spacing="12">
                              <Button x:Name="SidebarToggle" Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" VerticalAlignment="Center">
                                 <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
+                            </Button>
+                            
+                            <!-- STREMIO GENRE BUTTON (Visible only when Stremio is selected) -->
+                            <Button x:Name="GenreFilterButton" Click="GenreFilterButton_Click" 
+                                    Visibility="Collapsed"
+                                    Background="#1AFFFFFF" BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="16" Padding="12,4" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock x:Name="GenreButtonText" Text="Kategoriler" FontSize="13" Foreground="White"/>
+                                    <FontIcon Glyph="&#xE70D;" FontSize="10" Opacity="0.7" Foreground="White"/>
+                                </StackPanel>
                             </Button>
                         </StackPanel>
                         
@@ -227,24 +237,27 @@
 
                     <!-- MEDIA CONTENT AREA -->
                     <!-- 1. IPTV Grid (Standard) -->
-                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="2" Margin="0" Visibility="Visible" />
+                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="1" Margin="0" Visibility="Visible" />
 
                     <!-- 2. STREMIO HOME (Hero + Rows) -->
-                    <controls:StremioDiscoveryControl x:Name="StremioControl" Grid.Row="0" Grid.RowSpan="3" Visibility="Collapsed" 
+                    <controls:StremioDiscoveryControl x:Name="StremioControl" Grid.Row="0" Grid.RowSpan="2" Visibility="Collapsed" 
                                                       Canvas.ZIndex="0"/>
                     
-                    <!-- Loading Indicator (Legacy, can be hidden if shimmer is enough) -->
-                    <ProgressRing x:Name="LoadingRing" Grid.Row="2" IsActive="False" Width="50" Height="50" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <!-- Loading Indicator -->
+                    <ProgressRing x:Name="LoadingRing" Grid.Row="1" IsActive="False" Width="50" Height="50" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     
                     <!-- Flying Panel Overlay (For Stremio) -->
-                    <Canvas x:Name="OverlayCanvas" Grid.Row="0" Grid.RowSpan="3">
+                    <Canvas x:Name="OverlayCanvas" Grid.Row="0" Grid.RowSpan="2">
                         <Rectangle x:Name="CinemaScrim" Fill="#FF000000" Opacity="0" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="0"/>
                         <controls:ExpandedCard x:Name="ActiveExpandedCard" Visibility="Collapsed" IsHitTestVisible="True" Canvas.ZIndex="1"/>
                     </Canvas>
 
                     <!-- Spotlight Search Overlay -->
-                    <controls:SpotlightSearchControl x:Name="SpotlightSearch" Grid.Row="0" Grid.RowSpan="3" 
+                    <controls:SpotlightSearchControl x:Name="SpotlightSearch" Grid.Row="0" Grid.RowSpan="2" 
                                                      Visibility="Collapsed" Canvas.ZIndex="999"/>
+                                                     
+                    <!-- GENRE OVERLAY -->
+                    <controls:GenreSelectionOverlay x:Name="GenreOverlay" Grid.Row="0" Grid.RowSpan="2" Canvas.ZIndex="998"/>
                 </Grid>
             </SplitView.Content>
         </SplitView>

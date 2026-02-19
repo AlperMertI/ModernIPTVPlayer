@@ -198,6 +198,16 @@
                              <Button x:Name="SidebarToggle" Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" VerticalAlignment="Center">
                                 <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
                             </Button>
+
+                            <!-- STREMIO GENRE BUTTON (Visible only when Stremio is selected) -->
+                            <Button x:Name="GenreFilterButton" Click="GenreFilterButton_Click" 
+                                    Visibility="Collapsed"
+                                    Background="#1AFFFFFF" BorderBrush="#33FFFFFF" BorderThickness="1" CornerRadius="16" Padding="12,4" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <TextBlock x:Name="GenreButtonText" Text="Kategoriler" FontSize="13" Foreground="White"/>
+                                    <FontIcon Glyph="&#xE70D;" FontSize="10" Opacity="0.7" Foreground="White"/>
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
                         
                         <!-- Center: Source Switcher -->
@@ -244,6 +254,9 @@
                     <!-- Spotlight Search Overlay -->
                     <controls:SpotlightSearchControl x:Name="SpotlightSearch" Grid.Row="0" Grid.RowSpan="3" 
                                                      Visibility="Collapsed" Canvas.ZIndex="999"/>
+
+                    <!-- GENRE OVERLAY -->
+                    <controls:GenreSelectionOverlay x:Name="GenreOverlay" Grid.Row="0" Grid.RowSpan="3" Canvas.ZIndex="998"/>
                 </Grid>
             </SplitView.Content>
         </SplitView>

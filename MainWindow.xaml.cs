@@ -27,7 +27,7 @@ namespace ModernIPTVPlayer
             
             // Set title bar
             ExtendsContentIntoTitleBar = true;
-            SetTitleBar(AppTitleBar);
+            SetTitleBar(AppDragRegion);
 
             // Default navigation based on settings
             string startupPageTag = AppSettings.DefaultStartupPage;

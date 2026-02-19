@@ -106,7 +106,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         
         private async Task RefreshManifestsAsync()
         {
-            var client = new System.Net.Http.HttpClient();
+            var client = HttpHelper.Client;
             bool changed = false;
 
             foreach (var url in _addonUrls)
@@ -115,7 +115,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 // Or maybe fetch to update? Let's treat memory cache as "good enough" for quick start,
                 // but maybe verify if we shouldn't refresh periodically.
                 // For now, only fetch if MISSING.
-                if (_manifestCache.ContainsKey(url)) continue;
+                // Removed: if (_manifestCache.ContainsKey(url)) continue;
 
                 try
                 {

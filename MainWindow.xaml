@@ -13,22 +13,19 @@
         <Grid x:Name="AppTitleBar"
               Height="48"
               VerticalAlignment="Top"
-              Background="Transparent"
               Opacity="0"
               IsHitTestVisible="False"
               Canvas.ZIndex="9999"
               PointerEntered="AppTitleBar_PointerEntered"
               PointerExited="AppTitleBar_PointerExited">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/> <!-- Icon/Title -->
-                <ColumnDefinition Width="*"/>    <!-- Drag Region -->
-                <ColumnDefinition Width="Auto"/> <!-- System Buttons Placeholder -->
+                <ColumnDefinition Width="150"/> <!-- Left area: Menu + Category Button + Search Title (Non-draggable) -->
+                <ColumnDefinition Width="*"/>   <!-- Drag Region -->
+                <ColumnDefinition Width="150"/> <!-- Right area: System Buttons Placeholder + Search/Downloads (Non-draggable) -->
             </Grid.ColumnDefinitions>
 
-            <!-- App Title / Icon Area - REMOVED -->
-
             <!-- Drag Region -->
-            <Grid Grid.Column="1" Background="Transparent" IsHitTestVisible="True"/>
+            <Grid x:Name="AppDragRegion" Grid.Column="1" Background="Transparent" IsHitTestVisible="True"/>
         </Grid>
 
         <Grid>
