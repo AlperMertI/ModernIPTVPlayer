@@ -12,6 +12,7 @@ namespace ModernIPTVPlayer.Models
         public string CatalogName { get => _catalogName; set { _catalogName = value; OnPropertyChanged(); } }
         public ObservableCollection<StremioMediaStream> Items { get => _items; set { _items = value; OnPropertyChanged(); } }
         public bool IsLoading { get => _isLoading; set { _isLoading = value; OnPropertyChanged(); } }
+        public int SortIndex { get; set; }
 
         public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string name = null)

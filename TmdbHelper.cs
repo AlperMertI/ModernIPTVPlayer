@@ -14,9 +14,79 @@ namespace ModernIPTVPlayer
     {
         private static string API_KEY => AppSettings.TmdbApiKey;
         private const string BASE_URL = "https://api.themoviedb.org/3";
-        private static HttpClient _client = new HttpClient();
+        private static HttpClient _client => HttpHelper.Client;
         
         // Caching is now handled by TmdbCacheService (Persistent)
+
+        public static async Task<List<string>> GetMovieImagesAsync(string tmdbId)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || string.IsNullOrEmpty(tmdbId)) return new List<string>();
+            try
+            {
+                var cacheKey = $"movie_images_{tmdbId}";
+                if (TmdbCacheService.Instance.Get<List<string>>(cacheKey) is List<string> cached) return cached;
+
+                var url = $"{BASE_URL}/movie/{tmdbId}/images?api_key={API_KEY}";
+                var json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Movie Images Request: {url}");
+                
+                using var doc = JsonDocument.Parse(json);
+                var backdrops = new List<string>();
+                if (doc.RootElement.TryGetProperty("backdrops", out var backdropsEl))
+                {
+                    foreach (var item in backdropsEl.EnumerateArray())
+                    {
+                        if (item.TryGetProperty("file_path", out var pathEl))
+                        {
+                            backdrops.Add($"https://image.tmdb.org/t/p/original{pathEl.GetString()}");
+                        }
+                    }
+                }
+                
+                TmdbCacheService.Instance.Set(cacheKey, backdrops);
+                return backdrops;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Images Error: {ex.Message}");
+                return new List<string>();
+            }
+        }
+
+        public static async Task<List<string>> GetTvImagesAsync(string tmdbId)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || string.IsNullOrEmpty(tmdbId)) return new List<string>();
+            try
+            {
+                var cacheKey = $"tv_images_{tmdbId}";
+                if (TmdbCacheService.Instance.Get<List<string>>(cacheKey) is List<string> cached) return cached;
+
+                var url = $"{BASE_URL}/tv/{tmdbId}/images?api_key={API_KEY}";
+                var json = await _client.GetStringAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[TMDB] TV Images Request: {url}");
+                
+                using var doc = JsonDocument.Parse(json);
+                var backdrops = new List<string>();
+                if (doc.RootElement.TryGetProperty("backdrops", out var backdropsEl))
+                {
+                    foreach (var item in backdropsEl.EnumerateArray())
+                    {
+                        if (item.TryGetProperty("file_path", out var pathEl))
+                        {
+                            backdrops.Add($"https://image.tmdb.org/t/p/original{pathEl.GetString()}");
+                        }
+                    }
+                }
+                
+                TmdbCacheService.Instance.Set(cacheKey, backdrops);
+                return backdrops;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[TMDB] TV Images Error: {ex.Message}");
+                return new List<string>();
+            }
+        }
 
         public static async Task<TmdbMovieResult?> SearchMovieAsync(string title, string year = null)
         {
@@ -270,6 +340,25 @@ namespace ModernIPTVPlayer
             }
         }
 
+        public static async Task<TmdbMovieResult?> GetMovieByIdAsync(int movieId)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
+            try
+            {
+                if (TmdbCacheService.Instance.Get<TmdbMovieResult>($"movie_id_{movieId}") is TmdbMovieResult cached) return cached;
+                var url = $"{BASE_URL}/movie/{movieId}?api_key={API_KEY}&language=tr-TR&append_to_response=images&include_image_language=tr,en,null";
+                var json = await _client.GetStringAsync(url);
+                var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
+                if (result != null) 
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Parsed: {result.Title}. BackdropPath: {result.BackdropPath}");
+                    TmdbCacheService.Instance.Set($"movie_id_{movieId}", result);
+                }
+                return result;
+            }
+            catch { return null; }
+        }
+
         public static async Task<TmdbMovieResult?> GetTvByIdAsync(int tvId)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
@@ -278,11 +367,10 @@ namespace ModernIPTVPlayer
                 if (TmdbCacheService.Instance.Get<TmdbMovieResult>($"tv_id_{tvId}") is TmdbMovieResult cached) return cached;
                 var url = $"{BASE_URL}/tv/{tvId}?api_key={API_KEY}&language=tr-TR&append_to_response=images&include_image_language=tr,en,null";
                 var json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Raw JSON Length: {json.Length}");
                 var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
                 if (result != null) 
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Parsed. BackdropPath: {result.BackdropPath}, Images in Result: {result.Images?.Backdrops?.Count ?? 0}");
+                    System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Parsed: {result.Name}. BackdropPath: {result.BackdropPath}");
                     TmdbCacheService.Instance.Set($"tv_id_{tvId}", result);
                 }
                 return result;
@@ -473,6 +561,9 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("seasons")]
         public List<TmdbSeason> Seasons { get; set; }
 
+        [JsonPropertyName("imdb_id")]
+        public string ImdbId { get; set; }
+
         public string GetGenreNames()
         {
             if (GenreIds == null || GenreIds.Count == 0) return "Genel";
@@ -560,6 +651,9 @@ namespace ModernIPTVPlayer
 
         [JsonPropertyName("genres")]
         public List<TmdbGenre> Genres { get; set; }
+
+        [JsonPropertyName("imdb_id")]
+        public string ImdbId { get; set; }
     }
 
     public class TmdbGenre

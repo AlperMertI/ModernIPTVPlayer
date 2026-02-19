@@ -14,13 +14,29 @@ namespace ModernIPTVPlayer.Services.Stremio
         public static StremioAddonManager Instance => _instance ??= new StremioAddonManager();
 
         private const string ADDONS_KEY = "StremioInstalledAddons";
+        private const string MANIFEST_CACHE_FILE = "stremio_manifests.json";
         private List<string> _addonUrls;
         private Dictionary<string, StremioManifest> _manifestCache = new Dictionary<string, StremioManifest>();
+
+        public event EventHandler AddonsChanged;
 
         private StremioAddonManager()
         {
             LoadAddons();
-            _ = RefreshManifestsAsync();
+            // Load cached manifests strictly synchronously if possible or wait?
+            // Constructors can't wait. We'll fire off the load.
+            _ = InitializeAsync();
+        }
+
+        private async Task InitializeAsync()
+        {
+            await LoadManifestsFromDiskAsync();
+            if (_manifestCache.Count > 0)
+            {
+                // Notify UI immediately that we have cached manifests
+                AddonsChanged?.Invoke(this, EventArgs.Empty);
+            }
+            await RefreshManifestsAsync();
         }
 
         private void LoadAddons()
@@ -48,28 +64,87 @@ namespace ModernIPTVPlayer.Services.Stremio
             string json = JsonSerializer.Serialize(_addonUrls);
             localSettings.Values[ADDONS_KEY] = json;
         }
+
+        private async Task LoadManifestsFromDiskAsync()
+        {
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                var item = await folder.TryGetItemAsync(MANIFEST_CACHE_FILE);
+                if (item != null)
+                {
+                    var file = await folder.GetFileAsync(MANIFEST_CACHE_FILE);
+                    string json = await FileIO.ReadTextAsync(file);
+                    var cache = JsonSerializer.Deserialize<Dictionary<string, StremioManifest>>(json);
+                    if (cache != null)
+                    {
+                        _manifestCache = cache;
+                        System.Diagnostics.Debug.WriteLine($"[StremioAddonManager] Loaded {_manifestCache.Count} manifests from disk.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[StremioAddonManager] Error loading manifest cache: {ex.Message}");
+            }
+        }
+
+        private async Task SaveManifestsToDiskAsync()
+        {
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                var file = await folder.CreateFileAsync(MANIFEST_CACHE_FILE, CreationCollisionOption.ReplaceExisting);
+                string json = JsonSerializer.Serialize(_manifestCache);
+                await FileIO.WriteTextAsync(file, json);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[StremioAddonManager] Error saving manifest cache: {ex.Message}");
+            }
+        }
         
         private async Task RefreshManifestsAsync()
         {
             var client = new System.Net.Http.HttpClient();
+            bool changed = false;
+
             foreach (var url in _addonUrls)
             {
+                // If we already have it in memory, skip remote fetch for now?
+                // Or maybe fetch to update? Let's treat memory cache as "good enough" for quick start,
+                // but maybe verify if we shouldn't refresh periodically.
+                // For now, only fetch if MISSING.
                 if (_manifestCache.ContainsKey(url)) continue;
 
                 try
                 {
                     string manifestUrl = $"{url.TrimEnd('/')}/manifest.json";
-                    string json = await client.GetStringAsync(manifestUrl);
-                    var manifest = JsonSerializer.Deserialize<StremioManifest>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    if (manifest != null)
+                    
+                    // 5 second timeout for manifest
+                    using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+                    var response = await client.GetAsync(manifestUrl, cts.Token);
+                    if (response.IsSuccessStatusCode)
                     {
-                        _manifestCache[url] = manifest;
+                        string json = await response.Content.ReadAsStringAsync();
+                        var manifest = JsonSerializer.Deserialize<StremioManifest>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        if (manifest != null)
+                        {
+                            _manifestCache[url] = manifest;
+                            changed = true;
+                        }
                     }
                 }
                 catch (Exception ex)
                 {
                     System.Diagnostics.Debug.WriteLine($"[StremioAddonManager] Failed to fetch manifest for {url}: {ex.Message}");
                 }
+            }
+
+            if (changed)
+            {
+                await SaveManifestsToDiskAsync();
+                AddonsChanged?.Invoke(this, EventArgs.Empty);
             }
         }
 
@@ -86,8 +161,6 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
                 else
                 {
-                    // If manifest isn't loaded yet, return null for it or try to fetch? 
-                    // For now, return null to avoid blocking, but StremioService should handle nulls.
                     list.Add((url, null));
                 }
             }
@@ -100,7 +173,8 @@ namespace ModernIPTVPlayer.Services.Stremio
             {
                 _addonUrls.Add(url);
                 SaveAddons();
-                await RefreshManifestsAsync();
+                await RefreshManifestsAsync(); // Will fetch and save
+                AddonsChanged?.Invoke(this, EventArgs.Empty);
             }
         }
 
@@ -110,7 +184,35 @@ namespace ModernIPTVPlayer.Services.Stremio
             {
                 _addonUrls.Remove(url);
                 SaveAddons();
+                if (_manifestCache.ContainsKey(url)) _manifestCache.Remove(url);
+                _ = SaveManifestsToDiskAsync();
+                AddonsChanged?.Invoke(this, EventArgs.Empty);
             }
+        }
+
+        public void UpdateAddonOrder(List<string> orderedUrls)
+        {
+            _addonUrls = orderedUrls;
+            SaveAddons();
+            AddonsChanged?.Invoke(this, EventArgs.Empty);
+        }
+
+        public string GetAddonName(string url)
+        {
+            if (_manifestCache.TryGetValue(url, out var manifest) && manifest != null)
+            {
+                return manifest.Name;
+            }
+            return null;
+        }
+
+        public string GetAddonIcon(string url)
+        {
+             if (_manifestCache.TryGetValue(url, out var manifest) && manifest != null && !string.IsNullOrEmpty(manifest.Logo))
+            {
+                return manifest.Logo;
+            }
+            return null;
         }
     }
 }

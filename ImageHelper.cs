@@ -24,6 +24,7 @@ namespace ModernIPTVPlayer
 
             try
             {
+                // FALLBACK: If we must use URL, we now use HttpHelper for better headers
                 var colors = await ExtractDominantColorsAsync(imageUrl);
                 _colorCache.TryAdd(imageUrl, colors);
                 return colors;
@@ -35,11 +36,36 @@ namespace ModernIPTVPlayer
             }
         }
 
+        public static (Color Primary, Color Secondary) ExtractColorsFromPixels(byte[] pixels, int width, int height, string cacheKey = null)
+        {
+            try
+            {
+                var (color1, _, color2, _) = FindTopTwoColorsWithRatios(pixels, width, height);
+                
+                // Randomly decide which side gets the dominant color
+                bool dominantOnLeft = _random.Next(2) == 0;
+                var result = dominantOnLeft ? (color1, color2) : (color2, color1);
+
+                if (!string.IsNullOrEmpty(cacheKey))
+                {
+                    _colorCache.TryAdd(cacheKey, result);
+                }
+
+                return result;
+            }
+            catch
+            {
+                var fallback = Color.FromArgb(255, 30, 30, 30);
+                return (fallback, fallback);
+            }
+        }
+
         private static async Task<(Color Primary, Color Secondary)> ExtractDominantColorsAsync(string imageUrl)
         {
             try
             {
-                using var response = await _httpClient.GetAsync(imageUrl);
+                // Use HttpHelper.Client for better headers and reliability
+                using var response = await HttpHelper.Client.GetAsync(imageUrl);
                 response.EnsureSuccessStatusCode();
 
                 using var stream = await response.Content.ReadAsStreamAsync();

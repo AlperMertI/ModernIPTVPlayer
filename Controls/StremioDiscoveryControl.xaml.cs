@@ -35,6 +35,12 @@ namespace ModernIPTVPlayer.Controls
         private ObservableCollection<CatalogRowViewModel> _discoveryRows = new();
         private bool _isDraggingRow = false;
         private System.Threading.CancellationTokenSource? _loadCts;
+        private string _currentContentType;
+
+        // Hero Priority Logic
+        private enum RowState { Pending, Success, Failed }
+        private Dictionary<int, RowState> _rowStates = new();
+        private Dictionary<int, ObservableCollection<StremioMediaStream>> _rowItemsBuffer = new();
 
         public StremioDiscoveryControl()
         {
@@ -46,6 +52,22 @@ namespace ModernIPTVPlayer.Controls
             HeroControl.ColorExtracted += (s, c) => BackdropColorChanged?.Invoke(this, c);
 
             DiscoveryRows.ItemsSource = _discoveryRows;
+
+            // Listen for addon changes to invalidate local state
+            StremioAddonManager.Instance.AddonsChanged += OnAddonsChanged;
+        }
+
+        private void OnAddonsChanged(object sender, EventArgs e)
+        {
+            DispatcherQueue.TryEnqueue(async () => 
+            {
+                if (!string.IsNullOrEmpty(_currentContentType))
+                {
+                    System.Diagnostics.Debug.WriteLine("[StremioControl] Addons changed/loaded. Reloading discovery...");
+                    _discoveryRows.Clear();
+                    await LoadDiscoveryAsync(_currentContentType);
+                }
+            });
         }
 
         public bool HasContent => _discoveryRows.Count > 0 && !_discoveryRows.Any(r => r.IsLoading && r.CatalogName == "Yükleniyor...");
@@ -65,81 +87,206 @@ namespace ModernIPTVPlayer.Controls
                 if (!hasExistingContent)
                 {
                      HeroControl.SetLoading(true);
-                     // Add skeletons only if empty
-                     for (int i = 0; i < 6; i++)
-                     {
-                         _discoveryRows.Add(new CatalogRowViewModel { CatalogName = "Yükleniyor...", IsLoading = true });
-                     }
+                     // Add skeletons only if empty (REMOVED for Dynamic Sorting)
+                     // for (int i = 0; i < 6; i++)
+                     // {
+                     //     _discoveryRows.Add(new CatalogRowViewModel { CatalogName = "Yükleniyor...", IsLoading = true });
+                     // }
                 }
                 
-                // Fetch Manifests
-                var addonUrls = StremioAddonManager.Instance.GetAddons();
-                bool firstHeroSet = false;
-                int activeSkeletonIndex = 0;
-                
-                // Logic to handle clearing old content on first arrival of new content
-                bool isFirstLoadForThisCall = true;
+                // Fetch Manifests from Cache
+                _currentContentType = contentType;
+                var addons = StremioAddonManager.Instance.GetAddonsWithManifests();
+                System.Diagnostics.Debug.WriteLine($"[StremioControl] Starting Discovery for: '{contentType}' with {addons.Count} addons.");
 
-                foreach (var url in addonUrls)
+                // Log invalid manifests
+                int validManifests = addons.Count(a => a.Manifest != null);
+                if (validManifests < addons.Count)
                 {
-                    _ = Task.Run(async () =>
+                    System.Diagnostics.Debug.WriteLine($"[StremioControl] WARNING: Only {validManifests}/{addons.Count} manifests are loaded. Waiting for background refresh...");
+                    if (validManifests == 0)
                     {
-                        if (token.IsCancellationRequested) return;
+                         // If we have 0 valid manifests, we might be in a "First Run" race condition.
+                         // We will rely on OnAddonsChanged to trigger a reload when they arrive.
+                         // But we should probably show a "Loading Addons..." state?
+                         // Skeletons are already added above. We just return.
+                         // If we return here, Skeletons stay visible?
+                         // "if (addons.Count == 0)" check below handles empty LIST. 
+                         // But if list has 3 items (all null manifests), we proceed to SlotMap loop.
+                    }
+                }
 
+                if (addons.Count == 0)
+                {
+                    HeroControl.SetLoading(false);
+                    _discoveryRows.Clear();
+                    return;
+                }
+
+                // --- 1. PRE-ALLOCATE SLOTS (To maintain visual priority) ---
+                var slotMap = new List<(string BaseUrl, StremioCatalog Catalog, int SortIndex)>();
+                int globalIndex = 0;
+                
+                foreach (var (url, manifest) in addons)
+                {
+                    if (manifest?.Catalogs == null) continue;
+                    
+                    var relevantCatalogs = manifest.Catalogs
+                        .Where(c => string.Equals(c.Type, contentType, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                    foreach (var cat in relevantCatalogs)
+                    {
+                        // DYNAMIC SORTING: We no longer add skeletons here.
+                        // We simply track the "intended" order (globalIndex).
+                        slotMap.Add((url, cat, globalIndex));
+                        globalIndex++;
+                    }
+                }
+
+                if (slotMap.Count == 0)
+                {
+                    // Check if we are potentially waiting for manifests
+                    int pendingManifests = addons.Count(a => a.Manifest == null);
+                    if (pendingManifests > 0)
+                    {
+                         System.Diagnostics.Debug.WriteLine($"[StremioControl] SlotMap empty but waiting for {pendingManifests} manifests.");
+                         return; 
+                    }
+
+                    HeroControl.SetLoading(false);
+                    return;
+                }
+
+                // --- 2. LAUNCH PARALLEL FETCHES ---
+                // --- 2. LAUNCH PARALLEL FETCHES ---
+                // Reset Hero Logic on Load
+                _rowStates.Clear();
+                _rowItemsBuffer.Clear();
+                
+                // Initialize states
+                foreach (var (_, _, sortIndex) in slotMap)
+                {
+                    _rowStates[sortIndex] = RowState.Pending;
+                }
+
+                // Helper to Update Hero based on Priority Chain
+                void UpdateHeroState()
+                {
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        // Iterate strictly by priority index (0, 1, 2...)
+                        var sortedKeys = _rowStates.Keys.OrderBy(k => k).ToList();
+                        
+                        foreach (var idx in sortedKeys)
+                        {
+                            var state = _rowStates[idx];
+                            if (state == RowState.Pending)
+                            {
+                                // Strict Wait: Highest priority is still loading -> Show Shimmer
+                                HeroControl.SetLoading(true);
+                                return; 
+                            }
+                            
+                            if (state == RowState.Success)
+                            {
+                                // Success: This is the winner. Set items and STOP.
+                                if (_rowItemsBuffer.ContainsKey(idx))
+                                {
+                                    HeroControl.SetLoading(false);
+                                    HeroControl.SetItems(_rowItemsBuffer[idx].Take(5));
+                                }
+                                return;
+                            }
+                            
+                            // If Failed, continue loop to next priority
+                        }
+                        
+                        // If we fall through here, everything failed?
+                        HeroControl.SetLoading(false);
+                    });
+                }
+
+                var tasks = new List<Task>();
+
+                foreach (var (url, cat, sortIndex) in slotMap)
+                {
+                    if (token.IsCancellationRequested) break;
+
+                    tasks.Add(Task.Run(async () => 
+                    {
                         try
                         {
-                            var manifest = await StremioService.Instance.GetManifestAsync(url);
-                            if (manifest?.Catalogs == null || token.IsCancellationRequested) return;
+                            var rowResult = await LoadCatalogRowAsync(url, contentType, cat);
+                            
+                            if (token.IsCancellationRequested) return;
 
-                            foreach (var cat in manifest.Catalogs.Where(c => c.Type == contentType))
+                            DispatcherQueue.TryEnqueue(() =>
                             {
                                 if (token.IsCancellationRequested) return;
 
-                                var row = await LoadCatalogRowAsync(url, contentType, cat);
-                                if (row != null && row.Items.Count > 0)
+                                if (rowResult != null && rowResult.Items.Count > 0)
                                 {
-                                    if (token.IsCancellationRequested) return;
+                                    rowResult.SortIndex = sortIndex;
+                                    rowResult.IsLoading = false;
 
-                                    DispatcherQueue.TryEnqueue(() =>
+                                    // Store for Hero Logic
+                                    lock(_rowItemsBuffer) {
+                                        _rowStates[sortIndex] = RowState.Success;
+                                        _rowItemsBuffer[sortIndex] = rowResult.Items;
+                                    }
+
+                                    // DYNAMIC INSERTION: Find correct index to insert
+                                    // We want to insert before the first item that has a HIGHER SortIndex than ours.
+                                    int insertAt = _discoveryRows.Count;
+                                    for(int i=0; i<_discoveryRows.Count; i++)
                                     {
-                                        if (token.IsCancellationRequested) return;
-
-                                        if (isFirstLoadForThisCall && hasExistingContent)
+                                        if (_discoveryRows[i].SortIndex > sortIndex)
                                         {
-                                            _discoveryRows.Clear();
-                                            activeSkeletonIndex = 0;
-                                            hasExistingContent = false;
+                                            insertAt = i;
+                                            break;
                                         }
-
-                                        // Replace skeleton if any
-                                        if (activeSkeletonIndex < _discoveryRows.Count && _discoveryRows[activeSkeletonIndex].IsLoading)
-                                        {
-                                            _discoveryRows[activeSkeletonIndex].CatalogName = row.CatalogName;
-                                            _discoveryRows[activeSkeletonIndex].Items = row.Items;
-                                            _discoveryRows[activeSkeletonIndex].IsLoading = false;
-                                            activeSkeletonIndex++;
-                                        }
-                                        else
-                                        {
-                                            _discoveryRows.Add(row);
-                                        }
-                                        
-                                        // Update Hero if first
-                                        if (!firstHeroSet && row.Items.Count > 0)
-                                        {
-                                            firstHeroSet = true;
-                                            HeroControl.SetLoading(false); // Ensure shimmer is gone
-                                            HeroControl.SetItems(row.Items.Take(5));
-                                        }
-                                        
-                                        isFirstLoadForThisCall = false;
-                                    });
+                                    }
+                                    _discoveryRows.Insert(insertAt, rowResult);
+                                    
+                                    // Trigger Hero Check
+                                    UpdateHeroState();
                                 }
-                            }
+                                else
+                                {
+                                    // No results -> Mark as failed for Hero purposes so we skip to next
+                                    lock(_rowItemsBuffer) {
+                                        _rowStates[sortIndex] = RowState.Failed;
+                                    }
+                                    UpdateHeroState();
+                                }
+                            });
                         }
-                        catch { }
-                    });
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[Stremio] Error loading row {cat.Name}: {ex.Message}");
+                             DispatcherQueue.TryEnqueue(() => 
+                            {
+                                lock(_rowItemsBuffer) {
+                                    _rowStates[sortIndex] = RowState.Failed;
+                                }
+                                UpdateHeroState();
+                            });
+                        }
+                    }));
                 }
+
+                // --- 3. CLEANUP AFTER ALL TASKS ---
+                await Task.WhenAll(tasks);
+                
+                DispatcherQueue.TryEnqueue(() => 
+                {
+                    // If absolutely nothing loaded, ensure loading state is off
+                    if (_discoveryRows.Count == 0)
+                    {
+                        HeroControl.SetLoading(false);
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -152,7 +299,11 @@ namespace ModernIPTVPlayer.Controls
             try
             {
                 var items = await StremioService.Instance.GetCatalogItemsAsync(baseUrl, type, cat.Id);
-                if (items == null || items.Count == 0) return null;
+                if (items == null || items.Count == 0) 
+                {
+                    System.Diagnostics.Debug.WriteLine($"[StremioControl] No items returned for {cat.Name} ({baseUrl}). Removing row.");
+                    return null;
+                }
 
                 string finalName = cat.Name;
                 if (finalName == "KEŞFET" || finalName == "Keşfet") finalName = string.Empty;
@@ -163,7 +314,11 @@ namespace ModernIPTVPlayer.Controls
                     Items = new ObservableCollection<StremioMediaStream>(items)
                 };
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[StremioControl] Error loading row {cat.Name} ({baseUrl}): {ex.Message}");
+                return null; 
+            }
         }
 
         private void ScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)

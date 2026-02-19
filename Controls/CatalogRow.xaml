@@ -5,6 +5,7 @@
     xmlns:local="using:ModernIPTVPlayer.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:models="using:ModernIPTVPlayer.Models.Stremio"
     mc:Ignorable="d">
 
     <StackPanel x:Name="RootPanel" Spacing="16" Margin="48,0,0,24" Opacity="0"
@@ -78,8 +79,8 @@
                     </Style>
                 </ListView.ItemContainerStyle>
                 <ListView.ItemTemplate>
-                    <DataTemplate>
-                        <local:PosterCard ImageUrl="{Binding PosterUrl}" Width="160" Height="240" 
+                    <DataTemplate x:DataType="models:StremioMediaStream">
+                        <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" Width="160" Height="240" 
                                           HoverStarted="PosterCard_HoverStarted" 
                                           HoverEnded="PosterCard_HoverEnded"
                                           Tapped="PosterCard_Tapped"

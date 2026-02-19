@@ -479,6 +479,12 @@ namespace ModernIPTVPlayer.Controls
                 RatingText.Text = "";
                 YearText.Text = "";
                 
+                // STALE CONTENT FIX: Clear text and image immediately
+                TitleText.Text = "";
+                DescText.Text = "";
+                GenresText.Text = "";
+                BackdropImage.Source = null;
+                
                 // Reset Ambience
                 AmbienceGrid.Visibility = Visibility.Visible;
                 
@@ -499,6 +505,10 @@ namespace ModernIPTVPlayer.Controls
 
             // Reset all state first (except image)
             ResetState(isMorphing);
+            
+            // DEBOUNCE: Wait 300ms before doing heavy metadata/trailer work
+            await Task.Delay(300);
+            if (loadNonce != _loadNonce) return; // User moved to another poster
             
             _stream = stream;
             TitleText.Text = stream.Title;

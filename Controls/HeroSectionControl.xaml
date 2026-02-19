@@ -47,6 +47,9 @@
         <Grid x:Name="HeroImageContainer">
             <Border x:Name="HeroImageHost" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
             
+            <!-- Hidden image for reliable color extraction via RenderTargetBitmap -->
+            <Image x:Name="ColorExtractionImage" Visibility="Visible" Opacity="0" IsHitTestVisible="False" Width="100" Height="100" Source="{x:Null}" ImageOpened="ColorExtractionImage_ImageOpened"/>
+            
             <!-- Hero Shimmer (Visible when loading) -->
             <Grid x:Name="HeroShimmer" Visibility="Visible">
                 <local:ShimmerControl HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Opacity="0.3"/>

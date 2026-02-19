@@ -148,14 +148,14 @@ namespace ModernIPTVPlayer.Controls
                 HeroShimmer.Visibility = Visibility.Visible;
                 HeroTextShimmer.Visibility = Visibility.Visible;
                 HeroRealContent.Opacity = 0;
+                HeroRealContent.Visibility = Visibility.Collapsed;
             }
             else
             {
-                // We don't automatically hide here because UpdateHeroSection handles the transition
-                // effectively when data arrives. But strictly speaking, if we wanted to force hide:
-                // HeroShimmer.Visibility = Visibility.Collapsed;
-                // HeroTextShimmer.Visibility = Visibility.Collapsed;
-                // HeroRealContent.Opacity = 1;
+                HeroShimmer.Visibility = Visibility.Collapsed;
+                HeroTextShimmer.Visibility = Visibility.Collapsed;
+                HeroRealContent.Visibility = Visibility.Visible;
+                HeroRealContent.Opacity = 1;
             }
         }
         
@@ -171,6 +171,12 @@ namespace ModernIPTVPlayer.Controls
             }
 
             string imgUrl = item.Meta?.Background ?? item.PosterUrl;
+
+            // Trigger color extraction via hidden image
+            if (!string.IsNullOrEmpty(imgUrl))
+            {
+                ColorExtractionImage.Source = new BitmapImage(new Uri(imgUrl));
+            }
 
             if (animate && _heroVisual != null && !_heroTransitioning)
             {
@@ -203,15 +209,7 @@ namespace ModernIPTVPlayer.Controls
 
                 AnimateTextIn();
 
-                // Phase 4: Bleed colors
-                if (!string.IsNullOrEmpty(imgUrl))
-                {
-                    var colors = await ImageHelper.GetOrExtractColorAsync(imgUrl);
-                    if (colors.HasValue)
-                    {
-                        ColorExtracted?.Invoke(this, colors.Value);
-                    }
-                }
+                // Phase 4: Bleed colors (Now handled by ColorExtractionImage_ImageOpened)
 
                 _heroTransitioning = false;
             }
@@ -222,16 +220,43 @@ namespace ModernIPTVPlayer.Controls
 
                 if (!string.IsNullOrEmpty(imgUrl))
                 {
-                    var surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new Uri(imgUrl));
-                    if (_heroImageBrush != null)
-                        _heroImageBrush.Surface = surface;
-
-                    var colors = await ImageHelper.GetOrExtractColorAsync(imgUrl);
-                    if (colors.HasValue)
+                    try
                     {
-                        ColorExtracted?.Invoke(this, colors.Value);
+                        var surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new Uri(imgUrl));
+                        if (_heroImageBrush != null)
+                            _heroImageBrush.Surface = surface;
                     }
+                    catch { /* Ignore surface loading errors */ }
                 }
+            }
+        }
+
+        private async void ColorExtractionImage_ImageOpened(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // Ensure the element is ready for rendering
+                if (ColorExtractionImage.ActualWidth == 0 || ColorExtractionImage.XamlRoot == null)
+                {
+                    await Task.Delay(50); // Give layout a moment
+                }
+                
+                if (ColorExtractionImage.ActualWidth == 0 || ColorExtractionImage.XamlRoot == null) return;
+
+                var rtb = new RenderTargetBitmap();
+                await rtb.RenderAsync(ColorExtractionImage);
+                var pixelBuffer = await rtb.GetPixelsAsync();
+                var pixels = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(pixelBuffer);
+
+                // Use the image URL as cache key if possible, or just "Hero"
+                string cacheKey = (ColorExtractionImage.Source as BitmapImage)?.UriSource?.ToString() ?? "Hero";
+                var colors = ImageHelper.ExtractColorsFromPixels(pixels, rtb.PixelWidth, rtb.PixelHeight, cacheKey);
+                
+                ColorExtracted?.Invoke(this, colors);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[HeroControl] Color extraction failed: {ex.Message}");
             }
         }
 

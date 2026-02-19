@@ -107,6 +107,11 @@ namespace ModernIPTVPlayer
         private int _isWideModeIndex = -1; // -1: undefined, 0: narrow, 1: wide
         private bool _isSelectionSyncing = false;
         private bool _isHandoffInProgress = false;
+        private DispatcherTimer _slideshowTimer;
+        private string _slideshowId;
+        private List<string> _backdropUrls = new List<string>();
+        private int _currentBackdropIndex = 0;
+        private bool _isHeroImage1Active = true;
 
         private void MediaInfoPage_SizeChanged(object sender, SizeChangedEventArgs e)
         {
@@ -358,7 +363,7 @@ namespace ModernIPTVPlayer
 
                     if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Collapsed;
                     if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
-                    if (CastSection != null) CastSection.Visibility = Visibility.Visible;
+                    if (CastSection != null) CastSection.Visibility = (CastList != null && CastList.Count > 0) ? Visibility.Visible : Visibility.Collapsed;
                 }
                 else
                 {
@@ -386,7 +391,7 @@ namespace ModernIPTVPlayer
                     if (isSeries)
                     {
                         if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Visible;
-                        if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Visible;
+                        if (NarrowCastSection != null) NarrowCastSection.Visibility = (CastList != null && CastList.Count > 0) ? Visibility.Visible : Visibility.Collapsed;
                     }
                     else
                     {
@@ -422,6 +427,7 @@ namespace ModernIPTVPlayer
         protected override async void OnNavigatedFrom(NavigationEventArgs e)
         {
             base.OnNavigatedFrom(e);
+            StopBackgroundSlideshow();
             
             // CLEANUP ON EXIT: Ensure the cached page is blank for the next movie
             if (e.NavigationMode != NavigationMode.Back)
@@ -511,6 +517,12 @@ namespace ModernIPTVPlayer
                 // Debug: log current item state
                 string cachedItemId = _item?.IMDbId ?? _item?.Id.ToString();
                 System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Current cached _item ID: {cachedItemId}");
+
+                // STALE CONTENT FIX: Stop animations and clear images immediately
+                StopBackgroundSlideshow();
+                StopKenBurnsEffect();
+                if (HeroImage != null) HeroImage.Source = null;
+                if (HeroImage2 != null) HeroImage2.Source = null;
 
                 bool isBackNav = e.NavigationMode == NavigationMode.Back;
 
@@ -765,7 +777,6 @@ namespace ModernIPTVPlayer
                 if (HeroImage.Source == null || (HeroImage.Source as BitmapImage)?.UriSource?.ToString() != unified.BackdropUrl)
                 {
                     HeroImage.Source = newSource;
-                    ApplyPremiumAmbience(unified.BackdropUrl);
                 }
                 
                 if (HeroImage.Opacity < 1) HeroImage.Opacity = 1;
@@ -837,6 +848,7 @@ namespace ModernIPTVPlayer
                 if (CastList.Count > 0) 
                 {
                     CastSection.Visibility = Visibility.Visible;
+                    if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Visible;
                     CastListView.ItemsSource = CastList;
                     if (NarrowCastListView != null) NarrowCastListView.ItemsSource = CastList;
                     AdjustCastShimmer(CastList.Count);
@@ -844,25 +856,31 @@ namespace ModernIPTVPlayer
                 else
                 {
                     CastSection.Visibility = Visibility.Collapsed;
+                    if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
                     AdjustCastShimmer(0);
                 }
-            }
-            catch { CastSection.Visibility = Visibility.Collapsed; AdjustCastShimmer(0); }
 
-            // Background Slideshow
-            if (!string.IsNullOrEmpty(unified.BackdropUrl))
-            {
-                List<string> backdrops = new List<string> { unified.BackdropUrl };
-                // Optionally fetch more from TMDB if available
-                StartBackgroundSlideshow(backdrops);
-                
-                // [Fix] Apply Premium Glass Ambience
-                ApplyPremiumAmbience(unified.BackdropUrl ?? unified.PosterUrl ?? "");
+                // --- SLIDESHOW & SOURCE INFO ---
+                if (unified.BackdropUrls != null && unified.BackdropUrls.Count > 0)
+                {
+                    StartBackgroundSlideshow(unified.BackdropUrls);
+                }
+                if (SourceAttributionText != null)
+                {
+                    SourceAttributionText.Text = unified.MetadataSourceInfo;
+                }
             }
-            else
+            catch { 
+                CastSection.Visibility = Visibility.Collapsed; 
+                if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
+                AdjustCastShimmer(0); 
+            }
+
+            // Fallback for Ambience if no slideshow/backdrops
+            if (string.IsNullOrEmpty(unified.BackdropUrl))
             {
-                 // Fallback if no backdrop
-                 ApplyPremiumAmbience(unified.PosterUrl ?? "");
+                 // Fallback if no backdrop: default to blue/theme
+                 ApplyPremiumAmbience(Color.FromArgb(255, 0, 120, 215));
             }
 
             // Resume Logic (Unified for Movies/Live)
@@ -1258,20 +1276,19 @@ namespace ModernIPTVPlayer
             });
         }
 
-        private void StartKenBurnsEffect()
+        private void StartKenBurnsEffect(UIElement target = null)
         {
-            var visual = ElementCompositionPreview.GetElementVisual(HeroImage);
-            HeroImage.Opacity = 1; // Ensure visible after connected animation or fallback
+            var element = target ?? HeroImage;
+            if (element == null) return;
+
+            var visual = ElementCompositionPreview.GetElementVisual(element);
+            element.Opacity = 1; 
             
-            // Ensure Center Point is center for correct scaling
-            visual.CenterPoint = new System.Numerics.Vector3((float)HeroImage.ActualWidth / 2f, (float)HeroImage.ActualHeight / 2f, 0);
-            
-            // Update center point on size change to keep it centered
-            HeroImage.SizeChanged += (s, e) => 
+            // CenterPoint handled by EnsureHeroVisuals now, but safe to set initial
+             if (element is FrameworkElement fe)
             {
-                 if (visual != null)
-                    visual.CenterPoint = new System.Numerics.Vector3((float)HeroImage.ActualWidth / 2f, (float)HeroImage.ActualHeight / 2f, 0);
-            };
+                visual.CenterPoint = new System.Numerics.Vector3((float)fe.ActualWidth / 2f, (float)fe.ActualHeight / 2f, 0);
+            }
 
             var scaleAnim = _compositor.CreateVector3KeyFrameAnimation();
             scaleAnim.InsertKeyFrame(0f, new System.Numerics.Vector3(1.0f, 1.0f, 1.0f));
@@ -1283,11 +1300,14 @@ namespace ModernIPTVPlayer
             visual.StartAnimation("Scale", scaleAnim);
         }
 
-        private void StopKenBurnsEffect()
+        private void StopKenBurnsEffect(UIElement target = null)
         {
             try
             {
-                var visual = ElementCompositionPreview.GetElementVisual(HeroImage);
+                var element = target ?? HeroImage;
+                if (element == null) return;
+
+                var visual = ElementCompositionPreview.GetElementVisual(element);
                 visual.StopAnimation("Scale");
                 visual.Scale = new System.Numerics.Vector3(1.0f, 1.0f, 1.0f);
             }
@@ -1301,16 +1321,43 @@ namespace ModernIPTVPlayer
                 _slideshowTimer.Stop();
                 _slideshowTimer = null;
             }
-            _slideshowImages = null;
+            _backdropUrls = null;
         }
 
-        private async void ApplyPremiumAmbience(string imageUrl)
+        private async void HeroImage_ImageOpened(object sender, RoutedEventArgs e)
         {
-            var colors = await ImageHelper.GetOrExtractColorAsync(imageUrl);
-            
-            // Fallback: Use extracted color OR default to Deep Sky Blue
-            var primary = colors.HasValue ? colors.Value.Primary : Color.FromArgb(255, 0, 120, 215);
+            if (sender is Image img)
+            {
+                await ExtractAndApplyAmbienceAsync(img);
+            }
+        }
 
+        private async Task ExtractAndApplyAmbienceAsync(Image sourceImage = null)
+        {
+            try
+            {
+                var img = sourceImage ?? HeroImage;
+                if (img == null) return;
+
+                var rtb = new RenderTargetBitmap();
+                await rtb.RenderAsync(img);
+                var pixelBuffer = await rtb.GetPixelsAsync();
+                var pixels = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(pixelBuffer);
+
+                var colors = ImageHelper.ExtractColorsFromPixels(pixels, rtb.PixelWidth, rtb.PixelHeight, (_item?.PosterUrl ?? "hero"));
+                ApplyPremiumAmbience(colors.Primary);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Hero color extraction failed: {ex.Message}");
+                // Fallback to default blue/theme
+                ApplyPremiumAmbience(Color.FromArgb(255, 0, 120, 215));
+            }
+        }
+
+        private void ApplyPremiumAmbience(Color primary)
+        {
+            // Use provided color directly
             if (true) // Execute always
             {
                 
@@ -1486,6 +1533,16 @@ namespace ModernIPTVPlayer
                 }
 
                 System.Diagnostics.Debug.WriteLine($"[SERIES] Data Loaded. Seasons: {Seasons.Count}, Provider: {unified.DataSource}");
+
+                // --- SLIDESHOW & SOURCE INFO ---
+                if (unified.BackdropUrls != null && unified.BackdropUrls.Count > 0)
+                {
+                    StartBackgroundSlideshow(unified.BackdropUrls);
+                }
+                if (SourceAttributionText != null)
+                {
+                    SourceAttributionText.Text = unified.MetadataSourceInfo;
+                }
                 
                 // Hide shimmer, show actual list
                 if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Collapsed;
@@ -4624,15 +4681,54 @@ namespace ModernIPTVPlayer
             }
         }
 
+        private void EnsureHeroVisuals()
+        {
+             // Helper to attach SizeChanged to keep CenterPoint correct for Composition
+             void Attach(Image img)
+             {
+                 if (img == null) return;
+                 var v = ElementCompositionPreview.GetElementVisual(img);
+                 // Initial
+                 v.CenterPoint = new Vector3((float)img.ActualWidth / 2f, (float)img.ActualHeight / 2f, 0);
+                 
+                 // Event (Idempotent-ish: we use a named method check or just adding is fine if not adding duplicates...
+                 // Safe approach: Remove then Add)
+                 img.SizeChanged -= OnHeroSizeChanged;
+                 img.SizeChanged += OnHeroSizeChanged;
+             }
+             Attach(HeroImage);
+             Attach(HeroImage2);
 
-
-        private DispatcherTimer _slideshowTimer;
-        private List<string> _slideshowImages;
-        private int _slideshowIndex = 0;
+             // Also ensure ImageOpened is attached for dynamic ambience on HeroImage2
+             if (HeroImage2 != null)
+             {
+                 HeroImage2.ImageOpened -= HeroImage_ImageOpened;
+                 HeroImage2.ImageOpened += HeroImage_ImageOpened;
+             }
+        }
+        
+        private void OnHeroSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+             if (sender is Image img)
+             {
+                 var v = ElementCompositionPreview.GetElementVisual(img);
+                 v.CenterPoint = new Vector3((float)img.ActualWidth / 2f, (float)img.ActualHeight / 2f, 0);
+             }
+        }
 
         private void StartBackgroundSlideshow(List<string> images)
         {
             if (images == null || images.Count == 0 || HeroImage == null) return;
+            
+            // Deduplicate: Compare with current slideshow ID
+            string currentId = _item?.IMDbId ?? _item?.Title ?? "Unknown";
+            if (_slideshowId == currentId && _slideshowTimer != null && _backdropUrls?.Count == images.Count)
+            {
+                 // Already running for this item with same count
+                 return;
+            }
+
+            _slideshowId = currentId;
 
             // Stop existing timer
             if (_slideshowTimer != null)
@@ -4641,10 +4737,14 @@ namespace ModernIPTVPlayer
                 _slideshowTimer = null;
             }
 
-            _slideshowImages = images;
-            _slideshowIndex = 0;
+            _backdropUrls = images;
+            _currentBackdropIndex = 0;
+            _isHeroImage1Active = true; // Start with HeroImage (as checked below)
 
-            System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Starting with {images.Count} images. Interval: 8s");
+            System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Starting with {images.Count} images. Total unique backdrops gathered.");
+
+            // Ensure Composition CenterPoints are ready
+            EnsureHeroVisuals();
 
             // INITIALIZATION LOGIC
             // Check if we already have an image (e.g. Poster from navigation)
@@ -4658,19 +4758,21 @@ namespace ModernIPTVPlayer
                     HeroImage.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(images[0]));
                     HeroImage.Opacity = 1;
                     if (HeroImage2 != null) HeroImage2.Opacity = 0;
+                    StartKenBurnsEffect(HeroImage);
                 }
                 catch { }
             }
             else
             {
-                // We have an existing image (Poster).
-                // Do NOT crossfade immediately. Let the poster linger.
-                // The timer will handle the transition to the first backdrop.
+                // We have an existing image. Assume it's on HeroImage and Active.
+                _isHeroImage1Active = true; 
+                if (HeroImage2 != null) HeroImage2.Opacity = 0;
                 
-                // IMPORTANT: Since we want the FIRST backdrop (index 0) to be the first one shown 
-                // when the timer ticks, we need to set the index so that (index + 1) % count == 0.
-                // Thus, set index to -1.
-                _slideshowIndex = -1;
+                // Ensure animation is running on current header
+                StartKenBurnsEffect(HeroImage);
+
+                // Start from -1 so first tick shows index 0
+                _currentBackdropIndex = -1;
             }
 
             // If only 1 image, don't run timer
@@ -4681,20 +4783,29 @@ namespace ModernIPTVPlayer
             _slideshowTimer.Interval = TimeSpan.FromSeconds(8);
             _slideshowTimer.Tick += (s, e) =>
             {
-                if (HeroImage == null || HeroImage2 == null || _slideshowImages == null || _slideshowImages.Count == 0)
+                if (HeroImage == null || HeroImage2 == null || _backdropUrls == null || _backdropUrls.Count == 0)
                 {
                     _slideshowTimer?.Stop();
                     return;
                 }
 
-                _slideshowIndex = (_slideshowIndex + 1) % _slideshowImages.Count;
-                string nextImg = _slideshowImages[_slideshowIndex];
+                _currentBackdropIndex = (_currentBackdropIndex + 1) % _backdropUrls.Count;
+                string nextImgUrl = _backdropUrls[_currentBackdropIndex];
 
-                // Crossfade Logic:
-                // 1. Load Next Image into HeroImage2 (which is Opacity 0)
-                try { HeroImage2.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(nextImg)); } catch { return; }
+                // Toggle Logic:
+                // If Hero1 is active, we load into Hero2, start Hero2 anim, fade Hero2 IN, Hero1 OUT.
+                // Then Hero2 becomes active.
+                
+                Image incoming = _isHeroImage1Active ? HeroImage2 : HeroImage;
+                Image outgoing = _isHeroImage1Active ? HeroImage : HeroImage2;
 
-                // 2. Animate Crossfade
+                // 1. Load Next Image
+                try { incoming.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(nextImgUrl)); } catch { return; }
+
+                // 2. Start Ken Burns on Incomng (starts at Scale 1.0)
+                StartKenBurnsEffect(incoming);
+
+                // 3. Animate Crossfade
                 var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
                 fadeIn.InsertKeyFrame(0f, 0f);
                 fadeIn.InsertKeyFrame(1f, 1f);
@@ -4705,33 +4816,23 @@ namespace ModernIPTVPlayer
                 fadeOut.InsertKeyFrame(1f, 0f);
                 fadeOut.Duration = TimeSpan.FromSeconds(1.2);
 
-                var visual1 = ElementCompositionPreview.GetElementVisual(HeroImage);  // Current Visible
-                var visual2 = ElementCompositionPreview.GetElementVisual(HeroImage2); // New Incoming
+                var visualIncoming = ElementCompositionPreview.GetElementVisual(incoming);
+                var visualOutgoing = ElementCompositionPreview.GetElementVisual(outgoing);
 
-                // Ensure XAML Opacity is 1 so Composition works
-                HeroImage.Opacity = 1; 
-                HeroImage2.Opacity = 1; 
-                // We control actual visibility via Composition Opacity
+                // Ensure XAML Opacity is 1
+                incoming.Opacity = 1; 
+                outgoing.Opacity = 1; 
                 
-                // Start Animations
-                visual2.Opacity = 0; 
-                visual2.StartAnimation("Opacity", fadeIn); // Fade In New
-                visual1.StartAnimation("Opacity", fadeOut); // Fade Out Old
+                // Start Opacity Animations
+                visualIncoming.Opacity = 0; 
+                visualIncoming.StartAnimation("Opacity", fadeIn);
+                visualOutgoing.StartAnimation("Opacity", fadeOut);
 
-                // 3. Cleanup after animation (Swap sources to keep HeroImage as primary)
-                DispatcherQueue.TryEnqueue(async () => 
-                {
-                    await Task.Delay(1300); // Wait for animation
-                    if (HeroImage != null && HeroImage2 != null)
-                    {
-                        // Set Primary to New Image
-                        HeroImage.Source = HeroImage2.Source;
-                        
-                        // Reset Opacities (Visual layer)
-                        visual1.Opacity = 1; // Primary Visible
-                        visual2.Opacity = 0; // Secondary Hidden
-                    }
-                });
+                // 4. Update State
+                _isHeroImage1Active = !_isHeroImage1Active;
+                
+                // Note: We do NOT stop KenBurns on outgoing immediately, let it fade out while moving.
+                // We don't need a cleanup task to swap sources anymore.
             };
             _slideshowTimer.Start();
         }

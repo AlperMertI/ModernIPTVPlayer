@@ -47,6 +47,7 @@ namespace ModernIPTVPlayer
         public MoviesPage()
         {
             this.InitializeComponent();
+            this.NavigationCacheMode = NavigationCacheMode.Enabled;
             _httpClient = HttpHelper.Client;
             
             // Wire up MediaGrid events

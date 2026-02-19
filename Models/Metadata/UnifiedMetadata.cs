@@ -9,6 +9,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         public string Overview { get; set; }
         public string PosterUrl { get; set; }
         public string BackdropUrl { get; set; }
+        public List<string> BackdropUrls { get; set; } = new List<string>();
         public string LogoUrl { get; set; }
         public double Rating { get; set; }
         public string Year { get; set; }
@@ -24,6 +25,7 @@ namespace ModernIPTVPlayer.Models.Metadata
 
         // Tracking source
         public string DataSource { get; set; } // e.g. "Stremio", "Stremio + TMDB"
+        public string MetadataSourceInfo { get; set; } // Detailed attribution (e.g. "AioStreams (TMDB)")
 
         public List<UnifiedSeason> Seasons { get; set; } = new List<UnifiedSeason>();
         

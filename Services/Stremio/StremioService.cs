@@ -77,17 +77,21 @@ namespace ModernIPTVPlayer.Services.Stremio
                 if (!string.IsNullOrEmpty(extra))
                 {
                     // If extra params exist (like genre), append. 
-                    // Note: Stremio URL structure for extra args is intricate (key=value), skipping complex filters for now.
-                    // Simple "skip" logic: /catalog/movie/top/skip=20.json
                 }
 
-                string json = await _client.GetStringAsync(url);
-                var response = JsonSerializer.Deserialize<StremioMetaResponse>(json, _jsonOptions);
+                // USE SHORTER TIMEOUT FOR CATALOGS (10s)
+                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                using var response = await _client.SendAsync(request, cts.Token);
+                response.EnsureSuccessStatusCode();
+                
+                string json = await response.Content.ReadAsStringAsync();
+                var resultResponse = JsonSerializer.Deserialize<StremioMetaResponse>(json, _jsonOptions);
 
-                if (response?.Metas != null)
+                if (resultResponse?.Metas != null)
                 {
                     var result = new List<StremioMediaStream>();
-                    foreach (var meta in response.Metas)
+                    foreach (var meta in resultResponse.Metas)
                     {
                         var stream = new StremioMediaStream(meta);
                         stream.SourceAddon = baseUrl;
@@ -98,9 +102,13 @@ namespace ModernIPTVPlayer.Services.Stremio
                     return result;
                 }
             }
+            catch (TaskCanceledException)
+            {
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Catalog TIMEOUT for addon: {baseUrl} (Type: {type}, ID: {id})");
+            }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioService] Error fetching catalog: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[StremioService] JSON Error for {baseUrl}: {ex.Message}");
             }
 
             return new List<StremioMediaStream>();

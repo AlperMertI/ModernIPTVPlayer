@@ -5,8 +5,14 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="using:ModernIPTVPlayer.Pages"
+    xmlns:root="using:ModernIPTVPlayer"
     mc:Ignorable="d"
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    
+    <Page.Resources>
+        <root:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+        <root:BooleanInverseToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
+    </Page.Resources>
 
     <Grid Padding="30">
         <Grid.RowDefinitions>
@@ -41,31 +47,55 @@
         </Grid>
         
         <!-- Addon List -->
-        <ListView x:Name="AddonListView" Grid.Row="2" SelectionMode="None">
+        <ListView x:Name="AddonListView" Grid.Row="2" 
+                  SelectionMode="None"
+                  CanReorderItems="True" 
+                  AllowDrop="True" 
+                  CanDragItems="True"
+                  DragItemsCompleted="AddonListView_DragItemsCompleted">
             <ListView.ItemTemplate>
-                <DataTemplate>
+                <DataTemplate x:DataType="local:AddonItem">
                     <Grid Padding="12" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}" CornerRadius="8" Margin="0,0,0,10" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
                         <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="60"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
+
+                        <!-- Drag Handle -->
+                        <FontIcon Glyph="&#xE76C;" FontSize="14" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" Margin="0,0,12,0" Opacity="0.5"/>
                         
-                        <!-- Icon Placeholder -->
-                        <Border Width="48" Height="48" CornerRadius="8" Background="#20FFFFFF">
-                            <FontIcon Glyph="&#xE74C;" FontSize="24" Foreground="{ThemeResource SystemAccentColor}"/>
+                        <!-- Icon -->
+                        <Border Grid.Column="1" Width="48" Height="48" CornerRadius="8" Background="Transparent">
+                            <Grid>
+                                <FontIcon Glyph="&#xE74C;" FontSize="24" Foreground="{ThemeResource SystemAccentColor}"
+                                          Visibility="{Binding HasIcon, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+                                <Image Source="{Binding IconUrl}" Stretch="UniformToFill"
+                                       Visibility="{Binding HasIcon, Converter={StaticResource BoolToVisibilityConverter}}"/>
+                            </Grid>
                         </Border>
                         
                         <!-- Info -->
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0">
-                            <TextBlock Text="{Binding Url}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
-                            <TextBlock Text="Yüklü Eklenti" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="16,0">
+                            <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" FontSize="16"/>
+                            <TextBlock Text="{Binding Url}" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                         
                         <!-- Actions -->
-                        <Button Grid.Column="2" Click="BtnRemove_Click" Tag="{Binding Url}" Style="{ThemeResource SubtleButtonStyle}">
-                            <FontIcon Glyph="&#xE74D;" Foreground="Red"/>
-                        </Button>
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="8">
+                            <Button ToolTipService.ToolTip="Konfigüre Et" Click="BtnConfigure_Click" Tag="{Binding Url}" Style="{ThemeResource SubtleButtonStyle}">
+                                <FontIcon Glyph="&#xE713;"/>
+                            </Button>
+                            
+                            <Button ToolTipService.ToolTip="URL Kopyala" Click="BtnCopyUrl_Click" Tag="{Binding Url}" Style="{ThemeResource SubtleButtonStyle}">
+                                <FontIcon Glyph="&#xE8C8;"/>
+                            </Button>
+
+                            <Button ToolTipService.ToolTip="Kaldır" Click="BtnRemove_Click" Tag="{Binding Url}" Style="{ThemeResource SubtleButtonStyle}">
+                                <FontIcon Glyph="&#xE74D;" Foreground="Red"/>
+                            </Button>
+                        </StackPanel>
                     </Grid>
                 </DataTemplate>
             </ListView.ItemTemplate>

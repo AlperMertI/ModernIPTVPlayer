@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Collections.Concurrent;
 using ModernIPTVPlayer.Models.Metadata;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services.Stremio;
@@ -14,78 +15,221 @@ namespace ModernIPTVPlayer.Services.Metadata
         private static MetadataProvider _instance;
         public static MetadataProvider Instance => _instance ??= new MetadataProvider();
 
+        private readonly ConcurrentDictionary<string, Task<UnifiedMetadata>> _activeTasks = new();
+        private readonly ConcurrentDictionary<string, (UnifiedMetadata Data, DateTime Expiry)> _resultCache = new();
+        private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(2); // Short term cache
+
         public async Task<UnifiedMetadata> GetMetadataAsync(Models.IMediaStream stream)
         {
             if (stream == null) return null;
             
-            string id = stream.IMDbId; // Use IMDb if available
-            string type = "movie";
-
-            // Determine type
-            if (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv")))
-            {
-                type = "series";
-            }
+            string id = stream.IMDbId;
+            string type = (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv"))) ? "series" : "movie";
             
-            // Fallback to title if no ID
-            return await GetMetadataAsync(id ?? stream.Title, type, stream);
+            string cacheKey = $"{id ?? stream.Title}_{type}";
+
+            // 1. Check Result Cache
+            if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
+            {
+                return cached.Data;
+            }
+
+            // 2. Check Active Tasks (Deduplication)
+            return await _activeTasks.GetOrAdd(cacheKey, _ => GetMetadataInternalAsync(id ?? stream.Title, type, stream, cacheKey));
+        }
+
+        private async Task<UnifiedMetadata> GetMetadataInternalAsync(string id, string type, Models.IMediaStream sourceStream, string cacheKey)
+        {
+            try
+            {
+                var result = await GetMetadataAsync(id, type, sourceStream);
+                
+                if (result != null)
+                {
+                    _resultCache[cacheKey] = (result, DateTime.Now.Add(_cacheDuration));
+                }
+                
+                return result;
+            }
+            finally
+            {
+                _activeTasks.TryRemove(cacheKey, out _);
+            }
         }
 
         private readonly StremioService _stremioService = StremioService.Instance;
 
-        public async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null, string stremioBaseUrl = "https://v3-cinemeta.strem.io")
+        public async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null)
         {
-            var metadata = new UnifiedMetadata { ImdbId = id, IsSeries = type == "series" || type == "tv", MetadataId = id }; // Set MetadataId
-            
-            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Fetching: {id} | Type: {type} | Source: {sourceStream?.GetType().Name ?? "Null"}");
+            var metadata = new UnifiedMetadata 
+            { 
+                ImdbId = id, 
+                IsSeries = type == "series" || type == "tv", 
+                MetadataId = id,
+                Title = sourceStream?.Title ?? id
+            };
 
-            
+            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] START Fetching: {id} | Type: {type} | Source: {sourceStream?.GetType().Name ?? "Null"}");
+
             try
             {
-                // 1. Fetch Stremio Meta (Cinemeta is the primary source for IDs)
-                var stremioMeta = await _stremioService.GetMetaAsync(stremioBaseUrl, type, id);
-                
-                if (stremioMeta != null)
+                TmdbMovieResult tmdb = null;
+                StremioMeta stremioMeta = null;
+
+                // --- 1. TMDB PRIORITY (IF ENABLED & HAS ID/TITLE) ---
+                if (AppSettings.IsTmdbEnabled)
                 {
-                    MapStremioToUnified(stremioMeta, metadata);
-                    metadata.DataSource = "Stremio";
+                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] [Priority 1] Trying TMDB...");
+                    tmdb = await EnrichWithTmdbAsync(metadata);
+                    if (tmdb != null)
+                    {
+                        metadata.TmdbInfo = tmdb;
+                        metadata.MetadataSourceInfo = "TMDB (Primary)";
+                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] SUCCESS: Enriched with TMDB: {tmdb.DisplayTitle}");
+                        
+                        // Fetch additional backdrops for slideshow
+                        var additionalBackdrops = metadata.IsSeries ? 
+                            await TmdbHelper.GetTvImagesAsync(tmdb.Id.ToString()) : 
+                            await TmdbHelper.GetMovieImagesAsync(tmdb.Id.ToString());
+                            
+                        foreach(var bg in additionalBackdrops)
+                        {
+                            AddUniqueBackdrop(metadata, bg);
+                        }
+                        
+                        if (metadata.BackdropUrls.Count > 0)
+                            metadata.DataSource = "Stremio + TMDB Slideshow";
+                    }
                 }
 
-                // 2. Enrichment via TMDB (Optional)
-                TmdbMovieResult tmdb = null;
-                if (AppSettings.IsTmdbEnabled && !string.IsNullOrEmpty(metadata.ImdbId))
+                // --- 2. STREMIO ADDON CHAIN (FOR STREMIO CONTENT OR AS FALLBACK) ---
+                bool isStremio = sourceStream is StremioMediaStream;
+                if (isStremio || (!isStremio && string.IsNullOrEmpty(metadata.Overview)))
                 {
-                    tmdb = await EnrichWithTmdbAsync(metadata);
-                    metadata.TmdbInfo = tmdb;
+                    var addonUrls = StremioAddonManager.Instance.GetAddons();
+                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] [Priority 2] Trying Stremio Addons ({addonUrls.Count})...");
+
+                    bool isPrimaryMetadataSet = (tmdb != null);
+                    bool hasCheckedImagesForThisId = (tmdb != null);
+
+                    string currentSearchId = id;
+
+                    foreach (var url in addonUrls)
+                    {
+                        if (metadata.BackdropUrls.Count > 20) break; // Increased limit
+
+                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Probing Addon: {url} with ID: {currentSearchId}");
+                        var currentStremioMeta = await _stremioService.GetMetaAsync(url, type, currentSearchId);
+                        
+                        if (currentStremioMeta != null)
+                        {
+                            // If we found a proper IMDb ID, use it for subsequent addon calls (better compatibility)
+                            if (currentSearchId.StartsWith("tmdb:") && !string.IsNullOrEmpty(currentStremioMeta.ImdbId))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Switching search ID from {currentSearchId} to {currentStremioMeta.ImdbId}");
+                                currentSearchId = currentStremioMeta.ImdbId;
+                                metadata.ImdbId = currentSearchId; // Update core metadata too
+                            }
+
+                            if (IsValidMetadata(currentStremioMeta) && !isPrimaryMetadataSet)
+                            {
+                                MapStremioToUnified(currentStremioMeta, metadata);
+                                stremioMeta = currentStremioMeta; // Keep for episode reconciliation
+                                
+                                // Source Info
+                                string addonHost = new Uri(url).Host;
+                                metadata.MetadataSourceInfo = $"{addonHost}";
+                                if (!string.IsNullOrEmpty(currentStremioMeta.Background) && currentStremioMeta.Background.Contains("tmdb.org"))
+                                    metadata.MetadataSourceInfo += " (TMDB Metadata)";
+                                
+                                metadata.DataSource = string.IsNullOrEmpty(metadata.DataSource) ? "Stremio" : metadata.DataSource + " + Stremio";
+                                isPrimaryMetadataSet = true;
+                                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Primary metadata set from: {url}");
+                            }
+                            else if (!IsValidMetadata(currentStremioMeta))
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] REJECTED invalid metadata from {url} (Name: {currentStremioMeta.Name}, ID: {currentStremioMeta.Id})");
+                                continue; // Skip to next addon
+                            }
+                            
+                            if (currentStremioMeta.Background != null)
+                            {
+                                AddUniqueBackdrop(metadata, currentStremioMeta.Background);
+                            }
+
+                            // Deep Image Enrichment: If this addon provides a TMDB ID, use it for images
+                            string discoveredTmdbId = currentStremioMeta.MovieDbId?.ToString();
+                            if (string.IsNullOrEmpty(discoveredTmdbId) && currentStremioMeta.Id?.StartsWith("tmdb:") == true)
+                                discoveredTmdbId = currentStremioMeta.Id.Replace("tmdb:", "");
+
+                            // [FIX] Allow image fetching if we have an API key, even if general metadata is disabled
+                            bool hasTmdbKey = !string.IsNullOrEmpty(AppSettings.TmdbApiKey);
+                            if (!string.IsNullOrEmpty(discoveredTmdbId) && !hasCheckedImagesForThisId && hasTmdbKey)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Discovered TMDB ID {discoveredTmdbId} from {url}. Fetching images...");
+                                var additionalBackdrops = metadata.IsSeries ? 
+                                    await TmdbHelper.GetTvImagesAsync(discoveredTmdbId) : 
+                                    await TmdbHelper.GetMovieImagesAsync(discoveredTmdbId);
+                                    
+                                foreach(var bg in additionalBackdrops)
+                                {
+                                    AddUniqueBackdrop(metadata, bg);
+                                }
+                                hasCheckedImagesForThisId = true;
+                                if (additionalBackdrops.Count > 0)
+                                    metadata.DataSource = (metadata.DataSource ?? "") + " + TMDB Slideshow";
+                            }
+                        }
+                    }
                 }
-                
-                // 3. Post-processing (Virtual Episode Reconcilation)
+
+                // --- 3. EPISODE RECONCILIATION ---
                 if (metadata.IsSeries)
                 {
                     ReconcileEpisodes(stremioMeta, metadata, tmdb);
                 }
 
-                // 4. IPTV Fallback (If Overview is missing or it's a direct IPTV stream)
-                bool needsEnrichment = string.IsNullOrEmpty(metadata.Overview) || !IsImdbId(metadata.ImdbId);
+                // --- 4. IPTV FALLBACK ---
+                bool needsIptvEnrichment = string.IsNullOrEmpty(metadata.Overview) || metadata.Overview == "Açıklama mevcut değil." || !IsImdbId(metadata.ImdbId);
                 
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Needs Enrichment? {needsEnrichment} (Overview: {!string.IsNullOrEmpty(metadata.Overview)}, IsImdb: {IsImdbId(metadata.ImdbId)})");
-
-                if (metadata.IsSeries && sourceStream is SeriesStream seriesStream && needsEnrichment)
+                if (needsIptvEnrichment)
                 {
-                    await EnrichWithIptvAsync(metadata, seriesStream);
-                }
-                else if (!metadata.IsSeries && sourceStream != null && needsEnrichment)
-                {
-                    // Allow ANY stream type for movie enrichment if it's not a series
-                    await EnrichWithIptvMovieAsync(metadata, sourceStream);
+                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] [Priority 3] Trying IPTV Enrichment...");
+                    if (metadata.IsSeries && sourceStream is SeriesStream seriesStream)
+                    {
+                        await EnrichWithIptvAsync(metadata, seriesStream);
+                    }
+                    else if (!metadata.IsSeries && sourceStream != null)
+                    {
+                        await EnrichWithIptvMovieAsync(metadata, sourceStream);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CRITICAL ERROR: {ex.Message}");
             }
 
+            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] FINISHED: {metadata.Title} via {metadata.DataSource}");
             return metadata;
+        }
+
+        private bool IsValidMetadata(Models.Stremio.StremioMeta meta)
+        {
+            if (meta == null) return false;
+            
+            // 1. Check for common error patterns in name/description
+            if (meta.Name != null && (meta.Name.Contains("[❌]") || meta.Name.Contains("fetch failed", StringComparison.OrdinalIgnoreCase))) 
+                return false;
+
+            if (meta.Description != null && (meta.Description.Equals("fetch failed", StringComparison.OrdinalIgnoreCase) || meta.Description.Contains("Error", StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            // 2. Check ID for error prefixes
+            if (meta.Id != null && (meta.Id.StartsWith("error", StringComparison.OrdinalIgnoreCase) || meta.Id.Contains("aiostreamserror")))
+                return false;
+
+            return true;
         }
 
         private async Task EnrichWithIptvMovieAsync(UnifiedMetadata metadata, Models.IMediaStream vod)
@@ -294,51 +438,86 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private void MapStremioToUnified(StremioMeta stremio, UnifiedMetadata unified)
         {
-            unified.Title = stremio.Name;
-            unified.Overview = stremio.Description;
-            unified.PosterUrl = stremio.Poster;
-            unified.BackdropUrl = stremio.Background;
-            unified.LogoUrl = stremio.Logo;
-            unified.Year = stremio.ReleaseInfo;
-            unified.Genres = stremio.Genres != null ? string.Join(", ", stremio.Genres) : "";
-            unified.Cast = stremio.Cast;
-            unified.Runtime = stremio.Runtime;
-            unified.MetadataId = stremio.Id; // Critical for History
+            // Only overwrite if currently empty, as TMDB has higher priority for descriptive text
+            if (string.IsNullOrEmpty(unified.Title) || unified.Title == unified.MetadataId)
+                unified.Title = stremio.Name;
+
+            if (string.IsNullOrEmpty(unified.Overview) || unified.Overview == "Açıklama mevcut değil.")
+                unified.Overview = stremio.Description;
+
+            if (string.IsNullOrEmpty(unified.PosterUrl))
+                unified.PosterUrl = stremio.Poster;
+
+            if (string.IsNullOrEmpty(unified.BackdropUrl))
+                unified.BackdropUrl = stremio.Background;
+
+            if (string.IsNullOrEmpty(unified.LogoUrl))
+                unified.LogoUrl = stremio.Logo;
+
+            if (string.IsNullOrEmpty(unified.Year))
+                unified.Year = stremio.ReleaseInfo;
+
+            if (string.IsNullOrEmpty(unified.Genres))
+                unified.Genres = (stremio.Genres != null && stremio.Genres.Count > 0) ? string.Join(", ", stremio.Genres) : "";
+
+            if (unified.Cast == null || unified.Cast.Count == 0)
+                unified.Cast = stremio.Cast;
+
+            if (string.IsNullOrEmpty(unified.Runtime))
+                unified.Runtime = stremio.Runtime;
+
+            // MetadataId is essential for history and addon communication
+            // If the current ID is generic/fallback, we use the Stremio provided ID
+            if (string.IsNullOrEmpty(unified.MetadataId) || !IsImdbId(unified.MetadataId))
+                unified.MetadataId = stremio.Id;
             
-            if (stremio.ImdbRating != null)
+            if (stremio.ImdbRating != null && unified.Rating == 0)
                 unified.Rating = double.TryParse(stremio.ImdbRating.ToString(), out var r) ? r : 0;
 
-             if (stremio.Trailers != null && stremio.Trailers.Any())
+             if (stremio.Trailers != null && stremio.Trailers.Any() && string.IsNullOrEmpty(unified.TrailerUrl))
             {
                  var trailer = stremio.Trailers.FirstOrDefault();
-                 // Stremio trailers usually provide a "source" field which is the YouTube ID
                  if (!string.IsNullOrEmpty(trailer.Source))
                  {
                      unified.TrailerUrl = trailer.Source;
                  }
             }
             
-            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Mapped Stremio Title: '{unified.Title}' from '{stremio.Name}'");
+            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Mapped data from addon for: '{unified.Title}'");
         }
 
-        private async Task<TmdbMovieResult> EnrichWithTmdbAsync(UnifiedMetadata metadata)
+        private async Task<TmdbMovieResult?> EnrichWithTmdbAsync(UnifiedMetadata metadata)
         {
-            TmdbMovieResult tmdb = null;
+            TmdbMovieResult? tmdb = null;
             
             // Search TMDB
             if (metadata.IsSeries)
             {
-                tmdb = await TmdbHelper.GetTvByExternalIdAsync(metadata.ImdbId);
+                if (metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
+                {
+                    int.TryParse(metadata.ImdbId.Replace("tmdb:", ""), out int tvId);
+                    if (tvId > 0) tmdb = await TmdbHelper.GetTvByIdAsync(tvId);
+                }
+                
+                if (tmdb == null)
+                    tmdb = await TmdbHelper.GetTvByExternalIdAsync(metadata.ImdbId);
             }
             else
             {
-                tmdb = await TmdbHelper.SearchMovieAsync(metadata.Title, metadata.Year?.Split('–')[0]);
-                // If ID-based search failed or wasn't possible, try searching by title? 
-                // Using SearchMovieAsync covers title-based. 
-                // But GetMovieByExternalIdAsync is safer if we have ID.
-                if (tmdb == null && metadata.ImdbId != null && metadata.ImdbId.StartsWith("tt"))
+                if (metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
                 {
-                     tmdb = await TmdbHelper.GetMovieByExternalIdAsync(metadata.ImdbId);
+                    int.TryParse(metadata.ImdbId.Replace("tmdb:", ""), out int movieId);
+                    if (movieId > 0) tmdb = await TmdbHelper.GetMovieByIdAsync(movieId);
+                }
+
+                if (tmdb == null)
+                {
+                    tmdb = await TmdbHelper.SearchMovieAsync(metadata.Title, metadata.Year?.Split('–')[0]);
+                    
+                    if (tmdb == null && metadata.ImdbId != null && metadata.ImdbId.StartsWith("tt"))
+                    {
+                         tmdb = await TmdbHelper.GetMovieByExternalIdAsync(metadata.ImdbId);
+                    }
                 }
             }
 
@@ -359,6 +538,13 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (tmdbGenres != "Genel") metadata.Genres = tmdbGenres;
                 
                 metadata.TmdbInfo = tmdb;
+
+                // Propagate IMDb ID if found to help addon lookup
+                if (!string.IsNullOrEmpty(tmdb.ImdbId) && (string.IsNullOrEmpty(metadata.ImdbId) || metadata.ImdbId.StartsWith("tmdb:")))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Resolved IMDb ID from TMDB: {tmdb.ImdbId}");
+                    metadata.ImdbId = tmdb.ImdbId;
+                }
             }
             
             return tmdb;
@@ -366,7 +552,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private void ReconcileEpisodes(StremioMeta stremio, UnifiedMetadata metadata, TmdbMovieResult tmdb)
         {
-            // 1. Map existing Stremio episodes
+            // 1. Map existing Stremio episodes (if any)
             if (stremio?.Videos != null)
             {
                 var grouped = stremio.Videos
@@ -376,54 +562,137 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 foreach (var group in grouped)
                 {
-                    var season = new UnifiedSeason
+                    var season = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == group.Key);
+                    if (season == null)
                     {
-                        SeasonNumber = group.Key,
-                        Name = group.Key == 0 ? "Özel Bölümler" : $"{group.Key}. Sezon"
-                    };
+                        season = new UnifiedSeason
+                        {
+                            SeasonNumber = group.Key,
+                            Name = group.Key == 0 ? "Özel Bölümler" : $"{group.Key}. Sezon"
+                        };
+                        metadata.Seasons.Add(season);
+                    }
 
                     foreach (var vid in group.OrderBy(v => v.Episode))
                     {
-                        season.Episodes.Add(new UnifiedEpisode
+                        if (!season.Episodes.Any(e => e.EpisodeNumber == vid.Episode))
                         {
-                            Id = vid.Id,
-                            SeasonNumber = vid.Season,
-                            EpisodeNumber = vid.Episode,
-                            Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
-                            Overview = vid.Overview,
-                            ThumbnailUrl = vid.Thumbnail,
-                            AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
-                        });
+                            season.Episodes.Add(new UnifiedEpisode
+                            {
+                                Id = vid.Id,
+                                SeasonNumber = vid.Season,
+                                EpisodeNumber = vid.Episode,
+                                Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
+                                Overview = vid.Overview,
+                                ThumbnailUrl = vid.Thumbnail,
+                                AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
+                            });
+                        }
                     }
-                    metadata.Seasons.Add(season);
                 }
             }
 
-            // 2. Reconcile with TMDB Seasons (if available)
+            // 2. Reconcile with TMDB Seasons (if available) - Adds seasons/episodes Stremio might be missing
             if (tmdb?.Seasons != null)
             {
                 foreach (var tmdbSeason in tmdb.Seasons)
                 {
-                    if (tmdbSeason.SeasonNumber == 0) continue; // Skip specials for now unless needed
-
+                    // We typically prioritize TMDB season structure
                     var existingSeason = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == tmdbSeason.SeasonNumber);
                     if (existingSeason == null)
                     {
-                        // Stremio missed this entire season! Add a placeholder.
-                        // We do NOT populate episodes yet (too slow).
-                        // They will be populated on-demand via EnrichSeasonAsync.
                         metadata.Seasons.Add(new UnifiedSeason
                         {
                             SeasonNumber = tmdbSeason.SeasonNumber,
-                            Name = $"{tmdbSeason.SeasonNumber}. Sezon",
-                            Episodes = new List<UnifiedEpisode>() // Empty for now
+                            Name = tmdbSeason.SeasonNumber == 0 ? "Özel Bölümler" : $"{tmdbSeason.SeasonNumber}. Sezon",
+                            Episodes = new List<UnifiedEpisode>()
                         });
                     }
+                    else if (existingSeason.Episodes.Count < tmdbSeason.EpisodeCount)
+                    {
+                        // Stremio has the season but looks incomplete compared to TMDB count
+                        // We'll let EnrichSeasonAsync handle the detail later if needed,
+                        // but we could pre-fill virtual IDs here if we want instant placeholders.
+                    }
                 }
-                
-                // Ensure Season Order
-                metadata.Seasons = metadata.Seasons.OrderBy(s => s.SeasonNumber).ToList();
             }
+
+            // 3. Fallback: If absolutely no seasons found but it's a series, create at least Season 1 if we have an ID
+            if (metadata.Seasons.Count == 0 && !string.IsNullOrEmpty(metadata.ImdbId))
+            {
+                 metadata.Seasons.Add(new UnifiedSeason { SeasonNumber = 1, Name = "1. Sezon" });
+            }
+            
+            // Ensure correct order
+            metadata.Seasons = metadata.Seasons.OrderBy(s => s.SeasonNumber).ToList();
+        }
+
+        private void AddUniqueBackdrop(UnifiedMetadata metadata, string url)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            
+            string id = ExtractImageId(url);
+            if (string.IsNullOrEmpty(id))
+            {
+                if (!metadata.BackdropUrls.Contains(url)) metadata.BackdropUrls.Add(url);
+                return;
+            }
+
+            int existingIndex = -1;
+            for (int i = 0; i < metadata.BackdropUrls.Count; i++)
+            {
+                if (ExtractImageId(metadata.BackdropUrls[i]) == id)
+                {
+                    existingIndex = i;
+                    break;
+                }
+            }
+
+            if (existingIndex == -1)
+            {
+                metadata.BackdropUrls.Add(url);
+            }
+            else
+            {
+                string existingUrl = metadata.BackdropUrls[existingIndex];
+                if (GetQualityScore(url) > GetQualityScore(existingUrl))
+                {
+                    metadata.BackdropUrls[existingIndex] = url;
+                }
+            }
+        }
+
+        private string ExtractImageId(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return null;
+            try
+            {
+                if (url.Contains("metahub"))
+                {
+                    var parts = url.Split('/');
+                    var ttId = parts.FirstOrDefault(p => p.StartsWith("tt"));
+                    return ttId ?? url;
+                }
+
+                int lastSlash = url.LastIndexOf('/');
+                if (lastSlash >= 0 && lastSlash < url.Length - 1)
+                {
+                    string file = url.Substring(lastSlash + 1);
+                    if (file.Contains(".")) return file;
+                }
+            }
+            catch { }
+            return url;
+        }
+
+        private int GetQualityScore(string url)
+        {
+            if (url.Contains("/original/")) return 10;
+            if (url.Contains("/w1280/")) return 8;
+            if (url.Contains("/w780/")) return 6;
+            if (url.Contains("/w500/")) return 4;
+            if (url.Contains("/medium/")) return 3;
+            return 1;
         }
 
         private bool IsImdbId(string? id)

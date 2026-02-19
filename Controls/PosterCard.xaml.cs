@@ -98,6 +98,7 @@ namespace ModernIPTVPlayer.Controls
         {
             if (d is PosterCard card)
             {
+                System.Diagnostics.Debug.WriteLine($"[PosterCard] ImageUrl changed to: {e.NewValue} for Title: {card.Title}");
                 card.UpdateImage();
             }
         }
@@ -130,27 +131,61 @@ namespace ModernIPTVPlayer.Controls
             }
             else
             {
-                // Image loading is handled by XAML binding, but we trigger the opacity anim in ImageOpened
-                var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(ImageUrl));
+                // Optimize: Set DecodePixelWidth to save memory (Card width is ~160)
+                var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+                bitmapImage.DecodePixelWidth = 200; // Slightly larger than 160 for quality
+                bitmapImage.UriSource = new Uri(ImageUrl);
+                
                 PosterImage.Source = bitmapImage;
+                
+                // FORCE Opacity=1 immediately. 
+                // Previous FadeIn animation caused issues during virtualization/recycling.
+                PosterImage.Opacity = 1;
+
+                PosterShimmer.Visibility = Visibility.Collapsed;
             }
         }
 
 
-        private void Image_ImageOpened(object sender, RoutedEventArgs e)
+        private async void Image_ImageOpened(object sender, RoutedEventArgs e)
         {
-            // 1. Hide shimmer
-            PosterShimmer.Visibility = Visibility.Collapsed;
+            // 2. Extract Colors using RenderTargetBitmap (No extra network request!)
+            try
+            {
+                // Only extract if needed (e.g. for hover glow or parent background)
+                // For now we always extract to be safe
+                
+                // Check for 0 size to avoid ArgumentException
+                if (PosterImage.ActualWidth > 0 && PosterImage.ActualHeight > 0)
+                {
+                    var rtb = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
+                    await rtb.RenderAsync(PosterImage);
+                    var pixelBuffer = await rtb.GetPixelsAsync();
+                    var pixels = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(pixelBuffer);
+
+                    var colors = ImageHelper.ExtractColorsFromPixels(pixels, rtb.PixelWidth, rtb.PixelHeight, ImageUrl);
+                    ColorsExtracted?.Invoke(this, colors);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PosterCard] RenderTargetBitmap failed: {ex.Message}");
+            }
             
-            // 2. Premium Diagonal Reveal Animation (Composition API)
+            // 3. Premium Diagonal Reveal Animation (Composition API)
+            // SKIPPED: We handled Opacity in UpdateImage. 
+            // We can add extra fancy effects here if needed, but not visibility.
             try
             {
                 var compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
-                var imageVisual = ElementCompositionPreview.GetElementVisual(PosterImage);
+                // ... (Keep existing composition logic if it adds value, or remove if it was just for reveal?)
+                // The prompt implies the issue was Opacity=0. The previous code had a complex reveal.
+                // Let's keep the composition Setup but ensure Opacity is ALREADY 1.
                 
+                var imageVisual = ElementCompositionPreview.GetElementVisual(PosterImage);
                 // Ensure image is visible in XAML so composition works
-                PosterImage.Opacity = 1;
-
+                // PosterImage.Opacity = 1; // Already handled
+                
                 // Create a VisualSurface to capture the Image content
                 var surface = compositor.CreateVisualSurface();
                 surface.SourceVisual = imageVisual;
@@ -228,22 +263,27 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private void PosterCard_Loaded(object sender, RoutedEventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PosterCard] Loaded: {Title}");
+            UpdateImage();
+        }
 
-        private async void OnPointerEntered(object sender, PointerRoutedEventArgs e)
+        private void PosterCard_Unloaded(object sender, RoutedEventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine($"[PosterCard] Unloaded: {Title}");
+            // Optimization: Cancel pending image loads?
+        }
+
+        private void OnPointerEntered(object sender, PointerRoutedEventArgs e)
         {
             IsHovered = true;
             HoverInStoryboard.Begin();
             HoverStarted?.Invoke(this, EventArgs.Empty);
             
-            // Still extract colors for internal use/events, but no visual glow here
-            if (!string.IsNullOrEmpty(ImageUrl))
-            {
-                var colors = await ImageHelper.GetOrExtractColorAsync(ImageUrl);
-                if (colors.HasValue)
-                {
-                    ColorsExtracted?.Invoke(this, colors.Value);
-                }
-            }
+            // Colors are now extracted on ImageOpened using RenderTargetBitmap.
+            // If they are in cache, we could broadcast them here if needed, 
+            // but usually the consumer listens to the extraction event once.
         }
 
         private void OnPointerExited(object sender, PointerRoutedEventArgs e)

@@ -157,7 +157,14 @@
         <!-- 1. CINEMATIC BACKGROUND -->
         <Grid x:Name="HeroContainer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Image x:Name="HeroImage2" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
-            <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
+            <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0" ImageOpened="HeroImage_ImageOpened"/>
+            
+            <!-- Source Attribution (Bottom Right of Hero) -->
+            <TextBlock x:Name="SourceAttributionText" 
+                       VerticalAlignment="Bottom" HorizontalAlignment="Right" 
+                       Margin="0,0,24,12" 
+                       FontSize="11" Opacity="0.4" FontStyle="Italic"
+                       Foreground="White"/>
             
 
             <!-- Readability Scrim (Softened) -->
