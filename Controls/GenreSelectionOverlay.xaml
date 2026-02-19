@@ -38,14 +38,14 @@
             </Storyboard>
         </Grid.Resources>
 
-        <Grid HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="1100" MinWidth="900" Height="650" RenderTransformOrigin="0.5,0.5">
+        <Grid HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="1200" MaxHeight="800" Margin="60,40" RenderTransformOrigin="0.5,0.5">
             <Grid.RenderTransform>
                 <ScaleTransform x:Name="ContentScale" ScaleX="1" ScaleY="1"/>
             </Grid.RenderTransform>
             
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="280"/>
-                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="1*"/>
+                <ColumnDefinition Width="3*"/>
             </Grid.ColumnDefinitions>
 
             <!-- SIDEBAR: Addon Selection -->
@@ -115,7 +115,7 @@
                                           ItemClick="FilterGrid_ItemClick">
                                     <GridView.ItemsPanel>
                                         <ItemsPanelTemplate>
-                                            <ItemsWrapGrid Orientation="Horizontal" MaximumRowsOrColumns="4"/>
+                                            <ItemsWrapGrid Orientation="Horizontal"/>
                                         </ItemsPanelTemplate>
                                     </GridView.ItemsPanel>
                                     <GridView.ItemTemplate>

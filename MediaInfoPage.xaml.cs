@@ -432,7 +432,7 @@ namespace ModernIPTVPlayer
             // CLEANUP ON EXIT: Ensure the cached page is blank for the next movie
             if (e.NavigationMode != NavigationMode.Back)
             {
-                // ResetPageState(); // Removed aggressive clearing to preserve hero image for back nav
+                ResetPageState(); 
             }
             
             // Cancel any active probe
@@ -979,8 +979,11 @@ namespace ModernIPTVPlayer
             StopKenBurnsEffect();
             
             // Clear Images & Video - AGGRESSIVE
-            HeroImage.Source = null;
-            HeroImage.Opacity = 0;
+            if (HeroImage != null)
+            {
+                HeroImage.Source = null;
+                HeroImage.Opacity = 0;
+            }
             if (HeroImage2 != null)
             {
                 HeroImage2.Source = null;
@@ -988,17 +991,22 @@ namespace ModernIPTVPlayer
             }
             
             // Clear Metadata
-            TitleText.Text = "";
-            StickyTitle.Text = "";
-            OverviewText.Text = "";
-            GenresText.Text = "";
-            YearText.Text = "";
-            RuntimeText.Text = "";
+            if (TitleText != null) TitleText.Text = "";
+            if (StickyTitle != null) StickyTitle.Text = "";
+            if (OverviewText != null) OverviewText.Text = "";
+            if (GenresText != null) GenresText.Text = "";
+            if (YearText != null) YearText.Text = "";
+            if (RuntimeText != null) RuntimeText.Text = "";
             
             // Clear Collections
             Seasons?.Clear();
             CurrentEpisodes?.Clear();
             CastList?.Clear();
+            _addonResults?.Clear();
+
+            _currentStremioVideoId = null;
+            _unifiedMetadata = null;
+
             if (CastListView != null) CastListView.ItemsSource = null;
             if (NarrowCastListView != null) NarrowCastListView.ItemsSource = null;
 
@@ -4769,10 +4777,22 @@ namespace ModernIPTVPlayer
                 if (HeroImage2 != null) HeroImage2.Opacity = 0;
                 
                 // Ensure animation is running on current header
+                HeroImage.Opacity = 1; // [FIX] Ensure it's visible if seeding happened
                 StartKenBurnsEffect(HeroImage);
 
-                // Start from -1 so first tick shows index 0
-                _currentBackdropIndex = -1;
+                // DEDUPLICATION: If the first backdrop is the same as seeded image, skip index 0
+                bool firstIsSame = false;
+                if (HeroImage.Source is Microsoft.UI.Xaml.Media.Imaging.BitmapImage bmi && bmi.UriSource != null)
+                {
+                    string seededUrl = bmi.UriSource.ToString();
+                    if (seededUrl.Equals(images[0], StringComparison.OrdinalIgnoreCase))
+                    {
+                        firstIsSame = true;
+                    }
+                }
+
+                // Start from 0 if first is same (so next tick is 1), else -1 (so next tick is 0)
+                _currentBackdropIndex = firstIsSame ? 0 : -1;
             }
 
             // If only 1 image, don't run timer

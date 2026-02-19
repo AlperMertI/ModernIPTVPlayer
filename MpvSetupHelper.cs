@@ -177,6 +177,9 @@ namespace ModernIPTVPlayer
                 // Without this, track switches (subtitle/audio) flush the entire demuxer cache.
                 await SetPropertySafeAsync(player, "demuxer-seekable-cache", "yes");
                 
+                // Disable native OSD during seek
+                await SetPropertySafeAsync(player, "osd-on-seek", "no");
+
                 // Use MKV index for subtitle preroll: finds subtitle packets via index WITHOUT
                 // seeking the demuxer, which would otherwise flush the video/audio cache.
                 // "index" mode is superior to "yes" because it doesn't trigger a demuxer seek.

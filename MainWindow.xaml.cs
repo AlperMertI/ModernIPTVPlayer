@@ -263,8 +263,9 @@ namespace ModernIPTVPlayer
             // Ensure layout is updated to get positions
             target.UpdateLayout();
 
-            // Transform relative to NavIndicator's parent
-            var transform = target.TransformToVisual((UIElement)NavIndicator.Parent);
+            // Transform relative to NavIndicator's parent (the Grid inside ScrollViewer)
+            var parentGrid = (UIElement)NavIndicator.Parent;
+            var transform = target.TransformToVisual(parentGrid);
             var point = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
 
             double targetY = point.Y;
@@ -302,6 +303,7 @@ namespace ModernIPTVPlayer
             {
                 To = targetWidth,
                 Duration = new Duration(TimeSpan.FromMilliseconds(350)),
+                EnableDependentAnimation = true,
                 EasingFunction = new Microsoft.UI.Xaml.Media.Animation.QuinticEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut }
             };
             Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(animContainer, CustomNavContainer);
@@ -311,6 +313,7 @@ namespace ModernIPTVPlayer
             {
                 To = targetWidth,
                 Duration = new Duration(TimeSpan.FromMilliseconds(350)),
+                EnableDependentAnimation = true,
                 EasingFunction = new Microsoft.UI.Xaml.Media.Animation.QuinticEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut }
             };
             Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(animGlassW, GlassBorder);

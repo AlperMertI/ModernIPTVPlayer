@@ -32,9 +32,10 @@
             <!-- Compact Glassmorphism Sidebar (Floats over content) -->
             <Grid x:Name="CustomNavContainer" 
                   HorizontalAlignment="Left"
-                  VerticalAlignment="Center"
+                  VerticalAlignment="Stretch"
                   Width="60"
-                  Margin="16,0,0,0"
+                  Margin="16,64,0,32"
+                  Background="Transparent"
                   Canvas.ZIndex="1000"
                   PointerEntered="CustomNavContainer_PointerEntered"
                   PointerExited="CustomNavContainer_PointerExited">
@@ -43,50 +44,54 @@
                     <TranslateTransform x:Name="SidebarTranslate" X="0"/>
                 </Grid.RenderTransform>
             
-                <!-- Glass Background with Border -->
-                <Border x:Name="GlassBorder"
-                        BorderBrush="#22FFFFFF"
-                        BorderThickness="1"
-                        CornerRadius="30">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                            <GradientStop Color="#99000000" Offset="0"/>
-                            <GradientStop Color="#66000000" Offset="1"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
-
-                <Grid x:Name="NavInnerGrid" Padding="0,12,0,12">
-                    <!-- Liquid Lens Selection Indicator -->
-                        <!-- Glass Lens Indicator -->
-                        <Border x:Name="NavIndicator" 
-                                Width="44" 
-                                Height="44"
-                                CornerRadius="22" 
-                                VerticalAlignment="Top"
-                                HorizontalAlignment="Center"
-                                Margin="0"
-                                Opacity="0"
-                                BorderBrush="#60FFFFFF"
-                                BorderThickness="1"
-                                Canvas.ZIndex="1">
-                            <Border.Background>
-                                <RadialGradientBrush Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.75" RadiusY="0.75">
-                                    <GradientStop Color="#20FFFFFF" Offset="0"/>
-                                    <GradientStop Color="#05FFFFFF" Offset="1"/>
-                                </RadialGradientBrush>
-                            </Border.Background>
-                        </Border>
-
-                    <!-- Navigation List -->
-                    <ScrollViewer x:Name="NavScrollViewer"
-                                  VerticalScrollBarVisibility="Hidden" 
-                                  HorizontalScrollBarVisibility="Disabled" 
-                                  VerticalScrollMode="Enabled" 
-                                  HorizontalScrollMode="Disabled">
-                        <StackPanel x:Name="NavButtonsStack" 
-                                    Orientation="Vertical" 
-                                    Spacing="8">
+                <!-- Visual wrapper that centers the sidebar vertically and prevents it from over-stretching -->
+                <Grid VerticalAlignment="Center" HorizontalAlignment="Left">
+                    <!-- Glass Background with Border -->
+                    <Border x:Name="GlassBorder"
+                            Width="60"
+                            HorizontalAlignment="Left"
+                            BorderBrush="#22FFFFFF"
+                            BorderThickness="1"
+                            CornerRadius="30">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#99000000" Offset="0"/>
+                                <GradientStop Color="#66000000" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                    </Border>
+    
+                    <Grid x:Name="NavInnerGrid" Padding="0,12,0,12">
+                        <!-- Navigation List -->
+                        <ScrollViewer x:Name="NavScrollViewer"
+                                      VerticalScrollBarVisibility="Hidden" 
+                                      HorizontalScrollBarVisibility="Disabled" 
+                                      VerticalScrollMode="Auto" 
+                                      HorizontalScrollMode="Disabled">
+                            <Grid>
+                                <!-- Liquid Lens Selection Indicator (Moved inside ScrollViewer) -->
+                                <Border x:Name="NavIndicator" 
+                                        Width="44" 
+                                        Height="44"
+                                        CornerRadius="22" 
+                                        VerticalAlignment="Top"
+                                        HorizontalAlignment="Left"
+                                        Margin="8,0,0,0"
+                                        Opacity="0"
+                                        BorderBrush="#60FFFFFF"
+                                        BorderThickness="1"
+                                        Canvas.ZIndex="1">
+                                    <Border.Background>
+                                        <RadialGradientBrush Center="0.5,0.5" GradientOrigin="0.5,0.5" RadiusX="0.75" RadiusY="0.75">
+                                            <GradientStop Color="#20FFFFFF" Offset="0"/>
+                                            <GradientStop Color="#05FFFFFF" Offset="1"/>
+                                        </RadialGradientBrush>
+                                    </Border.Background>
+                                </Border>
+    
+                                <StackPanel x:Name="NavButtonsStack" 
+                                            Orientation="Vertical" 
+                                            Spacing="8">
                             
                             <RadioButton x:Name="BtnPlaylist" Content="Profil" Tag="LoginPage" 
                                          local:NavProperties.Icon="&#xE77B;"
@@ -141,9 +146,11 @@
                                          Style="{StaticResource SidebarPillRadioButtonStyle}" 
                                          Checked="NavButton_Checked"/>
                         </StackPanel>
+                            </Grid>
                     </ScrollViewer>
                 </Grid>
             </Grid>
+        </Grid>
 
 
 
