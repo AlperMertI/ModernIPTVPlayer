@@ -12,11 +12,17 @@ namespace ModernIPTVPlayer
             {
                 try
                 {
-                    // Suppress invalid URI crashes
                     if (Uri.TryCreate(url, UriKind.RelativeOrAbsolute, out var uri))
                     {
-                        // Use BitmapImage with automatic decoding
-                        return new BitmapImage(uri);
+                        var bmp = new BitmapImage();
+                        
+                        // Small decoding width for episode thumbs/covers to save RAM and time
+                        // Assuming most UI elements binding this are < 400px wide
+                        bmp.DecodePixelWidth = 400; 
+                        
+                        // Decode on a background thread instead of UI thread to prevent hitching
+                        bmp.UriSource = uri;
+                        return bmp;
                     }
                 }
                 catch 

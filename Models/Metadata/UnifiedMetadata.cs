@@ -6,6 +6,7 @@ namespace ModernIPTVPlayer.Models.Metadata
     public class UnifiedMetadata
     {
         public string Title { get; set; }
+        public string OriginalTitle { get; set; } // Feature #OriginalTitleForMovies
         public string Overview { get; set; }
         public string PosterUrl { get; set; }
         public string BackdropUrl { get; set; }

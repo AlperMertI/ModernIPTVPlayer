@@ -59,8 +59,9 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private readonly StremioService _stremioService = StremioService.Instance;
 
-        public async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null)
+        private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null)
         {
+             // This overload DOES NOT CHECK CACHE!
             var metadata = new UnifiedMetadata 
             { 
                 ImdbId = id, 
@@ -131,27 +132,38 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 metadata.ImdbId = currentSearchId; // Update core metadata too
                             }
 
-                            if (IsValidMetadata(currentStremioMeta) && !isPrimaryMetadataSet)
+                            if (IsValidMetadata(currentStremioMeta))
                             {
+                                // Backfill missing top-level properties (Cast, Genres, Overview, etc.)
                                 MapStremioToUnified(currentStremioMeta, metadata);
-                                stremioMeta = currentStremioMeta; // Keep for episode reconciliation
-                                
-                                // Source Info
-                                string addonHost = new Uri(url).Host;
-                                metadata.MetadataSourceInfo = $"{addonHost}";
-                                if (!string.IsNullOrEmpty(currentStremioMeta.Background) && currentStremioMeta.Background.Contains("tmdb.org"))
-                                    metadata.MetadataSourceInfo += " (TMDB Metadata)";
-                                
-                                metadata.DataSource = string.IsNullOrEmpty(metadata.DataSource) ? "Stremio" : metadata.DataSource + " + Stremio";
-                                isPrimaryMetadataSet = true;
-                                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Primary metadata set from: {url}");
+
+                                if (!isPrimaryMetadataSet)
+                                {
+                                    stremioMeta = currentStremioMeta; // Keep for episode reconciliation
+                                    
+                                    // Source Info
+                                    string addonHost = new Uri(url).Host;
+                                    metadata.MetadataSourceInfo = $"{addonHost}";
+                                    if (!string.IsNullOrEmpty(currentStremioMeta.Background) && currentStremioMeta.Background.Contains("tmdb.org"))
+                                        metadata.MetadataSourceInfo += " (TMDB Metadata)";
+                                    
+                                    metadata.DataSource = string.IsNullOrEmpty(metadata.DataSource) ? "Stremio" : metadata.DataSource + " + Stremio";
+                                    isPrimaryMetadataSet = true;
+                                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Primary metadata set from: {url}");
+                                }
                             }
-                            else if (!IsValidMetadata(currentStremioMeta))
+                            else
                             {
                                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] REJECTED invalid metadata from {url} (Name: {currentStremioMeta.Name}, ID: {currentStremioMeta.Id})");
                                 continue; // Skip to next addon
                             }
                             
+                            // MERGE EPISODES (ALWAYS, IF IT'S A SERIES AND METADATA IS VALID)
+                            if (metadata.IsSeries)
+                            {
+                                MergeStremioEpisodes(currentStremioMeta, metadata);
+                            }
+
                             if (currentStremioMeta.Background != null)
                             {
                                 AddUniqueBackdrop(metadata, currentStremioMeta.Background);
@@ -186,7 +198,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // --- 3. EPISODE RECONCILIATION ---
                 if (metadata.IsSeries)
                 {
-                    ReconcileEpisodes(stremioMeta, metadata, tmdb);
+                    ReconcileTmdbSeasons(metadata, tmdb);
                 }
 
                 // --- 4. IPTV FALLBACK ---
@@ -442,6 +454,26 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (string.IsNullOrEmpty(unified.Title) || unified.Title == unified.MetadataId)
                 unified.Title = stremio.Name;
 
+            if (string.IsNullOrEmpty(unified.OriginalTitle))
+            {
+                if (!string.IsNullOrEmpty(stremio.OriginalName))
+                {
+                    unified.OriginalTitle = stremio.OriginalName;
+                }
+                else if (stremio.Aliases != null && stremio.Aliases.Count > 0 && stremio.Name != stremio.Aliases[0])
+                {
+                    // Fallback to the first alias if it exists and is different from the localized name
+                    unified.OriginalTitle = stremio.Aliases[0];
+                }
+                else if (!string.IsNullOrEmpty(unified.Title) && unified.Title != unified.MetadataId && 
+                         !string.IsNullOrEmpty(stremio.Name) && !string.Equals(unified.Title, stremio.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    // If a subsequent addon provides a different name (e.g., localized vs English), 
+                    // capture the differing name as a fallback OriginalTitle.
+                    unified.OriginalTitle = stremio.Name;
+                }
+            }
+
             if (string.IsNullOrEmpty(unified.Overview) || unified.Overview == "Açıklama mevcut değil.")
                 unified.Overview = stremio.Description;
 
@@ -530,6 +562,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (!string.IsNullOrEmpty(tmdb.DisplayTitle) && tmdb.DisplayTitle != metadata.Title) 
                     metadata.Title = tmdb.DisplayTitle;
 
+                if (!string.IsNullOrEmpty(tmdb.DisplayOriginalTitle))
+                    metadata.OriginalTitle = tmdb.DisplayOriginalTitle;
+
                 // Higher quality images
                 if (!string.IsNullOrEmpty(tmdb.FullBackdropUrl)) metadata.BackdropUrl = tmdb.FullBackdropUrl;
                 
@@ -550,49 +585,100 @@ namespace ModernIPTVPlayer.Services.Metadata
             return tmdb;
         }
 
-        private void ReconcileEpisodes(StremioMeta stremio, UnifiedMetadata metadata, TmdbMovieResult tmdb)
+        private void MergeStremioEpisodes(StremioMeta stremio, UnifiedMetadata metadata)
         {
-            // 1. Map existing Stremio episodes (if any)
-            if (stremio?.Videos != null)
+            if (stremio?.Videos == null) return;
+
+            var grouped = stremio.Videos
+                .Where(v => v.Season >= 0)
+                .GroupBy(v => v.Season)
+                .OrderBy(g => g.Key);
+
+            foreach (var group in grouped)
             {
-                var grouped = stremio.Videos
-                    .Where(v => v.Season >= 0)
-                    .GroupBy(v => v.Season)
-                    .OrderBy(g => g.Key);
-
-                foreach (var group in grouped)
+                var season = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == group.Key);
+                if (season == null)
                 {
-                    var season = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == group.Key);
-                    if (season == null)
+                    season = new UnifiedSeason
                     {
-                        season = new UnifiedSeason
-                        {
-                            SeasonNumber = group.Key,
-                            Name = group.Key == 0 ? "Özel Bölümler" : $"{group.Key}. Sezon"
-                        };
-                        metadata.Seasons.Add(season);
-                    }
+                        SeasonNumber = group.Key,
+                        Name = group.Key == 0 ? "Özel Bölümler" : $"{group.Key}. Sezon"
+                    };
+                    metadata.Seasons.Add(season);
+                }
 
-                    foreach (var vid in group.OrderBy(v => v.Episode))
+                foreach (var vid in group.OrderBy(v => v.Episode))
+                {
+                    var existingEpisode = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == vid.Episode);
+                    if (existingEpisode == null)
                     {
-                        if (!season.Episodes.Any(e => e.EpisodeNumber == vid.Episode))
+                        season.Episodes.Add(new UnifiedEpisode
                         {
-                            season.Episodes.Add(new UnifiedEpisode
-                            {
-                                Id = vid.Id,
-                                SeasonNumber = vid.Season,
-                                EpisodeNumber = vid.Episode,
-                                Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
-                                Overview = vid.Overview,
-                                ThumbnailUrl = vid.Thumbnail,
-                                AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
-                            });
+                            Id = vid.Id,
+                            SeasonNumber = vid.Season,
+                            EpisodeNumber = vid.Episode,
+                            Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
+                            Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description,
+                            ThumbnailUrl = vid.Thumbnail,
+                            AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
+                        });
+                    }
+                    else
+                    {
+                        // Update missing fields
+                        bool isGenericTitle = IsGenericEpisodeTitle(existingEpisode.Title);
+
+                        if (isGenericTitle)
+                        {
+                            string newTitle = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title;
+                            
+                            bool isNewGenericTitle = IsGenericEpisodeTitle(newTitle);
+
+                            if (!isNewGenericTitle || string.IsNullOrEmpty(existingEpisode.Title))
+                                existingEpisode.Title = newTitle;
                         }
+
+                        if (string.IsNullOrEmpty(existingEpisode.Overview))
+                            existingEpisode.Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description;
+
+                        if (string.IsNullOrEmpty(existingEpisode.ThumbnailUrl))
+                            existingEpisode.ThumbnailUrl = vid.Thumbnail;
+                            
+                        if (existingEpisode.AirDate == null && !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d2))
+                            existingEpisode.AirDate = d2;
                     }
                 }
             }
+        }
 
-            // 2. Reconcile with TMDB Seasons (if available) - Adds seasons/episodes Stremio might be missing
+        private bool IsGenericEpisodeTitle(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return true;
+            
+            string t = title.ToLowerInvariant().Trim();
+            
+            // Just a number check
+            if (int.TryParse(t, out _)) return true; // e.g., "1", "02", "12"
+            
+            // Extract only the letters from the title (e.g., "1. Bölüm" -> "bölüm")
+            string lettersOnly = new string(t.Where(c => char.IsLetter(c)).ToArray());
+            
+            // If the only letters in the title form one of the common generic words, then it's a generic title
+            // This safely matches: "1. Bölüm", "Bölüm 2", "Episode 05", "1x02 Episode", "Ep 5", "S01E02"
+            return lettersOnly == "bölüm" || 
+                   lettersOnly == "bolum" || 
+                   lettersOnly == "episode" || 
+                   lettersOnly == "ep" || 
+                   lettersOnly == "se" ||          // e.g. "S1E2" -> letters format to "se"
+                   lettersOnly == "sezon" || 
+                   lettersOnly == "sezonbölüm" ||  // e.g. "Sezon 1 Bölüm 2" -> "sezonbölüm"
+                   lettersOnly == "sezonbolum" ||
+                   lettersOnly == "seasonepisode";     
+        }
+
+        private void ReconcileTmdbSeasons(UnifiedMetadata metadata, TmdbMovieResult tmdb)
+        {
+            // Reconcile with TMDB Seasons (if available) - Adds seasons/episodes Stremio might be missing
             if (tmdb?.Seasons != null)
             {
                 foreach (var tmdbSeason in tmdb.Seasons)
@@ -608,16 +694,10 @@ namespace ModernIPTVPlayer.Services.Metadata
                             Episodes = new List<UnifiedEpisode>()
                         });
                     }
-                    else if (existingSeason.Episodes.Count < tmdbSeason.EpisodeCount)
-                    {
-                        // Stremio has the season but looks incomplete compared to TMDB count
-                        // We'll let EnrichSeasonAsync handle the detail later if needed,
-                        // but we could pre-fill virtual IDs here if we want instant placeholders.
-                    }
                 }
             }
 
-            // 3. Fallback: If absolutely no seasons found but it's a series, create at least Season 1 if we have an ID
+            // Fallback: If absolutely no seasons found but it's a series, create at least Season 1 if we have an ID
             if (metadata.Seasons.Count == 0 && !string.IsNullOrEmpty(metadata.ImdbId))
             {
                  metadata.Seasons.Add(new UnifiedSeason { SeasonNumber = 1, Name = "1. Sezon" });

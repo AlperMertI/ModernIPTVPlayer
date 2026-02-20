@@ -524,12 +524,21 @@ namespace ModernIPTVPlayer
         
         [JsonPropertyName("title")]
         public string Title { get; set; }
+
+        [JsonPropertyName("original_title")]
+        public string OriginalTitle { get; set; }
         
         [JsonPropertyName("name")]
         public string Name { get; set; } 
 
+        [JsonPropertyName("original_name")]
+        public string OriginalName { get; set; }
+
         [JsonIgnore]
         public string DisplayTitle => !string.IsNullOrEmpty(Title) ? Title : Name;
+
+        [JsonIgnore]
+        public string DisplayOriginalTitle => !string.IsNullOrEmpty(OriginalTitle) ? OriginalTitle : OriginalName;
         
         [JsonPropertyName("overview")]
         public string Overview { get; set; }

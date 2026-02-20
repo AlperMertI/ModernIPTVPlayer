@@ -29,6 +29,7 @@ namespace ModernIPTVPlayer.Controls
         
         // Pre-initialization state
         private bool _webViewInitialized = false;
+        private bool _isSeriesFinished = false;
         private string _trailerFolder;
         private string _virtualHost = "trailers.moderniptv.local";
         private Microsoft.UI.Composition.Compositor _compositor;
@@ -501,7 +502,9 @@ namespace ModernIPTVPlayer.Controls
 
         public async Task LoadDataAsync(ModernIPTVPlayer.Models.IMediaStream stream, bool isMorphing = false)
         {
-            var loadNonce = ++_loadNonce;
+            _isSeriesFinished = false; // Reset on new load
+            _loadNonce++;
+            long loadNonce = _loadNonce;
 
             // Reset all state first (except image)
             ResetState(isMorphing);
@@ -581,36 +584,83 @@ namespace ModernIPTVPlayer.Controls
                     if (unified.IsSeries)
                     {
                         var history = HistoryManager.Instance.GetLastWatchedEpisode(unified.MetadataId);
+                        ModernIPTVPlayer.Models.Metadata.UnifiedEpisode nextEp = null;
+                        
                         if (history != null && unified.Seasons != null)
                         {
-                            var season = unified.Seasons.FirstOrDefault(s => s.SeasonNumber == history.SeasonNumber);
-                            if (season != null)
+                            // 1. Locate the season for the history item
+                            var historySeason = unified.Seasons.FirstOrDefault(s => s.SeasonNumber == history.SeasonNumber);
+                            if (historySeason != null)
                             {
-                                var ep = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == history.EpisodeNumber);
-                                if (ep == null && history.EpisodeNumber == 0)
-                                    ep = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == 1);
-
-                                if (ep != null)
+                                var historyEp = historySeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == history.EpisodeNumber);
+                                
+                                // 2. Check if we should show Next Episode
+                                if (history.IsFinished)
                                 {
-                                    string epName = ep.Title;
-                                    string cleanTitle = TmdbHelper.CleanEpisodeTitle(history.Title);
+                                    // Try next in same season
+                                    nextEp = historySeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == history.EpisodeNumber + 1);
                                     
-                                    bool isGeneric = string.IsNullOrEmpty(epName) || 
-                                                    epName.Contains("Bölüm") || 
-                                                    epName.Contains("Episode") || 
-                                                    epName == ep.EpisodeNumber.ToString();
-
-                                    if (isGeneric && !string.IsNullOrEmpty(cleanTitle) && cleanTitle.Length > 2)
-                                        displayTitle = cleanTitle;
-                                    else
-                                        displayTitle = !string.IsNullOrEmpty(epName) ? epName : $"Bölüm {ep.EpisodeNumber}";
-
-                                    if (!string.IsNullOrEmpty(ep.Overview)) displayOverview = ep.Overview;
-                                    if (!string.IsNullOrEmpty(ep.ThumbnailUrl)) displayBackdrop = ep.ThumbnailUrl;
+                                    // If not found, try first of next season
+                                    if (nextEp == null)
+                                    {
+                                        var nextSeason = unified.Seasons.FirstOrDefault(s => s.SeasonNumber == history.SeasonNumber + 1);
+                                        if (nextSeason != null)
+                                        {
+                                            nextEp = nextSeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == 1);
+                                        }
+                                    }
                                     
-                                    displayTitle = $"S{history.SeasonNumber:D2}E{history.EpisodeNumber:D2} - {displayTitle}";
+                                    // If still null, maybe stick to history display? Or just show the last one but marked watched?
+                                    // Logic: if no next episode, likely end of series. Show last watched.
+                                    if (nextEp == null && historyEp != null)
+                                    {
+                                         nextEp = historyEp;
+                                         _isSeriesFinished = true; // Mark as finished for UI
+                                    }
+                                }
+                                else
+                                {
+                                    // Not finished -> Show this episode (Resume)
+                                    nextEp = historyEp;
                                 }
                             }
+                        }
+
+                        // 3. Fallback: If no history, try S1E1
+                        if (nextEp == null && (history == null || history.IsFinished) && unified.Seasons != null)
+                        {
+                             // If history is null, or we finished last ep but couldn't find next (failed above),
+                             // But if history is null, we definitely want S1E1.
+                             if (history == null)
+                             {
+                                 var s1 = unified.Seasons.FirstOrDefault(s => s.SeasonNumber == 1) ?? unified.Seasons.FirstOrDefault();
+                                 if (s1 != null)
+                                 {
+                                     nextEp = s1.Episodes.FirstOrDefault(e => e.EpisodeNumber == 1) ?? s1.Episodes.FirstOrDefault();
+                                 }
+                             }
+                        }
+
+                        // 4. Update Display
+                        if (nextEp != null)
+                        {
+                            string epName = nextEp.Title;
+                            // Clean title logic (borrowed from existing)
+                            bool isGeneric = string.IsNullOrEmpty(epName) || 
+                                            epName.Contains("Bölüm", StringComparison.OrdinalIgnoreCase) || 
+                                            epName.Contains("Episode", StringComparison.OrdinalIgnoreCase) || 
+                                            epName == nextEp.EpisodeNumber.ToString();
+
+                            // Use history title if available and we are showing the SAME episode? 
+                            // No, relying on Unified Metadata is better for "Next Episode".
+                            
+                            if (isGeneric)
+                                displayTitle = $"S{nextEp.SeasonNumber:D2}E{nextEp.EpisodeNumber:D2}";
+                            else
+                                displayTitle = $"S{nextEp.SeasonNumber:D2}E{nextEp.EpisodeNumber:D2} - {epName}";
+
+                            if (!string.IsNullOrEmpty(nextEp.Overview)) displayOverview = nextEp.Overview;
+                            if (!string.IsNullOrEmpty(nextEp.ThumbnailUrl)) displayBackdrop = nextEp.ThumbnailUrl;
                         }
                     }
 
@@ -685,7 +735,10 @@ namespace ModernIPTVPlayer.Controls
                 var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
                 if (history != null) 
                 {
-                    url = history.StreamUrl;
+                    if (!history.IsFinished)
+                    {
+                        url = history.StreamUrl;
+                    }
                 }
                 else if (App.CurrentLogin != null)
                 {
@@ -734,7 +787,14 @@ namespace ModernIPTVPlayer.Controls
 
                 if (history != null)
                 {
-                    url = history.StreamUrl;
+                    if (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv")
+                    {
+                         if (!history.IsFinished) url = history.StreamUrl;
+                    }
+                    else
+                    {
+                        url = history.StreamUrl;
+                    }
                 }
             }
             else if (stream is WatchlistItem w)
@@ -742,7 +802,7 @@ namespace ModernIPTVPlayer.Controls
                 if (w.Type == "series")
                 {
                     var history = HistoryManager.Instance.GetLastWatchedEpisode(w.Id);
-                    if (history != null) url = history.StreamUrl;
+                    if (history != null && !history.IsFinished) url = history.StreamUrl;
                 }
                 else
                 {
@@ -870,7 +930,9 @@ namespace ModernIPTVPlayer.Controls
                 else
                     history = HistoryManager.Instance.GetProgress(stremio.IMDbId);
 
-                if (history == null || string.IsNullOrEmpty(history.StreamUrl))
+                bool isFinishedSeries = (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv") && history != null && history.IsFinished;
+
+                if (history == null || string.IsNullOrEmpty(history.StreamUrl) || isFinishedSeries)
                 {
                     TechBadgesPanel.Visibility = Visibility.Collapsed;
                     // Only collapse skeleton if we aren't currently probing (shimmer active)
@@ -1288,7 +1350,7 @@ namespace ModernIPTVPlayer.Controls
             else if (stream is SeriesStream series)
             {
                 var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
-                if (history != null) 
+                if (history != null && !history.IsFinished) 
                 {
                     isResume = true;
                     int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
@@ -1300,7 +1362,7 @@ namespace ModernIPTVPlayer.Controls
                 if (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv")
                 {
                     var history = HistoryManager.Instance.GetLastWatchedEpisode(stremio.Meta.Id);
-                    if (history != null)
+                    if (history != null && !history.IsFinished)
                     {
                         isResume = true;
                         int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
@@ -1318,7 +1380,7 @@ namespace ModernIPTVPlayer.Controls
                 if (w.Type == "series")
                 {
                     var history = HistoryManager.Instance.GetLastWatchedEpisode(w.Id);
-                    if (history != null)
+                    if (history != null && !history.IsFinished)
                     {
                         isResume = true;
                         int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
@@ -1344,6 +1406,12 @@ namespace ModernIPTVPlayer.Controls
                 {
                     PlayButtonSubtext.Visibility = Visibility.Collapsed;
                 }
+            }
+            else if (_isSeriesFinished)
+            {
+                PlayButtonText.Text = "Tekrar İzle";
+                PlayButtonSubtext.Text = "Tüm bölümler izlendi";
+                PlayButtonSubtext.Visibility = Visibility.Visible;
             }
             else
             {

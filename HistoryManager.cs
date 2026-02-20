@@ -142,13 +142,34 @@ namespace ModernIPTVPlayer
         {
             lock (_lock)
             {
-                // Find all episodes for this series
-                var episodes = _history.Values
+                // Find all history items for this series
+                var historyItems = _history.Values
                     .Where(x => x.ParentSeriesId == seriesId)
-                    .OrderByDescending(x => x.Timestamp)
                     .ToList();
 
-                return episodes.FirstOrDefault();
+                
+
+                if (historyItems.Count == 0) return null;
+
+                // 1. Get the absolute most recently accessed item
+                var mostRecent = historyItems.OrderByDescending(x => x.Timestamp).FirstOrDefault();
+
+                // 2. If it's unfinished, the user explicitly started it and left it halfway. Resume from here.
+                if (mostRecent != null && !mostRecent.IsFinished)
+                {
+                    return mostRecent;
+                }
+
+                // 3. If it's finished, find the absolute "furthest progressed" episode in their entire history
+                // (Highest Season, then Highest Episode) so the UI can auto-advance from the true leading edge.
+                var furthestProgressed = historyItems
+                    .OrderByDescending(x => x.SeasonNumber)
+                    .ThenByDescending(x => x.EpisodeNumber)
+                    .FirstOrDefault();
+
+
+                var finalResult = furthestProgressed ?? mostRecent;
+                return finalResult;
             }
         }
     }

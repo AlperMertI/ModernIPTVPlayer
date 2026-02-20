@@ -747,12 +747,34 @@ namespace ModernIPTVPlayer
             string metadataType = (item is SeriesStream || (item is Models.Stremio.StremioMediaStream smsType && (smsType.Meta.Type == "series" || smsType.Meta.Type == "tv"))) ? "series" : "movie";
             
             // If it's Stremio, we might have more than just ID (e.g. name for fallback)
-            _unifiedMetadata = await MetadataProvider.Instance.GetMetadataAsync(metadataId ?? item.Title, metadataType, item);
+            _unifiedMetadata = await MetadataProvider.Instance.GetMetadataAsync(item);
             var unified = _unifiedMetadata;
 
             // Update UI with Unified Data
             TitleText.Text = unified.Title;
             StickyTitle.Text = unified.Title;
+            
+            // Show Original Title for movies if available and different
+            if (!unified.IsSeries && !string.IsNullOrEmpty(unified.OriginalTitle) && 
+                !string.Equals(unified.Title, unified.OriginalTitle, StringComparison.OrdinalIgnoreCase))
+            {
+                if (SuperTitleText != null)
+                {
+                    SuperTitleText.Text = unified.OriginalTitle.ToUpperInvariant();
+                    SuperTitleText.Visibility = Visibility.Visible;
+                }
+            }
+            else if (!unified.IsSeries)
+            {
+                // Ensure hidden for movies if no original title
+                if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                // Series starts hidden (shows series name here later when an episode is selected)
+                if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
+            }
+
             OverviewText.Text = !string.IsNullOrEmpty(unified.Overview) ? unified.Overview : "Açıklama mevcut değil.";
             YearText.Text = unified.Year?.Split('–')[0] ?? "";
             GenresText.Text = unified.Genres;
@@ -1465,8 +1487,6 @@ namespace ModernIPTVPlayer
                     }
                 }
 
-                SeasonComboBox.ItemsSource = Seasons;
-
                 // 3. Handle Resume Logic (Initial Season Selection)
                 int targetSeasonIndex = 0;
                 EpisodeItem episodeToSelect = null;
@@ -1524,6 +1544,9 @@ namespace ModernIPTVPlayer
                 {
                     _pendingAutoSelectEpisode = episodeToSelect;
                 }
+
+                // Apply ItemsSource AFTER logic is computed to prevent early auto-select race condition 
+                SeasonComboBox.ItemsSource = Seasons;
 
                 if (Seasons.Count > 0)
                 {
@@ -2252,7 +2275,7 @@ namespace ModernIPTVPlayer
                  if (_item is SeriesStream ss)
                  {
                       string parentId = ss.SeriesId.ToString();
-                      await PerformHandoverAndNavigate(ep.StreamUrl, ep.Title, ep.Id, parentId, _item.Title, ep.SeasonNumber);
+                      await PerformHandoverAndNavigate(ep.StreamUrl, ep.Title, ep.Id, parentId, _item.Title, ep.SeasonNumber, ep.EpisodeNumber);
                  }
              }
         }
@@ -3012,10 +3035,21 @@ namespace ModernIPTVPlayer
             }
             else
             {
-                // If we have one but it's not attached (detached state)
+                // If we have one but it's not appropriately attached yet
                 if (PlayerHost != null && PlayerHost.Content != MediaInfoPlayer)
                 {
+                    // [WINUI FIX] An element can only have one parent.
+                    // If it was temporarily detached or returned from handoff, we must 
+                    // ensure it has no parent before setting it as Content.
+                    var parent = VisualTreeHelper.GetParent(MediaInfoPlayer) as ContentControl;
+                    if (parent != null)
+                    {
+                        parent.Content = null;
+                        Debug.WriteLine("[FastStart] Detached MediaInfoPlayer from previous parent.");
+                    }
+                    
                     PlayerHost.Content = MediaInfoPlayer;
+                    Debug.WriteLine("[FastStart] Re-attached MediaInfoPlayer to PlayerHost.");
                 }
             }
 
@@ -3256,7 +3290,11 @@ namespace ModernIPTVPlayer
                          resumeSeconds = history.Position;
                      }
 
-                     await PerformHandoverAndNavigate(_streamUrl, title, videoId, startSeconds: resumeSeconds);
+                     string parentIdStr = (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv") ? stremioItem.Meta.Id : null;
+                     int seasonToPass = _selectedEpisode?.SeasonNumber ?? 0;
+                     int episodeToPass = _selectedEpisode?.EpisodeNumber ?? 0;
+
+                     await PerformHandoverAndNavigate(_streamUrl, title, videoId, parentIdStr, null, seasonToPass, episodeToPass, resumeSeconds);
                      return;
                 }
                 
@@ -3286,7 +3324,7 @@ namespace ModernIPTVPlayer
                 if (_selectedEpisode != null)
                 {
                      string parentId = _item is SeriesStream ss ? ss.SeriesId.ToString() : null;
-                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber);
+                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber);
                 }
                 else if (_item is LiveStream live)
                 {
@@ -3445,7 +3483,8 @@ namespace ModernIPTVPlayer
                     {
                         var firstStream = firstAddon?.Streams?.FirstOrDefault(s => !string.IsNullOrEmpty(s.Url));
                         {
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, StartSeconds: startSeconds));
+                            string parentIdStr = _item is Models.Stremio.StremioMediaStream stremioItem && (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv") ? stremioItem.Meta.Id : null;
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds));
                             return;
                         }
                     }
@@ -3765,7 +3804,8 @@ namespace ModernIPTVPlayer
                                                     
                                                     // [FIX] Use direct navigation for new sources that haven't been pre-buffered.
                                                     // PerformHandoverAndNavigate requires the player to already be playing the content.
-                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, StartSeconds: startSeconds));
+                                                    string parentIdStr = _item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv") ? sms.Meta.Id : null;
+                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds));
                                                     return;
                                                 }
                                             }
@@ -4097,7 +4137,8 @@ namespace ModernIPTVPlayer
                     // [FIX] Direct Navigation for Stremio Sources (No Handoff)
                     // We cannot use Handoff because MediaInfoPlayer has not pre-buffered this specific URL.
                     // Doing Handoff would pass an empty/uninitialized player to PlayerPage.
-                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, StartSeconds: resumeSeconds));
+                    string parentIdStr = _item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv") ? sms.Meta.Id : null;
+                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds));
                 }
                 else if (!string.IsNullOrEmpty(vm.ExternalUrl))
                 {
@@ -4169,6 +4210,10 @@ namespace ModernIPTVPlayer
                 if (_selectedEpisode != null)
                 {
                      string parentId = _item is SeriesStream ss ? ss.SeriesId.ToString() : null;
+                     if (_item is Models.Stremio.StremioMediaStream stremioItem && (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv"))
+                     {
+                         parentId = stremioItem.Meta.Id;
+                     }
                      
                      // [Fix] Force seek to 0 before handoff
                      if (MediaInfoPlayer != null)
@@ -4185,8 +4230,8 @@ namespace ModernIPTVPlayer
                          catch {}
                      }
                      
-                     HistoryManager.Instance.UpdateProgress(_selectedEpisode.Id, _selectedEpisode.Title, _streamUrl, 0, 0, parentId, _item.Title, _selectedEpisode.SeasonNumber);
-                     PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, 0, 0);
+                     HistoryManager.Instance.UpdateProgress(_selectedEpisode.Id, _selectedEpisode.Title, _streamUrl, 0, 0, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber);
+                     PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, 0);
                 }
                 else if (_item is LiveStream live)
                 {

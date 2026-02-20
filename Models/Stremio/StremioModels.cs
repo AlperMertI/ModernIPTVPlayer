@@ -93,6 +93,12 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("name")]
         public string Name { get; set; }
 
+        [JsonPropertyName("originalName")]
+        public string OriginalName { get; set; }
+
+        [JsonPropertyName("aliases")]
+        public List<string> Aliases { get; set; }
+
         [JsonPropertyName("poster")]
         public string Poster { get; set; }
 
@@ -185,6 +191,9 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         [JsonPropertyName("overview")]
         public string Overview { get; set; }
+
+        [JsonPropertyName("description")]
+        public string Description { get; set; }
     }
 
     // ==========================================
