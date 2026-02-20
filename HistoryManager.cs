@@ -24,6 +24,9 @@ namespace ModernIPTVPlayer
         // To track "Next Up", we might need to know the parent Series ID
         public string ParentSeriesId { get; set; }
 
+        public string Type { get; set; } // "movie", "series", etc.
+        public string PosterUrl { get; set; }
+
         public string AudioTrackId { get; set; }
         public string SubtitleTrackId { get; set; }
         public string SubtitleTrackUrl { get; set; } // For Addon/External subs
@@ -90,7 +93,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null, string subUrl = null)
+        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null, string subUrl = null, string posterUrl = null, string type = null)
         {
             if (string.IsNullOrEmpty(id) || dur < 1) return;
 
@@ -123,6 +126,9 @@ namespace ModernIPTVPlayer
                 if (!string.IsNullOrEmpty(aid)) item.AudioTrackId = aid;
                 if (!string.IsNullOrEmpty(sid)) item.SubtitleTrackId = sid;
                 if (!string.IsNullOrEmpty(subUrl)) item.SubtitleTrackUrl = subUrl;
+                
+                if (!string.IsNullOrEmpty(posterUrl)) item.PosterUrl = posterUrl;
+                if (!string.IsNullOrEmpty(type)) item.Type = type;
             }
             // Fire and forget save (maybe debounce this in real app, but for now direct)
             // Actually better to save on Pause/Stop/Navigation, not every tick.
@@ -170,6 +176,65 @@ namespace ModernIPTVPlayer
 
                 var finalResult = furthestProgressed ?? mostRecent;
                 return finalResult;
+            }
+        }
+
+        public List<HistoryItem> GetContinueWatching(string contentType)
+        {
+            lock (_lock)
+            {
+                var query = _history.Values.Where(x => !x.IsFinished && x.Duration > 0);
+                
+                if (!string.IsNullOrEmpty(contentType))
+                {
+                    // Include items that match the content type OR have no type set (legacy history items)
+                    query = query.Where(x => string.IsNullOrEmpty(x.Type) || string.Equals(x.Type, contentType, StringComparison.OrdinalIgnoreCase));
+                }
+
+                // Group by Series if it's a series, or by Title if it's a movie to avoid addon duplicates
+                var results = new List<HistoryItem>();
+                var handledKeys = new HashSet<string>();
+
+                var sortedStream = query.OrderByDescending(x => x.Timestamp);
+
+                foreach (var item in sortedStream)
+                {
+                    // For series, group by ParentSeriesId. 
+                    // For movies, prioritize IMDb ID (tt...) since it's the standard across addons.
+                    // Fallback to title only if ID is not a standard IMDb ID (e.g., generic IPTV/local).
+                    string groupKey;
+                    if (!string.IsNullOrEmpty(item.ParentSeriesId)) 
+                    {
+                        groupKey = $"series_{item.ParentSeriesId}";
+                    }
+                    else if (item.Id.StartsWith("tt"))
+                    {
+                        groupKey = $"movie_{item.Id}";
+                    }
+                    else
+                    {
+                        groupKey = $"movie_{item.Title}";
+                    }
+
+                    if (handledKeys.Contains(groupKey)) continue;
+                    handledKeys.Add(groupKey);
+
+                    if (!string.IsNullOrEmpty(item.ParentSeriesId))
+                    {
+                        // Get the most progressed episode for this series
+                        var lastWatched = GetLastWatchedEpisode(item.ParentSeriesId);
+                        if (lastWatched != null && !lastWatched.IsFinished)
+                        {
+                            results.Add(lastWatched);
+                        }
+                    }
+                    else
+                    {
+                        results.Add(item);
+                    }
+                }
+
+                return results.Take(15).ToList();
             }
         }
     }

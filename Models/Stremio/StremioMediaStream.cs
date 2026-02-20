@@ -22,14 +22,42 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string IMDbId => Meta.Id; // Real ID
 
         public string Title => Meta.Name;
-        public string PosterUrl => Meta.Poster;
+
+        // PosterUrl: uses override (set by async enrichment) if available, else Meta.Poster
+        private string _overridePosterUrl;
+        public string PosterUrl
+        {
+            get => _overridePosterUrl ?? Meta.Poster;
+            set
+            {
+                if (_overridePosterUrl != value)
+                {
+                    _overridePosterUrl = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
         public string Rating => Meta.ImdbRating;
         public string Type => Meta.Type?.ToUpper();
         public string StreamUrl { get; set; } = "";
 
         // UI Binding Implementation
-        public double ProgressValue => 0;
-        public bool ShowProgress => false;
+        private double _progressValue;
+        public double ProgressValue 
+        { 
+            get => _progressValue; 
+            set 
+            {
+                if (_progressValue != value)
+                {
+                    _progressValue = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(ShowProgress));
+                }
+            } 
+        }
+        public bool ShowProgress => ProgressValue > 0;
         public string BadgeText => "";
         public bool ShowBadge => false;
 

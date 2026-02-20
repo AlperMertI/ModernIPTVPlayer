@@ -29,7 +29,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer
 {
-    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1);
+    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1, string PosterUrl = null, string Type = null);
 
     public sealed partial class PlayerPage : Page
     {
@@ -259,7 +259,7 @@ namespace ModernIPTVPlayer
                      string aid = await _mpvPlayer.GetPropertyAsync("aid");
                      string sid = await _mpvPlayer.GetPropertyAsync("sid");
 
-                     HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, aid, sid);
+                     HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, aid, sid, null, _navArgs.PosterUrl, _navArgs.Type);
                 }
 
                 if (!isLikelyLive)

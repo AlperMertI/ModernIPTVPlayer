@@ -80,7 +80,10 @@
                 </ListView.ItemContainerStyle>
                 <ListView.ItemTemplate>
                     <DataTemplate x:DataType="models:StremioMediaStream">
-                        <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" Width="160" Height="240" 
+                        <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" 
+                                          ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
+                                          ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
+                                          Width="160" Height="240" 
                                           HoverStarted="PosterCard_HoverStarted" 
                                           HoverEnded="PosterCard_HoverEnded"
                                           Tapped="PosterCard_Tapped"

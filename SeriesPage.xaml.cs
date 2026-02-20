@@ -106,6 +106,9 @@ namespace ModernIPTVPlayer
             if (e.NavigationMode == NavigationMode.Back)
             {
                 System.Diagnostics.Debug.WriteLine("[SeriesPage] Back navigation with custom slide animation.");
+                // Refresh CW row so just-watched content appears
+                if (_currentSource == ContentSource.Stremio)
+                    StremioControl.RefreshContinueWatching();
                 return;
             }
             // Controller handles cleanup via NavigatedFrom/Unloaded subscriptions

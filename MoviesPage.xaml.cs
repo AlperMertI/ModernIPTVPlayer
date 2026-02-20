@@ -109,7 +109,10 @@ namespace ModernIPTVPlayer
 
             if (e.NavigationMode == NavigationMode.Back)
             {
-                return; // SKIP full reload on back navigation
+                // Refresh CW row so just-watched content appears
+                if (_currentSource == ContentSource.Stremio)
+                    StremioControl.RefreshContinueWatching();
+                return;
             }
 
             if (e.Parameter is LoginParams p)

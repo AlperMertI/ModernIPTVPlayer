@@ -11,6 +11,7 @@ using System.Threading.Tasks;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services.Stremio;
+using ModernIPTVPlayer.Services.Metadata;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -72,6 +73,89 @@ namespace ModernIPTVPlayer.Controls
 
         public bool HasContent => _discoveryRows.Count > 0 && !_discoveryRows.Any(r => r.IsLoading && r.CatalogName == "Yükleniyor...");
 
+        /// <summary>
+        /// Refreshes only the "Continue Watching" row without reloading all catalogs.
+        /// Call this when returning from the player.
+        /// </summary>
+        public void RefreshContinueWatching()
+        {
+            if (string.IsNullOrEmpty(_currentContentType)) return;
+
+            // Remove any existing CW row
+            var existing = _discoveryRows.FirstOrDefault(r => r.SortIndex == -1);
+            if (existing != null)
+                _discoveryRows.Remove(existing);
+
+            lock (_rowItemsBuffer)
+            {
+                _rowStates.Remove(-1);
+                _rowItemsBuffer.Remove(-1);
+            }
+
+            // Re-inject with fresh history
+            var continueWatching = HistoryManager.Instance.GetContinueWatching(_currentContentType);
+            if (continueWatching.Count == 0) return;
+
+            var cwItems = new ObservableCollection<StremioMediaStream>();
+            foreach (var hist in continueWatching)
+            {
+                var stream = new StremioMediaStream(new StremioMeta
+                {
+                    Id = hist.ParentSeriesId ?? hist.Id,
+                    Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
+                    Poster = hist.PosterUrl,
+                    Type = hist.ParentSeriesId != null ? "series" : _currentContentType
+                });
+                stream.ProgressValue = hist.Duration > 0 ? (hist.Position / hist.Duration) * 100 : 0;
+                cwItems.Add(stream);
+            }
+
+            var cwRow = new CatalogRowViewModel
+            {
+                CatalogName = "İzlemeye Devam Et",
+                Items = cwItems,
+                IsLoading = false,
+                SortIndex = -1
+            };
+
+            // Insert at position 0
+            _discoveryRows.Insert(0, cwRow);
+
+            lock (_rowItemsBuffer)
+            {
+                _rowStates[-1] = RowState.Success;
+                _rowItemsBuffer[-1] = cwRow.Items;
+            }
+
+            // Asynchronously enrich items that have no poster
+            _ = EnrichContinueWatchingMetadataAsync(cwItems);
+        }
+
+        private async Task EnrichContinueWatchingMetadataAsync(ObservableCollection<StremioMediaStream> items)
+        {
+            var provider = new MetadataProvider();
+            foreach (var stream in items)
+            {
+                if (!string.IsNullOrEmpty(stream.PosterUrl)) continue; // Already has poster
+
+                try
+                {
+                    var meta = await provider.GetMetadataAsync(stream);
+                    if (meta?.PosterUrl is string url && !string.IsNullOrEmpty(url))
+                    {
+                        // Update on UI thread so PropertyChanged triggers binding
+                        DispatcherQueue.TryEnqueue(() => stream.PosterUrl = url);
+
+                        // Also persist to history so next time it's available
+                        var histId = stream.IMDbId;
+                        if (!string.IsNullOrEmpty(histId))
+                            HistoryManager.Instance.UpdateProgress(histId, stream.Title, "", 0, 0, posterUrl: url);
+                    }
+                }
+                catch { /* Best effort */ }
+            }
+        }
+
         public async Task LoadDiscoveryAsync(string contentType)
         {
             try
@@ -80,6 +164,9 @@ namespace ModernIPTVPlayer.Controls
                 _loadCts?.Cancel();
                 _loadCts = new System.Threading.CancellationTokenSource();
                 var token = _loadCts.Token;
+
+                // Ensure watch history is loaded before building the CW row
+                await HistoryManager.Instance.InitializeAsync();
 
                 // Optimization: Keep existing content visible if available
                 bool hasExistingContent = _discoveryRows.Count > 0;
@@ -121,6 +208,46 @@ namespace ModernIPTVPlayer.Controls
                     HeroControl.SetLoading(false);
                     _discoveryRows.Clear();
                     return;
+                }
+
+                // --- 0. INJECT CONTINUE WATCHING ROW ---
+                var continueWatching = HistoryManager.Instance.GetContinueWatching(contentType);
+                if (continueWatching.Count > 0)
+                {
+                    var cwItems = new ObservableCollection<StremioMediaStream>();
+                    foreach (var hist in continueWatching)
+                    {
+                        var stream = new StremioMediaStream(new StremioMeta 
+                        { 
+                            Id = hist.ParentSeriesId ?? hist.Id,
+                            Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
+                            Poster = hist.PosterUrl,
+                            Type = hist.ParentSeriesId != null ? "series" : contentType
+                        });
+                        
+                        stream.ProgressValue = hist.Duration > 0 ? (hist.Position / hist.Duration) * 100 : 0;
+                        cwItems.Add(stream);
+                    }
+                    
+                    if (cwItems.Count > 0)
+                    {
+                        var cwRow = new CatalogRowViewModel 
+                        {
+                            CatalogName = "İzlemeye Devam Et",
+                            Items = cwItems,
+                            IsLoading = false,
+                            SortIndex = -1
+                        };
+                        _discoveryRows.Add(cwRow);
+                        
+                        lock(_rowItemsBuffer) {
+                            _rowStates[-1] = RowState.Success;
+                            _rowItemsBuffer[-1] = cwRow.Items;
+                        }
+
+                        // Asynchronously enrich items that have no poster
+                        _ = EnrichContinueWatchingMetadataAsync(cwItems);
+                    }
                 }
 
                 // --- 1. PRE-ALLOCATE SLOTS (To maintain visual priority) ---

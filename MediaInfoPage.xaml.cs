@@ -3294,7 +3294,8 @@ namespace ModernIPTVPlayer
                      int seasonToPass = _selectedEpisode?.SeasonNumber ?? 0;
                      int episodeToPass = _selectedEpisode?.EpisodeNumber ?? 0;
 
-                     await PerformHandoverAndNavigate(_streamUrl, title, videoId, parentIdStr, null, seasonToPass, episodeToPass, resumeSeconds);
+                     string handoverType = (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv") ? "series" : "movie";
+                     await PerformHandoverAndNavigate(_streamUrl, title, videoId, parentIdStr, null, seasonToPass, episodeToPass, resumeSeconds, _item.PosterUrl, handoverType);
                      return;
                 }
                 
@@ -3324,12 +3325,12 @@ namespace ModernIPTVPlayer
                 if (_selectedEpisode != null)
                 {
                      string parentId = _item is SeriesStream ss ? ss.SeriesId.ToString() : null;
-                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber);
+                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, -1, _item.PosterUrl, "series");
                 }
                 else if (_item is LiveStream live)
                 {
                     // Movie / Live
-                    await PerformHandoverAndNavigate(_streamUrl, live.Title, live.StreamId.ToString());
+                    await PerformHandoverAndNavigate(_streamUrl, live.Title, live.StreamId.ToString(), null, null, 0, 0, -1, live.PosterUrl, "iptv");
                 }
                 else
                 {
@@ -3339,7 +3340,7 @@ namespace ModernIPTVPlayer
             }
         }
         
-        private async Task PerformHandoverAndNavigate(string url, string title, string id = null, string parentId = null, string seriesName = null, int season = 0, int episode = 0, double startSeconds = -1)
+        private async Task PerformHandoverAndNavigate(string url, string title, string id = null, string parentId = null, string seriesName = null, int season = 0, int episode = 0, double startSeconds = -1, string posterUrl = null, string type = null)
         {
             _isHandoffInProgress = true;
             // Handoff Logic
@@ -3400,12 +3401,12 @@ namespace ModernIPTVPlayer
                 
                 // Navigate
                 Debug.WriteLine($"[MediaInfoPage:Handoff] Navigating to PlayerPage for {url} | StartSeconds: {startSeconds} | HasHandoff: {App.HandoffPlayer != null}");
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type));
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[MediaInfoPage:Handoff] ERROR: {ex}");
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type));
             }
         }
         
@@ -3483,8 +3484,10 @@ namespace ModernIPTVPlayer
                     {
                         var firstStream = firstAddon?.Streams?.FirstOrDefault(s => !string.IsNullOrEmpty(s.Url));
                         {
-                            string parentIdStr = _item is Models.Stremio.StremioMediaStream stremioItem && (stremioItem.Meta.Type == "series" || stremioItem.Meta.Type == "tv") ? stremioItem.Meta.Id : null;
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds));
+                            var stremioMeta = (_item as Models.Stremio.StremioMediaStream)?.Meta;
+                            string autoParentIdStr = stremioMeta != null && (stremioMeta.Type == "series" || stremioMeta.Type == "tv") ? stremioMeta.Id : null;
+                            string autoStreamType = (stremioMeta?.Type == "series" || stremioMeta?.Type == "tv") ? "series" : "movie";
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, autoParentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType));
                             return;
                         }
                     }
@@ -3805,7 +3808,8 @@ namespace ModernIPTVPlayer
                                                     // [FIX] Use direct navigation for new sources that haven't been pre-buffered.
                                                     // PerformHandoverAndNavigate requires the player to already be playing the content.
                                                     string parentIdStr = _item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv") ? sms.Meta.Id : null;
-                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds));
+                                                    string autoStreamType = (_item is Models.Stremio.StremioMediaStream sms2 && (sms2.Meta.Type == "series" || sms2.Meta.Type == "tv")) ? "series" : "movie";
+                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType));
                                                     return;
                                                 }
                                             }
@@ -4137,8 +4141,20 @@ namespace ModernIPTVPlayer
                     // [FIX] Direct Navigation for Stremio Sources (No Handoff)
                     // We cannot use Handoff because MediaInfoPlayer has not pre-buffered this specific URL.
                     // Doing Handoff would pass an empty/uninitialized player to PlayerPage.
-                    string parentIdStr = _item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv") ? sms.Meta.Id : null;
-                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds));
+                    string streamType = "movie";
+                    string parentIdStr = null;
+                    if (_item is SeriesStream ss)
+                    {
+                        streamType = "series";
+                        parentIdStr = ss.SeriesId.ToString();
+                    }
+                    else if (_item is Models.Stremio.StremioMediaStream stType && (stType.Meta.Type == "series" || stType.Meta.Type == "tv"))
+                    {
+                        streamType = "series";
+                        parentIdStr = stType.Meta.Id;
+                    }
+
+                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType));
                 }
                 else if (!string.IsNullOrEmpty(vm.ExternalUrl))
                 {
@@ -4230,13 +4246,13 @@ namespace ModernIPTVPlayer
                          catch {}
                      }
                      
-                     HistoryManager.Instance.UpdateProgress(_selectedEpisode.Id, _selectedEpisode.Title, _streamUrl, 0, 0, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber);
+                     HistoryManager.Instance.UpdateProgress(_selectedEpisode.Id, _selectedEpisode.Title, _streamUrl, 0, 0, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, null, null, null, _item.PosterUrl, "series");
                      PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, 0);
                 }
                 else if (_item is LiveStream live)
                 {
                     // Update History to 0
-                    HistoryManager.Instance.UpdateProgress(live.StreamId.ToString(), live.Title, live.StreamUrl, 0, 0, null, null, 0, 0);
+                    HistoryManager.Instance.UpdateProgress(live.StreamId.ToString(), live.Title, live.StreamUrl, 0, 0, null, null, 0, 0, null, null, null, live.PosterUrl, "iptv");
                     
                      // [Fix] Force seek to 0 before handoff
                      if (MediaInfoPlayer != null)
@@ -5048,7 +5064,7 @@ namespace ModernIPTVPlayer
                      seriesId,
                      seriesName,
                      ep.SeasonNumber, 
-                     ep.EpisodeNumber);
+                     ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series");
 
                  // Update UI
                  ep.IsWatched = true;
@@ -5100,7 +5116,7 @@ namespace ModernIPTVPlayer
                              seriesId,
                              seriesName,
                              ep.SeasonNumber, 
-                             ep.EpisodeNumber);
+                             ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series");
                              
                          ep.IsWatched = true;
                          ep.ProgressPercent = 0;
@@ -5140,7 +5156,7 @@ namespace ModernIPTVPlayer
                      seriesId,
                      seriesName,
                      ep.SeasonNumber, 
-                     ep.EpisodeNumber);
+                     ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series");
                      
                 // Update UI
                 ep.IsWatched = false;

@@ -127,6 +127,9 @@ namespace ModernIPTVPlayer.Controls
             {
                 PosterImage.Source = null;
                 PosterImage.Opacity = 0;
+                PosterShimmer.Visibility = Visibility.Collapsed;
+                // If there's no image, we should probably show the title so the user knows what it is
+                IsTitleVisible = true;
             }
             else
             {
