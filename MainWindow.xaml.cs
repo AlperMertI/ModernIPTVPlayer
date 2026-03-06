@@ -90,10 +90,27 @@ namespace ModernIPTVPlayer
         {
             var point = e.GetCurrentPoint(RootGrid).Position;
             
-            // Sidebar Trigger
+            // Sidebar Trigger (Constrained to Sidebar's vertical area)
             if (!_isSidebarVisible && point.X < 10)
             {
-                ShowSidebar();
+                // Get sidebar vertical bounds
+                var sidebarHeight = CustomNavContainer.ActualHeight;
+                if (sidebarHeight > 0)
+                {
+                    double windowHeight = RootGrid.ActualHeight;
+                    double top = (windowHeight - sidebarHeight) / 2;
+                    double bottom = top + sidebarHeight;
+                    
+                    if (point.Y >= top && point.Y <= bottom)
+                    {
+                        ShowSidebar();
+                    }
+                }
+                else
+                {
+                    // Fallback
+                    ShowSidebar();
+                }
             }
 
             // TitleBar Trigger

@@ -24,12 +24,12 @@
              </Rectangle>
         </Canvas>
 
-        <!-- TOP CONTROL AREA (Trigger + Header) - No fixed height to prevent clipping -->
-        <Grid VerticalAlignment="Top" Width="500" HorizontalAlignment="Center" Background="Transparent" Canvas.ZIndex="10000"
+        <!-- TOP CONTROL AREA (Trigger + Header) - Shifted down to avoid AppTitleBar (First 50px) -->
+        <Grid VerticalAlignment="Top" Width="500" Height="80" Margin="0,60,0,0" HorizontalAlignment="Center" Background="Transparent" Canvas.ZIndex="10000"
               PointerEntered="Header_PointerEntered" PointerExited="Header_PointerExited">
             
             <!-- FLOATING HEADER (Auto-Hide) -->
-            <Grid x:Name="FloatingHeader" Height="50" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,5,0,0"
+            <Grid x:Name="FloatingHeader" Height="50" VerticalAlignment="Center" HorizontalAlignment="Center"
                   Opacity="0" IsHitTestVisible="False">
                 
                 <Grid.Transitions>

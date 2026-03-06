@@ -32,9 +32,9 @@
             <!-- Compact Glassmorphism Sidebar (Floats over content) -->
             <Grid x:Name="CustomNavContainer" 
                   HorizontalAlignment="Left"
-                  VerticalAlignment="Stretch"
+                  VerticalAlignment="Center"
                   Width="60"
-                  Margin="16,64,0,32"
+                  Margin="16,0,0,0"
                   Background="Transparent"
                   Canvas.ZIndex="1000"
                   PointerEntered="CustomNavContainer_PointerEntered"
@@ -44,8 +44,8 @@
                     <TranslateTransform x:Name="SidebarTranslate" X="0"/>
                 </Grid.RenderTransform>
             
-                <!-- Visual wrapper that centers the sidebar vertically and prevents it from over-stretching -->
-                <Grid VerticalAlignment="Center" HorizontalAlignment="Left">
+                <!-- Visual wrapper -->
+                <Grid HorizontalAlignment="Left">
                     <!-- Glass Background with Border -->
                     <Border x:Name="GlassBorder"
                             Width="60"

@@ -40,8 +40,9 @@ namespace ModernIPTVPlayer.Controls
 
         // Hero Priority Logic
         private enum RowState { Pending, Success, Failed }
-        private Dictionary<int, RowState> _rowStates = new();
-        private Dictionary<int, ObservableCollection<StremioMediaStream>> _rowItemsBuffer = new();
+        private Dictionary<string, RowState> _rowStates = new();
+        private Dictionary<string, ObservableCollection<StremioMediaStream>> _rowItemsBuffer = new();
+        private List<string> _heroPriorityOrder = new();
 
         public StremioDiscoveryControl()
         {
@@ -64,8 +65,8 @@ namespace ModernIPTVPlayer.Controls
             {
                 if (!string.IsNullOrEmpty(_currentContentType))
                 {
-                    System.Diagnostics.Debug.WriteLine("[StremioControl] Addons changed/loaded. Reloading discovery...");
-                    _discoveryRows.Clear();
+                    System.Diagnostics.Debug.WriteLine("[StremioControl] Addons changed/loaded. Reloading discovery incrementally...");
+                    // We don't clear here anymore, we do an additive/incremental pass.
                     await LoadDiscoveryAsync(_currentContentType);
                 }
             });
@@ -88,8 +89,8 @@ namespace ModernIPTVPlayer.Controls
 
             lock (_rowItemsBuffer)
             {
-                _rowStates.Remove(-1);
-                _rowItemsBuffer.Remove(-1);
+                _rowStates.Remove("CW");
+                _rowItemsBuffer.Remove("CW");
             }
 
             // Re-inject with fresh history
@@ -115,6 +116,7 @@ namespace ModernIPTVPlayer.Controls
                 CatalogName = "İzlemeye Devam Et",
                 Items = cwItems,
                 IsLoading = false,
+                RowId = "CW",
                 SortIndex = -1
             };
 
@@ -123,8 +125,8 @@ namespace ModernIPTVPlayer.Controls
 
             lock (_rowItemsBuffer)
             {
-                _rowStates[-1] = RowState.Success;
-                _rowItemsBuffer[-1] = cwRow.Items;
+                _rowStates["CW"] = RowState.Success;
+                _rowItemsBuffer["CW"] = cwRow.Items;
             }
 
             // Asynchronously enrich items that have no poster
@@ -229,6 +231,7 @@ namespace ModernIPTVPlayer.Controls
                         cwItems.Add(stream);
                     }
                     
+                    
                     if (cwItems.Count > 0)
                     {
                         var cwRow = new CatalogRowViewModel 
@@ -236,13 +239,18 @@ namespace ModernIPTVPlayer.Controls
                             CatalogName = "İzlemeye Devam Et",
                             Items = cwItems,
                             IsLoading = false,
+                            RowId = "CW",
                             SortIndex = -1
                         };
-                        _discoveryRows.Add(cwRow);
+                        
+                        if (!_discoveryRows.Any(r => r.RowId == "CW"))
+                        {
+                            _discoveryRows.Add(cwRow);
+                        }
                         
                         lock(_rowItemsBuffer) {
-                            _rowStates[-1] = RowState.Success;
-                            _rowItemsBuffer[-1] = cwRow.Items;
+                            _rowStates["CW"] = RowState.Success;
+                            _rowItemsBuffer["CW"] = cwItems;
                         }
 
                         // Asynchronously enrich items that have no poster
@@ -251,8 +259,9 @@ namespace ModernIPTVPlayer.Controls
                 }
 
                 // --- 1. PRE-ALLOCATE SLOTS (To maintain visual priority) ---
-                var slotMap = new List<(string BaseUrl, StremioCatalog Catalog, int SortIndex)>();
+                var slotMap = new List<(string BaseUrl, StremioCatalog Catalog, int SortIndex, string RowId)>();
                 int globalIndex = 0;
+                var newPriorityOrder = new List<string>();
                 
                 foreach (var (url, manifest) in addons)
                 {
@@ -264,10 +273,47 @@ namespace ModernIPTVPlayer.Controls
 
                     foreach (var cat in relevantCatalogs)
                     {
-                        // DYNAMIC SORTING: We no longer add skeletons here.
-                        // We simply track the "intended" order (globalIndex).
-                        slotMap.Add((url, cat, globalIndex));
+                        string rowId = $"{url}|{cat.Id}|{cat.Name}";
+                        newPriorityOrder.Add(rowId);
+                        
+                        var existingRow = _discoveryRows.FirstOrDefault(r => r.RowId == rowId);
+                        if (existingRow != null)
+                        {
+                            existingRow.SortIndex = globalIndex;
+                        }
+                        else
+                        {
+                            slotMap.Add((url, cat, globalIndex, rowId));
+                        }
                         globalIndex++;
+                    }
+                }
+                
+                _heroPriorityOrder = newPriorityOrder;
+
+                // Sync UI rows by removing stale ones, except CW
+                for (int i = _discoveryRows.Count - 1; i >= 0; i--)
+                {
+                    var row = _discoveryRows[i];
+                    if (row.RowId != "CW" && !_heroPriorityOrder.Contains(row.RowId))
+                    {
+                        _discoveryRows.RemoveAt(i);
+                        lock(_rowItemsBuffer) {
+                            _rowStates.Remove(row.RowId);
+                            _rowItemsBuffer.Remove(row.RowId);
+                        }
+                    }
+                }
+                
+                // Keep ObservableCollection sorted by SortIndex
+                for (int i = 0; i < _discoveryRows.Count - 1; i++)
+                {
+                    for (int j = i + 1; j < _discoveryRows.Count; j++)
+                    {
+                        if (_discoveryRows[i].SortIndex > _discoveryRows[j].SortIndex)
+                        {
+                             _discoveryRows.Move(j, i);
+                        }
                     }
                 }
 
@@ -286,15 +332,12 @@ namespace ModernIPTVPlayer.Controls
                 }
 
                 // --- 2. LAUNCH PARALLEL FETCHES ---
-                // --- 2. LAUNCH PARALLEL FETCHES ---
-                // Reset Hero Logic on Load
-                _rowStates.Clear();
-                _rowItemsBuffer.Clear();
+                // We do NOT Clear _rowStates because we are incremental
                 
-                // Initialize states
-                foreach (var (_, _, sortIndex) in slotMap)
+                // Initialize states for new fetches
+                foreach (var (_, _, _, rowId) in slotMap)
                 {
-                    _rowStates[sortIndex] = RowState.Pending;
+                    _rowStates[rowId] = RowState.Pending;
                 }
 
                 // Helper to Update Hero based on Priority Chain
@@ -302,12 +345,13 @@ namespace ModernIPTVPlayer.Controls
                 {
                     DispatcherQueue.TryEnqueue(() =>
                     {
-                        // Iterate strictly by priority index (0, 1, 2...)
-                        var sortedKeys = _rowStates.Keys.OrderBy(k => k).ToList();
+                        var orderToCheck = new List<string>();
+                        orderToCheck.AddRange(_heroPriorityOrder);
                         
-                        foreach (var idx in sortedKeys)
+                        foreach (var rowId in orderToCheck)
                         {
-                            var state = _rowStates[idx];
+                            if (!_rowStates.ContainsKey(rowId)) continue;
+                            var state = _rowStates[rowId];
                             if (state == RowState.Pending)
                             {
                                 // Strict Wait: Highest priority is still loading -> Show Shimmer
@@ -317,12 +361,22 @@ namespace ModernIPTVPlayer.Controls
                             
                             if (state == RowState.Success)
                             {
-                                // Success: This is the winner. Set items and STOP.
-                                if (_rowItemsBuffer.ContainsKey(idx))
+                                // Harvest up to 5 items total from all successful highest priority rows
+                                var aggregatedHeroItems = new List<StremioMediaStream>();
+                                foreach (var rid in orderToCheck)
                                 {
-                                    HeroControl.SetLoading(false);
-                                    HeroControl.SetItems(_rowItemsBuffer[idx].Take(5));
+                                    if (_rowStates.TryGetValue(rid, out var rowState) && rowState == RowState.Success)
+                                    {
+                                        if (_rowItemsBuffer.TryGetValue(rid, out var rowItems))
+                                        {
+                                            aggregatedHeroItems.AddRange(rowItems);
+                                            if (aggregatedHeroItems.Count >= 5) break;
+                                        }
+                                    }
                                 }
+                                
+                                HeroControl.SetLoading(false);
+                                HeroControl.SetItems(aggregatedHeroItems.Take(5));
                                 return;
                             }
                             
@@ -336,7 +390,7 @@ namespace ModernIPTVPlayer.Controls
 
                 var tasks = new List<Task>();
 
-                foreach (var (url, cat, sortIndex) in slotMap)
+                foreach (var (url, cat, sortIndex, rowId) in slotMap)
                 {
                     if (token.IsCancellationRequested) break;
 
@@ -355,12 +409,13 @@ namespace ModernIPTVPlayer.Controls
                                 if (rowResult != null && rowResult.Items.Count > 0)
                                 {
                                     rowResult.SortIndex = sortIndex;
+                                    rowResult.RowId = rowId;
                                     rowResult.IsLoading = false;
 
                                     // Store for Hero Logic
                                     lock(_rowItemsBuffer) {
-                                        _rowStates[sortIndex] = RowState.Success;
-                                        _rowItemsBuffer[sortIndex] = rowResult.Items;
+                                        _rowStates[rowId] = RowState.Success;
+                                        _rowItemsBuffer[rowId] = rowResult.Items;
                                     }
 
                                     // DYNAMIC INSERTION: Find correct index to insert
@@ -383,7 +438,7 @@ namespace ModernIPTVPlayer.Controls
                                 {
                                     // No results -> Mark as failed for Hero purposes so we skip to next
                                     lock(_rowItemsBuffer) {
-                                        _rowStates[sortIndex] = RowState.Failed;
+                                        _rowStates[rowId] = RowState.Failed;
                                     }
                                     UpdateHeroState();
                                 }
@@ -395,7 +450,7 @@ namespace ModernIPTVPlayer.Controls
                              DispatcherQueue.TryEnqueue(() => 
                             {
                                 lock(_rowItemsBuffer) {
-                                    _rowStates[sortIndex] = RowState.Failed;
+                                    _rowStates[rowId] = RowState.Failed;
                                 }
                                 UpdateHeroState();
                             });

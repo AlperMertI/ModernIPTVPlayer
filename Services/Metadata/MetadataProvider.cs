@@ -19,7 +19,7 @@ namespace ModernIPTVPlayer.Services.Metadata
         private readonly ConcurrentDictionary<string, (UnifiedMetadata Data, DateTime Expiry)> _resultCache = new();
         private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(2); // Short term cache
 
-        public async Task<UnifiedMetadata> GetMetadataAsync(Models.IMediaStream stream)
+        public async Task<UnifiedMetadata> GetMetadataAsync(Models.IMediaStream stream, Action<string> onBackdropFound = null)
         {
             if (stream == null) return null;
             
@@ -31,18 +31,23 @@ namespace ModernIPTVPlayer.Services.Metadata
             // 1. Check Result Cache
             if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
             {
+                // If cached, trigger callback for all existing backdrops immediately
+                if (onBackdropFound != null && cached.Data.BackdropUrls != null)
+                {
+                    foreach (var bg in cached.Data.BackdropUrls) onBackdropFound(bg);
+                }
                 return cached.Data;
             }
 
             // 2. Check Active Tasks (Deduplication)
-            return await _activeTasks.GetOrAdd(cacheKey, _ => GetMetadataInternalAsync(id ?? stream.Title, type, stream, cacheKey));
+            return await _activeTasks.GetOrAdd(cacheKey, _ => GetMetadataInternalAsync(id ?? stream.Title, type, stream, cacheKey, onBackdropFound));
         }
 
-        private async Task<UnifiedMetadata> GetMetadataInternalAsync(string id, string type, Models.IMediaStream sourceStream, string cacheKey)
+        private async Task<UnifiedMetadata> GetMetadataInternalAsync(string id, string type, Models.IMediaStream sourceStream, string cacheKey, Action<string> onBackdropFound = null)
         {
             try
             {
-                var result = await GetMetadataAsync(id, type, sourceStream);
+                var result = await GetMetadataAsync(id, type, sourceStream, onBackdropFound);
                 
                 if (result != null)
                 {
@@ -59,7 +64,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private readonly StremioService _stremioService = StremioService.Instance;
 
-        private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null)
+        private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null, Action<string> onBackdropFound = null)
         {
              // This overload DOES NOT CHECK CACHE!
             var metadata = new UnifiedMetadata 
@@ -95,7 +100,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                             
                         foreach(var bg in additionalBackdrops)
                         {
-                            AddUniqueBackdrop(metadata, bg);
+                            AddUniqueBackdrop(metadata, bg, onBackdropFound);
                         }
                         
                         if (metadata.BackdropUrls.Count > 0)
@@ -166,7 +171,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                             if (currentStremioMeta.Background != null)
                             {
-                                AddUniqueBackdrop(metadata, currentStremioMeta.Background);
+                                AddUniqueBackdrop(metadata, currentStremioMeta.Background, onBackdropFound);
                             }
 
                             // Deep Image Enrichment: If this addon provides a TMDB ID, use it for images
@@ -185,7 +190,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                     
                                 foreach(var bg in additionalBackdrops)
                                 {
-                                    AddUniqueBackdrop(metadata, bg);
+                                    AddUniqueBackdrop(metadata, bg, onBackdropFound);
                                 }
                                 hasCheckedImagesForThisId = true;
                                 if (additionalBackdrops.Count > 0)
@@ -707,14 +712,18 @@ namespace ModernIPTVPlayer.Services.Metadata
             metadata.Seasons = metadata.Seasons.OrderBy(s => s.SeasonNumber).ToList();
         }
 
-        private void AddUniqueBackdrop(UnifiedMetadata metadata, string url)
+        private void AddUniqueBackdrop(UnifiedMetadata metadata, string url, Action<string> onBackdropFound = null)
         {
             if (string.IsNullOrEmpty(url)) return;
             
             string id = ExtractImageId(url);
             if (string.IsNullOrEmpty(id))
             {
-                if (!metadata.BackdropUrls.Contains(url)) metadata.BackdropUrls.Add(url);
+                if (!metadata.BackdropUrls.Contains(url)) 
+                {
+                    metadata.BackdropUrls.Add(url);
+                    onBackdropFound?.Invoke(url);
+                }
                 return;
             }
 
@@ -731,6 +740,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (existingIndex == -1)
             {
                 metadata.BackdropUrls.Add(url);
+                onBackdropFound?.Invoke(url);
             }
             else
             {
@@ -738,6 +748,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (GetQualityScore(url) > GetQualityScore(existingUrl))
                 {
                     metadata.BackdropUrls[existingIndex] = url;
+                    // Note: Quality improvement might not need a re-trigger to the slideshow 
+                    // unless we want to replace the current display image. 
+                    // For now, only new additions trigger.
                 }
             }
         }

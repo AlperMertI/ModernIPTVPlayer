@@ -194,11 +194,13 @@ namespace ModernIPTVPlayer
                     int maxCons = 1;
                     try
                     {
-                        var authData = JsonSerializer.Deserialize<XtreamAuthResponse>(authJson);
+                        var authData = JsonSerializer.Deserialize<XtreamAuthResponse>(authJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                         if (authData?.UserInfo != null)
                         {
                             maxCons = authData.UserInfo.MaxConnections;
-                            System.Diagnostics.Debug.WriteLine($"[Login] Max Connections: {maxCons}");
+                            p.ExpiryDate = authData.UserInfo.FormattedExpiryDate;
+                            SaveAllPlaylists();
+                            System.Diagnostics.Debug.WriteLine($"[Login] Max Connections: {maxCons}, Expiry: {p.ExpiryDate}");
                         }
                     }
                     catch { /* Fallback to 1 */ }

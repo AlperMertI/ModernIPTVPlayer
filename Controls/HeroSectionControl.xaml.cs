@@ -26,6 +26,7 @@ namespace ModernIPTVPlayer.Controls
         // Data
         private List<StremioMediaStream> _heroItems = new();
         private int _currentHeroIndex = 0;
+        private string _currentHeroId = string.Empty;
         private bool _heroTransitioning = false;
         private DispatcherTimer _heroAutoTimer;
 
@@ -63,13 +64,35 @@ namespace ModernIPTVPlayer.Controls
 
         public void SetItems(IEnumerable<StremioMediaStream> items)
         {
-            _heroItems = items.ToList();
-            if (_heroItems.Count > 0)
+            var newItems = items.ToList();
+            if (newItems.Count == 0) return;
+
+            // Check if the top hero item is basically the same.
+            // If so, we just update the background list and do NOT trigger a visual transition.
+            string newTopId = newItems[0].IMDbId ?? newItems[0].Id.ToString();
+            
+            if (_heroItems.Count > 0 && newTopId == _currentHeroId && !HeroShimmer.Visibility.Equals(Visibility.Visible))
             {
-                _currentHeroIndex = 0;
-                UpdateHeroSection(_heroItems[0]);
-                StartHeroAutoRotation();
+                // Items match visually, just quietly update the rotation list behind the scenes
+                // We must preserve the currently active item's index in the NEW list to not break rotation
+                int newIndex = newItems.FindIndex(x => (x.IMDbId ?? x.Id.ToString()) == _currentHeroId);
+                
+                _heroItems = newItems;
+                _currentHeroIndex = newIndex >= 0 ? newIndex : 0;
+                
+                // Ensure timer is running if we now have more items
+                if (_heroItems.Count > 1 && (_heroAutoTimer == null || !_heroAutoTimer.IsEnabled))
+                {
+                    StartHeroAutoRotation();
+                }
+                return;
             }
+
+            // A genuinely new top item arrived (or first load)
+            _heroItems = newItems;
+            _currentHeroIndex = 0;
+            UpdateHeroSection(_heroItems[0]);
+            StartHeroAutoRotation();
         }
 
         private void SetupHeroCompositionMask()
@@ -171,6 +194,16 @@ namespace ModernIPTVPlayer.Controls
             }
 
             string imgUrl = item.Meta?.Background ?? item.PosterUrl;
+            string itemId = item.IMDbId ?? item.Id.ToString();
+
+            // Prevent redundant assignments and flickering
+            if (_currentHeroId == itemId && !HeroShimmer.Visibility.Equals(Visibility.Visible))
+            {
+                // We're already showing this item. No need to reload surface/extract colors again.
+                return;
+            }
+
+            _currentHeroId = itemId;
 
             // Trigger color extraction via hidden image
             if (!string.IsNullOrEmpty(imgUrl))

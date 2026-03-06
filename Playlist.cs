@@ -21,8 +21,23 @@ namespace ModernIPTVPlayer
         public string Host { get; set; } = string.Empty;
         public string Username { get; set; } = string.Empty;
         public string Password { get; set; } = string.Empty;
+        public string ExpiryDate { get; set; } = string.Empty;
+        
+        public bool IsExpired
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(ExpiryDate) || ExpiryDate == "Sonsuz" || ExpiryDate == "Belirsiz") return false;
+                if (DateTime.TryParseExact(ExpiryDate, "dd.MM.yyyy", null, System.Globalization.DateTimeStyles.None, out DateTime expDate))
+                {
+                    return expDate < DateTime.Now;
+                }
+                return false;
+            }
+        }
 
         public string Description => Type == PlaylistType.M3u ? Url : Host;
         public bool IsLastUsed => AppSettings.LastPlaylistId == Id;
+        public bool IsActiveBadgeVisible => IsLastUsed && !IsExpired;
     }
 }
