@@ -96,8 +96,8 @@ public sealed partial class MpvPlayer : Control
             Player.Client.SetProperty("vo", "libmpv");
             Player.Client.RequestLogMessage(MpvLogLevel.Info);
             Player.LogMessageReceived += OnLogMessageReceived;
-            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle);
-            Debug.WriteLine("[LOG] MPV Player Initialized Successfully.");
+            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, RenderApi);
+            Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
 
@@ -250,6 +250,23 @@ public sealed partial class MpvPlayer : Control
             try
             {
                 var val = Player.Client.GetPropertyToDouble("duration");
+                return TimeSpan.FromSeconds(val);
+            }
+            catch 
+            {
+                return TimeSpan.Zero;
+            }
+        }
+    }
+
+    public TimeSpan Position
+    {
+        get
+        {
+            if (Player == null) return TimeSpan.Zero;
+            try
+            {
+                var val = Player.Client.GetPropertyToDouble("time-pos");
                 return TimeSpan.FromSeconds(val);
             }
             catch 

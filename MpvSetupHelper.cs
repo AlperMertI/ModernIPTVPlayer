@@ -55,6 +55,16 @@ namespace ModernIPTVPlayer
                 // 3. Apply Player Settings from AppSettings
                 var pSettings = AppSettings.PlayerSettings;
 
+                // 3a. Preferred Languages
+                if (!string.IsNullOrEmpty(pSettings.PreferredAudioLanguage))
+                {
+                    await SetPropertySafeAsync(player, "alang", pSettings.PreferredAudioLanguage);
+                }
+                if (!string.IsNullOrEmpty(pSettings.PreferredSubtitleLanguage))
+                {
+                    await SetPropertySafeAsync(player, "slang", pSettings.PreferredSubtitleLanguage);
+                }
+
                 // Force D3D11 usage for Windows
                 // We rely on the internal D3D11RenderControl to handle the SwapChain and Context.
                 // Do NOT manually set gpu-context or gpu-api as it conflicts with the wrapper's initialization.
@@ -71,7 +81,7 @@ namespace ModernIPTVPlayer
                     Models.HardwareDecoding.AutoSafe => "auto-safe",
                     Models.HardwareDecoding.AutoCopy => "auto-copy",
                     Models.HardwareDecoding.No => "no",
-                    _ => "auto-copy"
+                    _ => "auto-safe"
                 };
                 
 

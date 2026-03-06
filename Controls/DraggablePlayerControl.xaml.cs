@@ -55,6 +55,24 @@ namespace ModernIPTVPlayer.Controls
                 {
                     // NEW INSTANCE MODE
                     Player = new MpvPlayer();
+
+                    try 
+                    {
+                        var pSettings = AppSettings.PlayerSettings;
+                        if (pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
+                        {
+                            Player.RenderApi = "d3d11";
+                        }
+                        else
+                        {
+                            Player.RenderApi = "dxgi";
+                        }
+                    }
+                    catch
+                    {
+                        Player.RenderApi = "d3d11";
+                    }
+
                     PlayerHost.Children.Add(Player);
                     Player.HorizontalAlignment = HorizontalAlignment.Stretch;
                     Player.VerticalAlignment = VerticalAlignment.Stretch;

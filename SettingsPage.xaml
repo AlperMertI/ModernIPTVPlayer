@@ -189,6 +189,10 @@
                             <ComboBoxItem Content="7.1 Surround" Tag="Surround71"/>
                         </ComboBox>
 
+                        <!-- Preferred Languages -->
+                        <TextBox x:Name="PreferredAudioLangBox" Header="Tercih Edilen Ses Dilleri" PlaceholderText="örn: tur,eng,tr" ToolTipService.ToolTip="Virgülle ayrılmış dil kodları (ISO 639). MPV bu sırayla eşleşen ilk sesi seçer." TextChanged="PreferredLang_TextChanged"/>
+                        <TextBox x:Name="PreferredSubtitleLangBox" Header="Tercih Edilen Altyazı Dilleri" PlaceholderText="örn: tur,eng,tr" ToolTipService.ToolTip="Virgülle ayrılmış dil kodları (ISO 639). MPV bu sırayla eşleşen ilk altyazıyı seçer." TextChanged="PreferredLang_TextChanged"/>
+
                         <!-- Toggles Grid -->
                         <Grid ColumnSpacing="10" Margin="0,5,0,0">
                             <Grid.ColumnDefinitions>

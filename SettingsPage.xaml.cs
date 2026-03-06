@@ -227,6 +227,8 @@ namespace ModernIPTVPlayer
 
                 DebandToggle.IsOn = settings.Deband == Models.DebandMode.Yes;
                 ExclusiveToggle.IsOn = settings.ExclusiveAudio == Models.ExclusiveMode.Yes;
+                PreferredAudioLangBox.Text = settings.PreferredAudioLanguage ?? "";
+                PreferredSubtitleLangBox.Text = settings.PreferredSubtitleLanguage ?? "";
                 CustomConfigBox.Text = settings.CustomConfig ?? "";
 
                 // Update UI state based on profile (e.g. enable/disable custom config if needed, though plan says always editable)
@@ -320,6 +322,12 @@ namespace ModernIPTVPlayer
             // We usually save immediately in this app.
             OnPlayerSettingChanged();
         }
+        
+        private void PreferredLang_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isUpdatingProfile) return;
+            OnPlayerSettingChanged();
+        }
 
         private void OnPlayerSettingChanged()
         {
@@ -392,6 +400,8 @@ namespace ModernIPTVPlayer
 
             settings.Deband = DebandToggle.IsOn ? Models.DebandMode.Yes : Models.DebandMode.No;
             settings.ExclusiveAudio = ExclusiveToggle.IsOn ? Models.ExclusiveMode.Yes : Models.ExclusiveMode.No;
+            settings.PreferredAudioLanguage = PreferredAudioLangBox.Text?.Trim();
+            settings.PreferredSubtitleLanguage = PreferredSubtitleLangBox.Text?.Trim();
             settings.CustomConfig = CustomConfigBox.Text;
 
             return settings;

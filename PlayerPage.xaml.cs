@@ -250,17 +250,16 @@ namespace ModernIPTVPlayer
                 bool isLikelyLive = (!isSeekable) 
                                     || (isMpegTs && duration > 0 && duration < 600); 
 
-                // Track Progress (VOD only)
-                if (!isLikelyLive && _navArgs != null && position > 1 && duration > 0)
-                {
-                     string id = !string.IsNullOrEmpty(_navArgs.Id) ? _navArgs.Id : _navArgs.Url;
-                     
-                     // Capture current Audio and Subtitle Track IDs
-                     string aid = await _mpvPlayer.GetPropertyAsync("aid");
-                     string sid = await _mpvPlayer.GetPropertyAsync("sid");
-
-                     HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, aid, sid, null, _navArgs.PosterUrl, _navArgs.Type);
-                }
+        // Track Progress (VOD only)
+        if (!isLikelyLive && _navArgs != null && position > 1 && duration > 0)
+        {
+             string id = !string.IsNullOrEmpty(_navArgs.Id) ? _navArgs.Id : _navArgs.Url;
+             
+             // [REFINED] Do NOT capture aid/sid here. 
+             // We only save these on EXPLICIT user selection to allow global settings (slang/alang) 
+             // to take precedence unless a manual override exists.
+             HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, null, null, null, _navArgs.PosterUrl, _navArgs.Type);
+        }
 
                 if (!isLikelyLive)
                 {
@@ -354,9 +353,14 @@ namespace ModernIPTVPlayer
                             string hdrStatus = await _mpvPlayer.GetPropertyAsync("video-out-params/sig-peak");
                             string gamma = await _mpvPlayer.GetPropertyAsync("video-out-params/gamma");
                             if (!string.IsNullOrEmpty(hdrStatus) && hdrStatus != "N/A" && double.TryParse(hdrStatus, NumberStyles.Any, CultureInfo.InvariantCulture, out double peak) && peak > 1.0)
-                                _cachedHdr = $"HDR ({peak:F1} nits)";
+                            {
+                                int nits = (int)Math.Round(peak * 203.0);
+                                _cachedHdr = $"HDR ({nits} nits)";
+                            }
                             else
+                            {
                                 _cachedHdr = $"SDR ({gamma})";
+                            }
 
                             // Update UI
                             TxtResolution.Text = _cachedResolution;
@@ -856,6 +860,33 @@ namespace ModernIPTVPlayer
                     // Fast Start prebuffer already sought to the correct position - no need to seek again
                     Debug.WriteLine("[PlayerPage:Handoff] Prebuffer ready, skipping seek logic");
 
+                    // [RESTORE SAVED AUDIO/SUBTITLE TRACKS]
+                    string contentId = !string.IsNullOrEmpty(_navArgs?.Id) ? _navArgs.Id : _streamUrl;
+                    var history = HistoryManager.Instance.GetProgress(contentId);
+                    var pSettings = AppSettings.PlayerSettings;
+
+                    // Logic: If user changed global language preferences AFTER they manually picked a track for this video,
+                    // we should respect the new global preference (override the override).
+                    bool isHistoryStale = history != null && pSettings.PreferredLanguagesUpdatedAt > history.Timestamp;
+
+                    if (history != null && !isHistoryStale)
+                    {
+                        if (!string.IsNullOrEmpty(history.AudioTrackId))
+                        {
+                            Debug.WriteLine($"[PlayerPage:Handoff] Restoring Audio Track: {history.AudioTrackId}");
+                            await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
+                        }
+                        if (!string.IsNullOrEmpty(history.SubtitleTrackId))
+                        {
+                            Debug.WriteLine($"[PlayerPage:Handoff] Restoring Subtitle Track: {history.SubtitleTrackId}");
+                            await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
+                        }
+                    }
+                    else if (isHistoryStale)
+                    {
+                        Debug.WriteLine("[PlayerPage:Handoff] Global language preferences are newer than history. Using global settings.");
+                    }
+
                     // Auto-fetch addon subtitles in background for auto-restore
                     _ = AutoFetchAndRestoreAddonSubtitleAsync();
                 }
@@ -965,7 +996,11 @@ namespace ModernIPTVPlayer
                         // [RESTORE SAVED AUDIO/SUBTITLE TRACKS]
                          string contentId = !string.IsNullOrEmpty(_navArgs?.Id) ? _navArgs.Id : _streamUrl;
                          var history = HistoryManager.Instance.GetProgress(contentId);
-                         if (history != null)
+                         var pSettings = AppSettings.PlayerSettings;
+
+                         bool isHistoryStale = history != null && pSettings.PreferredLanguagesUpdatedAt > history.Timestamp;
+
+                         if (history != null && !isHistoryStale)
                          {
                              if (!string.IsNullOrEmpty(history.AudioTrackId))
                              {
@@ -977,7 +1012,11 @@ namespace ModernIPTVPlayer
                                  Debug.WriteLine($"[PlayerPage] Restoring Subtitle Track: {history.SubtitleTrackId}");
                                  await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
                              }
-                        }
+                         }
+                         else if (isHistoryStale)
+                         {
+                             Debug.WriteLine("[PlayerPage] Global language preferences are newer than history. Using global settings.");
+                         }
 
                         // [FRESH START SEEK LOGIC]
                         // REMOVED: Replaced with 'start' property before OpenAsync for instant seeking.
@@ -2307,6 +2346,16 @@ namespace ModernIPTVPlayer
 
             await _mpvPlayer.SetPropertyAsync("aid", item.Id.ToString());
             ShowOsd($"Ses: {item.Text}");
+
+            // SAVE PREFERENCE
+            double duration = _mpvPlayer.Duration.TotalSeconds;
+            HistoryManager.Instance.UpdateProgress(
+               _navArgs.Id ?? _navArgs.Title, 
+               _navArgs.Title, 
+               _streamUrl, 
+               _mpvPlayer.Position.TotalSeconds, 
+               duration,
+               aid: item.Id.ToString());
         }
 
         private void CloseTracksButton_Click(object sender, RoutedEventArgs e)
@@ -2703,30 +2752,43 @@ namespace ModernIPTVPlayer
             try
             {
                 var history = HistoryManager.Instance.GetProgress(_navArgs.Id ?? _navArgs.Title);
+                SubtitleTrackViewModel match = null;
+
                 if (history != null && !string.IsNullOrEmpty(history.SubtitleTrackUrl))
                 {
-                    var match = _currentSubtitleTracks.FirstOrDefault(t => t.Url == history.SubtitleTrackUrl);
-                    if (match != null)
+                    match = _currentSubtitleTracks.FirstOrDefault(t => t.Url == history.SubtitleTrackUrl);
+                }
+                
+                // If no history match, try PreferredSubtitleLanguage from Settings
+                if (match == null && !string.IsNullOrEmpty(AppSettings.PlayerSettings.PreferredSubtitleLanguage))
+                {
+                    var prefs = AppSettings.PlayerSettings.PreferredSubtitleLanguage.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    foreach (var p in prefs)
                     {
-                        // Match found in the newly fetched/existing list
-                        // 1. Mark as selected in model
-                        foreach (var t in _currentSubtitleTracks) t.IsSelected = (t == match);
-                        match.IsSelected = true;
-
-                        // 2. Explicitly apply to MPV (UI binding might not fire if panel is closed)
-                        if (_mpvPlayer != null)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[InjectAddonSubs] Restoring addon subtitle: {match.Text} ({match.Url})");
-                            _ = _mpvPlayer.ExecuteCommandAsync("sub-add", match.Url);
-                            ShowOsd($"Altyazı Yüklendi: {match.Text}");
-                        }
-
-                        // 3. Sync UI Selection (if visible/initialized)
-                        DispatcherQueue.TryEnqueue(() => 
-                        {
-                            SubtitleListView.SelectedItem = match;
-                        });
+                        match = _currentSubtitleTracks.FirstOrDefault(t => t.IsAddon && (t.Lang.Equals(p, StringComparison.OrdinalIgnoreCase)));
+                        if (match != null) break;
                     }
+                }
+
+                if (match != null)
+                {
+                    // 1. Mark as selected in model
+                    foreach (var t in _currentSubtitleTracks) t.IsSelected = (t == match);
+                    match.IsSelected = true;
+
+                    // 2. Explicitly apply to MPV
+                    if (_mpvPlayer != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[InjectAddonSubs] Auto-selecting subtitle: {match.Text} ({match.Url})");
+                        _ = _mpvPlayer.ExecuteCommandAsync("sub-add", match.Url);
+                        ShowOsd($"Altyazı Otomatik Seçildi: {match.Text}");
+                    }
+
+                    // 3. Sync UI Selection
+                    DispatcherQueue.TryEnqueue(() => 
+                    {
+                        SubtitleListView.SelectedItem = match;
+                    });
                 }
             }
             catch (Exception ex)
@@ -2812,7 +2874,7 @@ namespace ModernIPTVPlayer
                        _navArgs.Id ?? _navArgs.Title, // Use NavArgs ID or Title
                        _navArgs.Title, 
                        _streamUrl, 
-                       duration, 
+                       _mpvPlayer.Position.TotalSeconds, 
                        duration,
                        subUrl: track.Url);
                 }
@@ -2827,7 +2889,7 @@ namespace ModernIPTVPlayer
                        _navArgs.Id ?? _navArgs.Title, 
                        _navArgs.Title, 
                        _streamUrl, 
-                       duration, 
+                       _mpvPlayer.Position.TotalSeconds, 
                        duration,
                        sid: track.Id.ToString(),
                        subUrl: null);

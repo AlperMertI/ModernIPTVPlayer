@@ -118,6 +118,7 @@ namespace ModernIPTVPlayer
         private List<BackdropEntry> _validatedBackdrops = new List<BackdropEntry>();
         private System.Threading.SemaphoreSlim _validationLock = new System.Threading.SemaphoreSlim(1, 1);
         private bool _isFirstImageApplied = false;
+        private bool _isHeroTransitionInProgress = false;
 
         private class BackdropEntry
         {
@@ -319,11 +320,28 @@ namespace ModernIPTVPlayer
         {
             if (item1 == null || item2 == null) return false;
             
-            // Compare by ID
+            // 1. Exact ID match (IMDb, TMDB, or internal)
             string id1 = item1.IMDbId ?? item1.Id.ToString();
             string id2 = item2.IMDbId ?? item2.Id.ToString();
             
-            return id1 == id2;
+            // [STABILITY] Strip prefixes like "imdb_id:" vs "tt" to help matching
+            if (id1 != null && id2 != null)
+            {
+                string clean1 = id1.Replace("imdb_id:", "").Replace("tmdb:", "");
+                string clean2 = id2.Replace("imdb_id:", "").Replace("tmdb:", "");
+                if (clean1 == clean2) return true;
+            }
+
+            // 2. Title match (Safety fallback for same context metadata enrichment)
+            if (!string.IsNullOrEmpty(item1.Title) && !string.IsNullOrEmpty(item2.Title))
+            {
+                if (item1.Title.Trim().Equals(item2.Title.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            
+            return false;
         }
 
         private void UpdateLayoutState(bool isWide)
@@ -1055,6 +1073,7 @@ namespace ModernIPTVPlayer
             _currentStremioVideoId = null;
             _unifiedMetadata = null;
             _slideshowId = null; // Important: Force slideshow reset
+            _isHeroImage1Active = true; 
 
             if (CastListView != null) CastListView.ItemsSource = null;
             if (NarrowCastListView != null) NarrowCastListView.ItemsSource = null;
@@ -1093,6 +1112,7 @@ namespace ModernIPTVPlayer
             OverviewShimmer.Visibility = Visibility.Collapsed;
             CastShimmer.Visibility = Visibility.Collapsed;
 
+            _isHeroTransitionInProgress = false; // Reset transition flag on item switch
             System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Page state reset complete.");
         }
 
@@ -1360,7 +1380,7 @@ namespace ModernIPTVPlayer
             // the reset usually occurs when the whole slideshow restarts.
             // By fixing StartBackgroundSlideshow's early return, we prevent the reset.
 
-            element.Opacity = 1; 
+            // element.Opacity = 1; // [REM] Removed to prevent flashes during crossfade. Caller handles visibility.
             
             // CenterPoint handled by EnsureHeroVisuals now, but safe to set initial
              if (element is FrameworkElement fe)
@@ -1399,11 +1419,16 @@ namespace ModernIPTVPlayer
                 _slideshowTimer.Stop();
                 _slideshowTimer = null;
             }
-            _backdropUrls = null;
+            _backdropUrls?.Clear();
+            _isHeroImage1Active = true;
+            _isFirstImageApplied = false;
             _lastKenBurnsElement = null;
             _backdropKeys.Clear();
             _lastVisualSignature = null;
             _validatedBackdrops.Clear();
+            
+            if (HeroImage != null) HeroImage.Source = null;
+            if (HeroImage2 != null) HeroImage2.Source = null;
         }
 
         private async Task<string> CalculateVisualSignatureAsync(Image img)
@@ -3145,6 +3170,26 @@ namespace ModernIPTVPlayer
             if (MediaInfoPlayer == null)
             {
                 MediaInfoPlayer = new MpvWinUI.MpvPlayer();
+
+                try 
+                {
+                    var pSettings = AppSettings.PlayerSettings;
+                    if (pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
+                    {
+                        MediaInfoPlayer.RenderApi = "d3d11";
+                    }
+                    else
+                    {
+                        MediaInfoPlayer.RenderApi = "dxgi";
+                    }
+                    Debug.WriteLine($"[MediaInfoPage] Selected Render API: {MediaInfoPlayer.RenderApi}");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[MediaInfoPage] Failed to load settings for RenderApi: {ex.Message}");
+                    MediaInfoPlayer.RenderApi = "d3d11"; // Default to gpu-next
+                }
+
                 isNew = true;
                 if (PlayerHost != null) PlayerHost.Content = MediaInfoPlayer;
             }
@@ -4988,10 +5033,14 @@ namespace ModernIPTVPlayer
         private async Task ValidateAndAddBackdropAsync(string url)
         {
             if (BackdropValidator == null) return;
+            string originalId = _slideshowId;
 
             await _validationLock.WaitAsync();
             try
             {
+                // Safety Check: Did we switch content while waiting for the lock?
+                if (_slideshowId != originalId) return;
+
                 // 1. Load into hidden validator
                 bool hasOpened = false;
                 bool hasFailed = false;
@@ -5007,9 +5056,14 @@ namespace ModernIPTVPlayer
 
                     // Wait for load with timeout
                     int timeout = 0;
-                    while (!hasOpened && !hasFailed && timeout < 50) { await Task.Delay(100); timeout++; }
+                    while (!hasOpened && !hasFailed && timeout < 50) 
+                    { 
+                       await Task.Delay(100); 
+                       if (_slideshowId != originalId) return; // Abort if item switched during delay
+                       timeout++; 
+                    }
 
-                    if (hasOpened)
+                    if (hasOpened && _slideshowId == originalId)
                     {
                         // 2. Calculate Signature
                         string signature = await CalculateVisualSignatureAsync(BackdropValidator);
@@ -5045,21 +5099,15 @@ namespace ModernIPTVPlayer
                                 // Sync the public URL list (for next cycle)
                                 _backdropUrls = _validatedBackdrops.Select(b => b.Url).ToList();
 
-                                // [PROTECTION] If we are upgrading the ONLY image, or the UI is currently empty/black, 
-                                // we should update the Source immediately to prevent a permanent black screen or low quality.
-                                bool isUiEmpty = HeroImage.Source == null || (HeroImage.Opacity < 0.1 && HeroImage2.Opacity < 0.1);
-                                if (_backdropUrls.Count == 1 || isUiEmpty)
-                                {
-                                    System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Applying upgrade immediately (Empty UI or Single Image).");
-                                    Image target = _isHeroImage1Active ? HeroImage : HeroImage2;
-                                    target.Source = new BitmapImage(new Uri(url));
-                                    
-                                    // [FIX] Abrupt opacity assignment can be ignored by Composition. Use animation.
-                                    AnimateOpacity(target, 1, TimeSpan.FromSeconds(0.5));
-                                    
-                                    StartKenBurnsEffect(target);
-                                }
-                            }
+                                 // [PROTECTION] If we are upgrading the ONLY image, or the UI is currently empty/black, 
+                                 // we should update the Source immediately to prevent a permanent black screen or low quality.
+                                 bool isUiEmpty = HeroImage.Source == null || (HeroImage.Opacity < 0.1 && HeroImage2.Opacity < 0.1);
+                                 if (_backdropUrls.Count == 1 || isUiEmpty)
+                                 {
+                                     System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Applying upgrade via crossfade to avoid flicker.");
+                                     _ = PerformUpgradeCrossfadeAsync(url);
+                                 }
+                             }
                             else
                             {
                                 System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Visual Match Blocked (Lower/Equal quality): {url}");
@@ -5077,17 +5125,24 @@ namespace ModernIPTVPlayer
                         // [UI INITIALIZATION]
                         if (_backdropUrls.Count == 1)
                         {
-                            // First valid image EVER for this item - Show it immediately.
+                            // First valid image EVER for this item - Show it.
                             if (!_isFirstImageApplied)
                             {
-                                System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Force applying first valid backdrop: {url}");
-                                HeroImage.Source = new BitmapImage(new Uri(url));
+                                // [NEW] If the poster is already visible (seeded), crossfade to high-res.
+                                bool hasSeed = HeroImage.Source != null && HeroImage.Opacity > 0.1;
+                                if (hasSeed)
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Seeding detected. Crossfading from poster to high-res backdrop: {url}");
+                                    _ = PerformUpgradeCrossfadeAsync(url);
+                                }
+                                else
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] No seeding. Applying first backdrop directly: {url}");
+                                    HeroImage.Source = new BitmapImage(new Uri(url));
+                                    AnimateOpacity(HeroImage, 1, TimeSpan.FromSeconds(1));
+                                    StartKenBurnsEffect(HeroImage);
+                                }
                                 
-                                // [FIX] Abrupt opacity assignment can stall initial rendering. Animate it.
-                                AnimateOpacity(HeroImage, 1, TimeSpan.FromSeconds(0.5));
-                                if (HeroImage2 != null) HeroImage2.Opacity = 0;
-                                
-                                StartKenBurnsEffect(HeroImage);
                                 _lastVisualSignature = signature;
                                 _isFirstImageApplied = true;
                             }
@@ -5120,8 +5175,9 @@ namespace ModernIPTVPlayer
         {
             if (images == null || images.Count == 0 || HeroImage == null) return;
             
-            // Deduplicate using a stable ID that won't change after metadata enrichments (Title + StreamUrl/ID)
-            string currentId = $"{_item?.Title}_{_item?.Id}";
+            // Deduplicate using a stable ID that won't change after metadata enrichments (Title based)
+            string currentId = $"{_item?.Title}";
+            if (!string.IsNullOrEmpty(_item?.IMDbId)) currentId += $"_{_item.IMDbId.Replace("imdb_id:", "")}";
 
             // If the slideshow ID matches, add new images incrementally without resetting.
             if (_slideshowId == currentId)
@@ -5132,7 +5188,7 @@ namespace ModernIPTVPlayer
                     AddBackdropToSlideshow(img);
                 }
 
-                if (_backdropUrls.Count > 1 && (_slideshowTimer == null || !_slideshowTimer.IsEnabled))
+                if (_backdropUrls != null && _backdropUrls.Count > 1 && (_slideshowTimer == null || !_slideshowTimer.IsEnabled))
                 {
                     InitializeSlideshowTimer();
                 }
@@ -5155,17 +5211,9 @@ namespace ModernIPTVPlayer
             _currentBackdropIndex = 0;
             _isFirstImageApplied = false;
             
-            // Clean up UI sources to prevent stale data from blocking the new first image
-            if (HeroImage != null)
-            {
-                HeroImage.Source = null;
-                HeroImage.Opacity = 0;
-            }
-            if (HeroImage2 != null)
-            {
-                HeroImage2.Source = null;
-                HeroImage2.Opacity = 0;
-            }
+            // [REM] HeroImage.Source = null; Removed to prevent flicker.
+            // ResetPageState or a truly new navigation already handles clearing if needed.
+            // Keeping the seeded poster visible until the slideshow crossfades into a high-res backdrop.
 
             System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] New Slideshow ID: {currentId}. Offloading {images.Count} images.");
             
@@ -5178,6 +5226,7 @@ namespace ModernIPTVPlayer
             EnsureHeroVisuals();
         }
 
+
         private void InitializeSlideshowTimer()
         {
             if (_backdropUrls == null || _backdropUrls.Count <= 1) return;
@@ -5185,34 +5234,19 @@ namespace ModernIPTVPlayer
 
             _slideshowTimer = new DispatcherTimer();
             _slideshowTimer.Interval = TimeSpan.FromSeconds(8);
-            _slideshowTimer.Tick += (s, e) =>
+            _slideshowTimer.Tick += async (s, e) =>
             {
-                if (HeroImage == null || HeroImage2 == null || _backdropUrls == null || _backdropUrls.Count <= 1)
+                if (HeroImage == null || HeroImage2 == null || _backdropUrls == null || _backdropUrls.Count <= 1 || _isHeroTransitionInProgress)
                 {
-                    _slideshowTimer?.Stop();
                     return;
                 }
 
                 _currentBackdropIndex = (_currentBackdropIndex + 1) % _backdropUrls.Count;
                 string nextImgUrl = _backdropUrls[_currentBackdropIndex];
 
-                // Toggle Logic:
-                Image incoming = _isHeroImage1Active ? HeroImage2 : HeroImage;
-                Image outgoing = _isHeroImage1Active ? HeroImage : HeroImage2;
-
-                // 1. Prepare for Load
-                bool hasOpened = false;
-                RoutedEventHandler openedHandler = null;
-                openedHandler = async (sender, args) =>
-                {
-                    incoming.ImageOpened -= openedHandler;
-                    if (hasOpened) return;
-                    hasOpened = true;
-
-                    // [REFINED] Visual check is now mostly handled at addition time,
-                    // but we keep a final check here to update the current signature and catch any leaks.
+                await PerformHeroCrossfadeAsync(nextImgUrl, 2.0, async (incoming) => {
+                    // Final Duplicate Check
                     string signature = await CalculateVisualSignatureAsync(incoming);
-                    
                     bool isDuplicate = false;
                     foreach (var entry in _validatedBackdrops)
                     {
@@ -5225,53 +5259,15 @@ namespace ModernIPTVPlayer
 
                     if (isDuplicate)
                     {
-                        System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Found visual duplicate in loop - Skipping.");
-                        await Task.Delay(100); 
-                        _slideshowTimer?.Stop();
-                        _slideshowTimer?.Start(); 
-                        return;
+                        System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Found duplicate in loop - Skipping.");
+                        // We can't easily cancel the crossfade once it's started without complex logic, 
+                        // so we just let it finish but stop the timer temporarily to re-evaluate if needed.
                     }
-                    _lastVisualSignature = signature;
-                    // Note: No need to add to _visualSignatures manually here as pre-validation handles it
-
-                    // 2. Start Ken Burns on Incoming (starts immediately once visible)
-                    StartKenBurnsEffect(incoming);
-
-                    // 3. Animate Crossfade (Only after image is ready!)
-                    var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
-                    fadeIn.InsertKeyFrame(0f, 0f);
-                    fadeIn.InsertKeyFrame(1f, 1f);
-                    fadeIn.Duration = TimeSpan.FromSeconds(1.5);
-
-                    var fadeOut = _compositor.CreateScalarKeyFrameAnimation();
-                    fadeOut.InsertKeyFrame(0f, 1f);
-                    fadeOut.InsertKeyFrame(1f, 0f);
-                    fadeOut.Duration = TimeSpan.FromSeconds(1.5);
-
-                    var visualIncoming = ElementCompositionPreview.GetElementVisual(incoming);
-                    var visualOutgoing = ElementCompositionPreview.GetElementVisual(outgoing);
-
-                    visualIncoming.Opacity = 0; 
-                    incoming.Opacity = 1; 
-                    
-                    visualIncoming.StartAnimation("Opacity", fadeIn);
-                    visualOutgoing.StartAnimation("Opacity", fadeOut);
-
-                    // 4. Update State
-                    _isHeroImage1Active = !_isHeroImage1Active;
-                };
-
-                incoming.ImageOpened += openedHandler;
-
-                // 2. Load Next Image
-                try 
-                { 
-                    incoming.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(nextImgUrl)); 
-                } 
-                catch 
-                { 
-                    incoming.ImageOpened -= openedHandler;
-                }
+                    else
+                    {
+                        _lastVisualSignature = signature;
+                    }
+                });;
             };
             _slideshowTimer.Start();
         }
@@ -5573,7 +5569,123 @@ namespace ModernIPTVPlayer
             
             ToolTipService.SetToolTip(WatchlistButton, isInList ? "İzleme Listesinden Çıkar" : "İzleme Listesine Ekle");
         }
+
+        private async Task PerformUpgradeCrossfadeAsync(string url)
+        {
+            await PerformHeroCrossfadeAsync(url, 1.8);
+        }
+
+        private async Task PerformHeroCrossfadeAsync(string imageUrl, double durationSeconds = 1.8, Func<Image, Task> onOpenedAsync = null)
+        {
+            if (string.IsNullOrEmpty(imageUrl) || HeroImage == null || HeroImage2 == null || _isHeroTransitionInProgress) return;
+
+            try
+            {
+                _isHeroTransitionInProgress = true;
+
+                // Ensure compositor is ready
+                if (_compositor == null) EnsureHeroVisuals();
+
+                // Toggle Logic: Load into the INACTIVE image
+                Image incoming = _isHeroImage1Active ? HeroImage2 : HeroImage;
+                Image outgoing = _isHeroImage1Active ? HeroImage : HeroImage2;
+
+                var visualIncoming = ElementCompositionPreview.GetElementVisual(incoming);
+                var visualOutgoing = ElementCompositionPreview.GetElementVisual(outgoing);
+
+                // [CRITICAL] Pre-hide the incoming layer completely before setting source
+                visualIncoming.Opacity = 0;
+                incoming.Opacity = 1; // Make it visible to XAML, but transparent at compositor level
+
+                bool isResolved = false;
+                RoutedEventHandler openedHandler = null;
+                ExceptionRoutedEventHandler failedHandler = null;
+
+                Action cleanup = () => {
+                    incoming.ImageOpened -= openedHandler;
+                    incoming.ImageFailed -= failedHandler;
+                    _isHeroTransitionInProgress = false;
+                };
+
+                openedHandler = async (s, e) =>
+                {
+                    if (isResolved) return;
+                    isResolved = true;
+
+                    // Execute custom logic while image is loaded but still invisible
+                    if (onOpenedAsync != null) await onOpenedAsync(incoming);
+
+                    cleanup();
+
+                    // Ensure it is still hidden before we start the animation
+                    visualIncoming.Opacity = 0;
+
+                    // Start Ken Burns on Incoming
+                    StartKenBurnsEffect(incoming);
+
+                    // Crossfade
+                    var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(0f, 0f);
+                    fadeIn.InsertKeyFrame(1f, 1f);
+                    fadeIn.Duration = TimeSpan.FromSeconds(durationSeconds);
+
+                    var fadeOut = _compositor.CreateScalarKeyFrameAnimation();
+                    fadeOut.InsertKeyFrame(0f, 1f);
+                    fadeOut.InsertKeyFrame(1f, 0f);
+                    fadeOut.Duration = TimeSpan.FromSeconds(durationSeconds);
+
+                    visualIncoming.StartAnimation("Opacity", fadeIn);
+                    visualOutgoing.StartAnimation("Opacity", fadeOut);
+
+                    // Update State
+                    _isHeroImage1Active = !_isHeroImage1Active;
+                };
+
+                failedHandler = (s, e) => {
+                    if (isResolved) return;
+                    isResolved = true;
+                    cleanup();
+                    System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Crossfade Failed for {imageUrl}: {e.ErrorMessage}");
+                };
+
+                incoming.ImageOpened += openedHandler;
+                incoming.ImageFailed += failedHandler;
+                incoming.Source = new BitmapImage(new Uri(imageUrl));
+
+                // Guard against hanging
+                _ = Task.Delay(8000).ContinueWith(t => {
+                    if (!isResolved) { 
+                        isResolved = true; 
+                        DispatcherQueue.TryEnqueue(() => cleanup()); 
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _isHeroTransitionInProgress = false;
+                System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Crossfade Error: {ex.Message}");
+            }
+        }
+
+        private void AnimateOpacity(UIElement element, float targetOpacity, TimeSpan duration)
+        {
+            if (element == null) return;
+            if (_compositor == null) EnsureHeroVisuals();
+            
+            var visual = ElementCompositionPreview.GetElementVisual(element);
+            
+            // If we are fading IN from 0, make sure current visual opacity is actually 0
+            if (targetOpacity > 0.5f && visual.Opacity > 0.5f) visual.Opacity = 0;
+
+            var animation = _compositor.CreateScalarKeyFrameAnimation();
+            animation.InsertKeyFrame(1f, targetOpacity);
+            animation.Duration = duration;
+            
+            visual.StartAnimation("Opacity", animation);
+            element.Opacity = 1; // Ensure XAML visibility but use Composition for the actual fade
+        }
     }
+
     public class SeasonItem
     {
         public string Name { get; set; }

@@ -87,6 +87,21 @@ namespace ModernIPTVPlayer.Models
         public TargetDisplayMode TargetDisplayMode { get; set; } = TargetDisplayMode.Auto;
         public AudioChannels AudioChannels { get; set; } = AudioChannels.AutoSafe;
         public ExclusiveMode ExclusiveAudio { get; set; } = ExclusiveMode.No;
+        private string _preferredSubtitleLanguage = "tur,tr,eng,en";
+        public string PreferredSubtitleLanguage
+        {
+            get => _preferredSubtitleLanguage;
+            set { if (_preferredSubtitleLanguage != value) { _preferredSubtitleLanguage = value; PreferredLanguagesUpdatedAt = DateTime.Now; } }
+        }
+
+        private string _preferredAudioLanguage = "tur,tr,eng,en";
+        public string PreferredAudioLanguage
+        {
+            get => _preferredAudioLanguage;
+            set { if (_preferredAudioLanguage != value) { _preferredAudioLanguage = value; PreferredLanguagesUpdatedAt = DateTime.Now; } }
+        }
+
+        public DateTime PreferredLanguagesUpdatedAt { get; set; } = DateTime.MinValue;
         public string CustomConfig { get; set; } = "";
 
         public static PlayerSettings GetDefault(PlayerProfile profile)
