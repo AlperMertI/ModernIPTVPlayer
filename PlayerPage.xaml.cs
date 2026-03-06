@@ -706,8 +706,9 @@ namespace ModernIPTVPlayer
                 {
                     // If it was a handoff, we DON'T CleanupAsync because the control belongs to MediaInfoPage.
                     // CleanupAsync destroys the native MpvContext, making the control unusable on the previous page.
-                    // Instead, we just PAUSE playback to keep buffer in RAM.
+                    // Instead, we just PAUSE playback and return the player to the source page.
                     _ = _mpvPlayer.ExecuteCommandAsync("set", "pause", "yes");
+                    App.HandoffPlayer = _mpvPlayer; // Return player to source page for reuse
                     
                     // We DO NOT call DisableHandoffMode(); -> PreserveStateOnUnload keeps RenderControl alive.
                     
@@ -957,9 +958,6 @@ namespace ModernIPTVPlayer
                              }
                         }
                         catch {}
-
-                        _statsTimer?.Start();
-                        SetupProfessionalAnimations();
 
                         _statsTimer?.Start();
                         SetupProfessionalAnimations();

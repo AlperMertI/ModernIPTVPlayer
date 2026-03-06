@@ -267,13 +267,13 @@ namespace ModernIPTVPlayer.Controls
 
         private void PosterCard_Loaded(object sender, RoutedEventArgs e)
         {
-            System.Diagnostics.Debug.WriteLine($"[PosterCard] Loaded: {Title}");
+            //System.Diagnostics.Debug.WriteLine($"[PosterCard] Loaded: {Title}");
             UpdateImage();
         }
 
         private void PosterCard_Unloaded(object sender, RoutedEventArgs e)
         {
-            System.Diagnostics.Debug.WriteLine($"[PosterCard] Unloaded: {Title}");
+            //System.Diagnostics.Debug.WriteLine($"[PosterCard] Unloaded: {Title}");
             // Optimization: Cancel pending image loads?
         }
 

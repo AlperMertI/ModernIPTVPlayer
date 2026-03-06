@@ -345,6 +345,12 @@ public sealed partial class MpvPlayer : Control
         }
     }
 
+    // [FIX] Force swap chain linking before handoff detachment
+    public void EnsureSwapChainLinked()
+    {
+        _renderControl?.EnsureSwapChainLinked();
+    }
+
     private void EnsureTemplateApplied()
     {
         if (_renderControl == null)

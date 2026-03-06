@@ -280,7 +280,7 @@ public class D3D11RenderControl : ContentControl
 
                 try
                 {
-                    if (_atomicBackBuffer == IntPtr.Zero) {
+                    if (_atomicBackBuffer == IntPtr.Zero || (CurrentWidth <= 1 && CurrentHeight <= 1)) {
                          continue;
                     }
 
@@ -681,6 +681,19 @@ public class D3D11RenderControl : ContentControl
     private void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
         RequestResize(false);
+    }
+
+    // [FIX] Force immediate swap chain linking — must be called from UI thread BEFORE detaching for handoff
+    public unsafe void EnsureSwapChainLinked()
+    {
+        if (_disposed || _swapChainPanel == null || _swapChain.Handle == null) return;
+
+        if (_needsFirstFrameLink || (IntPtr)_swapChain.Handle != _lastLinkedHandle)
+        {
+            UpdateSwapChainOnUI();
+            _needsFirstFrameLink = false;
+            LogSync("[FIX] EnsureSwapChainLinked: Forced immediate swap chain linkage.");
+        }
     }
 
     private void LogSync(string message) => Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SYNC] [Thread:{Environment.CurrentManagedThreadId}] {message}");
