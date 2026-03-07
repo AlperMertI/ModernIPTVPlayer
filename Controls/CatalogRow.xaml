@@ -6,7 +6,8 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:models="using:ModernIPTVPlayer.Models.Stremio"
-    mc:Ignorable="d">
+    mc:Ignorable="d"
+    x:Name="RootControl">
 
     <StackPanel x:Name="RootPanel" Spacing="16" Margin="48,0,0,24" Opacity="0"
                 PointerEntered="RootPanel_PointerEntered" 
@@ -53,6 +54,7 @@
                       ManipulationStarted="ItemsListView_ManipulationStarted"
                       ManipulationDelta="ItemsListView_ManipulationDelta"
                       ManipulationCompleted="ItemsListView_ManipulationCompleted"
+                      Loaded="ItemsListView_Loaded"
                       SelectionMode="None"
                       IsItemClickEnabled="False"
                       ElementSoundMode="Off">
@@ -79,17 +81,18 @@
                     </Style>
                 </ListView.ItemContainerStyle>
                 <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="models:StremioMediaStream">
-                        <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" 
-                                          ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
-                                          ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
-                                          Width="160" Height="240" 
-                                          HoverStarted="PosterCard_HoverStarted" 
-                                          HoverEnded="PosterCard_HoverEnded"
-                                          Tapped="PosterCard_Tapped"
-                                          ElementSoundMode="Off"/>
+                    <DataTemplate>
+                        <!-- Use ContentPresenter to render the passed in template, allowing flexibility -->
+                        <ContentPresenter Content="{Binding}" ContentTemplate="{Binding ElementName=RootControl, Path=ItemTemplate}" />
                     </DataTemplate>
                 </ListView.ItemTemplate>
+                
+                <ListView.Footer>
+                    <StackPanel Orientation="Horizontal" Visibility="{x:Bind IsLoadingMore, Mode=OneWay}" Padding="0,0,16,0" Opacity="0.5">
+                        <local:ShimmerCard Width="280" Height="160" Margin="0,0,16,0"/>
+                        <local:ShimmerCard Width="280" Height="160" Margin="0,0,16,0"/>
+                    </StackPanel>
+                </ListView.Footer>
             </ListView>
 
             <!-- Navigation Arrows -->

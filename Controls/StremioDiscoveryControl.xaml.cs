@@ -12,9 +12,53 @@ using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Services.Metadata;
+using Microsoft.UI.Xaml.Data;
 
 namespace ModernIPTVPlayer.Controls
 {
+    public class RowStyleToTemplateConverter : IValueConverter
+    {
+        public DataTemplate StandardTemplate { get; set; }
+        public DataTemplate LandscapeTemplate { get; set; }
+
+        public object Convert(object value, Type targetType, object parameter, string language)
+        {
+            if (value is string style)
+            {
+                if (style == "Landscape") return LandscapeTemplate;
+            }
+            return StandardTemplate;
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, string language)
+        {
+            throw new NotImplementedException();
+        }
+    }
+
+    public class DiscoveryRowTemplateSelector : DataTemplateSelector
+    {
+        public DataTemplate StandardRowTemplate { get; set; }
+        public DataTemplate SpotlightRowTemplate { get; set; }
+
+        protected override DataTemplate SelectTemplateCore(object item)
+        {
+            if (item is CatalogRowViewModel vm)
+            {
+                if (vm.RowStyle == "Spotlight")
+                {
+                    return SpotlightRowTemplate;
+                }
+            }
+            return StandardRowTemplate;
+        }
+
+        protected override DataTemplate SelectTemplateCore(object item, DependencyObject container)
+        {
+            return SelectTemplateCore(item);
+        }
+    }
+
     public sealed partial class StremioDiscoveryControl : UserControl
     {
         // Public Events
@@ -34,15 +78,22 @@ namespace ModernIPTVPlayer.Controls
         public ScrollViewer MainScrollViewer => DiscoveryScrollViewer;
 
         private ObservableCollection<CatalogRowViewModel> _discoveryRows = new();
+        private int _rowCount = 0;
+        private bool _isDiscoveryRunning = false;
         private bool _isDraggingRow = false;
         private System.Threading.CancellationTokenSource? _loadCts;
         private string _currentContentType;
+        private int _discoveryVersion = 0; // Monotonic counter to invalidate stale runs
 
         // Hero Priority Logic
         private enum RowState { Pending, Success, Failed }
         private Dictionary<string, RowState> _rowStates = new();
         private Dictionary<string, ObservableCollection<StremioMediaStream>> _rowItemsBuffer = new();
         private List<string> _heroPriorityOrder = new();
+
+        // Track used Spotlight IDs and last style to prevent duplicates/clutter
+        private readonly HashSet<string> _usedSpotlightIds = new();
+        private string _lastUsedStyle = "Standard";
 
         public StremioDiscoveryControl()
         {
@@ -63,10 +114,9 @@ namespace ModernIPTVPlayer.Controls
         {
             DispatcherQueue.TryEnqueue(async () => 
             {
-                if (!string.IsNullOrEmpty(_currentContentType))
+                if (!string.IsNullOrEmpty(_currentContentType) && !_isDiscoveryRunning)
                 {
                     System.Diagnostics.Debug.WriteLine("[StremioControl] Addons changed/loaded. Reloading discovery incrementally...");
-                    // We don't clear here anymore, we do an additive/incremental pass.
                     await LoadDiscoveryAsync(_currentContentType);
                 }
             });
@@ -105,9 +155,10 @@ namespace ModernIPTVPlayer.Controls
                     Id = hist.ParentSeriesId ?? hist.Id,
                     Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
                     Poster = hist.PosterUrl,
+                    Background = hist.BackdropUrl,
                     Type = hist.ParentSeriesId != null ? "series" : _currentContentType
                 });
-                stream.ProgressValue = hist.Duration > 0 ? (hist.Position / hist.Duration) * 100 : 0;
+                stream.ProgressValue = hist.Duration > 0 ? ((double)hist.Position / hist.Duration) * 100 : 0;
                 cwItems.Add(stream);
             }
 
@@ -117,7 +168,8 @@ namespace ModernIPTVPlayer.Controls
                 Items = cwItems,
                 IsLoading = false,
                 RowId = "CW",
-                SortIndex = -1
+                SortIndex = -1,
+                RowStyle = "Landscape" // explicitly set to Landscape
             };
 
             // Insert at position 0
@@ -138,20 +190,22 @@ namespace ModernIPTVPlayer.Controls
             var provider = new MetadataProvider();
             foreach (var stream in items)
             {
-                if (!string.IsNullOrEmpty(stream.PosterUrl)) continue; // Already has poster
+                if (!string.IsNullOrEmpty(stream.PosterUrl) && !string.IsNullOrEmpty(stream.Banner)) continue;
 
                 try
                 {
                     var meta = await provider.GetMetadataAsync(stream);
-                    if (meta?.PosterUrl is string url && !string.IsNullOrEmpty(url))
+                    if (meta != null)
                     {
-                        // Update on UI thread so PropertyChanged triggers binding
-                        DispatcherQueue.TryEnqueue(() => stream.PosterUrl = url);
+                        DispatcherQueue.TryEnqueue(() => 
+                        {
+                            if (!string.IsNullOrEmpty(meta.PosterUrl)) stream.PosterUrl = meta.PosterUrl;
+                            if (!string.IsNullOrEmpty(meta.BackdropUrl)) stream.UpdateBackground(meta.BackdropUrl);
+                        });
 
-                        // Also persist to history so next time it's available
                         var histId = stream.IMDbId;
-                        if (!string.IsNullOrEmpty(histId))
-                            HistoryManager.Instance.UpdateProgress(histId, stream.Title, "", 0, 0, posterUrl: url);
+                        if (!string.IsNullOrEmpty(histId) && !string.IsNullOrEmpty(meta.PosterUrl))
+                            HistoryManager.Instance.UpdateProgress(histId, stream.Title, "", 0, 0, posterUrl: meta.PosterUrl, backdropUrl: meta.BackdropUrl); 
                     }
                 }
                 catch { /* Best effort */ }
@@ -160,8 +214,16 @@ namespace ModernIPTVPlayer.Controls
 
         public async Task LoadDiscoveryAsync(string contentType)
         {
+            // Increment version to invalidate any in-flight stale calls
+            int myVersion = ++_discoveryVersion;
+
+            if (_isDiscoveryRunning && contentType == _currentContentType) return;
+            
             try
             {
+                _isDiscoveryRunning = true;
+                _rowCount = 0; // Reset counter for consistent row styles (Spotlight, etc.)
+
                 // Cancel previous loading
                 _loadCts?.Cancel();
                 _loadCts = new System.Threading.CancellationTokenSource();
@@ -170,19 +232,16 @@ namespace ModernIPTVPlayer.Controls
                 // Ensure watch history is loaded before building the CW row
                 await HistoryManager.Instance.InitializeAsync();
 
-                // Optimization: Keep existing content visible if available
-                bool hasExistingContent = _discoveryRows.Count > 0;
-                
-                if (!hasExistingContent)
+                // Bail if a newer LoadDiscoveryAsync call has been triggered while we awaited
+                if (myVersion != _discoveryVersion) return;
+
+                // Sync UI rows by removing stale ones, except CW
+                lock(_usedSpotlightIds)
                 {
-                     HeroControl.SetLoading(true);
-                     // Add skeletons only if empty (REMOVED for Dynamic Sorting)
-                     // for (int i = 0; i < 6; i++)
-                     // {
-                     //     _discoveryRows.Add(new CatalogRowViewModel { CatalogName = "Yükleniyor...", IsLoading = true });
-                     // }
+                    _usedSpotlightIds.Clear();
+                    _lastUsedStyle = "Standard";
                 }
-                
+
                 // Fetch Manifests from Cache
                 _currentContentType = contentType;
                 var addons = StremioAddonManager.Instance.GetAddonsWithManifests();
@@ -193,16 +252,6 @@ namespace ModernIPTVPlayer.Controls
                 if (validManifests < addons.Count)
                 {
                     System.Diagnostics.Debug.WriteLine($"[StremioControl] WARNING: Only {validManifests}/{addons.Count} manifests are loaded. Waiting for background refresh...");
-                    if (validManifests == 0)
-                    {
-                         // If we have 0 valid manifests, we might be in a "First Run" race condition.
-                         // We will rely on OnAddonsChanged to trigger a reload when they arrive.
-                         // But we should probably show a "Loading Addons..." state?
-                         // Skeletons are already added above. We just return.
-                         // If we return here, Skeletons stay visible?
-                         // "if (addons.Count == 0)" check below handles empty LIST. 
-                         // But if list has 3 items (all null manifests), we proceed to SlotMap loop.
-                    }
                 }
 
                 if (addons.Count == 0)
@@ -224,13 +273,13 @@ namespace ModernIPTVPlayer.Controls
                             Id = hist.ParentSeriesId ?? hist.Id,
                             Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
                             Poster = hist.PosterUrl,
+                            Background = hist.BackdropUrl,
                             Type = hist.ParentSeriesId != null ? "series" : contentType
                         });
                         
                         stream.ProgressValue = hist.Duration > 0 ? (hist.Position / hist.Duration) * 100 : 0;
                         cwItems.Add(stream);
                     }
-                    
                     
                     if (cwItems.Count > 0)
                     {
@@ -240,7 +289,8 @@ namespace ModernIPTVPlayer.Controls
                             Items = cwItems,
                             IsLoading = false,
                             RowId = "CW",
-                            SortIndex = -1
+                            SortIndex = -1,
+                            RowStyle = "Landscape" // explicitly set Landscape
                         };
                         
                         if (!_discoveryRows.Any(r => r.RowId == "CW"))
@@ -262,7 +312,8 @@ namespace ModernIPTVPlayer.Controls
                 var slotMap = new List<(string BaseUrl, StremioCatalog Catalog, int SortIndex, string RowId)>();
                 int globalIndex = 0;
                 var newPriorityOrder = new List<string>();
-                
+                var seenLogicalCatalogs = new HashSet<string>();
+
                 foreach (var (url, manifest) in addons)
                 {
                     if (manifest?.Catalogs == null) continue;
@@ -273,16 +324,30 @@ namespace ModernIPTVPlayer.Controls
 
                     foreach (var cat in relevantCatalogs)
                     {
+                        System.Diagnostics.Debug.WriteLine($"[StremioControl] Found catalog in manifest: '{cat.Name}' (ID: {cat.Id}) Type: {cat.Type} from {url}");
+                        
+                        string idKey = $"{url}|id:{cat.Id}";
+                        string nameKey = $"{url}|name:{cat.Name?.Trim().ToLowerInvariant()}";
+                        if (seenLogicalCatalogs.Contains(idKey) || seenLogicalCatalogs.Contains(nameKey)) 
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[StremioControl] Skipping duplicate catalog '{cat.Name}' (ID: {cat.Id}) from same addon {url}");
+                            continue;
+                        }
+                        seenLogicalCatalogs.Add(idKey);
+                        seenLogicalCatalogs.Add(nameKey);
+
                         string rowId = $"{url}|{cat.Id}|{cat.Name}";
                         newPriorityOrder.Add(rowId);
                         
                         var existingRow = _discoveryRows.FirstOrDefault(r => r.RowId == rowId);
                         if (existingRow != null)
                         {
+                            System.Diagnostics.Debug.WriteLine($"[StremioControl] Row already exists for {rowId}. Updating sort index to {globalIndex}.");
                             existingRow.SortIndex = globalIndex;
                         }
                         else
                         {
+                            System.Diagnostics.Debug.WriteLine($"[StremioControl] Adding new slot to slotMap: {rowId} at index {globalIndex}");
                             slotMap.Add((url, cat, globalIndex, rowId));
                         }
                         globalIndex++;
@@ -292,34 +357,36 @@ namespace ModernIPTVPlayer.Controls
                 _heroPriorityOrder = newPriorityOrder;
 
                 // Sync UI rows by removing stale ones, except CW
-                for (int i = _discoveryRows.Count - 1; i >= 0; i--)
+                DispatcherQueue.TryEnqueue(() => 
                 {
-                    var row = _discoveryRows[i];
-                    if (row.RowId != "CW" && !_heroPriorityOrder.Contains(row.RowId))
+                    for (int i = _discoveryRows.Count - 1; i >= 0; i--)
                     {
-                        _discoveryRows.RemoveAt(i);
-                        lock(_rowItemsBuffer) {
-                            _rowStates.Remove(row.RowId);
-                            _rowItemsBuffer.Remove(row.RowId);
-                        }
-                    }
-                }
-                
-                // Keep ObservableCollection sorted by SortIndex
-                for (int i = 0; i < _discoveryRows.Count - 1; i++)
-                {
-                    for (int j = i + 1; j < _discoveryRows.Count; j++)
-                    {
-                        if (_discoveryRows[i].SortIndex > _discoveryRows[j].SortIndex)
+                        var row = _discoveryRows[i];
+                        if (row.RowId != "CW" && !_heroPriorityOrder.Contains(row.RowId))
                         {
-                             _discoveryRows.Move(j, i);
+                            _discoveryRows.RemoveAt(i);
+                            lock(_rowItemsBuffer) {
+                                _rowStates.Remove(row.RowId);
+                                _rowItemsBuffer.Remove(row.RowId);
+                            }
                         }
                     }
-                }
+                    
+                    // Keep ObservableCollection sorted by SortIndex
+                    for (int i = 0; i < _discoveryRows.Count - 1; i++)
+                    {
+                        for (int j = i + 1; j < _discoveryRows.Count; j++)
+                        {
+                            if (_discoveryRows[i].SortIndex > _discoveryRows[j].SortIndex)
+                            {
+                                 _discoveryRows.Move(j, i);
+                            }
+                        }
+                    }
+                });
 
                 if (slotMap.Count == 0)
                 {
-                    // Check if we are potentially waiting for manifests
                     int pendingManifests = addons.Count(a => a.Manifest == null);
                     if (pendingManifests > 0)
                     {
@@ -332,15 +399,11 @@ namespace ModernIPTVPlayer.Controls
                 }
 
                 // --- 2. LAUNCH PARALLEL FETCHES ---
-                // We do NOT Clear _rowStates because we are incremental
-                
-                // Initialize states for new fetches
                 foreach (var (_, _, _, rowId) in slotMap)
                 {
                     _rowStates[rowId] = RowState.Pending;
                 }
 
-                // Helper to Update Hero based on Priority Chain
                 void UpdateHeroState()
                 {
                     DispatcherQueue.TryEnqueue(() =>
@@ -354,14 +417,12 @@ namespace ModernIPTVPlayer.Controls
                             var state = _rowStates[rowId];
                             if (state == RowState.Pending)
                             {
-                                // Strict Wait: Highest priority is still loading -> Show Shimmer
                                 HeroControl.SetLoading(true);
                                 return; 
                             }
                             
                             if (state == RowState.Success)
                             {
-                                // Harvest up to 5 items total from all successful highest priority rows
                                 var aggregatedHeroItems = new List<StremioMediaStream>();
                                 foreach (var rid in orderToCheck)
                                 {
@@ -379,17 +440,12 @@ namespace ModernIPTVPlayer.Controls
                                 HeroControl.SetItems(aggregatedHeroItems.Take(5));
                                 return;
                             }
-                            
-                            // If Failed, continue loop to next priority
                         }
-                        
-                        // If we fall through here, everything failed?
                         HeroControl.SetLoading(false);
                     });
                 }
 
                 var tasks = new List<Task>();
-
                 foreach (var (url, cat, sortIndex, rowId) in slotMap)
                 {
                     if (token.IsCancellationRequested) break;
@@ -398,13 +454,13 @@ namespace ModernIPTVPlayer.Controls
                     {
                         try
                         {
-                            var rowResult = await LoadCatalogRowAsync(url, contentType, cat);
+                            var rowResult = await LoadCatalogRowAsync(url, contentType, cat, sortIndex);
                             
                             if (token.IsCancellationRequested) return;
 
                             DispatcherQueue.TryEnqueue(() =>
                             {
-                                if (token.IsCancellationRequested) return;
+                                if (token.IsCancellationRequested || myVersion != _discoveryVersion) return;
 
                                 if (rowResult != null && rowResult.Items.Count > 0)
                                 {
@@ -412,14 +468,13 @@ namespace ModernIPTVPlayer.Controls
                                     rowResult.RowId = rowId;
                                     rowResult.IsLoading = false;
 
-                                    // Store for Hero Logic
                                     lock(_rowItemsBuffer) {
                                         _rowStates[rowId] = RowState.Success;
                                         _rowItemsBuffer[rowId] = rowResult.Items;
                                     }
 
-                                    // DYNAMIC INSERTION: Find correct index to insert
-                                    // We want to insert before the first item that has a HIGHER SortIndex than ours.
+                                    if (_discoveryRows.Any(r => r.RowId == rowId)) return;
+
                                     int insertAt = _discoveryRows.Count;
                                     for(int i=0; i<_discoveryRows.Count; i++)
                                     {
@@ -430,13 +485,10 @@ namespace ModernIPTVPlayer.Controls
                                         }
                                     }
                                     _discoveryRows.Insert(insertAt, rowResult);
-                                    
-                                    // Trigger Hero Check
                                     UpdateHeroState();
                                 }
                                 else
                                 {
-                                    // No results -> Mark as failed for Hero purposes so we skip to next
                                     lock(_rowItemsBuffer) {
                                         _rowStates[rowId] = RowState.Failed;
                                     }
@@ -458,12 +510,10 @@ namespace ModernIPTVPlayer.Controls
                     }));
                 }
 
-                // --- 3. CLEANUP AFTER ALL TASKS ---
                 await Task.WhenAll(tasks);
                 
                 DispatcherQueue.TryEnqueue(() => 
                 {
-                    // If absolutely nothing loaded, ensure loading state is off
                     if (_discoveryRows.Count == 0)
                     {
                         HeroControl.SetLoading(false);
@@ -474,17 +524,70 @@ namespace ModernIPTVPlayer.Controls
             {
                 System.Diagnostics.Debug.WriteLine($"[StremioControl] Error: {ex.Message}");
             }
+            finally
+            {
+                _isDiscoveryRunning = false;
+            }
         }
 
-        private async Task<CatalogRowViewModel> LoadCatalogRowAsync(string baseUrl, string type, StremioCatalog cat)
+        private async Task<CatalogRowViewModel> LoadCatalogRowAsync(string baseUrl, string type, StremioCatalog cat, int sortIndex)
         {
             try
             {
                 var items = await StremioService.Instance.GetCatalogItemsAsync(baseUrl, type, cat.Id);
-                if (items == null || items.Count == 0) 
+                if (items == null || items.Count == 0) return null;
+
+                string style = "Standard";
+                bool hasBackgrounds = items.Count > 0 && !string.IsNullOrEmpty(items[0].Banner);
+
+                lock(_usedSpotlightIds)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[StremioControl] No items returned for {cat.Name} ({baseUrl}). Removing row.");
-                    return null;
+                    bool isSpotlightCandidate = (sortIndex + 1) % 3 == 0;
+
+                    if (isSpotlightCandidate) 
+                    {
+                        var spotlightItems = items.Where(i => !_usedSpotlightIds.Contains(i.IMDbId)).Take(5).ToList();
+                        if (spotlightItems.Count < 5)
+                        {
+                            spotlightItems = items.Take(5).ToList();
+                        }
+
+                        if (spotlightItems.Count > 0)
+                        {
+                            style = "Spotlight";
+                            foreach(var item in spotlightItems) _usedSpotlightIds.Add(item.IMDbId);
+                            _lastUsedStyle = "Spotlight";
+
+                            for (int i = 0; i < spotlightItems.Count; i++)
+                            {
+                                if (items.IndexOf(spotlightItems[i]) != i)
+                                {
+                                    items.Remove(spotlightItems[i]);
+                                    items.Insert(i, spotlightItems[i]);
+                                }
+                            }
+                        }
+                        else if (hasBackgrounds)
+                        {
+                            style = "Landscape";
+                            _lastUsedStyle = "Landscape";
+                        }
+                        else
+                        {
+                            style = "Standard";
+                            _lastUsedStyle = "Standard";
+                        }
+                    }
+                    else if (sortIndex % 2 == 0 && hasBackgrounds && _lastUsedStyle == "Standard")
+                    {
+                        style = "Landscape";
+                        _lastUsedStyle = "Landscape";
+                    }
+                    else
+                    {
+                        style = "Standard";
+                        _lastUsedStyle = "Standard";
+                    }
                 }
 
                 string finalName = cat.Name;
@@ -493,7 +596,14 @@ namespace ModernIPTVPlayer.Controls
                 return new CatalogRowViewModel
                 {
                     CatalogName = finalName,
-                    Items = new ObservableCollection<StremioMediaStream>(items)
+                    Items = new ObservableCollection<StremioMediaStream>(items),
+                    RowStyle = style,
+                    SourceUrl = baseUrl,
+                    CatalogType = type,
+                    CatalogId = cat.Id,
+                    Extra = "",
+                    Skip = items.Count,
+                    HasMore = items.Count >= 20
                 };
             }
             catch (Exception ex)
@@ -508,35 +618,24 @@ namespace ModernIPTVPlayer.Controls
             ViewChanged?.Invoke(this, e);
         }
 
-
-
-        // State Tracking for Backward Animation
         private int _lastRowIndex = -1;
         private int _lastItemIndex = -1;
         private string _lastItemId = "";
 
-        // Row Interactions
         private void CatalogRow_ItemClicked(object sender, (IMediaStream Stream, UIElement SourceElement) e)
         {
-            // Capture state on click
             if (sender is CatalogRow row && DiscoveryRows.ItemsSource is ObservableCollection<CatalogRowViewModel> rows)
             {
                 if (row.DataContext is CatalogRowViewModel vm)
                 {
                     _lastRowIndex = rows.IndexOf(vm);
-                    
                     if (vm.Items != null)
                     {
-                        // Use IndexOf to find position. 
-                        // Note: e.Stream might be a different object instance if list refreshed, 
-                        // so we might need ID check if simple IndexOf fails, but usually on click it's the exact object.
                         _lastItemIndex = vm.Items.IndexOf((StremioMediaStream)e.Stream);
                         _lastItemId = e.Stream.IMDbId ?? e.Stream.Id.ToString();
                     }
                 }
             }
-            
-            System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] Item Clicked. Saved State -> Row: {_lastRowIndex}, Item: {_lastItemIndex}, ID: {_lastItemId}");
             ItemClicked?.Invoke(this, e);
         }
 
@@ -545,121 +644,135 @@ namespace ModernIPTVPlayer.Controls
         private void CatalogRow_ScrollStarted(object sender, EventArgs e) => RowScrollStarted?.Invoke(this, e);
         private void CatalogRow_ScrollEnded(object sender, EventArgs e) => RowScrollEnded?.Invoke(this, e);
 
+        private async void CatalogRow_LoadMoreAction(object sender, EventArgs e)
+        {
+            if (sender is CatalogRow row && row.DataContext is CatalogRowViewModel vm)
+            {
+                if (vm.IsLoadingMore || !vm.HasMore) return;
+                if (vm.RowId == "CW") return; 
+
+                vm.IsLoadingMore = true;
+                try
+                {
+                    var newItems = await StremioService.Instance.GetCatalogItemsAsync(vm.SourceUrl, vm.CatalogType, vm.CatalogId, vm.Extra, vm.Skip);
+                    if (newItems != null && newItems.Count > 0)
+                    {
+                        foreach(var item in newItems) vm.Items.Add(item);
+                        vm.Skip += newItems.Count;
+                        vm.HasMore = newItems.Count > 0;
+                    }
+                    else vm.HasMore = false;
+                }
+                catch
+                {
+                    vm.HasMore = false;
+                }
+                finally
+                {
+                    vm.IsLoadingMore = false;
+                }
+            }
+        }
+
+        private void LandscapeCard_HoverStarted(object sender, EventArgs e) { }
+        private void LandscapeCard_HoverEnded(object sender, EventArgs e) { }
+
+        private void SpotlightInjectRow_ItemClicked(object sender, (IMediaStream Stream, UIElement SourceElement) e)
+        {
+            ItemClicked?.Invoke(this, e);
+        }
+
+        private void PosterCard_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        {
+            if (sender is PosterCard card && card.DataContext is IMediaStream stream)
+            {
+                Microsoft.UI.Xaml.ElementSoundPlayer.Play(Microsoft.UI.Xaml.ElementSoundKind.Invoke);
+                ItemClicked?.Invoke(this, (stream, card.ImageElement));
+            }
+            else if (sender is LandscapeCard lCard && lCard.DataContext is IMediaStream lStream)
+            {
+                Microsoft.UI.Xaml.ElementSoundPlayer.Play(Microsoft.UI.Xaml.ElementSoundKind.Invoke);
+                ItemClicked?.Invoke(this, (lStream, lCard.ImageElement));
+            }
+        }
+
+        private void PosterCard_HoverStarted(object sender, EventArgs e)
+        {
+            if (sender is PosterCard card) CardHoverStarted?.Invoke(this, card);
+        }
+
+        private void PosterCard_HoverEnded(object sender, EventArgs e)
+        {
+            if (sender is PosterCard card) CardHoverEnded?.Invoke(this, card);
+        }
+
         public async Task ScrollToLastActiveItemAsync()
         {
-            // This is now effectively replaced by ResolveBackAnimationElementAsync but we might want it for simple scrolling
             if (_lastRowIndex < 0 || _lastItemIndex < 0) return;
             if (DiscoveryRows.ItemsSource is not ObservableCollection<CatalogRowViewModel> rows) return;
             if (_lastRowIndex >= rows.Count) return;
-
             var targetRowVM = rows[_lastRowIndex];
             DiscoveryRows.ScrollIntoView(targetRowVM);
         }
 
         public UIElement? GetPosterElement(IMediaStream item)
         {
-            // Try Fast Path first
             if ((!string.IsNullOrEmpty(item.IMDbId) && item.IMDbId == _lastItemId) || item.Id.ToString() == _lastItemId)
             {
-                 var fastElement = GetLastClickedPosterElement();
-                 if (fastElement != null) 
-                 {
-                     System.Diagnostics.Debug.WriteLine("[StremioDiscoveryControl] Fast Path: Found element via cached indices.");
-                     return fastElement;
-                 }
+                var fastElement = GetLastClickedPosterElement();
+                if (fastElement != null) return fastElement;
             }
             
             try 
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] Looking for Poster for item: {item.Title} (IMDb: {item.IMDbId})");
-
-                // Iterate loaded rows
                 foreach (var rowItem in DiscoveryRows.Items)
                 {
-                   var rowContainer = DiscoveryRows.ContainerFromItem(rowItem) as DependencyObject; // Could be SelectorItem/ListViewItem
-                   
-                   if (rowContainer == null) continue; 
-
-                   // Traverse to find CatalogRow (Template Root)
-                   CatalogRow catalogRow = null;
-                   int childCount = VisualTreeHelper.GetChildrenCount(rowContainer);
-                   if (childCount > 0)
-                   {
+                    var rowContainer = DiscoveryRows.ContainerFromItem(rowItem) as DependencyObject;
+                    if (rowContainer == null) continue; 
+                    CatalogRow catalogRow = null;
+                    if (VisualTreeHelper.GetChildrenCount(rowContainer) > 0)
                         catalogRow = VisualTreeHelper.GetChild(rowContainer, 0) as CatalogRow;
-                   }
 
-                   if (catalogRow == null) continue;
-
-                   // Check if this row contains the item
-                   if (catalogRow.ItemsSource is IEnumerable<IMediaStream> list)
-                   {
-                        // Use IMDbId for robust comparison if available
+                    if (catalogRow == null) continue;
+                    if (catalogRow.ItemsSource is IEnumerable<IMediaStream> list)
+                    {
                         var actualItem = list.FirstOrDefault(x =>
                             (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == item.IMDbId) ||
                             x.Id == item.Id);
 
                         if (actualItem != null)
                         {
-                            System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] Found Item in Row: {catalogRow.CatalogName}");
-
-                            // Found the row, now find the card
                             if (catalogRow.ListView != null)
                             {
                                 var container = catalogRow.ListView.ContainerFromItem(actualItem) as ListViewItem;
                                 if (container != null)
                                 {
-                                    System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] Found Container for item. Searching visual tree...");
                                     var card = FindPosterCardInContainer(container);
-                                    if (card != null)
-                                    {
-                                         System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] Found PosterCard! Size: {card.ActualWidth}x{card.ActualHeight}");
-                                         return card;
-                                    }
-                                    else
-                                    {
-                                         System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] Container found but PosterCard NOT found in visual tree.");
-                                    }
-                                }
-                                else
-                                {
-                                    System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] Item is in data source but ContainerFromItem returned null (Virtualized?)");
+                                    if (card != null) return card;
                                 }
                             }
-                            return null; // Item found in this row, don't check other rows
+                            return null;
                         }
-                   }
+                    }
                 }
-                System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] Item {item.Title} (IMDb: {item.IMDbId}) not found in any visible rows.");
             }
-            catch (Exception ex) 
-            {
-               System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] GetPosterElement Error: {ex.Message}");
-            }
+            catch { }
             return null;
         }
 
         private UIElement? GetLastClickedPosterElement()
         {
              if (_lastRowIndex < 0 || _lastItemIndex < 0) return null;
-             
              try
              {
                  var container = DiscoveryRows.ContainerFromIndex(_lastRowIndex) as DependencyObject;
                  if (container == null) return null;
-
                  var catalogRow = VisualTreeHelper.GetChildrenCount(container) > 0 ? VisualTreeHelper.GetChild(container, 0) as CatalogRow : null;
                  if (catalogRow == null || catalogRow.ListView == null) return null;
-
                  var itemContainer = catalogRow.ListView.ContainerFromIndex(_lastItemIndex) as ListViewItem;
-                 if (itemContainer != null)
-                 {
-                      return FindPosterCardInContainer(itemContainer);
-                 }
+                 if (itemContainer != null) return FindPosterCardInContainer(itemContainer);
              }
-             catch (Exception ex)
-             {
-                 System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] GetLastClickedPosterElement Error: {ex.Message}");
-             }
+             catch { }
              return null;
         }
 
@@ -667,74 +780,51 @@ namespace ModernIPTVPlayer.Controls
         {
             if (root == null) return null;
             if (root is PosterCard card) return card;
-
             try 
             {
                 int count = VisualTreeHelper.GetChildrenCount(root);
                 for(int i=0; i<count; i++)
                 {
-                    var child = VisualTreeHelper.GetChild(root, i);
-                    var result = FindPosterCardInContainer(child);
+                    var result = FindPosterCardInContainer(VisualTreeHelper.GetChild(root, i));
                     if (result != null) return result;
                 }
             }
-            catch { /* Ignore visual tree errors */ }
-            
+            catch { }
             return null;
         }
 
         public async Task ScrollToItemAsync(IMediaStream item)
         {
             if (DiscoveryRows.ItemsSource is not IEnumerable<CatalogRowViewModel> rows) return;
-
-            // 1. Find the row containing the item
             CatalogRowViewModel targetRow = null;
             foreach (var row in rows)
             {
-                // Use IMDbId for robust comparison
                 if (row.Items.Any(x => (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == item.IMDbId) || x.Id == item.Id))
                 {
                     targetRow = row;
                     break;
                 }
             }
-
-            if (targetRow == null) 
-            {
-                System.Diagnostics.Debug.WriteLine($"[StremioDiscoveryControl] ScrollToItemAsync: Row NOT found for {item.Title}");
-                return;
-            }
-
-            // 2. Scroll Outer List to the Row
+            if (targetRow == null) return;
             DiscoveryRows.ScrollIntoView(targetRow);
-            
-            // 3. Wait for Row to Realize (Virtualized)
             CatalogRow catalogRow = null;
-            for (int i = 0; i < 10; i++) // Retry up to 500ms
+            for (int i = 0; i < 10; i++)
             {
                 var container = DiscoveryRows.ContainerFromItem(targetRow) as DependencyObject;
-                if (container != null)
+                if (container != null && VisualTreeHelper.GetChildrenCount(container) > 0)
                 {
-                    if (VisualTreeHelper.GetChildrenCount(container) > 0)
-                    {
-                        catalogRow = VisualTreeHelper.GetChild(container, 0) as CatalogRow;
-                        if (catalogRow != null) break;
-                    }
+                    catalogRow = VisualTreeHelper.GetChild(container, 0) as CatalogRow;
+                    if (catalogRow != null) break;
                 }
                 await Task.Delay(50);
             }
-
-            // 4. Scroll Inner List to the Item
             if (catalogRow != null && catalogRow.ListView != null && catalogRow.ItemsSource is IEnumerable<IMediaStream> list)
             {
                 var actualItem = list.FirstOrDefault(x => (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == item.IMDbId) || x.Id == item.Id);
-                
                 if (actualItem != null)
                 {
                     catalogRow.ListView.ScrollIntoView(actualItem);
-                    
-                     // Wait for Inner Item to Realize
-                    for(int j=0; j<20; j++) // Wait up to 1 second
+                    for(int j=0; j<20; j++)
                     {
                         if (catalogRow.ListView.ContainerFromItem(actualItem) != null) break;
                         await Task.Delay(50);

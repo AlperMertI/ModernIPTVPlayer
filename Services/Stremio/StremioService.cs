@@ -63,24 +63,37 @@ namespace ModernIPTVPlayer.Services.Stremio
         // ==========================================
         // 2. CATALOGS (Discovery)
         // ==========================================
-        public async Task<List<StremioMediaStream>> GetCatalogItemsAsync(string baseUrl, string type, string id, string extra = "")
+        public async Task<List<StremioMediaStream>> GetCatalogItemsAsync(string baseUrl, string type, string id, string extra = "", int skip = 0)
         {
-            string cacheKey = $"{baseUrl}|{type}|{id}|{extra}";
+            string cacheKey = $"{baseUrl}|{type}|{id}|{extra}|{skip}";
             if (_catalogCache.ContainsKey(cacheKey)) return _catalogCache[cacheKey];
 
+            string url = $"{baseUrl.TrimEnd('/')}/catalog/{type}/{id}";
             try
             {
                 // Format: /catalog/{type}/{id}.json  OR /catalog/{type}/{id}/{extra}.json
-                string url = $"{baseUrl.TrimEnd('/')}/catalog/{type}/{id}.json";
-                if (!string.IsNullOrEmpty(extra))
+                
+                string pathParams = extra;
+                if (skip > 0)
                 {
-                    // If extra params exist (like genre), append. 
+                    if (string.IsNullOrEmpty(pathParams)) pathParams = $"skip={skip}";
+                    else pathParams += $"&skip={skip}";
                 }
+
+                if (!string.IsNullOrEmpty(pathParams))
+                {
+                    url += $"/{pathParams}";
+                }
+                url += ".json";
+
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Fetching Catalog URL: {url}");
 
                 // USE SHORTER TIMEOUT FOR CATALOGS (10s)
                 using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
                 using var response = await _client.SendAsync(request, cts.Token);
+                
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Response for {url}: {response.StatusCode}");
                 response.EnsureSuccessStatusCode();
                 
                 string json = await response.Content.ReadAsStringAsync();
@@ -106,7 +119,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioService] JSON Error for {baseUrl}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[StremioService] JSON Error for {url} ({baseUrl}): {ex.Message}");
             }
 
             return new List<StremioMediaStream>();

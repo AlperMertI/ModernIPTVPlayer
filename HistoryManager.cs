@@ -26,6 +26,7 @@ namespace ModernIPTVPlayer
 
         public string Type { get; set; } // "movie", "series", etc.
         public string PosterUrl { get; set; }
+        public string BackdropUrl { get; set; }
 
         public string AudioTrackId { get; set; }
         public string SubtitleTrackId { get; set; }
@@ -93,7 +94,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null, string subUrl = null, string posterUrl = null, string type = null)
+        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null, string subUrl = null, string posterUrl = null, string type = null, string backdropUrl = null)
         {
             if (string.IsNullOrEmpty(id) || dur < 1) return;
 
@@ -128,6 +129,7 @@ namespace ModernIPTVPlayer
                 if (!string.IsNullOrEmpty(subUrl)) item.SubtitleTrackUrl = subUrl;
                 
                 if (!string.IsNullOrEmpty(posterUrl)) item.PosterUrl = posterUrl;
+                if (!string.IsNullOrEmpty(backdropUrl)) item.BackdropUrl = backdropUrl;
                 if (!string.IsNullOrEmpty(type)) item.Type = type;
             }
             // Fire and forget save (maybe debounce this in real app, but for now direct)

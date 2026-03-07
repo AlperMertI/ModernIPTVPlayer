@@ -3485,22 +3485,22 @@ namespace ModernIPTVPlayer
                 if (_selectedEpisode != null)
                 {
                      string parentId = _item is SeriesStream ss ? ss.SeriesId.ToString() : null;
-                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, -1, _item.PosterUrl, "series");
+                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, -1, _item.PosterUrl, "series", GetCurrentBackdrop());
                 }
                 else if (_item is LiveStream live)
                 {
                     // Movie / Live
-                    await PerformHandoverAndNavigate(_streamUrl, live.Title, live.StreamId.ToString(), null, null, 0, 0, -1, live.PosterUrl, "iptv");
+                    await PerformHandoverAndNavigate(_streamUrl, live.Title, live.StreamId.ToString(), null, null, 0, 0, -1, live.PosterUrl, "iptv", GetCurrentBackdrop());
                 }
                 else
                 {
                     // Fallback
-                    await PerformHandoverAndNavigate(_streamUrl, TitleText.Text);
+                    await PerformHandoverAndNavigate(_streamUrl, TitleText.Text, backdropUrl: GetCurrentBackdrop());
                 }
             }
         }
         
-        private async Task PerformHandoverAndNavigate(string url, string title, string id = null, string parentId = null, string seriesName = null, int season = 0, int episode = 0, double startSeconds = -1, string posterUrl = null, string type = null)
+        private async Task PerformHandoverAndNavigate(string url, string title, string id = null, string parentId = null, string seriesName = null, int season = 0, int episode = 0, double startSeconds = -1, string posterUrl = null, string type = null, string backdropUrl = null)
         {
             _isHandoffInProgress = true;
             // Handoff Logic
@@ -3565,13 +3565,21 @@ namespace ModernIPTVPlayer
                 
                 // Navigate
                 Debug.WriteLine($"[MediaInfoPage:Handoff] Navigating to PlayerPage for {url} | StartSeconds: {startSeconds} | HasHandoff: {App.HandoffPlayer != null}");
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl));
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[MediaInfoPage:Handoff] ERROR: {ex}");
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl));
             }
+        }
+
+        private string GetCurrentBackdrop()
+        {
+            if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.BackdropUrl)) return _unifiedMetadata.BackdropUrl;
+            if (_item is StremioMediaStream sms && !string.IsNullOrEmpty(sms.Meta.Background)) return sms.Meta.Background;
+            if (_item?.TmdbInfo != null && !string.IsNullOrEmpty(_item.TmdbInfo.FullBackdropUrl)) return _item.TmdbInfo.FullBackdropUrl;
+            return null;
         }
         
         private async Task PlayStremioContent(string videoId, bool showGlobalLoading = true, bool autoPlay = false, double startSeconds = -1)
@@ -3651,7 +3659,7 @@ namespace ModernIPTVPlayer
                             var stremioMeta = (_item as Models.Stremio.StremioMediaStream)?.Meta;
                             string autoParentIdStr = stremioMeta != null && (stremioMeta.Type == "series" || stremioMeta.Type == "tv") ? stremioMeta.Id : null;
                             string autoStreamType = (stremioMeta?.Type == "series" || stremioMeta?.Type == "tv") ? "series" : "movie";
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, autoParentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType));
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, autoParentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType, GetCurrentBackdrop()));
                             return;
                         }
                     }
@@ -3973,7 +3981,7 @@ namespace ModernIPTVPlayer
                                                     // PerformHandoverAndNavigate requires the player to already be playing the content.
                                                     string parentIdStr = _item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv") ? sms.Meta.Id : null;
                                                     string autoStreamType = (_item is Models.Stremio.StremioMediaStream sms2 && (sms2.Meta.Type == "series" || sms2.Meta.Type == "tv")) ? "series" : "movie";
-                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType));
+                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType, GetCurrentBackdrop()));
                                                     return;
                                                 }
                                             }
@@ -4370,18 +4378,18 @@ namespace ModernIPTVPlayer
                         {
                             Debug.WriteLine($"[SourceSelect] URL switch failed: {ex.Message}. Falling back to direct navigate.");
                             // Fallback: direct navigation
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType));
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop()));
                             return;
                         }
 
-                        await PerformHandoverAndNavigate(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType);
+                        await PerformHandoverAndNavigate(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop());
                     }
                     else
                     {
                         // CASE 3: No active player — direct navigation (fresh start)
                         Debug.WriteLine($"[SourceSelect] No active player — direct navigate for fresh start.");
                         _streamUrl = vm.Url;
-                        Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType));
+                        Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop()));
                     }
                 }
                 else if (!string.IsNullOrEmpty(vm.ExternalUrl))

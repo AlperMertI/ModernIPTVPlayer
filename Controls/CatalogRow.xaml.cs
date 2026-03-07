@@ -14,6 +14,15 @@ namespace ModernIPTVPlayer.Controls
         public static readonly DependencyProperty CatalogNameProperty =
             DependencyProperty.Register("CatalogName", typeof(string), typeof(CatalogRow), new PropertyMetadata(string.Empty));
 
+        public static readonly DependencyProperty IsLoadingMoreProperty =
+            DependencyProperty.Register("IsLoadingMore", typeof(bool), typeof(CatalogRow), new PropertyMetadata(false));
+
+        public bool IsLoadingMore
+        {
+            get => (bool)GetValue(IsLoadingMoreProperty);
+            set => SetValue(IsLoadingMoreProperty, value);
+        }
+
         public string CatalogName
         {
             get => (string)GetValue(CatalogNameProperty);
@@ -27,6 +36,23 @@ namespace ModernIPTVPlayer.Controls
         {
             get => GetValue(ItemsSourceProperty);
             set => SetValue(ItemsSourceProperty, value);
+        }
+
+        public static readonly DependencyProperty ItemTemplateProperty =
+            DependencyProperty.Register("ItemTemplate", typeof(DataTemplate), typeof(CatalogRow), new PropertyMetadata(null));
+
+        public DataTemplate ItemTemplate
+        {
+            get => (DataTemplate)GetValue(ItemTemplateProperty);
+            set => SetValue(ItemTemplateProperty, value);
+        }
+
+        private static void OnItemTemplateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is CatalogRow row)
+            {
+                row.ItemsListView.ItemTemplate = e.NewValue as DataTemplate;
+            }
         }
 
         public static readonly DependencyProperty IsLoadingProperty =
@@ -73,6 +99,7 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<PosterCard> HoverEnded;
         public event EventHandler ScrollStarted;
         public event EventHandler ScrollEnded;
+        public event EventHandler LoadMoreAction;
 
         public CatalogRow()
         {
@@ -82,6 +109,8 @@ namespace ModernIPTVPlayer.Controls
 
         private void CatalogRow_Loaded(object sender, RoutedEventArgs e)
         {
+            EnsureScrollViewer();
+            
             // Simple entrance animation
             var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
             var opacityAnim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation { To = 1, Duration = TimeSpan.FromMilliseconds(600) };
@@ -105,6 +134,11 @@ namespace ModernIPTVPlayer.Controls
                 ElementSoundPlayer.Play(ElementSoundKind.Invoke);
                 // Pass the internal ImageElement for ConnectedAnimation
                 ItemClicked?.Invoke(this, (stream, card.ImageElement));
+            }
+            else if (sender is LandscapeCard lCard && lCard.DataContext is IMediaStream lStream)
+            {
+                ElementSoundPlayer.Play(ElementSoundKind.Invoke);
+                ItemClicked?.Invoke(this, (lStream, lCard.ImageElement));
             }
         }
 
@@ -180,6 +214,26 @@ namespace ModernIPTVPlayer.Controls
                     _scrollEndTimer.Stop();
                     _isScrolling = false;
                     ScrollEnded?.Invoke(this, EventArgs.Empty);
+
+                    if (_scrollViewer != null && _scrollViewer.ScrollableWidth > 0 && !IsLoadingMore)
+                    {
+                        // Enable early trigger point so user doesn't hit a wall
+                        // 1500 pixels is roughly 4-5 cards ahead
+                        if (_scrollViewer.HorizontalOffset >= _scrollViewer.ScrollableWidth - 1500)
+                        {
+                            IsLoadingMore = true;
+                            LoadMoreAction?.Invoke(this, EventArgs.Empty);
+                            
+                            // Reset flag after a delay to allow data to load
+                            var resetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                            resetTimer.Tick += (resetS, resetArgs) =>
+                            {
+                                resetTimer.Stop();
+                                IsLoadingMore = false;
+                            };
+                            resetTimer.Start();
+                        }
+                    }
                 };
             }
             _scrollEndTimer.Stop();
@@ -197,6 +251,12 @@ namespace ModernIPTVPlayer.Controls
                 if (result != null) return result;
             }
             return null;
+        }
+
+        private void ItemsListView_Loaded(object sender, RoutedEventArgs e)
+        {
+            // ListView visual tree is now definitely generated
+            EnsureScrollViewer();
         }
 
         private void ItemsListView_ManipulationStarted(object sender, ManipulationStartedRoutedEventArgs e)

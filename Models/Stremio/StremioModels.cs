@@ -149,6 +149,24 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         [JsonPropertyName("tvdb_id")]
         public object TvDbId { get; set; }
+
+        [JsonPropertyName("website")]
+        public string Website { get; set; }
+
+        [JsonPropertyName("links")]
+        public List<StremioLink> Links { get; set; }
+    }
+
+    public class StremioLink
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("category")]
+        public string Category { get; set; }
+
+        [JsonPropertyName("url")]
+        public string Url { get; set; }
     }
 
     public class StremioMetaTrailer

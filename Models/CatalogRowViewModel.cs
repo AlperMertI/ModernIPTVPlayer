@@ -14,6 +14,18 @@ namespace ModernIPTVPlayer.Models
         public bool IsLoading { get => _isLoading; set { _isLoading = value; OnPropertyChanged(); } }
         public string RowId { get; set; }
         public int SortIndex { get; set; }
+        public string RowStyle { get; set; } = "Standard"; // Standard, Landscape, Spotlight
+
+        // Pagination Context
+        public string SourceUrl { get; set; }
+        public string CatalogType { get; set; }
+        public string CatalogId { get; set; }
+        public string Extra { get; set; }
+        public int Skip { get; set; } = 0;
+        public bool HasMore { get; set; } = true;
+        
+        private bool _isLoadingMore;
+        public bool IsLoadingMore { get => _isLoadingMore; set { _isLoadingMore = value; OnPropertyChanged(); } }
 
         public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string name = null)

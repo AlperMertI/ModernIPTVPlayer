@@ -31,6 +31,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             // 1. Check Result Cache
             if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
             {
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CACHE HIT: {cacheKey}");
                 // If cached, trigger callback for all existing backdrops immediately
                 if (onBackdropFound != null && cached.Data.BackdropUrls != null)
                 {
@@ -40,18 +41,30 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             // 2. Check Active Tasks (Deduplication)
+            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] START Fetching: {id ?? stream.Title} | Type: {type}");
             return await _activeTasks.GetOrAdd(cacheKey, _ => GetMetadataInternalAsync(id ?? stream.Title, type, stream, cacheKey, onBackdropFound));
         }
 
         private async Task<UnifiedMetadata> GetMetadataInternalAsync(string id, string type, Models.IMediaStream sourceStream, string cacheKey, Action<string> onBackdropFound = null)
         {
+            // [FIX] Normalize ID to canonical IMDB ID immediately to avoid search failures on priority addons
+            string normalizedId = NormalizeId(id) ?? id;
             try
             {
                 var result = await GetMetadataAsync(id, type, sourceStream, onBackdropFound);
                 
                 if (result != null)
                 {
-                    _resultCache[cacheKey] = (result, DateTime.Now.Add(_cacheDuration));
+                    var expiry = DateTime.Now.Add(_cacheDuration);
+                    _resultCache[cacheKey] = (result, expiry);
+                    
+                    // If the ID changed (e.g. tmdb -> imdb), cache under the new ID as well
+                    if (!string.IsNullOrEmpty(result.ImdbId) && result.ImdbId != id && result.ImdbId != normalizedId)
+                    {
+                        string newKey = $"{result.ImdbId}_{type}";
+                        _resultCache[newKey] = (result, expiry);
+                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Multi-cached: {cacheKey} AND {newKey}");
+                    }
                 }
                 
                 return result;
@@ -66,7 +79,6 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null, Action<string> onBackdropFound = null)
         {
-             // This overload DOES NOT CHECK CACHE!
             var metadata = new UnifiedMetadata 
             { 
                 ImdbId = id, 
@@ -74,8 +86,6 @@ namespace ModernIPTVPlayer.Services.Metadata
                 MetadataId = id,
                 Title = sourceStream?.Title ?? id
             };
-
-            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] START Fetching: {id} | Type: {type} | Source: {sourceStream?.GetType().Name ?? "Null"}");
 
             try
             {
@@ -118,29 +128,40 @@ namespace ModernIPTVPlayer.Services.Metadata
                     bool isPrimaryMetadataSet = (tmdb != null);
                     bool hasCheckedImagesForThisId = (tmdb != null);
 
-                    string currentSearchId = id;
+                    string currentSearchId = IsImdbId(metadata.ImdbId) ? metadata.ImdbId : id;
 
                     foreach (var url in addonUrls)
                     {
-                        if (metadata.BackdropUrls.Count > 20) break; // Increased limit
 
                         System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Probing Addon: {url} with ID: {currentSearchId}");
                         var currentStremioMeta = await _stremioService.GetMetaAsync(url, type, currentSearchId);
                         
                         if (currentStremioMeta != null)
                         {
-                            // If we found a proper IMDb ID, use it for subsequent addon calls (better compatibility)
-                            if (currentSearchId.StartsWith("tmdb:") && !string.IsNullOrEmpty(currentStremioMeta.ImdbId))
+                            // If we don't have a proper IMDb ID yet, but this addon provides one (even in sub-fields), use it for subsequent addon calls (better compatibility)
+                            string? discoveredImdbId = ExtractImdbId(currentStremioMeta);
+                            if (!IsImdbId(currentSearchId) && IsImdbId(discoveredImdbId))
                             {
-                                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Switching search ID from {currentSearchId} to {currentStremioMeta.ImdbId}");
-                                currentSearchId = currentStremioMeta.ImdbId;
+                                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Switching search ID from {currentSearchId} to {discoveredImdbId}");
+                                string previousSearchId = currentSearchId;
+                                currentSearchId = discoveredImdbId;
                                 metadata.ImdbId = currentSearchId; // Update core metadata too
+
+                                // [FIX] Re-query the SAME addon with the new canonical ID. 
+                                // Priority addons like AioStreams/Torbox will return a subset of episodes (only the ones in the torrent) when queried with a debrid ID.
+                                // Re-querying with the canonical tt... ID ensures we get the FULL show metadata before falling back to lower priority addons.
+                                var fullMeta = await _stremioService.GetMetaAsync(url, type, currentSearchId);
+                                if (fullMeta != null && IsValidMetadata(fullMeta))
+                                {
+                                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Re-queried addon {url} with canonical ID {currentSearchId} to fetch full metadata.");
+                                    currentStremioMeta = fullMeta;
+                                }
                             }
 
                             if (IsValidMetadata(currentStremioMeta))
                             {
                                 // Backfill missing top-level properties (Cast, Genres, Overview, etc.)
-                                MapStremioToUnified(currentStremioMeta, metadata);
+                                MapStremioToUnified(currentStremioMeta, metadata, !isPrimaryMetadataSet);
 
                                 if (!isPrimaryMetadataSet)
                                 {
@@ -171,7 +192,8 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                             if (currentStremioMeta.Background != null)
                             {
-                                AddUniqueBackdrop(metadata, currentStremioMeta.Background, onBackdropFound);
+                                if (metadata.BackdropUrls.Count <= 20)
+                                    AddUniqueBackdrop(metadata, currentStremioMeta.Background, onBackdropFound);
                             }
 
                             // Deep Image Enrichment: If this addon provides a TMDB ID, use it for images
@@ -427,7 +449,17 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (existing != null)
                 {
                     // Enhance existing
-                    if (!string.IsNullOrEmpty(tmdbEp.Name)) existing.Title = tmdbEp.Name;
+                    if (!string.IsNullOrEmpty(tmdbEp.Name)) 
+                    {
+                        // [FIX] TMDB often returns generic titles ("Season 2 Episode 1") while Stremio has proper ones.
+                        // Only override if the new title is NOT generic, or if the current title IS generic.
+                        bool existingIsGeneric = IsGenericEpisodeTitle(existing.Title, metadata.Title);
+                        bool newIsGeneric = IsGenericEpisodeTitle(tmdbEp.Name, metadata.Title);
+                        if (existingIsGeneric || !newIsGeneric)
+                        {
+                            existing.Title = tmdbEp.Name;
+                        }
+                    }
                     if (!string.IsNullOrEmpty(tmdbEp.Overview)) existing.Overview = tmdbEp.Overview;
                     if (!string.IsNullOrEmpty(tmdbEp.StillUrl)) existing.ThumbnailUrl = tmdbEp.StillUrl;
                     if (!existing.AirDate.HasValue && tmdbEp.AirDateDateTime.HasValue) existing.AirDate = tmdbEp.AirDateDateTime;
@@ -453,13 +485,13 @@ namespace ModernIPTVPlayer.Services.Metadata
             season.Episodes = season.Episodes.OrderBy(e => e.EpisodeNumber).ToList();
         }
 
-        private void MapStremioToUnified(StremioMeta stremio, UnifiedMetadata unified)
+        private void MapStremioToUnified(StremioMeta stremio, UnifiedMetadata unified, bool overwritePrimary)
         {
-            // Only overwrite if currently empty, as TMDB has higher priority for descriptive text
-            if (string.IsNullOrEmpty(unified.Title) || unified.Title == unified.MetadataId)
+            // Only overwrite if currently empty or explicitly requested by priority, as TMDB has higher priority for descriptive text
+            if (overwritePrimary || string.IsNullOrEmpty(unified.Title) || unified.Title == unified.MetadataId)
                 unified.Title = stremio.Name;
 
-            if (string.IsNullOrEmpty(unified.OriginalTitle))
+            if (overwritePrimary || string.IsNullOrEmpty(unified.OriginalTitle))
             {
                 if (!string.IsNullOrEmpty(stremio.OriginalName))
                 {
@@ -479,28 +511,28 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
             }
 
-            if (string.IsNullOrEmpty(unified.Overview) || unified.Overview == "Açıklama mevcut değil.")
+            if (overwritePrimary || string.IsNullOrEmpty(unified.Overview) || unified.Overview == "Açıklama mevcut değil.")
                 unified.Overview = stremio.Description;
 
-            if (string.IsNullOrEmpty(unified.PosterUrl))
+            if (overwritePrimary || string.IsNullOrEmpty(unified.PosterUrl))
                 unified.PosterUrl = stremio.Poster;
 
-            if (string.IsNullOrEmpty(unified.BackdropUrl))
+            if (overwritePrimary || string.IsNullOrEmpty(unified.BackdropUrl))
                 unified.BackdropUrl = stremio.Background;
 
-            if (string.IsNullOrEmpty(unified.LogoUrl))
+            if (overwritePrimary || string.IsNullOrEmpty(unified.LogoUrl))
                 unified.LogoUrl = stremio.Logo;
 
-            if (string.IsNullOrEmpty(unified.Year))
+            if (overwritePrimary || string.IsNullOrEmpty(unified.Year))
                 unified.Year = stremio.ReleaseInfo;
 
-            if (string.IsNullOrEmpty(unified.Genres))
+            if (overwritePrimary || string.IsNullOrEmpty(unified.Genres))
                 unified.Genres = (stremio.Genres != null && stremio.Genres.Count > 0) ? string.Join(", ", stremio.Genres) : "";
 
-            if (unified.Cast == null || unified.Cast.Count == 0)
-                unified.Cast = stremio.Cast;
+            if (overwritePrimary || unified.Cast == null || unified.Cast.Count == 0)
+                unified.Cast = stremio.Cast?.Take(25).ToList();
 
-            if (string.IsNullOrEmpty(unified.Runtime))
+            if (overwritePrimary || string.IsNullOrEmpty(unified.Runtime))
                 unified.Runtime = stremio.Runtime;
 
             // MetadataId is essential for history and addon communication
@@ -511,12 +543,16 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (stremio.ImdbRating != null && unified.Rating == 0)
                 unified.Rating = double.TryParse(stremio.ImdbRating.ToString(), out var r) ? r : 0;
 
-             if (stremio.Trailers != null && stremio.Trailers.Any() && string.IsNullOrEmpty(unified.TrailerUrl))
+             if (stremio.Trailers != null && stremio.Trailers.Any())
             {
-                 var trailer = stremio.Trailers.FirstOrDefault();
-                 if (!string.IsNullOrEmpty(trailer.Source))
+                 var trailer = stremio.Trailers.FirstOrDefault(t => (t.Type?.ToLower() == "trailer" || string.IsNullOrEmpty(t.Type)) && !string.IsNullOrWhiteSpace(t.Source));
+                 if (trailer != null)
                  {
-                     unified.TrailerUrl = trailer.Source;
+                     // Update if current is null or if this is a priority update
+                     if (string.IsNullOrEmpty(unified.TrailerUrl))
+                     {
+                         unified.TrailerUrl = trailer.Source;
+                     }
                  }
             }
             
@@ -631,13 +667,13 @@ namespace ModernIPTVPlayer.Services.Metadata
                     else
                     {
                         // Update missing fields
-                        bool isGenericTitle = IsGenericEpisodeTitle(existingEpisode.Title);
+                        bool isGenericTitle = IsGenericEpisodeTitle(existingEpisode.Title, metadata.Title);
 
                         if (isGenericTitle)
                         {
                             string newTitle = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title;
                             
-                            bool isNewGenericTitle = IsGenericEpisodeTitle(newTitle);
+                            bool isNewGenericTitle = IsGenericEpisodeTitle(newTitle, metadata.Title);
 
                             if (!isNewGenericTitle || string.IsNullOrEmpty(existingEpisode.Title))
                                 existingEpisode.Title = newTitle;
@@ -656,11 +692,30 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
         }
 
-        private bool IsGenericEpisodeTitle(string title)
+        private bool IsGenericEpisodeTitle(string title, string seriesTitle = null)
         {
             if (string.IsNullOrWhiteSpace(title)) return true;
             
             string t = title.ToLowerInvariant().Trim();
+
+            if (!string.IsNullOrEmpty(seriesTitle))
+            {
+                string sTitle = seriesTitle.ToLowerInvariant().Trim();
+                if (t.StartsWith(sTitle))
+                {
+                    t = t.Substring(sTitle.Length).TrimStart('-', ':', ' ', '.');
+                }
+                else 
+                {
+                    // Fallback for "ThePitt S02E01" if there are spacing differences
+                    string sTitleStripped = new string(sTitle.Where(c => char.IsLetterOrDigit(c)).ToArray());
+                    string tStripped = new string(t.Where(c => char.IsLetterOrDigit(c)).ToArray());
+                    if (tStripped.StartsWith(sTitleStripped))
+                    {
+                        t = t.Replace(sTitle, "").Replace(sTitleStripped, "").Trim('-', ':', ' ', '.'); 
+                    }
+                }
+            }
             
             // Just a number check
             if (int.TryParse(t, out _)) return true; // e.g., "1", "02", "12"
@@ -668,6 +723,8 @@ namespace ModernIPTVPlayer.Services.Metadata
             // Extract only the letters from the title (e.g., "1. Bölüm" -> "bölüm")
             string lettersOnly = new string(t.Where(c => char.IsLetter(c)).ToArray());
             
+            if (string.IsNullOrEmpty(lettersOnly)) return true; // empty like "1.0", "1-2"
+
             // If the only letters in the title form one of the common generic words, then it's a generic title
             // This safely matches: "1. Bölüm", "Bölüm 2", "Episode 05", "1x02 Episode", "Ep 5", "S01E02"
             return lettersOnly == "bölüm" || 
@@ -675,6 +732,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                    lettersOnly == "episode" || 
                    lettersOnly == "ep" || 
                    lettersOnly == "se" ||          // e.g. "S1E2" -> letters format to "se"
+                   lettersOnly == "x" ||           // e.g. "1x02" -> letters format to "x"
                    lettersOnly == "sezon" || 
                    lettersOnly == "sezonbölüm" ||  // e.g. "Sezon 1 Bölüm 2" -> "sezonbölüm"
                    lettersOnly == "sezonbolum" ||
@@ -793,6 +851,52 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (string.IsNullOrEmpty(id)) return false;
             // IMDb IDs start with 'tt' followed by numbers
             return id.StartsWith("tt") && id.Length >= 4;
+        }
+
+        private string? ExtractImdbId(Models.Stremio.StremioMeta meta)
+        {
+            if (IsImdbId(meta.ImdbId)) return meta.ImdbId;
+            if (IsImdbId(meta.Id)) return meta.Id;
+
+            // Check website field
+            if (!string.IsNullOrEmpty(meta.Website))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(meta.Website, @"tt\d+");
+                if (match.Success) return match.Value;
+            }
+
+            // Check links collection
+            if (meta.Links != null)
+            {
+                foreach (var link in meta.Links)
+                {
+                    // Some addons put the ID in 'name' when category is 'imdb'
+                    if (link.Category == "imdb" && IsImdbId(link.Name)) return link.Name;
+                    
+                    // Or extract from URL
+                    if (!string.IsNullOrEmpty(link.Url))
+                    {
+                        var match = System.Text.RegularExpressions.Regex.Match(link.Url, @"tt\d+");
+                        if (match.Success) return match.Value;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private string? NormalizeId(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return id;
+            
+            // Extract tt\d+ or tmdb:\d+ from prefixes (like "imdb_id:tt12345" or "torbox:tt12345")
+            var imdbMatch = System.Text.RegularExpressions.Regex.Match(id, @"tt\d+");
+            if (imdbMatch.Success) return imdbMatch.Value;
+
+            var tmdbMatch = System.Text.RegularExpressions.Regex.Match(id, @"tmdb:\d+");
+            if (tmdbMatch.Success) return tmdbMatch.Value;
+            
+            return id;
         }
     }
 }

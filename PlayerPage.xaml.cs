@@ -29,7 +29,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer
 {
-    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1, string PosterUrl = null, string Type = null);
+    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1, string PosterUrl = null, string Type = null, string BackdropUrl = null);
 
     public sealed partial class PlayerPage : Page
     {
@@ -258,7 +258,7 @@ namespace ModernIPTVPlayer
              // [REFINED] Do NOT capture aid/sid here. 
              // We only save these on EXPLICIT user selection to allow global settings (slang/alang) 
              // to take precedence unless a manual override exists.
-             HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, null, null, null, _navArgs.PosterUrl, _navArgs.Type);
+             HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, null, null, null, _navArgs.PosterUrl, _navArgs.Type, _navArgs.BackdropUrl);
         }
 
                 if (!isLikelyLive)

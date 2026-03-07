@@ -41,6 +41,19 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Rating => Meta.ImdbRating;
         public string Type => Meta.Type?.ToUpper();
         public string StreamUrl { get; set; } = "";
+        
+        // Use Backdrop/Banner for Landscape cards if available, else fallback to Poster.
+        public string LandscapeImageUrl => !string.IsNullOrEmpty(Meta.Background) ? Meta.Background : PosterUrl;
+
+        public void UpdateBackground(string url)
+        {
+            if (Meta.Background != url)
+            {
+                Meta.Background = url;
+                OnPropertyChanged(nameof(Banner));
+                OnPropertyChanged(nameof(LandscapeImageUrl));
+            }
+        }
 
         // UI Binding Implementation
         private double _progressValue;

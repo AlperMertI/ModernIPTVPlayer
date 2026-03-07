@@ -3,11 +3,64 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:ModernIPTVPlayer.Controls"
+    xmlns:models="using:ModernIPTVPlayer.Models"
+    xmlns:stremioModels="using:ModernIPTVPlayer.Models.Stremio"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
     d:DesignHeight="1000"
     d:DesignWidth="1200">
+    <UserControl.Resources>
+        <DataTemplate x:Key="StandardCardTemplate" x:DataType="stremioModels:StremioMediaStream">
+            <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" 
+                              ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
+                              ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
+                              Width="160" Height="240" 
+                              HoverStarted="PosterCard_HoverStarted" 
+                              HoverEnded="PosterCard_HoverEnded"
+                              Tapped="PosterCard_Tapped"
+                              ElementSoundMode="Off"/>
+        </DataTemplate>
+        <DataTemplate x:Key="LandscapeCardTemplate" x:DataType="stremioModels:StremioMediaStream">
+            <local:LandscapeCard ImageUrl="{x:Bind LandscapeImageUrl, Mode=OneWay}" 
+                                 Title="{x:Bind Title, Mode=OneWay}"
+                                 Year="{x:Bind Year, Mode=OneWay}"
+                                 RatingText="{x:Bind Rating, Mode=OneWay}"
+                                 ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
+                                 ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
+                                 Width="280" Height="160" 
+                                 HoverStarted="LandscapeCard_HoverStarted" 
+                                 HoverEnded="LandscapeCard_HoverEnded"
+                                 Tapped="PosterCard_Tapped"
+                                 ElementSoundMode="Off"/>
+        </DataTemplate>
+        <local:RowStyleToTemplateConverter x:Key="RowStyleToTemplateConverter" 
+                                           StandardTemplate="{StaticResource StandardCardTemplate}" 
+                                           LandscapeTemplate="{StaticResource LandscapeCardTemplate}" />
+                                           
+        <!-- Row Level Templates -->
+        <DataTemplate x:Key="StandardCatalogRowTemplate" x:DataType="models:CatalogRowViewModel">
+            <local:CatalogRow CatalogName="{x:Bind CatalogName, Mode=OneWay}" 
+                              ItemsSource="{x:Bind Items, Mode=OneWay}"
+                              IsLoading="{x:Bind IsLoading, Mode=OneWay}"
+                              ItemTemplate="{x:Bind RowStyle, Converter={StaticResource RowStyleToTemplateConverter}, Mode=OneWay}"
+                              ItemClicked="CatalogRow_ItemClicked"
+                              HoverStarted="CatalogRow_HoverStarted"
+                              HoverEnded="CatalogRow_HoverEnded"
+                              ScrollStarted="CatalogRow_ScrollStarted"
+                              ScrollEnded="CatalogRow_ScrollEnded"
+                              LoadMoreAction="CatalogRow_LoadMoreAction"/>
+        </DataTemplate>
+
+        <DataTemplate x:Key="SpotlightCatalogRowTemplate" x:DataType="models:CatalogRowViewModel">
+            <local:SpotlightInjectRow DataContext="{x:Bind Mode=OneWay}" ItemClicked="SpotlightInjectRow_ItemClicked" />
+        </DataTemplate>
+
+        <local:DiscoveryRowTemplateSelector x:Key="DiscoveryRowTemplateSelector"
+                                            StandardRowTemplate="{StaticResource StandardCatalogRowTemplate}"
+                                            SpotlightRowTemplate="{StaticResource SpotlightCatalogRowTemplate}" />
+
+    </UserControl.Resources>
 
     <Grid>
         <ScrollViewer x:Name="DiscoveryScrollViewer" 
@@ -20,7 +73,10 @@
                 <local:HeroSectionControl x:Name="HeroControl" />
 
                 <!-- DYNAMIC CATALOG ROWS -->
-                <ListView x:Name="DiscoveryRows" SelectionMode="None" IsItemClickEnabled="False">
+                <ListView x:Name="DiscoveryRows" 
+                          SelectionMode="None" 
+                          IsItemClickEnabled="False"
+                          ItemTemplateSelector="{StaticResource DiscoveryRowTemplateSelector}">
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem">
                             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
@@ -29,18 +85,6 @@
                             <Setter Property="MinWidth" Value="0"/>
                         </Style>
                     </ListView.ItemContainerStyle>
-                    <ListView.ItemTemplate>
-                        <DataTemplate>
-                            <local:CatalogRow CatalogName="{Binding CatalogName}" 
-                                              ItemsSource="{Binding Items}" 
-                                              IsLoading="{Binding IsLoading}"
-                                              ItemClicked="CatalogRow_ItemClicked"
-                                              HoverStarted="CatalogRow_HoverStarted"
-                                              HoverEnded="CatalogRow_HoverEnded"
-                                              ScrollStarted="CatalogRow_ScrollStarted"
-                                              ScrollEnded="CatalogRow_ScrollEnded"/>
-                        </DataTemplate>
-                    </ListView.ItemTemplate>
                 </ListView>
                 
             </StackPanel>
