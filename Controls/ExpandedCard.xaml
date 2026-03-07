@@ -42,7 +42,7 @@
         <Grid x:Name="TrailerArea" Grid.Row="0" Background="#000" 
               Tapped="TrailerArea_Tapped">
             <Grid x:Name="BackdropContainer">
-                <Image x:Name="BackdropImage" Stretch="UniformToFill" Opacity="0.7"/>
+                <Image x:Name="BackdropImage" Stretch="UniformToFill" Opacity="0.7" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                 <Rectangle x:Name="BackdropOverlay">
                     <Rectangle.Fill>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">

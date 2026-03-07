@@ -43,7 +43,11 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string StreamUrl { get; set; } = "";
         
         // Use Backdrop/Banner for Landscape cards if available, else fallback to Poster.
-        public string LandscapeImageUrl => !string.IsNullOrEmpty(Meta.Background) ? Meta.Background : PosterUrl;
+        public string LandscapeImageUrl => !string.IsNullOrEmpty(Banner) ? Banner : PosterUrl;
+
+        public bool IsContinueWatching { get; set; }
+        public bool IsMovie => Meta.Type?.ToLower() == "movie";
+        public bool IsSeries => Meta.Type?.ToLower() == "series" || Meta.Type?.ToLower() == "tv";
 
         public void UpdateBackground(string url)
         {
@@ -92,6 +96,8 @@ namespace ModernIPTVPlayer.Models.Stremio
         // Properties for UI Binding
         public string Year => Meta.ReleaseInfo;
         public string Banner => Meta.Background;
+        public string Description => Meta.Description;
+        public string Genres => (Meta.Genres != null && Meta.Genres.Count > 0) ? string.Join(", ", Meta.Genres) : "";
         
         // Helper
         public BitmapImage PosterBitmap => !string.IsNullOrEmpty(PosterUrl) ? new BitmapImage(new System.Uri(PosterUrl)) : null;

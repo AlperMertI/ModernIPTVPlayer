@@ -23,6 +23,78 @@ namespace ModernIPTVPlayer.Controls
         private readonly string _instanceId = Guid.NewGuid().ToString("N");
 
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> ItemClicked;
+        public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> TrailerExpandRequested;
+
+        public static readonly DependencyProperty IsExpandedProperty =
+            DependencyProperty.Register("IsExpanded", typeof(bool), typeof(SpotlightInjectRow), new PropertyMetadata(false, OnIsExpandedChanged));
+
+        public bool IsExpanded
+        {
+            get => (bool)GetValue(IsExpandedProperty);
+            set => SetValue(IsExpandedProperty, value);
+        }
+
+        private static void OnIsExpandedChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is SpotlightInjectRow row)
+            {
+                bool isExpanded = (bool)e.NewValue;
+                row.AnimateExpansion(isExpanded);
+
+                // Update ExpandButton icon and tooltip
+                if (row.ExpandButton != null && row.ExpandButton.Content is FontIcon icon)
+                {
+                    icon.Glyph = isExpanded ? "\uE73F" : "\uE740";
+                    ToolTipService.SetToolTip(row.ExpandButton, isExpanded ? "Küçült" : "Genişlet");
+                }
+            }
+        }
+
+        private async void AnimateExpansion(bool expand)
+        {
+            double targetHeight = expand ? 700 : 400;
+            double targetScale = expand ? 0.94 : 1.0;
+
+            var easing = new CubicEase { EasingMode = EasingMode.EaseOut };
+            var duration = new Duration(TimeSpan.FromMilliseconds(600));
+
+            // Height animation
+            var heightAnim = new DoubleAnimation
+            {
+                To = targetHeight,
+                Duration = duration,
+                EasingFunction = easing,
+                EnableDependentAnimation = true
+            };
+            Storyboard.SetTarget(heightAnim, ContainerBorder);
+            Storyboard.SetTargetProperty(heightAnim, "Height");
+
+            // ScaleX animation for focus effect
+            var scaleAnim = new DoubleAnimation
+            {
+                To = targetScale,
+                Duration = duration,
+                EasingFunction = easing
+            };
+            Storyboard.SetTarget(scaleAnim, ContainerTransform);
+            Storyboard.SetTargetProperty(scaleAnim, "ScaleX");
+
+            var sb = new Storyboard();
+            sb.Children.Add(heightAnim);
+            sb.Children.Add(scaleAnim);
+            sb.Begin();
+
+            // Scroll this row to center of viewport when expanding
+            if (expand)
+            {
+                await Task.Delay(80);
+                this.StartBringIntoView(new BringIntoViewOptions
+                {
+                    AnimationDesired = true,
+                    VerticalAlignmentRatio = 0.5
+                });
+            }
+        }
 
         public SpotlightInjectRow()
         {
@@ -124,6 +196,16 @@ namespace ModernIPTVPlayer.Controls
             }
             
             FallbackImage.Opacity = 1;
+
+            string idToCheck = item.IMDbId ?? item.Id.ToString();
+            if (Services.WatchlistManager.Instance.IsOnWatchlist(idToCheck))
+            {
+                WatchlistButton.Content = new FontIcon { Glyph = "\xE73E", FontSize = 16 };
+            }
+            else
+            {
+                WatchlistButton.Content = new FontIcon { Glyph = "\xE710", FontSize = 16 };
+            }
         }
 
         private async void UserControl_Loaded(object sender, RoutedEventArgs e)
@@ -186,6 +268,20 @@ namespace ModernIPTVPlayer.Controls
                     {
                         // Optimization: Switch video within same WebView
                         await _webView.CoreWebView2.ExecuteScriptAsync($"switchVideo('{ytId}');");
+                        UpdateMuteButtonIcon();
+                    }
+                    else 
+                    {
+                         // Wait slightly if initializing
+                         _ = Task.Run(async () => {
+                              await Task.Delay(500);
+                              DispatcherQueue?.TryEnqueue(async () => {
+                                  if (_webView?.CoreWebView2 != null && currentItem == _items[_currentIndex]) {
+                                      await _webView.CoreWebView2.ExecuteScriptAsync($"switchVideo('{ytId}');");
+                                      UpdateMuteButtonIcon();
+                                  }
+                              });
+                         });
                     }
                 }
             }
@@ -318,6 +414,10 @@ namespace ModernIPTVPlayer.Controls
             {
                 _isTrailerPlaying = true;
                 
+                ExpandButton.Visibility = Visibility.Visible;
+                MuteButton.Visibility = Visibility.Visible;
+                UpdateMuteButtonIcon();
+
                 var sb = new Storyboard();
                 var anim = new DoubleAnimation { To = 0.8, Duration = TimeSpan.FromSeconds(2) }; 
                 Storyboard.SetTarget(anim, VideoContainer);
@@ -342,6 +442,9 @@ namespace ModernIPTVPlayer.Controls
                 VideoContainer.Children.Clear();
                 _webView = null;
                 _isTrailerPlaying = false;
+                
+                ExpandButton.Visibility = Visibility.Collapsed;
+                MuteButton.Visibility = Visibility.Collapsed;
 
                 try
                 {
@@ -389,6 +492,69 @@ namespace ModernIPTVPlayer.Controls
                 CleanupWebView();
                 ItemClicked?.Invoke(this, (item, FallbackImage));
             }
+        }
+
+        private async void WatchlistButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_currentIndex >= 0 && _currentIndex < _items.Count)
+            {
+                var item = _items[_currentIndex];
+                ElementSoundPlayer.Play(ElementSoundKind.Invoke);
+
+                // Fetch full unified metadata to get canonical ID
+                Models.Metadata.UnifiedMetadata? unified = null;
+                try
+                {
+                    unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(item);
+                }
+                catch { }
+
+                string idToSave = unified?.ImdbId ?? item.IMDbId ?? item.Id.ToString();
+                string titleToSave = unified?.Title ?? item.Title;
+                string typeToSave = unified?.IsSeries == true ? "series" : (item.Meta?.Type ?? "movie");
+                string posterToSave = unified?.PosterUrl ?? item.PosterUrl;
+
+                if (!string.IsNullOrEmpty(idToSave) && !string.IsNullOrEmpty(titleToSave))
+                {
+                    if (Services.WatchlistManager.Instance.IsOnWatchlist(idToSave))
+                    {
+                        await Services.WatchlistManager.Instance.RemoveFromWatchlist(idToSave);
+                        WatchlistButton.Content = new FontIcon { Glyph = "\xE710", FontSize = 16 };
+                    }
+                    else
+                    {
+                        await Services.WatchlistManager.Instance.AddToWatchlist(item);
+                        WatchlistButton.Content = new FontIcon { Glyph = "\xE73E", FontSize = 16 };
+                    }
+                }
+            }
+        }
+
+        private bool _isMuted = true;
+
+        private async void MuteButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (_webView != null && _webView.CoreWebView2 != null)
+            {
+                _isMuted = !_isMuted;
+                string script = _isMuted ? "player.mute();" : "player.unMute();";
+                await _webView.CoreWebView2.ExecuteScriptAsync(script);
+                UpdateMuteButtonIcon();
+            }
+        }
+
+        private void UpdateMuteButtonIcon()
+        {
+            if (MuteIcon != null)
+            {
+                MuteIcon.Glyph = _isMuted ? "\xE74F" : "\xE767"; // Mute / Volume icon
+            }
+        }
+
+        private void ExpandButton_Click(object sender, RoutedEventArgs e)
+        {
+            IsExpanded = !IsExpanded;
+            ElementSoundPlayer.Play(ElementSoundKind.Invoke);
         }
     }
 }

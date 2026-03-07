@@ -61,25 +61,32 @@
                 <local:ShimmerCard x:Name="PosterShimmer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
                 <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
                 
-                <!-- Title Overlay (Premium) -->
                 <Grid VerticalAlignment="Bottom" 
-                      Height="60" 
+                      Height="70" 
                       IsHitTestVisible="False"
                       Visibility="{x:Bind IsTitleVisible, Mode=OneWay}">
                     <Grid.Background>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                             <GradientStop Color="Transparent" Offset="0"/>
-                            <GradientStop Color="#99000000" Offset="1"/>
+                            <GradientStop Color="#99000000" Offset="0.5"/>
+                            <GradientStop Color="#E6000000" Offset="1"/>
                         </LinearGradientBrush>
                     </Grid.Background>
-                    <TextBlock Text="{x:Bind Title, Mode=OneWay}" 
-                               Foreground="White" 
-                               FontSize="12" 
-                               FontWeight="SemiBold"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               TextTrimming="CharacterEllipsis"
-                               Margin="8,0,8,0"/>
+                    <StackPanel VerticalAlignment="Center" Margin="8,0,8,0">
+                        <TextBlock Text="{x:Bind Title, Mode=OneWay}" 
+                                   Foreground="White" 
+                                   FontSize="12" 
+                                   FontWeight="SemiBold"
+                                   HorizontalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{x:Bind Subtext, Mode=OneWay}" 
+                                   Foreground="#CCCCCC" 
+                                   FontSize="10" 
+                                   HorizontalAlignment="Center"
+                                   Visibility="{x:Bind HasSubtext, Mode=OneWay}"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,2,0,0"/>
+                    </StackPanel>
                 </Grid>
 
                 <!-- Progress Bar -->

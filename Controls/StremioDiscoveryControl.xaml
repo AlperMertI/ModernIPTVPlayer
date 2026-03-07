@@ -5,14 +5,18 @@
     xmlns:local="using:ModernIPTVPlayer.Controls"
     xmlns:models="using:ModernIPTVPlayer.Models"
     xmlns:stremioModels="using:ModernIPTVPlayer.Models.Stremio"
+    xmlns:converters="using:ModernIPTVPlayer.Converters"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
     d:DesignHeight="1000"
     d:DesignWidth="1200">
     <UserControl.Resources>
+        <converters:InverseBooleanConverter x:Key="InverseBooleanConverter"/>
+        
         <DataTemplate x:Key="StandardCardTemplate" x:DataType="stremioModels:StremioMediaStream">
             <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" 
+                              Subtext="{x:Bind Description, Mode=OneWay}"
                               ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
                               ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
                               Width="160" Height="240" 
@@ -24,9 +28,11 @@
         <DataTemplate x:Key="LandscapeCardTemplate" x:DataType="stremioModels:StremioMediaStream">
             <local:LandscapeCard ImageUrl="{x:Bind LandscapeImageUrl, Mode=OneWay}" 
                                  Title="{x:Bind Title, Mode=OneWay}"
+                                 Subtext="{x:Bind Genres, Mode=OneWay}"
                                  Year="{x:Bind Year, Mode=OneWay}"
                                  RatingText="{x:Bind Rating, Mode=OneWay}"
                                  ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
+                                 ShowMeta="{x:Bind IsContinueWatching, Converter={StaticResource InverseBooleanConverter}, Mode=OneWay}"
                                  ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
                                  Width="280" Height="160" 
                                  HoverStarted="LandscapeCard_HoverStarted" 
@@ -53,7 +59,8 @@
         </DataTemplate>
 
         <DataTemplate x:Key="SpotlightCatalogRowTemplate" x:DataType="models:CatalogRowViewModel">
-            <local:SpotlightInjectRow DataContext="{x:Bind Mode=OneWay}" ItemClicked="SpotlightInjectRow_ItemClicked" />
+            <local:SpotlightInjectRow DataContext="{x:Bind Mode=OneWay}" 
+                                      ItemClicked="SpotlightInjectRow_ItemClicked" />
         </DataTemplate>
 
         <local:DiscoveryRowTemplateSelector x:Key="DiscoveryRowTemplateSelector"

@@ -87,7 +87,26 @@ namespace ModernIPTVPlayer.Controls
             set { SetValue(RatingTextProperty, value); }
         }
 
+        public static readonly DependencyProperty SubtextProperty =
+            DependencyProperty.Register("Subtext", typeof(string), typeof(LandscapeCard), new PropertyMetadata(string.Empty));
+
+        public string Subtext
+        {
+            get { return (string)GetValue(SubtextProperty); }
+            set { SetValue(SubtextProperty, value); }
+        }
+        
+        public static readonly DependencyProperty ShowMetaProperty =
+            DependencyProperty.Register("ShowMeta", typeof(bool), typeof(LandscapeCard), new PropertyMetadata(true));
+
+        public bool ShowMeta
+        {
+            get { return (bool)GetValue(ShowMetaProperty); }
+            set { SetValue(ShowMetaProperty, value); }
+        }
+
         public bool HasRating => !string.IsNullOrEmpty(RatingText);
+        public bool HasSubtext => !string.IsNullOrEmpty(Subtext);
 
         private static void OnImageUrlChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
@@ -175,8 +194,8 @@ namespace ModernIPTVPlayer.Controls
                 var xDiff = pointerPosition.X - center.X;
                 var yDiff = pointerPosition.Y - center.Y;
 
-                TiltProjection.RotationY = -xDiff / 25.0; // Less tilt for wide cards
-                TiltProjection.RotationX = yDiff / 25.0;
+                TiltProjection.RotationY = -xDiff / 50.0; // Subtle tilt for wide cards
+                TiltProjection.RotationX = yDiff / 50.0;
             }
         }
     }

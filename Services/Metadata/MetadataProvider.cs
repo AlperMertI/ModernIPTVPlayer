@@ -51,7 +51,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             string normalizedId = NormalizeId(id) ?? id;
             try
             {
-                var result = await GetMetadataAsync(id, type, sourceStream, onBackdropFound);
+                var result = await GetMetadataAsync(normalizedId, type, sourceStream, onBackdropFound);
                 
                 if (result != null)
                 {
@@ -59,7 +59,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     _resultCache[cacheKey] = (result, expiry);
                     
                     // If the ID changed (e.g. tmdb -> imdb), cache under the new ID as well
-                    if (!string.IsNullOrEmpty(result.ImdbId) && result.ImdbId != id && result.ImdbId != normalizedId)
+                    if (!string.IsNullOrEmpty(result.ImdbId) && result.ImdbId != normalizedId)
                     {
                         string newKey = $"{result.ImdbId}_{type}";
                         _resultCache[newKey] = (result, expiry);

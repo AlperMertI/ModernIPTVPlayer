@@ -131,6 +131,11 @@ namespace ModernIPTVPlayer.Services
         {
             if (stream == null) return false;
             string id = GetId(stream);
+            return IsOnWatchlist(id);
+        }
+
+        public bool IsOnWatchlist(string id)
+        {
             if (string.IsNullOrEmpty(id)) return false;
 
             lock (_lock)

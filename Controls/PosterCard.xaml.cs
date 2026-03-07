@@ -52,6 +52,32 @@ namespace ModernIPTVPlayer.Controls
         public static readonly DependencyProperty ProgressValueProperty =
             DependencyProperty.Register("ProgressValue", typeof(double), typeof(PosterCard), new PropertyMetadata(0.0));
 
+        public string Subtext
+        {
+            get => (string)GetValue(SubtextProperty);
+            set => SetValue(SubtextProperty, value);
+        }
+
+        public static readonly DependencyProperty SubtextProperty =
+            DependencyProperty.Register("Subtext", typeof(string), typeof(PosterCard), new PropertyMetadata(null, OnSubtextChanged));
+
+        public Visibility HasSubtext
+        {
+            get => (Visibility)GetValue(HasSubtextProperty);
+            private set => SetValue(HasSubtextProperty, value);
+        }
+
+        public static readonly DependencyProperty HasSubtextProperty =
+            DependencyProperty.Register("HasSubtext", typeof(Visibility), typeof(PosterCard), new PropertyMetadata(Visibility.Collapsed));
+
+        private static void OnSubtextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is PosterCard card)
+            {
+                card.HasSubtext = string.IsNullOrEmpty(card.Subtext) ? Visibility.Collapsed : Visibility.Visible;
+            }
+        }
+
         public double ProgressValue
         {
             get { return (double)GetValue(ProgressValueProperty); }

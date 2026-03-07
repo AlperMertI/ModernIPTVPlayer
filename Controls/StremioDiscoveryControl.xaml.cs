@@ -63,14 +63,15 @@ namespace ModernIPTVPlayer.Controls
     {
         // Public Events
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> ItemClicked;
+        public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> TrailerExpandRequested;
         public event EventHandler<IMediaStream> PlayAction;
         public event EventHandler<IMediaStream> DetailsAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> BackdropColorChanged;
         public event EventHandler<ScrollViewerViewChangedEventArgs> ViewChanged;
         
         // Expanded Card Event Bridges
-        public event EventHandler<PosterCard> CardHoverStarted;
-        public event EventHandler<PosterCard> CardHoverEnded;
+        public event EventHandler<FrameworkElement> CardHoverStarted;
+        public event EventHandler<FrameworkElement> CardHoverEnded;
         public event EventHandler RowScrollStarted;
         public event EventHandler RowScrollEnded;
 
@@ -156,8 +157,12 @@ namespace ModernIPTVPlayer.Controls
                     Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
                     Poster = hist.PosterUrl,
                     Background = hist.BackdropUrl,
-                    Type = hist.ParentSeriesId != null ? "series" : _currentContentType
+                    Type = hist.ParentSeriesId != null ? "series" : _currentContentType,
+                    Description = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0 
+                        ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 
+                        : null
                 });
+                stream.IsContinueWatching = true;
                 stream.ProgressValue = hist.Duration > 0 ? ((double)hist.Position / hist.Duration) * 100 : 0;
                 cwItems.Add(stream);
             }
@@ -274,9 +279,13 @@ namespace ModernIPTVPlayer.Controls
                             Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
                             Poster = hist.PosterUrl,
                             Background = hist.BackdropUrl,
-                            Type = hist.ParentSeriesId != null ? "series" : contentType
+                            Type = hist.ParentSeriesId != null ? "series" : contentType,
+                            Description = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0 
+                                ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 
+                                : null
                         });
                         
+                        stream.IsContinueWatching = true;
                         stream.ProgressValue = hist.Duration > 0 ? (hist.Position / hist.Duration) * 100 : 0;
                         cwItems.Add(stream);
                     }
@@ -674,12 +683,23 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void LandscapeCard_HoverStarted(object sender, EventArgs e) { }
-        private void LandscapeCard_HoverEnded(object sender, EventArgs e) { }
+        private void LandscapeCard_HoverStarted(object sender, EventArgs e) 
+        {
+            if (sender is LandscapeCard card) CardHoverStarted?.Invoke(this, card);
+        }
+        private void LandscapeCard_HoverEnded(object sender, EventArgs e) 
+        {
+            if (sender is LandscapeCard card) CardHoverEnded?.Invoke(this, card);
+        }
 
         private void SpotlightInjectRow_ItemClicked(object sender, (IMediaStream Stream, UIElement SourceElement) e)
         {
             ItemClicked?.Invoke(this, e);
+        }
+
+        private void SpotlightInjectRow_TrailerExpandRequested(object sender, (IMediaStream Stream, UIElement SourceElement) e)
+        {
+            TrailerExpandRequested?.Invoke(this, e);
         }
 
         private void PosterCard_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)

@@ -29,8 +29,8 @@ namespace ModernIPTVPlayer.Controls
         private DispatcherTimer? _hoverTimer;
         private DispatcherTimer? _flightTimer;
         private CancellationTokenSource? _closeCts;
-        private PosterCard? _pendingHoverCard;
-        private PosterCard? _activeSourceCard;
+        private FrameworkElement? _pendingHoverCard;
+        private FrameworkElement? _activeSourceCard;
         private Rect _preCinemaBounds;
         private bool _isInCinemaMode;
         private bool _suppressCinemaAnimations;
@@ -98,7 +98,7 @@ namespace ModernIPTVPlayer.Controls
             _pendingHoverCard = null;
         }
 
-        public void OnHoverStarted(PosterCard card)
+        public void OnHoverStarted(FrameworkElement card)
         {
             if (_isInCinemaMode) return;
 
@@ -226,7 +226,7 @@ namespace ModernIPTVPlayer.Controls
         private void FlightTimer_Tick(object sender, object e)
         {
             _flightTimer?.Stop();
-            if (_pendingHoverCard != null && _pendingHoverCard.IsHovered)
+            if (_pendingHoverCard != null && IsCardHovered(_pendingHoverCard))
             {
                 ShowExpandedCard(_pendingHoverCard);
             }
@@ -235,13 +235,20 @@ namespace ModernIPTVPlayer.Controls
         private void HoverTimer_Tick(object sender, object e)
         {
             _hoverTimer?.Stop();
-            if (_pendingHoverCard != null && _pendingHoverCard.IsHovered)
+            if (_pendingHoverCard != null && IsCardHovered(_pendingHoverCard))
             {
                 ShowExpandedCard(_pendingHoverCard);
             }
         }
 
-        private async void ShowExpandedCard(PosterCard sourceCard)
+        private bool IsCardHovered(FrameworkElement card)
+        {
+            if (card is PosterCard p) return p.IsHovered;
+            if (card is LandscapeCard l) return l.IsHovered;
+            return false;
+        }
+
+        private async void ShowExpandedCard(FrameworkElement sourceCard)
         {
             try
             {
@@ -340,6 +347,78 @@ namespace ModernIPTVPlayer.Controls
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlayController] Show error: {ex.Message}");
             }
+        }
+
+        public void ExpandToCinema(IMediaStream item, UIElement sourceElement)
+        {
+            if (sourceElement is not FrameworkElement fe) return;
+            
+            _closeCts?.Cancel();
+            _closeCts = new CancellationTokenSource();
+            
+            // Set state to prevent closing
+            _activeSourceCard = null; 
+            _isInCinemaMode = true;
+            
+            _overlayCanvas.Visibility = Visibility.Visible;
+            if (_cinemaScrim != null)
+            {
+                _cinemaScrim.Visibility = Visibility.Visible;
+                _cinemaScrim.IsHitTestVisible = true;
+                _cinemaScrim.Opacity = 0.8f;
+            }
+
+            // 1. Initial Position (at source)
+            var transform = fe.TransformToVisual(_overlayCanvas);
+            var sourcePos = transform.TransformPoint(new Point(0, 0));
+            
+            _expandedCard.Visibility = Visibility.Visible;
+            _expandedCard.Opacity = 1;
+            Canvas.SetLeft(_expandedCard, sourcePos.X);
+            Canvas.SetTop(_expandedCard, sourcePos.Y);
+            _expandedCard.Width = fe.ActualWidth;
+            _expandedCard.Height = fe.ActualHeight;
+            _expandedCard.UpdateLayout();
+
+            // Store current bounds as "pre-cinema"
+            _preCinemaBounds = new Rect(sourcePos.X, sourcePos.Y, fe.ActualWidth, fe.ActualHeight);
+
+            // 2. Load Data & Cinema Mode
+            _expandedCard.LoadDataAsync(item);
+            _expandedCard.ToggleCinemaMode(true);
+
+            // 3. Animate to Center
+            var target = CalculateCinemaTarget();
+
+            if (_cardBoundsStoryboard != null)
+            {
+                _cardBoundsStoryboard.Stop();
+            }
+
+            _cardBoundsStoryboard = new Storyboard();
+            var easing = new ExponentialEase { Exponent = 6, EasingMode = EasingMode.EaseOut };
+            
+            var animX = new DoubleAnimation { To = target.X, Duration = TimeSpan.FromMilliseconds(800), EasingFunction = easing, EnableDependentAnimation = true };
+            var animY = new DoubleAnimation { To = target.Y, Duration = TimeSpan.FromMilliseconds(800), EasingFunction = easing, EnableDependentAnimation = true };
+            var animW = new DoubleAnimation { To = target.Width, Duration = TimeSpan.FromMilliseconds(800), EasingFunction = easing, EnableDependentAnimation = true };
+            var animH = new DoubleAnimation { To = target.Height, Duration = TimeSpan.FromMilliseconds(800), EasingFunction = easing, EnableDependentAnimation = true };
+
+            Storyboard.SetTarget(animX, _expandedCard);
+            Storyboard.SetTargetProperty(animX, "(Canvas.Left)");
+            Storyboard.SetTarget(animY, _expandedCard);
+            Storyboard.SetTargetProperty(animY, "(Canvas.Top)");
+            Storyboard.SetTarget(animW, _expandedCard);
+            Storyboard.SetTargetProperty(animW, "Width");
+            Storyboard.SetTarget(animH, _expandedCard);
+            Storyboard.SetTargetProperty(animH, "Height");
+
+            _cardBoundsStoryboard.Children.Add(animX);
+            _cardBoundsStoryboard.Children.Add(animY);
+            _cardBoundsStoryboard.Children.Add(animW);
+            _cardBoundsStoryboard.Children.Add(animH);
+            
+            CinemaModeChanged?.Invoke(this, true);
+            _cardBoundsStoryboard.Begin();
         }
 
         private void ExpandedCard_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -571,6 +650,11 @@ namespace ModernIPTVPlayer.Controls
             if (_isInCinemaMode)
             {
                 SyncScrimSize();
+                var target = CalculateCinemaTarget();
+                Canvas.SetLeft(_expandedCard, target.Left);
+                Canvas.SetTop(_expandedCard, target.Top);
+                _expandedCard.Width = target.Width;
+                _expandedCard.Height = target.Height;
             }
         }
 

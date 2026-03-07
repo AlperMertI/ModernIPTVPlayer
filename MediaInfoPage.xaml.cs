@@ -5471,19 +5471,26 @@ namespace ModernIPTVPlayer
                      
                      if (shouldMark && !ep.IsWatched)
                      {
-                         HistoryManager.Instance.UpdateProgress(ep.Id, 
-                             ep.Title, 
-                             ep.StreamUrl ?? "", 
-                             1000, 1000, 
-                             seriesId,
-                             seriesName,
-                             ep.SeasonNumber, 
-                             ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series");
-                             
-                         ep.IsWatched = true;
-                         ep.ProgressPercent = 0;
-                         ep.ProgressText = "";
-                         ep.HasProgress = false;
+                         // [FIX] Validating if the episode has actually aired/is available before marking watched
+                         bool isAired = ep.ReleaseDate.HasValue ? (ep.ReleaseDate.Value <= DateTime.Now.AddDays(1)) : ep.IsReleased;
+                         bool hasStream = !string.IsNullOrEmpty(ep.StreamUrl);
+
+                         if (isAired || hasStream)
+                         {
+                             HistoryManager.Instance.UpdateProgress(ep.Id, 
+                                 ep.Title, 
+                                 ep.StreamUrl ?? "", 
+                                 1000, 1000, 
+                                 seriesId,
+                                 seriesName,
+                                 ep.SeasonNumber, 
+                                 ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series");
+                                 
+                             ep.IsWatched = true;
+                             ep.ProgressPercent = 0;
+                             ep.ProgressText = "";
+                             ep.HasProgress = false;
+                         }
                      }
                  }
                  
