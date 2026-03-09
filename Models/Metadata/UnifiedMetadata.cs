@@ -28,12 +28,15 @@ namespace ModernIPTVPlayer.Models.Metadata
         // Tracking source
         public string DataSource { get; set; } // e.g. "Stremio", "Stremio + TMDB"
         public string MetadataSourceInfo { get; set; } // Detailed attribution (e.g. "AioStreams (TMDB)")
+        public string CatalogSourceInfo { get; set; }
+        public string CatalogSourceAddonUrl { get; set; }
+        public string PrimaryMetadataAddonUrl { get; set; }
 
         public List<UnifiedSeason> Seasons { get; set; } = new List<UnifiedSeason>();
         
         [JsonIgnore]
         public HashSet<string> ProbedAddons { get; set; } = new HashSet<string>();
-        
+
         [JsonIgnore] 
         public string DurationFormatted => Runtime; // Alias for compatibility
     }

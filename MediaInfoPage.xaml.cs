@@ -706,6 +706,7 @@ namespace ModernIPTVPlayer
         private async Task LoadDetailsAsync(IMediaStream item, TmdbMovieResult preFetchedTmdb = null)
         {
             bool isSwitchingItem = _item != null && !IsSameItem(_item, item);
+            string navSeedTitle = item?.Title?.Trim() ?? "";
 
             // Only clear sources if we are switching to a completely DIFFERENT movie/series
             // Note: For series, switching episodes happens inside PlayStremioContent which handles its own videoId-based caching
@@ -788,25 +789,105 @@ namespace ModernIPTVPlayer
                 }
             }
             var unified = _unifiedMetadata;
+            if (unified == null)
+            {
+                System.Diagnostics.Debug.WriteLine("[MediaInfoPage] MetadataProvider returned null. Creating fallback unified model.");
+                bool isSeriesItem = item is SeriesStream || (item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv"));
+                var stremioItem = item as Models.Stremio.StremioMediaStream;
+
+                unified = new UnifiedMetadata
+                {
+                    Title = item.Title ?? "",
+                    Overview = stremioItem?.Meta?.Description ?? "",
+                    PosterUrl = item.PosterUrl,
+                    BackdropUrl = item.BackdropUrl ?? stremioItem?.Meta?.Background,
+                    Year = stremioItem?.Meta?.ReleaseInfo ?? "",
+                    Genres = stremioItem?.Genres ?? "",
+                    Runtime = stremioItem?.Meta?.Runtime ?? "",
+                    IsSeries = isSeriesItem,
+                    ImdbId = item.IMDbId,
+                    MetadataId = item.IMDbId ?? item.Id.ToString(),
+                    DataSource = "Fallback"
+                };
+
+                if (!string.IsNullOrWhiteSpace(item.Rating))
+                {
+                    string ratingText = item.Rating.Replace(",", ".");
+                    if (double.TryParse(ratingText, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var parsedRating))
+                    {
+                        unified.Rating = parsedRating;
+                    }
+                }
+
+                _unifiedMetadata = unified;
+            }
+
+            if (string.IsNullOrWhiteSpace(unified.PosterUrl) && !string.IsNullOrWhiteSpace(item.PosterUrl))
+            {
+                unified.PosterUrl = item.PosterUrl;
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] PosterUrl seeded from item: {unified.PosterUrl}");
+            }
+
+            if (string.IsNullOrWhiteSpace(unified.BackdropUrl))
+            {
+                string itemBackdrop = (item as Models.Stremio.StremioMediaStream)?.Meta?.Background ?? item.BackdropUrl;
+                if (!string.IsNullOrWhiteSpace(itemBackdrop))
+                {
+                    unified.BackdropUrl = itemBackdrop;
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] BackdropUrl seeded from item: {unified.BackdropUrl}");
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(unified.BackdropUrl) && unified.BackdropUrls != null && unified.BackdropUrls.Count > 0)
+            {
+                unified.BackdropUrl = unified.BackdropUrls[0];
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] BackdropUrl seeded from BackdropUrls[0]: {unified.BackdropUrl}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(unified.BackdropUrl))
+            {
+                unified.BackdropUrls ??= new List<string>();
+                if (!unified.BackdropUrls.Contains(unified.BackdropUrl))
+                {
+                    unified.BackdropUrls.Insert(0, unified.BackdropUrl);
+                }
+            }
 
             // Update UI with Unified Data
             TitleText.Text = unified.Title;
             StickyTitle.Text = unified.Title;
             
             // [FEATURE] Dual Title (SuperTitle): Show secondary title (SubTitle or Original) if available and different
-            string sub = !string.IsNullOrEmpty(unified.SubTitle) ? unified.SubTitle : unified.OriginalTitle;
+            if (string.IsNullOrWhiteSpace(unified.SubTitle) &&
+                item is Models.Stremio.StremioMediaStream stremioForSubtitle &&
+                !string.IsNullOrWhiteSpace(stremioForSubtitle.Meta?.OriginalName) &&
+                !string.Equals(stremioForSubtitle.Meta.OriginalName, unified.Title, StringComparison.OrdinalIgnoreCase))
+            {
+                unified.SubTitle = stremioForSubtitle.Meta.OriginalName;
+            }
 
-            if (!string.IsNullOrEmpty(sub) && !string.Equals(unified.Title, sub, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(unified.SubTitle) &&
+                !string.IsNullOrWhiteSpace(navSeedTitle) &&
+                !string.Equals(navSeedTitle, unified.Title, StringComparison.OrdinalIgnoreCase))
+            {
+                unified.SubTitle = navSeedTitle;
+            }
+
+            string sub = !string.IsNullOrWhiteSpace(unified.SubTitle) ? unified.SubTitle : unified.OriginalTitle;
+
+            if (!string.IsNullOrWhiteSpace(sub) && !string.Equals(unified.Title, sub, StringComparison.OrdinalIgnoreCase))
             {
                 if (SuperTitleText != null)
                 {
                     SuperTitleText.Text = sub.ToUpperInvariant();
                     SuperTitleText.Visibility = Visibility.Visible;
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] SuperTitle shown: {sub}");
                 }
             }
             else
             {
                 if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
+                System.Diagnostics.Debug.WriteLine("[MediaInfoPage] SuperTitle hidden (no secondary title).");
             }
 
             OverviewText.Text = !string.IsNullOrEmpty(unified.Overview) ? unified.Overview : "Açıklama mevcut değil.";
@@ -827,15 +908,13 @@ namespace ModernIPTVPlayer
 
             if (!string.IsNullOrEmpty(unified.BackdropUrl))
             {
-                // Only update if backdrop is different from what we seeded (poster)
-                // This prevents flicker mid-animation.
-                var newSource = new BitmapImage(new Uri(unified.BackdropUrl));
-                if (HeroImage.Source == null || (HeroImage.Source as BitmapImage)?.UriSource?.ToString() != unified.BackdropUrl)
-                {
-                    HeroImage.Source = newSource;
-                }
-                
-                if (HeroImage.Opacity < 1) HeroImage.Opacity = 1;
+                // Feed backdrop into validation/slideshow pipeline first.
+                AddBackdropToSlideshow(unified.BackdropUrl);
+                ApplyHeroSeedImage(unified.BackdropUrl, "backdrop");
+            }
+            else if (!string.IsNullOrEmpty(unified.PosterUrl))
+            {
+                ApplyHeroSeedImage(unified.PosterUrl, "poster-fallback");
             }
             
             System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Unified Metadata Loaded via {unified.DataSource}");
@@ -1028,6 +1107,40 @@ namespace ModernIPTVPlayer
 
             // Reveal
             StaggeredRevealContent();
+        }
+
+        private void ApplyHeroSeedImage(string imageUrl, string reason)
+        {
+            if (string.IsNullOrWhiteSpace(imageUrl) || HeroImage == null || HeroImage2 == null) return;
+            if (!Uri.TryCreate(imageUrl, UriKind.Absolute, out var uri))
+            {
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Hero seed skipped (invalid URI): {imageUrl}");
+                return;
+            }
+
+            try
+            {
+                var visual1 = ElementCompositionPreview.GetElementVisual(HeroImage);
+                var visual2 = ElementCompositionPreview.GetElementVisual(HeroImage2);
+                visual1.StopAnimation("Opacity");
+                visual2.StopAnimation("Opacity");
+
+                HeroImage.Source = new BitmapImage(uri);
+                HeroImage.Opacity = 1;
+                HeroImage2.Opacity = 0;
+
+                visual1.Opacity = 1f;
+                visual2.Opacity = 0f;
+
+                _isHeroImage1Active = true;
+                _isHeroTransitionInProgress = false;
+
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Hero seed applied ({reason}): {imageUrl}");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Hero seed error ({reason}): {ex.Message}");
+            }
         }
 
         private void ResetPageState()
@@ -1557,6 +1670,26 @@ namespace ModernIPTVPlayer
             if (sender is Image img)
             {
                 System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Image LOAD FAILED: {img.Name}. Error: {e.ErrorMessage}");
+
+                // MetaHub Failover Logic: Try alternative domain before giving up
+                string? failingUrl = (img.Source as BitmapImage)?.UriSource?.ToString();
+                if (!string.IsNullOrEmpty(failingUrl) && failingUrl.Contains("metahub.space"))
+                {
+                    string retryUrl = failingUrl;
+                    if (failingUrl.Contains("live.metahub.space"))
+                        retryUrl = failingUrl.Replace("live.metahub.space", "images.metahub.space");
+                    else if (failingUrl.Contains("images.metahub.space"))
+                        retryUrl = failingUrl.Replace("images.metahub.space", "live.metahub.space");
+
+                    if (retryUrl != failingUrl)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Retrying MetaHub with alternative domain: {retryUrl}");
+                        // Unsubscribe temporarily to avoid potential loops if failure is immediate, 
+                        // though WinUI ImageFailed handles this gracefully usually.
+                        img.Source = new BitmapImage(new Uri(retryUrl));
+                        return; // Wait for next load result
+                    }
+                }
                 
                 // If we have more images, try to move to the next one immediately
                 if (_backdropUrls != null && _backdropUrls.Count > 1)
@@ -1568,6 +1701,21 @@ namespace ModernIPTVPlayer
                     // Trigger manual next if possible
                     _currentBackdropIndex = (_currentBackdropIndex + 1) % _backdropUrls.Count;
                     RotateBackdrop();
+                }
+                else
+                {
+                    // Single-image failure: keep UI alive with poster fallback instead of blank hero.
+                    string fallbackPoster = _unifiedMetadata?.PosterUrl ?? _item?.PosterUrl;
+                    if (!string.IsNullOrWhiteSpace(fallbackPoster))
+                    {
+                        string currentUrl = (img.Source as BitmapImage)?.UriSource?.ToString();
+                        if (!string.Equals(currentUrl, fallbackPoster, StringComparison.OrdinalIgnoreCase))
+                        {
+                            img.Source = new BitmapImage(new Uri(fallbackPoster));
+                            img.Opacity = 1;
+                            System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Applied poster fallback after image failure: {fallbackPoster}");
+                        }
+                    }
                 }
             }
         }

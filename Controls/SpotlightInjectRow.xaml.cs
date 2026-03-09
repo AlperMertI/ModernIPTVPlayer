@@ -21,6 +21,8 @@ namespace ModernIPTVPlayer.Controls
         private int _currentIndex = 0;
         private bool _isTrailerPlaying = false;
         private readonly string _instanceId = Guid.NewGuid().ToString("N");
+        private readonly List<string> _currentImageCandidates = new List<string>();
+        private int _currentImageCandidateIndex = 0;
 
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> ItemClicked;
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> TrailerExpandRequested;
@@ -102,10 +104,12 @@ namespace ModernIPTVPlayer.Controls
             this.DataContextChanged += SpotlightInjectRow_DataContextChanged;
             this.EffectiveViewportChanged += SpotlightInjectRow_EffectiveViewportChanged;
             this.Unloaded += SpotlightInjectRow_Unloaded;
+            FallbackImage.ImageFailed += FallbackImage_ImageFailed;
         }
 
         private void SpotlightInjectRow_Unloaded(object sender, RoutedEventArgs e)
         {
+            FallbackImage.ImageFailed -= FallbackImage_ImageFailed;
             CleanupWebView();
         }
 
@@ -189,11 +193,9 @@ namespace ModernIPTVPlayer.Controls
             RatingBlock.Text = item.Rating ?? "";
             DescriptionBlock.Text = item.Meta?.Description ?? "";
 
-            string imgUrl = !string.IsNullOrEmpty(item.Banner) ? item.Banner : item.PosterUrl;
-            if (!string.IsNullOrEmpty(imgUrl))
-            {
-                FallbackImage.Source = new BitmapImage(new Uri(imgUrl));
-            }
+            BuildImageCandidates(item);
+            _currentImageCandidateIndex = 0;
+            TrySetCurrentImageCandidate();
             
             FallbackImage.Opacity = 1;
 
@@ -223,6 +225,7 @@ namespace ModernIPTVPlayer.Controls
             var currentItem = _items[_currentIndex];
 
             string trailerId = null;
+            Models.Metadata.UnifiedMetadata? discoveryUnified = null;
 
             // 1. Try existing trailers in meta
             if (currentItem.Meta?.Trailers != null && currentItem.Meta.Trailers.Count > 0)
@@ -230,22 +233,42 @@ namespace ModernIPTVPlayer.Controls
                 trailerId = currentItem.Meta.Trailers.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Source))?.Source;
             }
 
-            // 2. Try fetching from metadata provider (which should be cached or pre-fetched)
+            // 2. Always apply Discovery unified metadata so poster/year/overview are refreshed from cache/priority logic.
+            try
+            {
+                discoveryUnified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(currentItem, Services.Metadata.MetadataContext.Discovery);
+                if (currentItem != _items[_currentIndex]) return;
+
+                if (discoveryUnified != null)
+                {
+                    ApplyUnifiedToSpotlightItem(currentItem, discoveryUnified);
+                    if (string.IsNullOrEmpty(trailerId) && !string.IsNullOrEmpty(discoveryUnified.TrailerUrl))
+                        trailerId = discoveryUnified.TrailerUrl;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Spotlight] Discovery meta fetch error: {ex.Message}");
+            }
+
+            // 3. Trailer hala yoksa Detail metadata dene.
             if (string.IsNullOrEmpty(trailerId))
             {
                 try
                 {
-                    var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(currentItem);
+                    var detailUnified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(currentItem, Services.Metadata.MetadataContext.Detail);
                     if (currentItem != _items[_currentIndex]) return;
 
-                    if (unified != null && !string.IsNullOrEmpty(unified.TrailerUrl))
+                    if (detailUnified != null)
                     {
-                        trailerId = unified.TrailerUrl;
+                        ApplyUnifiedToSpotlightItem(currentItem, detailUnified);
+                        if (!string.IsNullOrEmpty(detailUnified.TrailerUrl))
+                            trailerId = detailUnified.TrailerUrl;
                     }
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[Spotlight] Meta fetch error: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine($"[Spotlight] Detail meta fetch error: {ex.Message}");
                 }
             }
             
@@ -290,6 +313,150 @@ namespace ModernIPTVPlayer.Controls
                 _pendingTrailerId = null;
                 // If it was playing, hide it or stop it?
                 VideoContainer.Opacity = 0;
+            }
+        }
+
+        private void BuildImageCandidates(StremioMediaStream item)
+        {
+            _currentImageCandidates.Clear();
+            AddImageCandidate(item?.BackdropUrl);
+            AddImageCandidate(item?.Meta?.Background);
+            AddImageCandidate(item?.LandscapeImageUrl);
+            AddImageCandidate(item?.Banner);
+            AddImageCandidate(item?.PosterUrl);
+            AddImageCandidate(item?.Meta?.Poster);
+        }
+
+        private void AddImageCandidate(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return;
+
+            string candidate = url.Trim();
+            if (string.Equals(candidate, "null", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(candidate, "none", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            if (candidate.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+            {
+                candidate = "https://" + candidate.Substring("http://".Length);
+            }
+
+            // Upgrade MetaHub quality
+            if (candidate.Contains("metahub.space/"))
+            {
+                candidate = candidate.Replace("/medium/", "/large/").Replace("/small/", "/large/");
+            }
+
+            if (_currentImageCandidates.Contains(candidate, StringComparer.OrdinalIgnoreCase)) return;
+            _currentImageCandidates.Add(candidate);
+        }
+
+        private void TrySetCurrentImageCandidate()
+        {
+            while (_currentImageCandidateIndex < _currentImageCandidates.Count)
+            {
+                string candidate = _currentImageCandidates[_currentImageCandidateIndex];
+                if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Spotlight] Invalid image URL skipped: {candidate}");
+                    _currentImageCandidateIndex++;
+                    continue;
+                }
+
+                FallbackImage.Source = new BitmapImage(uri);
+                return;
+            }
+
+            FallbackImage.Source = null;
+            System.Diagnostics.Debug.WriteLine("[Spotlight] No usable image candidate found.");
+        }
+
+        private void FallbackImage_ImageFailed(object sender, ExceptionRoutedEventArgs e)
+        {
+            string failed = (_currentImageCandidateIndex >= 0 && _currentImageCandidateIndex < _currentImageCandidates.Count)
+                ? _currentImageCandidates[_currentImageCandidateIndex]
+                : "unknown";
+            System.Diagnostics.Debug.WriteLine($"[Spotlight] Image failed: {failed} | Error={e?.ErrorMessage}");
+            _currentImageCandidateIndex++;
+            TrySetCurrentImageCandidate();
+        }
+
+        private void ApplyUnifiedToSpotlightItem(StremioMediaStream item, Models.Metadata.UnifiedMetadata unified)
+        {
+            if (item?.Meta == null || unified == null) return;
+
+            bool changed = false;
+
+            if (!string.IsNullOrWhiteSpace(unified.Title) && item.Meta.Name != unified.Title)
+            {
+                // Preserve original catalog title for dual-title use in detail page.
+                if (string.IsNullOrWhiteSpace(item.Meta.OriginalName) &&
+                    !string.IsNullOrWhiteSpace(item.Meta.Name) &&
+                    !string.Equals(item.Meta.Name, unified.Title, StringComparison.OrdinalIgnoreCase))
+                {
+                    item.Meta.OriginalName = item.Meta.Name;
+                }
+
+                item.Meta.Name = unified.Title;
+                changed = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(unified.Overview) && item.Meta.Description != unified.Overview)
+            {
+                item.Meta.Description = unified.Overview;
+                changed = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(unified.Year) && item.Meta.ReleaseInfo != unified.Year)
+            {
+                item.Meta.ReleaseInfo = unified.Year;
+                changed = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(unified.Genres))
+            {
+                var genres = unified.Genres.Split(", ").ToList();
+                if (item.Meta.Genres == null || item.Meta.Genres.Count != genres.Count || !item.Meta.Genres.SequenceEqual(genres))
+                {
+                    item.Meta.Genres = genres;
+                    changed = true;
+                }
+            }
+
+            if (unified.Rating > 0)
+            {
+                string rating = unified.Rating.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+                if (item.Meta.ImdbRating?.ToString() != rating)
+                {
+                    item.Meta.ImdbRating = rating;
+                    changed = true;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(unified.BackdropUrl) && item.Meta.Background != unified.BackdropUrl)
+            {
+                item.UpdateBackground(unified.BackdropUrl);
+                changed = true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(unified.PosterUrl) && item.PosterUrl != unified.PosterUrl)
+            {
+                item.PosterUrl = unified.PosterUrl;
+                changed = true;
+            }
+
+            if (changed && item == _items[_currentIndex])
+            {
+                item.OnPropertyChanged(nameof(item.Title));
+                item.OnPropertyChanged(nameof(item.Description));
+                item.OnPropertyChanged(nameof(item.Year));
+                item.OnPropertyChanged(nameof(item.Genres));
+                item.OnPropertyChanged(nameof(item.Rating));
+                item.OnPropertyChanged(nameof(item.PosterUrl));
+                item.OnPropertyChanged(nameof(item.LandscapeImageUrl));
+                UpdateUI();
             }
         }
 

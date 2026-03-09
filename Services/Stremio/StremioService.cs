@@ -135,13 +135,14 @@ namespace ModernIPTVPlayer.Services.Stremio
                 // Format: /meta/{type}/{id}.json
                 string url = $"{baseUrl.TrimEnd('/')}/meta/{type}/{id}.json";
                 string json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[StremioService] RAW META JSON from {baseUrl}:\n{json}");
+                System.Diagnostics.Debug.WriteLine($"[StremioService] RAW META JSON ({type}:{id}) from {url}:\n{json}");
                 var response = JsonSerializer.Deserialize<StremioMetaResponse>(json, _jsonOptions);
                 return response?.Meta;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioService] Error fetching meta: {ex.Message}");
+                string failedUrl = $"{baseUrl.TrimEnd('/')}/meta/{type}/{id}.json";
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Error fetching meta ({type}:{id}) from {failedUrl}: {ex.Message}");
                 return null;
             }
         }
@@ -229,7 +230,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         try
                         {
                             var root = await GetCatalogAsync(url);
-                            var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = manifest.Name ?? "Unknown Addon" }).ToList() ?? new List<StremioMediaStream>();
+                            var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = baseUrl }).ToList() ?? new List<StremioMediaStream>();
                             return items;
                         }
                         catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
@@ -288,7 +289,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 System.Diagnostics.Debug.WriteLine($"[StremioService] Pinpoint Discover URL: {url}");
 
                 var root = await GetCatalogAsync(url);
-                var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = args.DisplayName }).ToList() ?? new List<StremioMediaStream>();
+                var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = args.AddonId }).ToList() ?? new List<StremioMediaStream>();
                 
                 // No need for validation here since the user manually clicked this option from the manifest!
                 return items;
@@ -345,7 +346,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         try
                         {
                             var root = await GetCatalogAsync(url);
-                            var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = manifest.Name ?? "Unknown Addon" }).ToList() ?? new List<StremioMediaStream>();
+                            var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = baseUrl }).ToList() ?? new List<StremioMediaStream>();
                             return items;
                         }
                         catch (Exception ex)
@@ -406,10 +407,22 @@ namespace ModernIPTVPlayer.Services.Stremio
         private bool IsMatch(StremioMediaStream existing, StremioMediaStream current, string currentNormTitle)
         {
             // 1. ID Match (Strongest)
-            // If both have IMDb IDs (tt...), and they match -> Match
+            // If both have IDs and normalized IDs match exactly -> Match.
+            // This is important for non-tt IDs like tbm:..., where title can differ by locale.
             if (!string.IsNullOrEmpty(existing.IMDbId) && !string.IsNullOrEmpty(current.IMDbId))
             {
-                if (existing.IMDbId.StartsWith("tt") && current.IMDbId.StartsWith("tt"))
+                string existingNormId = NormalizeExternalId(existing.IMDbId);
+                string currentNormId = NormalizeExternalId(current.IMDbId);
+
+                if (!string.IsNullOrWhiteSpace(existingNormId) &&
+                    !string.IsNullOrWhiteSpace(currentNormId) &&
+                    string.Equals(existingNormId, currentNormId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                if (existing.IMDbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase) &&
+                    current.IMDbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase))
                 {
                      if (existing.IMDbId == current.IMDbId) return true;
                      // If both are tt but different, definitely NOT a match (e.g. Sequel)
@@ -437,6 +450,12 @@ namespace ModernIPTVPlayer.Services.Stremio
             string y2 = GetYearDigits(current.Year);
             
             return y1 == y2;
+        }
+
+        private string NormalizeExternalId(string? id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return string.Empty;
+            return id.Trim().ToLowerInvariant();
         }
 
         private string GetYearDigits(string raw)
@@ -467,26 +486,98 @@ namespace ModernIPTVPlayer.Services.Stremio
                 // existing.SourceAddon = current.SourceAddon; // Maybe?
             }
 
+            // Keep identifier hints from any source. These are critical for later canonical ID resolution.
+            bool existingImdbUsable = !string.IsNullOrWhiteSpace(existing.Meta.ImdbId) &&
+                                      System.Text.RegularExpressions.Regex.IsMatch(existing.Meta.ImdbId, @"tt\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            bool currentImdbUsable = !string.IsNullOrWhiteSpace(current.Meta.ImdbId) &&
+                                     System.Text.RegularExpressions.Regex.IsMatch(current.Meta.ImdbId, @"tt\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if ((!existingImdbUsable && currentImdbUsable) || string.IsNullOrWhiteSpace(existing.Meta.ImdbId))
+            {
+                existing.Meta.ImdbId = current.Meta.ImdbId;
+            }
+
+            bool existingWebsiteHasImdb = !string.IsNullOrWhiteSpace(existing.Meta.Website) &&
+                                          System.Text.RegularExpressions.Regex.IsMatch(existing.Meta.Website, @"tt\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            bool currentWebsiteHasImdb = !string.IsNullOrWhiteSpace(current.Meta.Website) &&
+                                         System.Text.RegularExpressions.Regex.IsMatch(current.Meta.Website, @"tt\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if ((!existingWebsiteHasImdb && currentWebsiteHasImdb) || string.IsNullOrWhiteSpace(existing.Meta.Website))
+            {
+                existing.Meta.Website = current.Meta.Website;
+            }
+
+            if (existing.Meta.MovieDbId == null && current.Meta.MovieDbId != null)
+            {
+                existing.Meta.MovieDbId = current.Meta.MovieDbId;
+            }
+
+            if ((existing.Meta.Links == null || existing.Meta.Links.Count == 0) && current.Meta.Links?.Count > 0)
+            {
+                existing.Meta.Links = current.Meta.Links;
+            }
+
+            if ((existing.Meta.Trailers == null || existing.Meta.Trailers.Count == 0) && current.Meta.Trailers?.Count > 0)
+            {
+                existing.Meta.Trailers = current.Meta.Trailers;
+            }
+
+            if ((existing.Meta.TrailerStreams == null || existing.Meta.TrailerStreams.Count == 0) && current.Meta.TrailerStreams?.Count > 0)
+            {
+                existing.Meta.TrailerStreams = current.Meta.TrailerStreams;
+            }
+
+            // Prefer richer text metadata
+            if (string.IsNullOrWhiteSpace(existing.Meta.Description) && !string.IsNullOrWhiteSpace(current.Meta.Description))
+            {
+                existing.Meta.Description = current.Meta.Description;
+            }
+
+            bool existingGenresGeneric = existing.Meta.Genres == null ||
+                                         existing.Meta.Genres.Count == 0 ||
+                                         (existing.Meta.Genres.Count == 1 && string.Equals(existing.Meta.Genres[0], "movie", StringComparison.OrdinalIgnoreCase));
+            bool currentGenresUseful = current.Meta.Genres != null &&
+                                       current.Meta.Genres.Count > 0 &&
+                                       !(current.Meta.Genres.Count == 1 && string.Equals(current.Meta.Genres[0], "movie", StringComparison.OrdinalIgnoreCase));
+            if (existingGenresGeneric && currentGenresUseful)
+            {
+                existing.Meta.Genres = current.Meta.Genres;
+            }
+
             // 1. Poster
             if (string.IsNullOrEmpty(existing.PosterUrl) && !string.IsNullOrEmpty(current.PosterUrl))
             {
                 existing.Meta.Poster = current.PosterUrl;
             }
             // 2. Rating
-            if (string.IsNullOrEmpty(existing.Rating) && !string.IsNullOrEmpty(current.Rating))
+            double existingRating = ParseRating(existing.Rating);
+            double currentRating = ParseRating(current.Rating);
+            if (currentRating > 0 && existingRating <= 0)
             {
-                existing.Meta.ImdbRatingRaw = current.Rating;
+                existing.Meta.ImdbRatingRaw = current.Meta.ImdbRatingRaw ?? current.Rating;
             }
             // 3. Year (if existing was empty)
-            if (string.IsNullOrEmpty(existing.Year) && !string.IsNullOrEmpty(current.Year))
+            string existingYear = GetYearDigits(existing.Year);
+            string currentYear = GetYearDigits(current.Year);
+            bool existingYearWeak = string.IsNullOrEmpty(existingYear) || existingYear == "0";
+            bool existingLooksPlaceholder = existingYear == "2026" && (string.IsNullOrWhiteSpace(existing.Meta.Description) || existingRating <= 0);
+            if ((existingYearWeak || existingLooksPlaceholder) && !string.IsNullOrEmpty(currentYear))
             {
-                existing.Meta.ReleaseInfoRaw = current.Year;
+                existing.Meta.ReleaseInfoRaw = current.Meta.ReleaseInfoRaw ?? current.Year;
             }
             // 4. Background
             if (string.IsNullOrEmpty(existing.Banner) && !string.IsNullOrEmpty(current.Banner))
             {
                 existing.Meta.Background = current.Banner;
             }
+        }
+
+        private double ParseRating(string? raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return 0;
+            if (double.TryParse(raw.Replace(",", "."), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var r))
+            {
+                return r;
+            }
+            return 0;
         }
 
         private int GetScore(StremioMediaStream item, string query)
