@@ -151,12 +151,20 @@ namespace ModernIPTVPlayer.Controls
             var cwItems = new ObservableCollection<StremioMediaStream>();
             foreach (var hist in continueWatching)
             {
+                string backdrop = hist.BackdropUrl;
+                if (string.IsNullOrEmpty(backdrop) && !string.IsNullOrEmpty(hist.ParentSeriesId))
+                {
+                    var parentHist = HistoryManager.Instance.GetProgress(hist.ParentSeriesId);
+                    if (parentHist != null && !string.IsNullOrEmpty(parentHist.BackdropUrl))
+                        backdrop = parentHist.BackdropUrl;
+                }
+
                 var stream = new StremioMediaStream(new StremioMeta
                 {
                     Id = hist.ParentSeriesId ?? hist.Id,
                     Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
                     Poster = hist.PosterUrl,
-                    Background = hist.BackdropUrl,
+                    Background = backdrop,
                     Type = hist.ParentSeriesId != null ? "series" : _currentContentType,
                     Description = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0 
                         ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 
@@ -190,30 +198,119 @@ namespace ModernIPTVPlayer.Controls
             _ = EnrichContinueWatchingMetadataAsync(cwItems);
         }
 
+        private async Task EnrichRowMetadataAsync(CatalogRowViewModel row)
+        {
+            if (row.RowStyle != "Landscape" && row.RowStyle != "Spotlight") return;
+            if (row.Items == null || row.Items.Count == 0) return;
+
+            var provider = MetadataProvider.Instance;
+            var tasks = new List<Task>();
+
+            foreach (var stream in row.Items)
+            {
+                // Only enrich if we are missing mandatory fields for horizontal display
+                bool needsEnrichment = string.IsNullOrEmpty(stream.Banner) || 
+                                       string.IsNullOrEmpty(stream.Year) || 
+                                       string.IsNullOrEmpty(stream.Genres) ||
+                                       string.IsNullOrEmpty(stream.Description) ||
+                                       string.IsNullOrEmpty(stream.Rating) ||
+                                       stream.Rating == "0.0" || stream.Rating == "0";
+
+                if (!needsEnrichment) continue;
+
+                tasks.Add(Task.Run(async () => 
+                {
+                    try
+                    {
+                        var meta = await provider.GetMetadataAsync(stream, MetadataContext.Discovery);
+                        if (meta != null)
+                        {
+                            DispatcherQueue.TryEnqueue(() => 
+                            {
+                                // Priority: Only update if the new metadata is actually richer 
+                                // (MetadataProvider already handles merging/priority, so we just apply)
+                                if (!string.IsNullOrEmpty(meta.PosterUrl)) stream.PosterUrl = meta.PosterUrl;
+                                if (!string.IsNullOrEmpty(meta.BackdropUrl)) stream.UpdateBackground(meta.BackdropUrl);
+                                
+                                // Update StremioMeta fields directly for UI bindings to pick up
+                                if (stream.Meta != null)
+                                {
+                                    if (!string.IsNullOrEmpty(meta.Title)) stream.Meta.Name = meta.Title;
+                                    if (!string.IsNullOrEmpty(meta.Year)) stream.Meta.ReleaseInfo = meta.Year;
+                                    if (!string.IsNullOrEmpty(meta.Genres)) 
+                                    {
+                                        stream.Meta.Genres = meta.Genres.Split(", ").ToList();
+                                    }
+                                    if (!string.IsNullOrEmpty(meta.Overview)) stream.Meta.Description = meta.Overview;
+                                    if (meta.Rating > 0) stream.Meta.ImdbRating = meta.Rating.ToString("F1");
+                                }
+
+                                // Trigger property changes for the stream wrapper
+                                stream.OnPropertyChanged(nameof(stream.Year));
+                                stream.OnPropertyChanged(nameof(stream.Genres));
+                                stream.OnPropertyChanged(nameof(stream.Title));
+                                stream.OnPropertyChanged(nameof(stream.Description));
+                                stream.OnPropertyChanged(nameof(stream.Rating));
+                            });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[StremioControl] Enrichment error for {stream.Title}: {ex.Message}");
+                    }
+                }));
+            }
+
+            if (tasks.Count > 0)
+                await Task.WhenAll(tasks);
+        }
+
         private async Task EnrichContinueWatchingMetadataAsync(ObservableCollection<StremioMediaStream> items)
         {
-            var provider = new MetadataProvider();
+            var provider = MetadataProvider.Instance;
             foreach (var stream in items)
             {
-                if (!string.IsNullOrEmpty(stream.PosterUrl) && !string.IsNullOrEmpty(stream.Banner)) continue;
+                // Only enrich if missing backdrop (for landscape) or missing critical fields
+                bool missingBackdrop = string.IsNullOrEmpty(stream.Banner);
+                bool missingMeta = string.IsNullOrEmpty(stream.Year) || string.IsNullOrEmpty(stream.Genres);
 
-                try
+                if (missingBackdrop || missingMeta)
                 {
-                    var meta = await provider.GetMetadataAsync(stream);
-                    if (meta != null)
+                    try
                     {
-                        DispatcherQueue.TryEnqueue(() => 
+                        var meta = await provider.GetMetadataAsync(stream, MetadataContext.Discovery);
+                        if (meta != null)
                         {
-                            if (!string.IsNullOrEmpty(meta.PosterUrl)) stream.PosterUrl = meta.PosterUrl;
-                            if (!string.IsNullOrEmpty(meta.BackdropUrl)) stream.UpdateBackground(meta.BackdropUrl);
-                        });
+                            DispatcherQueue.TryEnqueue(() => 
+                            {
+                                if (!string.IsNullOrEmpty(meta.PosterUrl)) stream.PosterUrl = meta.PosterUrl;
+                                if (!string.IsNullOrEmpty(meta.BackdropUrl)) stream.UpdateBackground(meta.BackdropUrl);
 
-                        var histId = stream.IMDbId;
-                        if (!string.IsNullOrEmpty(histId) && !string.IsNullOrEmpty(meta.PosterUrl))
-                            HistoryManager.Instance.UpdateProgress(histId, stream.Title, "", 0, 0, posterUrl: meta.PosterUrl, backdropUrl: meta.BackdropUrl); 
+                                // Fully populate metadata for landscape display if missing
+                                if (stream.Meta != null)
+                                {
+                                    if (!string.IsNullOrEmpty(meta.Year)) stream.Meta.ReleaseInfo = meta.Year;
+                                    if (!string.IsNullOrEmpty(meta.Genres)) stream.Meta.Genres = meta.Genres.Split(", ").ToList();
+                                    if (!string.IsNullOrEmpty(meta.Overview)) stream.Meta.Description = meta.Overview;
+                                    if (meta.Rating > 0) stream.Meta.ImdbRating = meta.Rating.ToString("F1");
+                                }
+
+                                stream.OnPropertyChanged(nameof(stream.Year));
+                                stream.OnPropertyChanged(nameof(stream.Genres));
+                                stream.OnPropertyChanged(nameof(stream.Description));
+                                stream.OnPropertyChanged(nameof(stream.Rating));
+                            });
+
+                            var histId = stream.IMDbId;
+                            if (!string.IsNullOrEmpty(histId) && !string.IsNullOrEmpty(meta.PosterUrl))
+                            {
+                                HistoryManager.Instance.UpdateProgress(histId, stream.Title, "", 0, 0, posterUrl: meta.PosterUrl, backdropUrl: meta.BackdropUrl); 
+                                await HistoryManager.Instance.SaveAsync();
+                            }
+                        }
                     }
+                    catch { /* Best effort */ }
                 }
-                catch { /* Best effort */ }
             }
         }
 
@@ -494,6 +591,13 @@ namespace ModernIPTVPlayer.Controls
                                         }
                                     }
                                     _discoveryRows.Insert(insertAt, rowResult);
+                                    
+                                    // [NEW] Trigger background enrichment for Landscape/Spotlight rows
+                                    if (rowResult.RowStyle == "Landscape" || rowResult.RowStyle == "Spotlight")
+                                    {
+                                        _ = EnrichRowMetadataAsync(rowResult);
+                                    }
+
                                     UpdateHeroState();
                                 }
                                 else

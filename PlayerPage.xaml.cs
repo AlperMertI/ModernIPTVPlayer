@@ -194,7 +194,7 @@ namespace ModernIPTVPlayer
 
         private async void StatsTimer_Tick(object? sender, object e)
         {
-            if (_mpvPlayer == null || !_isPageLoaded) return;
+            if (!IsPlayerActive) return;
 
             try 
             {
@@ -2212,6 +2212,9 @@ namespace ModernIPTVPlayer
 
             public override string ToString() => Text; // Fallback
         }
+        private bool IsPlayerActive => _isPageLoaded && _mpvPlayer != null;
+
+        // ---------- SUBTITLE & SYNC STATE ----------
 
         private bool _isPopulatingTracks = false;
 
@@ -2221,7 +2224,7 @@ namespace ModernIPTVPlayer
 
         private async Task LoadTracksAsync()
         {
-            if (_mpvPlayer == null) return;
+            if (!IsPlayerActive) return;
             
             _isPopulatingTracks = true;
             System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Started (Safe Loop Mode).");
@@ -2240,22 +2243,29 @@ namespace ModernIPTVPlayer
 
                 var audioTracks = new List<TrackItem>();
                 var newSubTracks = new List<SubtitleTrackViewModel>();
-                // _currentSubtitleTracks will be updated at the end, not cleared here
 
                 // 2. Iterate with Safety Delay
                 for (int i = 0; i < trackCount; i++)
                 {
-                    // CRITICAL: Throttle calls to prevent Heap Corruption (0xC0000374)
+                    // Exit if player was detached/nullified (e.g. Back navigation)
+                    if (!IsPlayerActive) break;
+
+                    // Throttle calls to prevent Heap Corruption (0xC0000374)
                     await Task.Delay(15); 
+                    
+                    if (!IsPlayerActive) break;
 
                     string type = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/type");
+                    if (!IsPlayerActive) break;
                     
                     if (type == "audio")
                     {
                         string sId = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/id");
+                        if (!IsPlayerActive) break;
                         int.TryParse(sId, out int id);
                         
                         bool selected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected");
+                        if (!IsPlayerActive) break;
                         string title = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/title");
                         string lang = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/lang");
                         string codec = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/codec-name");
@@ -2285,6 +2295,7 @@ namespace ModernIPTVPlayer
                     else if (type == "sub")
                     {
                         string sId = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/id");
+                        if (!IsPlayerActive) break;
                         int.TryParse(sId, out int id);
                         
                         string title = await _mpvPlayer.GetPropertyAsync($"track-list/{i}/title");
@@ -2293,22 +2304,27 @@ namespace ModernIPTVPlayer
                         if (title == "N/A") title = "";
                         if (lang == "N/A") lang = "";
 
+                        bool subSelected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected");
+
                         newSubTracks.Add(new SubtitleTrackViewModel 
                         { 
                             Id = id, 
                             Text = string.IsNullOrEmpty(title) ? $"Track {id}" : title,
                             Lang = !string.IsNullOrEmpty(lang) ? lang : "und",
                             IsAddon = false,
-                            IsSelected = await _mpvPlayer.GetPropertyBoolAsync($"track-list/{i}/selected")
+                            IsSelected = subSelected
                         });
                     }
                 }
 
                 // Update Audio UI
                 System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Updating Audio UI...");
-                AudioListView.ItemsSource = audioTracks;
-                var selectedAudio = audioTracks.FirstOrDefault(t => t.IsSelected);
-                if (selectedAudio != null) AudioListView.SelectedItem = selectedAudio;
+                if (_isPageLoaded && AudioListView != null)
+                {
+                    AudioListView.ItemsSource = audioTracks;
+                    var selectedAudio = audioTracks.FirstOrDefault(t => t.IsSelected);
+                    if (selectedAudio != null) AudioListView.SelectedItem = selectedAudio;
+                }
 
                 // Update Subtitle UI (Merge new tracks, keep addons)
                 System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Updating Subtitle UI...");
@@ -2318,8 +2334,11 @@ namespace ModernIPTVPlayer
                 _currentSubtitleTracks = newSubTracks; 
                 _currentSubtitleTracks.AddRange(existingAddons);
 
-                UpdateLanguageList(isLoading: true);
-                _ = FetchAddonSubtitles();
+                if (_isPageLoaded)
+                {
+                    UpdateLanguageList(isLoading: true);
+                    _ = FetchAddonSubtitles();
+                }
                 
                 System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Completed Successfully.");
             }
@@ -2336,7 +2355,7 @@ namespace ModernIPTVPlayer
 
         private async void AudioListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (_isPopulatingTracks || _mpvPlayer == null || AudioListView.SelectedItem is not TrackItem item) return;
+            if (_isPopulatingTracks || !IsPlayerActive || AudioListView.SelectedItem is not TrackItem item) return;
             
             // Update models
             if (AudioListView.ItemsSource is IEnumerable<TrackItem> tracks)
@@ -2355,7 +2374,7 @@ namespace ModernIPTVPlayer
                _streamUrl, 
                _mpvPlayer.Position.TotalSeconds, 
                duration,
-               aid: item.Id.ToString());
+               aid: item.Id.ToString(), posterUrl: _navArgs.PosterUrl, type: _navArgs.Type, backdropUrl: _navArgs.BackdropUrl);
         }
 
         private void CloseTracksButton_Click(object sender, RoutedEventArgs e)
@@ -2495,31 +2514,30 @@ namespace ModernIPTVPlayer
 
         private void SubtitleLangListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (SubtitleLangListView.SelectedItem is SubtitleLanguageViewModel lang && !lang.IsLoadingItem)
+            if (!IsPlayerActive || SubtitleLangListView.SelectedItem is not SubtitleLanguageViewModel lang || lang.IsLoadingItem) return;
+
+            bool oldState = _isPopulatingTracks;
+            _isPopulatingTracks = true; // Guard the cascade selection
+            
+            try
             {
-                bool oldState = _isPopulatingTracks;
-                _isPopulatingTracks = true; // Guard the cascade selection
+                var filtered = _currentSubtitleTracks.Where(t => 
+                    t.Lang.Equals(lang.Code, StringComparison.OrdinalIgnoreCase) || 
+                    (lang.Code == "und" && string.IsNullOrEmpty(t.Lang))
+                ).ToList();
+                SubtitleListView.ItemsSource = filtered;
                 
-                try
+                // Restore active subtitle track selection
+                var selectedTrack = filtered.FirstOrDefault(t => t.IsSelected);
+                if (selectedTrack != null)
                 {
-                    var filtered = _currentSubtitleTracks.Where(t => 
-                        t.Lang.Equals(lang.Code, StringComparison.OrdinalIgnoreCase) || 
-                        (lang.Code == "und" && string.IsNullOrEmpty(t.Lang))
-                    ).ToList();
-                    SubtitleListView.ItemsSource = filtered;
-                    
-                    // Restore active subtitle track selection
-                    var selectedTrack = filtered.FirstOrDefault(t => t.IsSelected);
-                    if (selectedTrack != null)
-                    {
-                        SubtitleListView.SelectedItem = selectedTrack;
-                        SubtitleListView.ScrollIntoView(selectedTrack);
-                    }
+                    SubtitleListView.SelectedItem = selectedTrack;
+                    SubtitleListView.ScrollIntoView(selectedTrack);
                 }
-                finally
-                {
-                    _isPopulatingTracks = oldState;
-                }
+            }
+            finally
+            {
+                _isPopulatingTracks = oldState;
             }
         }
 
@@ -2857,7 +2875,7 @@ namespace ModernIPTVPlayer
 
         private async void SubtitleListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (_isPopulatingTracks || _mpvPlayer == null) return;
+            if (_isPopulatingTracks || !IsPlayerActive) return;
             if (SubtitleListView.SelectedItem is SubtitleTrackViewModel track)
             {
                 // Update internal IsSelected state
@@ -2871,12 +2889,15 @@ namespace ModernIPTVPlayer
                     // SAVE PREFERENCE
                     double duration = _mpvPlayer.Duration.TotalSeconds; // Get duration from TimeSpan property
                     HistoryManager.Instance.UpdateProgress(
-                       _navArgs.Id ?? _navArgs.Title, // Use NavArgs ID or Title
+                       _navArgs.Id ?? _navArgs.Title, 
                        _navArgs.Title, 
                        _streamUrl, 
                        _mpvPlayer.Position.TotalSeconds, 
-                       duration,
-                       subUrl: track.Url);
+                        duration,
+                        subUrl: track.Url,
+                        posterUrl: _navArgs.PosterUrl,
+                        type: _navArgs.Type,
+                        backdropUrl: _navArgs.BackdropUrl);
                 }
                 else
                 {
@@ -2890,9 +2911,12 @@ namespace ModernIPTVPlayer
                        _navArgs.Title, 
                        _streamUrl, 
                        _mpvPlayer.Position.TotalSeconds, 
-                       duration,
-                       sid: track.Id.ToString(),
-                       subUrl: null);
+                        duration,
+                        sid: track.Id.ToString(),
+                        subUrl: null,
+                        posterUrl: _navArgs.PosterUrl,
+                        type: _navArgs.Type,
+                        backdropUrl: _navArgs.BackdropUrl);
                 }
             }
         }

@@ -16,6 +16,7 @@ namespace ModernIPTVPlayer.Models
 
         public string PosterUrl { get; set; }
         public string BackgroundUrl { get; set; }
+        public string? BackdropUrl => BackgroundUrl;
         public string Description { get; set; }
         public string StreamUrl { get; set; }
         

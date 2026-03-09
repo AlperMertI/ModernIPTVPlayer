@@ -115,13 +115,21 @@ namespace ModernIPTVPlayer.Models.Stremio
         public object ReleaseInfoRaw { get; set; } // Can be string or int
 
         [JsonIgnore]
-        public string ReleaseInfo => ReleaseInfoRaw?.ToString();
+        public string ReleaseInfo 
+        { 
+            get => ReleaseInfoRaw?.ToString();
+            set => ReleaseInfoRaw = value;
+        }
 
         [JsonPropertyName("imdbRating")]
         public object ImdbRatingRaw { get; set; } // Can be string or double
 
         [JsonIgnore]
-        public string ImdbRating => ImdbRatingRaw?.ToString();
+        public string ImdbRating 
+        { 
+            get => ImdbRatingRaw?.ToString();
+            set => ImdbRatingRaw = value;
+        }
 
         [JsonPropertyName("genres")]
         public List<string> Genres { get; set; }
@@ -155,6 +163,18 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         [JsonPropertyName("links")]
         public List<StremioLink> Links { get; set; }
+
+        [JsonPropertyName("trailerStreams")]
+        public List<StremioTrailerStream> TrailerStreams { get; set; }
+    }
+
+    public class StremioTrailerStream
+    {
+        [JsonPropertyName("title")]
+        public string Title { get; set; }
+
+        [JsonPropertyName("ytId")]
+        public string YtId { get; set; }
     }
 
     public class StremioLink

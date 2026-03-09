@@ -766,7 +766,7 @@ namespace ModernIPTVPlayer
                     _ = PlayStremioContent(sMovie.Meta.Id, showGlobalLoading: false);
                 }
 
-                _unifiedMetadata = await MetadataProvider.Instance.GetMetadataAsync(item, (url) => 
+                _unifiedMetadata = await MetadataProvider.Instance.GetMetadataAsync(item, onBackdropFound: (url) => 
                 {
                     DispatcherQueue.TryEnqueue(() => 
                     {
@@ -793,24 +793,19 @@ namespace ModernIPTVPlayer
             TitleText.Text = unified.Title;
             StickyTitle.Text = unified.Title;
             
-            // Show Original Title for movies if available and different
-            if (!unified.IsSeries && !string.IsNullOrEmpty(unified.OriginalTitle) && 
-                !string.Equals(unified.Title, unified.OriginalTitle, StringComparison.OrdinalIgnoreCase))
+            // [FEATURE] Dual Title (SuperTitle): Show secondary title (SubTitle or Original) if available and different
+            string sub = !string.IsNullOrEmpty(unified.SubTitle) ? unified.SubTitle : unified.OriginalTitle;
+
+            if (!string.IsNullOrEmpty(sub) && !string.Equals(unified.Title, sub, StringComparison.OrdinalIgnoreCase))
             {
                 if (SuperTitleText != null)
                 {
-                    SuperTitleText.Text = unified.OriginalTitle.ToUpperInvariant();
+                    SuperTitleText.Text = sub.ToUpperInvariant();
                     SuperTitleText.Visibility = Visibility.Visible;
                 }
             }
-            else if (!unified.IsSeries)
-            {
-                // Ensure hidden for movies if no original title
-                if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
-            }
             else
             {
-                // Series starts hidden (shows series name here later when an episode is selected)
                 if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
             }
 
@@ -2001,11 +1996,12 @@ namespace ModernIPTVPlayer
                      if (TitleText != null) 
                      {
                          TitleText.Text = ep.Title;
+                         if (StickyTitle != null) StickyTitle.Text = ep.Title;
                          
                          // Fix: Always show Series Name as SuperTitle when looking at an episode
                          if (SuperTitleText != null)
                          {
-                             SuperTitleText.Text = _item.Title.ToUpperInvariant();
+                             SuperTitleText.Text = (_unifiedMetadata?.Title ?? _item?.Title ?? "").ToUpperInvariant();
                              SuperTitleText.Visibility = Visibility.Visible;
                          }
                      }
@@ -2087,11 +2083,19 @@ namespace ModernIPTVPlayer
                     if (EpisodesListView != null)
                          EpisodesListView.SelectedItem = ep;
                          
-                    // Fix: Ensure SuperTitle is updated here too (Redundant but safe)
-                    if (SuperTitleText != null)
+                    // Sync Title UI
+                    if (TitleText != null)
                     {
-                        SuperTitleText.Text = _item.Title.ToUpperInvariant();
-                        SuperTitleText.Visibility = Visibility.Visible;
+                        TitleText.Text = ep.Title ?? "";
+                        if (StickyTitle != null) StickyTitle.Text = ep.Title ?? "";
+
+                        // Fix: Ensure SuperTitle is updated here too (Redundant but safe)
+                        if (SuperTitleText != null)
+                        {
+                            string seriesTitle = _unifiedMetadata?.Title ?? _item?.Title ?? "";
+                            SuperTitleText.Text = seriesTitle.ToUpperInvariant();
+                            SuperTitleText.Visibility = Visibility.Visible;
+                        }
                     }
                     
                     // Update Play Button
@@ -4260,7 +4264,9 @@ namespace ModernIPTVPlayer
                     await Task.Delay(50);
                     
                     var list = _isWideModeIndex == 1 ? SourcesListView : NarrowSourcesListView;
-                    System.Diagnostics.Debug.WriteLine($"[Stremio] ScrollToActiveSource: List={list?.Name}, Items={list?.Items?.Count}");
+                    if (list == null) return;
+
+                    System.Diagnostics.Debug.WriteLine($"[Stremio] ScrollToActiveSource: List={list.Name}, Items={list.Items?.Count}");
 
                     if (list.ItemsSource is List<StremioStreamViewModel> streams)
                     {
@@ -4472,13 +4478,13 @@ namespace ModernIPTVPlayer
                          catch {}
                      }
                      
-                     HistoryManager.Instance.UpdateProgress(_selectedEpisode.Id, _selectedEpisode.Title, _streamUrl, 0, 0, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, null, null, null, _item.PosterUrl, "series");
+                     HistoryManager.Instance.UpdateProgress(_selectedEpisode.Id, _selectedEpisode.Title, _streamUrl, 0, 0, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, null, null, null, _item.PosterUrl, "series", _item.BackdropUrl);
                      PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, 0);
                 }
                 else if (_item is LiveStream live)
                 {
                     // Update History to 0
-                    HistoryManager.Instance.UpdateProgress(live.StreamId.ToString(), live.Title, live.StreamUrl, 0, 0, null, null, 0, 0, null, null, null, live.PosterUrl, "iptv");
+                    HistoryManager.Instance.UpdateProgress(live.StreamId.ToString(), live.Title, live.StreamUrl, 0, 0, null, null, 0, 0, null, null, null, live.PosterUrl, "iptv", live.BackdropUrl);
                     
                      // [Fix] Force seek to 0 before handoff
                      if (MediaInfoPlayer != null)
@@ -5426,7 +5432,8 @@ namespace ModernIPTVPlayer
                      seriesId,
                      seriesName,
                      ep.SeasonNumber, 
-                     ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series");
+                                          ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series", _item?.BackdropUrl);
+
 
                  // Update UI
                  ep.IsWatched = true;
@@ -5484,7 +5491,7 @@ namespace ModernIPTVPlayer
                                  seriesId,
                                  seriesName,
                                  ep.SeasonNumber, 
-                                 ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series");
+                                 ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series", _item?.BackdropUrl);
                                  
                              ep.IsWatched = true;
                              ep.ProgressPercent = 0;
@@ -5525,7 +5532,8 @@ namespace ModernIPTVPlayer
                      seriesId,
                      seriesName,
                      ep.SeasonNumber, 
-                     ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series");
+                                          ep.EpisodeNumber, null, null, null, _item?.PosterUrl, "series", _item?.BackdropUrl);
+
                      
                 // Update UI
                 ep.IsWatched = false;

@@ -136,23 +136,42 @@ namespace ModernIPTVPlayer.Controls
             {
                 PosterImage.Source = null;
                 PosterImage.Opacity = 0;
-                PosterShimmer.Visibility = Visibility.Collapsed;
+                PosterShimmer.Visibility = Visibility.Visible;
             }
             else
             {
+                // If it's the same source, don't re-trigger shimmer/hide
+                if (PosterImage.Source is Microsoft.UI.Xaml.Media.Imaging.BitmapImage current && current.UriSource?.ToString() == ImageUrl)
+                    return;
+
+                PosterImage.Opacity = 0; // Prepare for fade in
+                PosterShimmer.Visibility = Visibility.Visible;
+
                 var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                bitmapImage.DecodePixelWidth = 320; 
+                bitmapImage.DecodePixelWidth = 480; // Higher quality for landscape
                 bitmapImage.UriSource = new Uri(ImageUrl);
                 
                 PosterImage.Source = bitmapImage;
-                PosterImage.Opacity = 1;
-                PosterShimmer.Visibility = Visibility.Collapsed;
             }
         }
 
         private void Image_ImageOpened(object sender, RoutedEventArgs e)
         {
-            // Simple animation or just let it be. Opacity is handled abruptly above for list virtualizing stability.
+            PosterShimmer.Visibility = Visibility.Collapsed;
+            
+            var anim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+            {
+                To = 1.0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(400)),
+                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.CubicEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut }
+            };
+            
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(anim, PosterImage);
+            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(anim, "Opacity");
+            
+            var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
+            sb.Children.Add(anim);
+            sb.Begin();
         }
 
         private void Card_Loaded(object sender, RoutedEventArgs e)

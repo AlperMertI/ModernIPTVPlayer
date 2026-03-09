@@ -7,6 +7,7 @@ namespace ModernIPTVPlayer.Models.Metadata
     {
         public string Title { get; set; }
         public string OriginalTitle { get; set; } // Feature #OriginalTitleForMovies
+        public string SubTitle { get; set; } // Secondary title (e.g. English title when Turkish is primary)
         public string Overview { get; set; }
         public string PosterUrl { get; set; }
         public string BackdropUrl { get; set; }
@@ -29,6 +30,9 @@ namespace ModernIPTVPlayer.Models.Metadata
         public string MetadataSourceInfo { get; set; } // Detailed attribution (e.g. "AioStreams (TMDB)")
 
         public List<UnifiedSeason> Seasons { get; set; } = new List<UnifiedSeason>();
+        
+        [JsonIgnore]
+        public HashSet<string> ProbedAddons { get; set; } = new HashSet<string>();
         
         [JsonIgnore] 
         public string DurationFormatted => Runtime; // Alias for compatibility

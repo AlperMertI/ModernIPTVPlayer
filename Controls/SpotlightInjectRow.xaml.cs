@@ -165,7 +165,7 @@ namespace ModernIPTVPlayer.Controls
 
         private async Task PreFetchCarouselMetadataAsync(List<StremioMediaStream> items)
         {
-            var tasks = items.Select(item => Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(item)).ToList();
+            var tasks = items.Select(item => Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(item, Services.Metadata.MetadataContext.Discovery)).ToList();
             await Task.WhenAll(tasks);
         }
 

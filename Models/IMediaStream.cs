@@ -8,6 +8,7 @@ namespace ModernIPTVPlayer.Models
         string? IMDbId { get; }
         string Title { get; }
         string PosterUrl { get; }
+        string? BackdropUrl { get; }
         string Rating { get; }
         string StreamUrl { get; set; }
         TmdbMovieResult TmdbInfo { get; set; }

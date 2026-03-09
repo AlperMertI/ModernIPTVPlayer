@@ -96,7 +96,12 @@ namespace ModernIPTVPlayer
 
         public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null, string subUrl = null, string posterUrl = null, string type = null, string backdropUrl = null)
         {
-            if (string.IsNullOrEmpty(id) || dur < 1) return;
+            if (string.IsNullOrEmpty(id)) return;
+            
+            // If it's a progress update, duration must be valid.
+            // If it's a metadata-only update (poster/backdrop/type), we allow dur < 1.
+            bool isMetadataUpdate = !string.IsNullOrEmpty(posterUrl) || !string.IsNullOrEmpty(backdropUrl) || !string.IsNullOrEmpty(type);
+            if (!isMetadataUpdate && dur < 1) return;
 
             // Mark finished if > 95%
             bool finished = (pos / dur) > 0.95;
@@ -109,12 +114,18 @@ namespace ModernIPTVPlayer
                 }
 
                 var item = _history[id];
-                item.Title = title;
-                item.StreamUrl = url;
-                item.Position = pos;
-                item.Duration = dur;
+                if (!string.IsNullOrEmpty(title)) item.Title = title;
+                if (!string.IsNullOrEmpty(url)) item.StreamUrl = url;
+
+                // Update progress only if duration is valid
+                if (dur > 0)
+                {
+                    item.Position = pos;
+                    item.Duration = dur;
+                    item.IsFinished = (pos / dur) > 0.95;
+                }
+
                 item.Timestamp = DateTime.Now;
-                item.IsFinished = finished;
                 
                 if (parentId != null)
                 {

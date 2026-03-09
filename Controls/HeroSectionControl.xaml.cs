@@ -227,6 +227,9 @@ namespace ModernIPTVPlayer.Controls
 
                 // Phase 2: Swap content
                 PopulateHeroData(item);
+                
+                // Subscribe to changes (for enrichment updates)
+                SubscribeToItemChanges(item);
 
                 if (!string.IsNullOrEmpty(imgUrl))
                 {
@@ -250,6 +253,7 @@ namespace ModernIPTVPlayer.Controls
             {
                 // No animation (first load / shimmer exit)
                 PopulateHeroData(item);
+                SubscribeToItemChanges(item);
 
                 if (!string.IsNullOrEmpty(imgUrl))
                 {
@@ -293,16 +297,67 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private StremioMediaStream _lastSubscribedItem = null;
+
+        private void SubscribeToItemChanges(StremioMediaStream item)
+        {
+            if (_lastSubscribedItem != null)
+                _lastSubscribedItem.PropertyChanged -= Item_PropertyChanged;
+            
+            _lastSubscribedItem = item;
+            if (_lastSubscribedItem != null)
+                _lastSubscribedItem.PropertyChanged += Item_PropertyChanged;
+        }
+
+        private void Item_PropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (sender is StremioMediaStream item)
+            {
+                DispatcherQueue.TryEnqueue(() => 
+                {
+                    // Refresh fields if they might have been enriched
+                    if (e.PropertyName == nameof(item.Description) || e.PropertyName == nameof(item.Rating) || 
+                        e.PropertyName == nameof(item.Year) || e.PropertyName == nameof(item.Genres))
+                    {
+                        PopulateHeroData(item);
+                    }
+                    
+                    if (e.PropertyName == nameof(item.Banner) || e.PropertyName == nameof(item.LandscapeImageUrl))
+                    {
+                        string newImgUrl = item.Meta?.Background ?? item.PosterUrl;
+                        if (!string.IsNullOrEmpty(newImgUrl) && _heroImageBrush != null)
+                        {
+                            var surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new System.Uri(newImgUrl));
+                            _heroImageBrush.Surface = surface;
+                        }
+                    }
+                });
+            }
+        }
+
         private void PopulateHeroData(StremioMediaStream item)
         {
             HeroTitle.Text = item.Title;
-            HeroOverview.Text = item.Meta?.Description ?? "Sinematik bir serüven sizi bekliyor.";
-            HeroYear.Text = item.Meta?.ReleaseInfo ?? "";
-            HeroGenres.Text = (item.Meta?.Genres != null && item.Meta.Genres.Count > 0) ? string.Join(", ", item.Meta.Genres.Take(2)) : "";
-            HeroRating.Text = item.Meta?.ImdbRating != null ? $"{item.Meta.ImdbRating} ★" : "";
+            HeroOverview.Text = !string.IsNullOrEmpty(item.Description) ? item.Description : "Sinematik bir serüven sizi bekliyor.";
+            HeroYear.Text = item.Year ?? "";
+            
+            if (!string.IsNullOrEmpty(item.Genres))
+            {
+                HeroGenres.Text = item.Genres;
+                HeroYearDot.Visibility = Visibility.Visible;
+            }
+            else HeroYearDot.Visibility = Visibility.Collapsed;
 
-            HeroYearDot.Visibility = (!string.IsNullOrEmpty(HeroYear.Text) && !string.IsNullOrEmpty(HeroGenres.Text)) ? Visibility.Visible : Visibility.Collapsed;
-            HeroRatingDot.Visibility = (!string.IsNullOrEmpty(HeroGenres.Text) && !string.IsNullOrEmpty(HeroRating.Text)) ? Visibility.Visible : Visibility.Collapsed;
+            if (!string.IsNullOrEmpty(item.Rating) && item.Rating != "0" && item.Rating != "0.0")
+            {
+                HeroRating.Text = item.Rating;
+                HeroRatingDot.Visibility = Visibility.Visible;
+            }
+            else HeroRatingDot.Visibility = Visibility.Collapsed;
+
+            // Update visible indicators
+            if (string.IsNullOrEmpty(HeroOverview.Text)) HeroOverview.Visibility = Visibility.Collapsed;
+            else HeroOverview.Visibility = Visibility.Visible;
         }
 
         private void AnimateTextOut()

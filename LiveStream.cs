@@ -16,6 +16,7 @@ namespace ModernIPTVPlayer
         public string? IMDbId => null;
         public string Title => Name;
         public string PosterUrl => IconUrl;
+        public string? BackdropUrl => null; // Live streams don't typically have backdrops
         
         // Custom
         public string Year { get; set; } // Added for TMDB filtering

@@ -13,6 +13,31 @@ namespace ModernIPTVPlayer.Models.Stremio
         public StremioMediaStream(StremioMeta meta)
         {
             Meta = meta;
+            TryPreEnrichFromCache();
+        }
+
+        private void TryPreEnrichFromCache()
+        {
+            if (string.IsNullOrEmpty(Meta.Background) && !string.IsNullOrEmpty(Meta.Id))
+            {
+                try
+                {
+                    // Try to find in TMDB Cache synchronously (RAM)
+                    string typeKey = IsSeries ? "tv" : "movie";
+                    string idKey = Meta.Id.StartsWith("tt") ? $"{typeKey}_id_{Meta.Id}" : null;
+                    
+                    if (idKey != null)
+                    {
+                        var cached = Services.TmdbCacheService.Instance.Get<TmdbMovieResult>(idKey);
+                        if (cached != null && !string.IsNullOrEmpty(cached.BackdropPath))
+                        {
+                            Meta.Background = $"https://image.tmdb.org/t/p/w1280{cached.BackdropPath}";
+                            System.Diagnostics.Debug.WriteLine($"[StremioStream] Pre-enriched Backdrop from Cache for {Meta.Name}");
+                        }
+                    }
+                }
+                catch { /* Silent fail for pre-enrichment */ }
+            }
         }
 
         public string SourceAddon { get; set; }
@@ -41,6 +66,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Rating => Meta.ImdbRating;
         public string Type => Meta.Type?.ToUpper();
         public string StreamUrl { get; set; } = "";
+        public string? BackdropUrl => Banner;
         
         // Use Backdrop/Banner for Landscape cards if available, else fallback to Poster.
         public string LandscapeImageUrl => !string.IsNullOrEmpty(Banner) ? Banner : PosterUrl;
@@ -103,7 +129,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public BitmapImage PosterBitmap => !string.IsNullOrEmpty(PosterUrl) ? new BitmapImage(new System.Uri(PosterUrl)) : null;
 
         public event PropertyChangedEventHandler? PropertyChanged;
-        private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        public void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }

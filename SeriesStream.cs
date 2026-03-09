@@ -41,6 +41,7 @@ namespace ModernIPTVPlayer
         public string? IMDbId => null;
         public string Title => Name;
         public string PosterUrl => Cover;
+        public string? BackdropUrl => null; // IPTV Series usually don't have backdrops in catalog
         public string StreamUrl { get; set; } = "";
 
         // UI Binding Implementation
