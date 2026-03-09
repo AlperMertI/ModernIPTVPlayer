@@ -1224,9 +1224,9 @@
         <!-- 10. TRAILER OVERLAY -->
         <!-- 10. TRAILER OVERLAY -->
         <Grid x:Name="TrailerOverlay" Visibility="Collapsed" Canvas.ZIndex="2000" 
-              HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#01000000" Margin="-16"
+              HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Background="#01000000"
               Grid.RowSpan="99" Grid.ColumnSpan="99">
-            <Grid x:Name="TrailerScrim" Background="#FF000000" Opacity="0" Margin="-16"
+            <Grid x:Name="TrailerScrim" Background="#FF000000" Opacity="0"
                   HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                   PointerPressed="TrailerScrim_PointerPressed"/>
 

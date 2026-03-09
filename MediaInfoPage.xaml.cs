@@ -168,31 +168,18 @@ namespace ModernIPTVPlayer
                 return;
             }
 
-            double rootWidth = RootGrid?.ActualWidth ?? 0;
-            double rootHeight = RootGrid?.ActualHeight ?? 0;
-            double pageWidth = ActualWidth;
-            double pageHeight = ActualHeight;
-            double xamlRootWidth = XamlRoot?.Size.Width ?? 0;
-            double xamlRootHeight = XamlRoot?.Size.Height ?? 0;
-
-            double targetWidth = Math.Max(Math.Max(rootWidth, pageWidth), xamlRootWidth);
-            double targetHeight = Math.Max(Math.Max(rootHeight, pageHeight), xamlRootHeight);
-
-            if (targetWidth <= 0 || targetHeight <= 0)
-            {
-                return;
-            }
-
-            // Aggressive overdraw to prevent title bar/top edge leaks on fractional scaling.
-            TrailerOverlay.Width = targetWidth + 48;
-            TrailerOverlay.Height = targetHeight + 48;
-            TrailerScrim.Width = targetWidth + 48;
-            TrailerScrim.Height = targetHeight + 48;
+            // Let XAML Stretch handle it. Explicitly unset any fixed sizes that might have been set.
+            TrailerOverlay.Width = double.NaN;
+            TrailerOverlay.Height = double.NaN;
+            TrailerScrim.Width = double.NaN;
+            TrailerScrim.Height = double.NaN;
+            
+            System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Overlay Bounds Reset to Auto (Stretch).");
         }
 
         private void ApplyTrailerFullscreenLayout(bool enable)
         {
-            if (TrailerContent == null)
+            if (TrailerContent == null || TrailerOverlay == null)
             {
                 return;
             }
@@ -202,7 +189,7 @@ namespace ModernIPTVPlayer
                 TrailerContent.Width = TrailerDefaultWidth;
                 TrailerContent.Height = TrailerDefaultHeight;
                 
-                // Reset close button to default position
+                // Reset close button
                 if (CloseTrailerButton != null)
                 {
                     CloseTrailerButton.Margin = new Thickness(16, 16, 16, 0);
@@ -210,12 +197,13 @@ namespace ModernIPTVPlayer
                 return;
             }
 
-            double overlayWidth = TrailerOverlay?.ActualWidth > 0 ? TrailerOverlay.ActualWidth : (RootGrid?.ActualWidth > 0 ? RootGrid.ActualWidth : ActualWidth);
-            double overlayHeight = TrailerOverlay?.ActualHeight > 0 ? TrailerOverlay.ActualHeight : (RootGrid?.ActualHeight > 0 ? RootGrid.ActualHeight : ActualHeight);
+            // Use XamlRoot size for the absolute bounds
+            double overlayWidth = XamlRoot?.Size.Width ?? ActualWidth;
+            double overlayHeight = XamlRoot?.Size.Height ?? ActualHeight;
 
-            // Keep 16:9 while maximizing visible area with safe margins.
-            double maxWidth = Math.Max(320, overlayWidth - 64);
-            double maxHeight = Math.Max(180, overlayHeight - 64);
+            // Keep 16:9 while leaving comfortable margins around the trailer (200px total).
+            double maxWidth = Math.Max(320, overlayWidth - 200);
+            double maxHeight = Math.Max(180, overlayHeight - 160);
 
             double width = maxWidth;
             double height = width * 9.0 / 16.0;
@@ -229,17 +217,22 @@ namespace ModernIPTVPlayer
             TrailerContent.Height = height;
             TrailerContent.UpdateLayout();
 
-            // Position close button at top-right of the overlay
+            // Position close button at the top-right corner ABOVE the trailer content
             if (CloseTrailerButton != null)
             {
-                CloseTrailerButton.Margin = new Thickness(16, 16, 16, 0);
+                // Calculate offset above the trailer (overlay center - trailer top, then a small gap)
+                double topPad = Math.Max(12, (overlayHeight - height) / 2.0 - 48);
+                double rightPad = Math.Max(12, (overlayWidth - width) / 2.0 - 4);
+                CloseTrailerButton.Margin = new Thickness(0, topPad, rightPad, 0);
+                CloseTrailerButton.HorizontalAlignment = HorizontalAlignment.Right;
+                CloseTrailerButton.VerticalAlignment = VerticalAlignment.Top;
             }
 
             var visual = ElementCompositionPreview.GetElementVisual(TrailerContent);
             visual.StopAnimation("Offset");
-            visual.Offset = Vector3.Zero;
-            float centerX = (float)(TrailerContent.ActualWidth > 0 ? TrailerContent.ActualWidth / 2.0 : width / 2.0);
-            float centerY = (float)(TrailerContent.ActualHeight > 0 ? TrailerContent.ActualHeight / 2.0 : height / 2.0);
+            
+            float centerX = (float)(width / 2.0);
+            float centerY = (float)(height / 2.0);
             visual.CenterPoint = new Vector3(centerX, centerY, 0);
         }
 
@@ -881,12 +874,19 @@ namespace ModernIPTVPlayer
                 {
                     SuperTitleText.Text = sub.ToUpperInvariant();
                     SuperTitleText.Visibility = Visibility.Visible;
+                    SuperTitleText.Margin = new Thickness(2, 0, 0, -4); // Restore pull-up margin
+                    if (TitleShimmer != null) TitleShimmer.Height = 72; // Shimmer matches supertitle+title
                     System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] SuperTitle shown: {sub}");
                 }
             }
             else
             {
-                if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
+                if (SuperTitleText != null)
+                {
+                    SuperTitleText.Visibility = Visibility.Collapsed;
+                    SuperTitleText.Margin = new Thickness(0); // Reset margin: no phantom space when hidden
+                    if (TitleShimmer != null) TitleShimmer.Height = 56; // Shimmer matches title only
+                }
                 System.Diagnostics.Debug.WriteLine("[MediaInfoPage] SuperTitle hidden (no secondary title).");
             }
 
@@ -1170,7 +1170,9 @@ namespace ModernIPTVPlayer
             if (GenresText != null) GenresText.Text = "";
             if (YearText != null) YearText.Text = "";
             if (RuntimeText != null) RuntimeText.Text = "";
-            if (SuperTitleText != null) { SuperTitleText.Text = ""; SuperTitleText.Visibility = Visibility.Collapsed; }
+            if (SuperTitleText != null) { SuperTitleText.Text = ""; SuperTitleText.Visibility = Visibility.Collapsed; SuperTitleText.Margin = new Thickness(0); }
+            if (TitleShimmer != null) TitleShimmer.Height = 56; // Reset shimmer to default height
+
             
             // Clear Collections
             Seasons?.Clear();
@@ -1319,21 +1321,23 @@ namespace ModernIPTVPlayer
         {
             if (TitleShimmer == null || TitlePanel == null) return;
             
-            // If SuperTitle is visible, it adds approx 12-16px of height.
-            // We want the Shimmer to take the EXACT height of the Panel to keep layout stable.
+            // Force layout update to get real dimensions including potential SuperTitle
+            TitlePanel.UpdateLayout();
+            
             double h = TitlePanel.ActualHeight;
             if (h > 0)
             {
                 TitleShimmer.Height = h;
-                
-                // If it's a multi-line title or has supertitle, align shimmer box correctly
-                // TitleShimmer is a single box in XAML, let's keep it that way but match height.
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] TitleShimmer Height adjusted to ActualHeight: {h}");
             }
             else
             {
                 // Fallback for Title only
                 TitleShimmer.Height = (SuperTitleText.Visibility == Visibility.Visible) ? 72 : 56;
             }
+            
+            // Ensure shimmer follows the same alignment logic to avoid empty spacing artifacts
+            TitleShimmer.VerticalAlignment = VerticalAlignment.Top;
         }
 
         private void AdjustOverviewShimmer(string text)
@@ -2723,34 +2727,35 @@ namespace ModernIPTVPlayer
             TrailerScrim.Opacity = 1; 
             TrailerLoadingRing.IsActive = true;
             TrailerLoadingRing.Visibility = Visibility.Visible;
-            _isTrailerFullscreen = false;
-            
-            // First apply layout to get correct measurements
-            ApplyTrailerFullscreenLayout(enable: false);
+            // Apply full-screen layout NOW (before animation) to get correct sizing
+            _isTrailerFullscreen = true;
+            ApplyTrailerFullscreenLayout(enable: true);
             TrailerOverlay.UpdateLayout();
             TrailerContent.UpdateLayout();
             EnsureTrailerOverlayBounds();
             
             // CRITICAL: Reset visual state completely before animation
+            // Read Width/Height AFTER XAML layout has run to get accurate values
             if (TrailerContent != null)
             {
                 var contentVisual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerContent);
                 
-                // Stop ALL animations and reset completely
+                // Stop ALL animations
                 contentVisual.StopAnimation("Scale");
                 contentVisual.StopAnimation("Offset");
                 contentVisual.StopAnimation("Opacity");
                 
-                // Reset Scale and Offset to center
+                // CenterPoint uses the ACTUAL post-layout dimensions
+                double targetW = TrailerContent.ActualWidth > 0 ? TrailerContent.ActualWidth : (TrailerContent.Width > 0 ? TrailerContent.Width : TrailerDefaultWidth);
+                double targetH = TrailerContent.ActualHeight > 0 ? TrailerContent.ActualHeight : (TrailerContent.Height > 0 ? TrailerContent.Height : TrailerDefaultHeight);
+                float centerX = (float)(targetW / 2.0);
+                float centerY = (float)(targetH / 2.0);
+                
+                contentVisual.CenterPoint = new System.Numerics.Vector3(centerX, centerY, 0);
                 contentVisual.Scale = new System.Numerics.Vector3(0.1f, 0.1f, 1f);
-                contentVisual.Offset = System.Numerics.Vector3.Zero;
+                // NOTE: Do NOT set Offset - let XAML layout compute the centered position
                 
-                // Use explicit Width/Height for center point calculation
-                double centerX = TrailerContent.Width > 0 ? TrailerContent.Width / 2 : TrailerDefaultWidth / 2;
-                double centerY = TrailerContent.Height > 0 ? TrailerContent.Height / 2 : TrailerDefaultHeight / 2;
-                contentVisual.CenterPoint = new System.Numerics.Vector3((float)centerX, (float)centerY, 0);
-                
-                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Visual reset - CenterPoint: {centerX}, {centerY}, Scale: 0.1, Offset: 0");
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Visual reset - CenterPoint: {centerX}, {centerY}, ActualSize: {targetW}x{targetH}, Scale: 0.1");
             }
             
             // Start HIDDEN to avoid black screen / loading artifacts.
@@ -2766,13 +2771,11 @@ namespace ModernIPTVPlayer
                 // Using Composition for smoother performance
                 var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerContent);
                 
-                // Ensure center point is correct
-                double centerX = TrailerContent.Width > 0 ? TrailerContent.Width / 2 : TrailerDefaultWidth / 2;
-                double centerY = TrailerContent.Height > 0 ? TrailerContent.Height / 2 : TrailerDefaultHeight / 2;
+                // Ensure center point is correct (reading from ActualWidth/Height post-layout)
+                double centerX = TrailerContent.ActualWidth > 0 ? TrailerContent.ActualWidth / 2 : (TrailerContent.Width > 0 ? TrailerContent.Width / 2 : TrailerDefaultWidth / 2);
+                double centerY = TrailerContent.ActualHeight > 0 ? TrailerContent.ActualHeight / 2 : (TrailerContent.Height > 0 ? TrailerContent.Height / 2 : TrailerDefaultHeight / 2);
                 visual.CenterPoint = new System.Numerics.Vector3((float)centerX, (float)centerY, 0);
-                
-                // Reset Offset to ensure it starts from center
-                visual.Offset = System.Numerics.Vector3.Zero;
+                // NOTE: Do NOT set visual.Offset - XAML centering is authoritative
                 
                 System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Animation Start - Center: {centerX}, {centerY}");
                 
@@ -3260,14 +3263,14 @@ namespace ModernIPTVPlayer
                 var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(TrailerContent);
                 visual.StopAnimation("Scale");
                 visual.StopAnimation("Offset");
+                visual.StopAnimation("Opacity");
                 visual.Scale = new System.Numerics.Vector3(1f, 1f, 1f);
-                visual.Offset = new System.Numerics.Vector3(0, 0, 0);
                 
-                // Use captured center point
-                if (cx > 0) visual.CenterPoint = new System.Numerics.Vector3(cx, cy, 0);
-                else visual.CenterPoint = new System.Numerics.Vector3(500f, 281f, 0); // Absolute fallback
+                double finalW = TrailerContent.Width > 0 ? TrailerContent.Width : TrailerDefaultWidth;
+                double finalH = TrailerContent.Height > 0 ? TrailerContent.Height : TrailerDefaultHeight;
+                visual.CenterPoint = new System.Numerics.Vector3((float)(finalW / 2.0), (float)(finalH / 2.0), 0);
                 
-                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Close Complete. CenterPoint Reset: {cx},{cy}");
+                System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Close Complete. CenterPoint Reset: {finalW/2},{finalH/2}");
             }
         }
 
