@@ -73,6 +73,8 @@ namespace ModernIPTVPlayer.Services.Metadata
             
             string rawId = stream.IMDbId;
             string id = ResolveBestInitialId(stream) ?? NormalizeId(rawId) ?? rawId;
+            var trace = new MetadataTrace(context.ToString(), id, stream?.Title);
+
             if (!string.IsNullOrWhiteSpace(id) && id != rawId)
             {
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Canonical ID resolved at entry: {rawId} -> {id}");
@@ -93,7 +95,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 id = null;
             }
 
-            string type = (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv"))) ? "series" : "movie";
+            string type = (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms_entry && (sms_entry.Meta.Type == "series" || sms_entry.Meta.Type == "tv"))) ? "series" : "movie";
             string fetchId = id ?? rawId ?? stream.Title;
             
             string cacheKey = $"{id ?? stream.Title}_{type}";
@@ -103,6 +105,14 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
             {
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CACHE HIT: {cacheKey}");
+
+                // [FIX] CROSS-CATALOG TITLE SEEDING:
+                // Even on cache hit, if we entered from a different catalog, we should seed its title!
+                if (stream is StremioMediaStream stremioStream)
+                {
+                    SeedFromCatalogMetadata(cached.Data, stremioStream, trace);
+                }
+
                 // If cached, trigger callback for all existing backdrops immediately
                 if (onBackdropFound != null && cached.Data.BackdropUrls != null)
                 {
@@ -137,14 +147,16 @@ namespace ModernIPTVPlayer.Services.Metadata
         private string? ResolveBestInitialId(Models.IMediaStream stream)
         {
             string? baseId = NormalizeId(stream.IMDbId) ?? stream.IMDbId;
-            if (IsImdbId(baseId) || (!string.IsNullOrWhiteSpace(baseId) && baseId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase)))
-                return baseId;
+            
+            // If already IMDb, nothing else to do
+            if (IsImdbId(baseId)) return baseId;
 
             if (stream is not StremioMediaStream sms || sms.Meta == null)
                 return baseId;
 
             var meta = sms.Meta;
 
+            // Prefer IMDb ID from meta even if baseId is tmdb or other
             string? extracted = ExtractImdbId(meta);
             if (IsImdbId(extracted)) return extracted;
 
@@ -153,6 +165,10 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             string? normalizedMetaId = NormalizeId(meta.Id);
             if (IsImdbId(normalizedMetaId)) return normalizedMetaId;
+
+            // Fallback to TMDB if no IMDb found
+            if (IsImdbId(baseId) || (!string.IsNullOrWhiteSpace(baseId) && baseId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase)))
+                return baseId;
 
             if (meta.MovieDbId != null && int.TryParse(meta.MovieDbId.ToString(), out int tmdbId) && tmdbId > 0)
                 return $"tmdb:{tmdbId}";
@@ -323,8 +339,18 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 missing = GetMissingFields(metadata, required);
                                 if (missing == MetadataField.None)
                                 {
-                                    trace.Log("Addon", "Missing field kalmadi. Probe zinciri tamamlandi.");
-                                    break;
+                                    // [OPTIMIZATION] If we are satisfied, but a higher priority addon'S DATA IS ALREADY IN CACHED, 
+                                    // apply it for consistency across different catalogs.
+                                    var nextCacheKey = $"{url}|{type}|{currentSearchId}";
+                                    if (index <= primaryPriority && _addonMetaCache.ContainsKey(nextCacheKey))
+                                    {
+                                        trace.Log("Addon", $"Satisfied but higher priority addon {GetHostSafe(url)} is in cache. Applying for consistency.");
+                                    }
+                                    else
+                                    {
+                                        trace.Log("Addon", "Missing field kalmadi. Probe zinciri tamamlandi.");
+                                        break;
+                                    }
                                 }
 
                                 if (metadata.ProbedAddons.Contains(url))
@@ -381,7 +407,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                     trace.Log("ID", $"Upgraded search id to canonical IMDb: {discoveredImdbId}");
                                 }
 
-                                bool overwritePrimary = index < primaryPriority;
+                                bool overwritePrimary = index <= primaryPriority;
                                 MapStremioToUnified(entry.Meta, metadata, overwritePrimary);
                                 if (overwritePrimary)
                                 {
@@ -475,18 +501,55 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             if (stream?.Meta == null) return;
 
-            metadata.CatalogSourceAddonUrl = stream.SourceAddon;
-            metadata.CatalogSourceInfo = GetHostSafe(stream.SourceAddon);
+            // [FIX] CROSS-CATALOG TITLE SEEDING
+            // If we already have a title from another catalog, we want to maintain both if they differ.
+            // This ensures consistent SuperTitle display regardless of which catalog entry is used.
+            var addonUrls = StremioAddonManager.Instance.GetAddons();
+            int currentCatalogPriority = GetAddonPriorityIndex(addonUrls, stream.SourceAddon);
+            int primaryCatalogPriority = GetAddonPriorityIndex(addonUrls, metadata.CatalogSourceAddonUrl);
 
-            bool canOverwriteSeedFields = string.IsNullOrWhiteSpace(metadata.MetadataSourceInfo) || metadata.MetadataSourceInfo.Contains("Catalog Seed", StringComparison.OrdinalIgnoreCase);
+            if (currentCatalogPriority < 0) currentCatalogPriority = int.MaxValue;
+            if (primaryCatalogPriority < 0) primaryCatalogPriority = int.MaxValue;
 
-            if (!string.IsNullOrWhiteSpace(stream.Meta.Name) && (canOverwriteSeedFields || string.IsNullOrWhiteSpace(metadata.Title))) metadata.Title = stream.Meta.Name;
+            string newTitle = stream.Meta.Name;
+            if (!string.IsNullOrWhiteSpace(newTitle))
+            {
+                if (string.IsNullOrWhiteSpace(metadata.Title))
+                {
+                    metadata.Title = newTitle;
+                    metadata.CatalogSourceAddonUrl = stream.SourceAddon;
+                    metadata.CatalogSourceInfo = GetHostSafe(stream.SourceAddon);
+                }
+                else if (!string.Equals(metadata.Title, newTitle, StringComparison.OrdinalIgnoreCase))
+                {
+                    // Heuristic: If new catalog has HIGHER (lower index) priority, it becomes Title, old becomes SubTitle.
+                    // Otherwise, new becomes SubTitle.
+                    if (currentCatalogPriority < primaryCatalogPriority)
+                    {
+                        trace.Log("Seed", $"Title swap: {metadata.Title} (low pri) -> SubTitle, {newTitle} (high pri) -> Title");
+                        metadata.SubTitle = metadata.Title;
+                        metadata.Title = newTitle;
+                        metadata.CatalogSourceAddonUrl = stream.SourceAddon;
+                        metadata.CatalogSourceInfo = GetHostSafe(stream.SourceAddon);
+                    }
+                    else if (string.IsNullOrWhiteSpace(metadata.SubTitle))
+                    {
+                        trace.Log("Seed", $"Alternative title from lower priority catalog ({GetHostSafe(stream.SourceAddon)}): {newTitle} -> SubTitle");
+                        metadata.SubTitle = newTitle;
+                    }
+                }
+            }
+
+            // OriginalName handling (as a secondary SubTitle source)
             if (!string.IsNullOrWhiteSpace(stream.Meta.OriginalName) &&
                 !string.Equals(stream.Meta.OriginalName, metadata.Title, StringComparison.OrdinalIgnoreCase) &&
                 string.IsNullOrWhiteSpace(metadata.SubTitle))
             {
                 metadata.SubTitle = stream.Meta.OriginalName;
             }
+
+            bool canOverwriteSeedFields = string.IsNullOrWhiteSpace(metadata.MetadataSourceInfo) || metadata.MetadataSourceInfo.Contains("Catalog Seed", StringComparison.OrdinalIgnoreCase);
+
             if (!string.IsNullOrWhiteSpace(stream.Meta.Description) && (canOverwriteSeedFields || string.IsNullOrWhiteSpace(metadata.Overview))) metadata.Overview = stream.Meta.Description;
             if (!string.IsNullOrWhiteSpace(stream.Meta.Poster) && (canOverwriteSeedFields || string.IsNullOrWhiteSpace(metadata.PosterUrl))) metadata.PosterUrl = stream.Meta.Poster;
             if (!string.IsNullOrWhiteSpace(stream.Meta.Background))
@@ -514,15 +577,15 @@ namespace ModernIPTVPlayer.Services.Metadata
             string? bestImdb = ExtractImdbId(stream.Meta) ?? NormalizeId(stream.IMDbId) ?? NormalizeId(stream.Meta.Id);
             if (IsImdbId(bestImdb))
             {
-                metadata.ImdbId = bestImdb;
+                if (string.IsNullOrEmpty(metadata.ImdbId)) metadata.ImdbId = bestImdb;
             }
             else if (stream.Meta.MovieDbId != null && int.TryParse(stream.Meta.MovieDbId.ToString(), out int movieDbId) && movieDbId > 0)
             {
-                metadata.ImdbId = $"tmdb:{movieDbId}";
+                if (string.IsNullOrEmpty(metadata.ImdbId)) metadata.ImdbId = $"tmdb:{movieDbId}";
             }
             else if (!string.IsNullOrWhiteSpace(stream.Meta.Id) && stream.Meta.Id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
             {
-                metadata.ImdbId = NormalizeId(stream.Meta.Id);
+                if (string.IsNullOrEmpty(metadata.ImdbId)) metadata.ImdbId = NormalizeId(stream.Meta.Id);
             }
 
             if (string.IsNullOrWhiteSpace(metadata.MetadataId))
