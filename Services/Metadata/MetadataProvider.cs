@@ -386,11 +386,11 @@ namespace ModernIPTVPlayer.Services.Metadata
                                     }
                                 }
                                 
-                                // [NEW] SMART SEQUENTIAL PROBING
+                                // [NEW] SMART SEQUENTIAL PROBING (Discovery only)
                                 // If the CURRENT context requirements are met (even if not from a higher priority source), 
                                 // we can stop probing to save network requests, UNLESS we still want to hunt for better priority data.
-                                // For Detail context (Trailer), if we found a trailer from GLOBAL SEEDING or a prev addon, we can stop.
-                                if (missing == MetadataField.None)
+                                // For Discovery context, we stop immediately once basics are met.
+                                if (context == MetadataContext.Discovery && missing == MetadataField.None)
                                 {
                                     trace.Log("Decision", $"Context '{context}' requirements fully satisfied. Stopping probe loop.");
                                     break;
