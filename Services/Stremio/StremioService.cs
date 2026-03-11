@@ -18,7 +18,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         private JsonSerializerOptions _jsonOptions;
 
         // In-Memory Cache for Catalogs to speed up switching
-        private Dictionary<string, List<StremioMediaStream>> _catalogCache = new();
+        private System.Collections.Concurrent.ConcurrentDictionary<string, List<StremioMediaStream>> _catalogCache = new();
 
         // Global High-Performance Index for Metadata across all catalogs
         private readonly Dictionary<string, HashSet<StremioMediaStream>> _globalMetaIndex = new();
@@ -70,7 +70,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         public async Task<List<StremioMediaStream>> GetCatalogItemsAsync(string baseUrl, string type, string id, string extra = "", int skip = 0)
         {
             string cacheKey = $"{baseUrl}|{type}|{id}|{extra}|{skip}";
-            if (_catalogCache.ContainsKey(cacheKey)) return _catalogCache[cacheKey];
+            if (_catalogCache.TryGetValue(cacheKey, out var cachedData)) return cachedData;
 
             string url = $"{baseUrl.TrimEnd('/')}/catalog/{type}/{id}";
             try

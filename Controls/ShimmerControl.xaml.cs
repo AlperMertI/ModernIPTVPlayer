@@ -8,48 +8,71 @@ namespace ModernIPTVPlayer.Controls
     public sealed partial class ShimmerControl : UserControl
     {
         private Storyboard _storyboard;
+        private bool _callbackRegistered = false;
 
         public ShimmerControl()
         {
             this.InitializeComponent();
-            this.Loaded += ShimmerControl_Loaded;
-            this.Unloaded += ShimmerControl_Unloaded;
-            
             SetupAnimation();
+
+            // Register for loaded/unloaded to manage animation lifecycle
+            this.Loaded += (s, e) =>
+            {
+                // Register visibility callback once, on first load
+                if (!_callbackRegistered)
+                {
+                    this.RegisterPropertyChangedCallback(VisibilityProperty, OnVisibilityChanged);
+                    _callbackRegistered = true;
+                }
+                // Start if already visible when loaded
+                if (Visibility == Visibility.Visible)
+                    BeginShimmer();
+            };
+
+            this.Unloaded += (s, e) => _storyboard?.Stop();
         }
 
         private void SetupAnimation()
         {
             _storyboard = new Storyboard();
-            
+
             var anim = new DoubleAnimation
             {
-                From = -300,
-                To = 300,
-                Duration = new Duration(TimeSpan.FromSeconds(1.5)),
-                RepeatBehavior = RepeatBehavior.Forever
+                From = -400,
+                To = 400,
+                Duration = new Duration(TimeSpan.FromSeconds(1.6)),
+                RepeatBehavior = RepeatBehavior.Forever,
+                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut }
             };
-            
-            // Randomize start time slightly for more natural look across multiple items
-            double delay = new Random().NextDouble() * 500;
-            anim.BeginTime = TimeSpan.FromMilliseconds(delay);
+
+            // Stagger each instance slightly so multiple shimmers don't pulse in sync
+            anim.BeginTime = TimeSpan.FromMilliseconds(new Random().NextDouble() * 800);
 
             Storyboard.SetTarget(anim, ShimmerTransform);
             Storyboard.SetTargetProperty(anim, "X");
             _storyboard.Children.Add(anim);
         }
 
-        private void ShimmerControl_Loaded(object sender, RoutedEventArgs e)
+        private void OnVisibilityChanged(DependencyObject sender, DependencyProperty dp)
         {
-            _storyboard.Begin();
+            if (Visibility == Visibility.Visible)
+                BeginShimmer();
+            else
+                _storyboard?.Stop();
         }
 
-        private void ShimmerControl_Unloaded(object sender, RoutedEventArgs e)
+        /// <summary>
+        /// Starts the shimmer, always dispatched to the UI thread to be safe.
+        /// </summary>
+        private void BeginShimmer()
         {
-            _storyboard.Stop();
+            if (DispatcherQueue != null)
+                DispatcherQueue.TryEnqueue(() => _storyboard?.Begin());
+            else
+                _storyboard?.Begin();
         }
-        
-        public void Stop() => _storyboard.Stop();
-        public void Start() => _storyboard.Begin();
+
+        public void Stop() => _storyboard?.Stop();
+        public void Start() => BeginShimmer();
     }
 }

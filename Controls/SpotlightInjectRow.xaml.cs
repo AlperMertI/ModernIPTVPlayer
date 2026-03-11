@@ -503,7 +503,9 @@ namespace ModernIPTVPlayer.Controls
                 string envFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTVPlayer_Spotlight", "env_" + _instanceId);
                 System.IO.Directory.CreateDirectory(envFolder);
                 var env = await CoreWebView2Environment.CreateWithOptionsAsync(null, envFolder, null);
+                if (_webView == null) return;
                 await _webView.EnsureCoreWebView2Async(env);
+                if (_webView == null || _webView.CoreWebView2 == null) return;
                 
                 string contentFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTVPlayer_Spotlight", "content_" + _instanceId);
                 System.IO.Directory.CreateDirectory(contentFolder);
@@ -562,6 +564,8 @@ namespace ModernIPTVPlayer.Controls
                 string htmlFilePath = System.IO.Path.Combine(contentFolder, "spotlight.html");
                 await System.IO.File.WriteAllTextAsync(htmlFilePath, htmlContent);
                 
+                if (_webView == null || _webView.CoreWebView2 == null) return;
+
                 _webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                     virtualHost, contentFolder, Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
 

@@ -192,7 +192,6 @@ namespace ModernIPTVPlayer
                     ColoredLogo.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri);
                     PlayerLoadingOverlay.Visibility = Visibility.Visible;
                     LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, 0, 120);
-                    PlayerLoadingPercentageText.Text = "%0";
 
                     _fakeLogoProgress = 0;
                     if (_logoLoadingTimer == null)
@@ -205,7 +204,6 @@ namespace ModernIPTVPlayer
                                 // Slows down as it reaches 90!
                                 _fakeLogoProgress += Math.Max(0.2, (95 - _fakeLogoProgress) * 0.1);
                                 LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, (_fakeLogoProgress / 100) * 300, 120);
-                                PlayerLoadingPercentageText.Text = $"%{(int)_fakeLogoProgress}";
                             }
                         };
                     }
@@ -220,7 +218,6 @@ namespace ModernIPTVPlayer
             {
                 _logoLoadingTimer?.Stop();
                 LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, 300, 120);
-                PlayerLoadingPercentageText.Text = "%100";
                 
                 // Fade out softly
                 var t = Task.Run(async () => 

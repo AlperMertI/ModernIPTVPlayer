@@ -169,15 +169,30 @@
             
 
             <!-- Readability Scrim (Softened & Refined) -->
-            <Rectangle x:Name="LocalInfoGradient" VerticalAlignment="Stretch" HorizontalAlignment="Left" Width="1400" 
+            <!-- Readability Scrim (Full Width Span) -->
+            <Rectangle x:Name="LocalInfoGradient" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" 
                        Opacity="0" IsHitTestVisible="False" Margin="-50,0,0,-50">
                 <Rectangle.Fill>
-                    <RadialGradientBrush Center="0,1" GradientOrigin="0,1" RadiusX="1.2" RadiusY="1.2">
-                        <!-- Much softer stops to preserve image beauty -->
-                        <GradientStop Color="#66000000" Offset="0"/> 
-                        <GradientStop Color="#22000000" Offset="0.4"/>
-                        <GradientStop Color="#00000000" Offset="0.75"/>
-                    </RadialGradientBrush>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                        <GradientStop Color="#B3000000" Offset="0.0"/>
+                        <GradientStop Color="#80000000" Offset="0.15"/>
+                        <GradientStop Color="#33000000" Offset="0.35"/>
+                        <GradientStop Color="#1A000000" Offset="0.55"/>
+                        <GradientStop Color="Transparent" Offset="0.8"/>
+                    </LinearGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+
+            <!-- EXTRA CONTRAST: Diagonal/Localized Grad for Actor Names & Bottom Items -->
+            <Rectangle x:Name="ExtraReadabilityGradient" VerticalAlignment="Bottom" HorizontalAlignment="Left" Width="1100" Height="750" 
+                       Opacity="0" IsHitTestVisible="False" Margin="-50,0,0,-50">
+                <Rectangle.Fill>
+                    <LinearGradientBrush StartPoint="0,1" EndPoint="0.7,0.3">
+                        <GradientStop Color="#99000000" Offset="0.0"/>
+                        <GradientStop Color="#4D000000" Offset="0.4"/>
+                        <GradientStop Color="#1A000000" Offset="0.7"/>
+                        <GradientStop Color="Transparent" Offset="1.0"/>
+                    </LinearGradientBrush>
                 </Rectangle.Fill>
             </Rectangle>
 
@@ -248,13 +263,15 @@
                         <Setter Target="ContentGrid.Padding" Value="60,0,20,0"/>
                         <Setter Target="TitleText.FontSize" Value="48"/>
                         
-                        <Setter Target="InfoContainer.VerticalAlignment" Value="Bottom"/>
-                        <Setter Target="InfoContainer.(Grid.RowSpan)" Value="1"/>
-                        <Setter Target="InfoColumn.Margin" Value="0,0,40,40"/>
+                        <Setter Target="InfoColumn.Margin" Value="0,0,40,80"/>
                         
                         <Setter Target="EpisodesPanel.VerticalAlignment" Value="Center"/>
+                        <Setter Target="EpisodesPanel.Margin" Value="40,0,0,0"/>
                         <Setter Target="EpisodesPanel.(Grid.RowSpan)" Value="1"/>
                         <Setter Target="EpisodesPanel.HorizontalAlignment" Value="Right"/>
+                        
+                        <Setter Target="SourcesPanel.VerticalAlignment" Value="Center"/>
+                        <Setter Target="SourcesPanel.Margin" Value="40,0,0,0"/>
                         
                         <!-- Collapse Narrow Sections in Wide Mode -->
                         <Setter Target="NarrowEpisodesSection.Visibility" Value="Collapsed"/>
@@ -272,13 +289,37 @@
                         <Setter Target="RootScrollViewer.VerticalScrollMode" Value="Auto"/>
                         
                         <Setter Target="Row0.Height" Value="Auto"/>
-                        <Setter Target="ContentGrid.Padding" Value="20,120,20,40"/>
+                        <Setter Target="ContentGrid.Padding" Value="20,140,20,40"/>
                         <Setter Target="TitleText.FontSize" Value="28"/>
                         
                         <Setter Target="InfoContainer.VerticalAlignment" Value="Top"/>
                         <Setter Target="InfoContainer.(Grid.ColumnSpan)" Value="2"/>
                         <Setter Target="InfoContainer.(Grid.RowSpan)" Value="1"/>
-                        <Setter Target="InfoColumn.Margin" Value="0,0,0,20"/>
+                        <Setter Target="InfoColumn.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="InfoColumn.Margin" Value="0,0,0,10"/>
+                        <Setter Target="IdentityContainer.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="ContentLogo.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="TitlePanel.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="TitleText.TextAlignment" Value="Center"/>
+                        <Setter Target="SuperTitleText.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="MetadataRibbon.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="ActionBarPanel.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="OverviewPanel.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="OverviewText.TextAlignment" Value="Center"/>
+                        <Setter Target="GenresText.TextAlignment" Value="Center"/>
+                        <Setter Target="GenresText.HorizontalAlignment" Value="Stretch"/>
+
+                        <!-- Center Narrow Specific Sections -->
+                        <Setter Target="NarrowEpisodesSection.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="NarrowEpisodesSection.Margin" Value="0,20,0,0"/>
+                        <Setter Target="NarrowSourcesSection.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="NarrowDirectorSection.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="NarrowCastSection.HorizontalAlignment" Value="Stretch"/>
+                        
+                        <!-- Title alignment for narrow sections -->
+                        <Setter Target="NarrowEpisodesSection.Padding" Value="20,0"/>
+                        <Setter Target="NarrowDirectorSection.Padding" Value="20,0"/>
+                        <Setter Target="NarrowCastSection.Padding" Value="20,0"/>
                         
                         <!-- Collapse Wide Panels in Narrow Mode -->
                         <Setter Target="EpisodesPanel.Visibility" Value="Collapsed"/>
@@ -307,7 +348,7 @@
         <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Padding="0">
             
 
-            <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,40" MaxWidth="850" RenderTransformOrigin="0,1"> 
+            <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,25" MaxWidth="850"> 
                 <StackPanel.RenderTransform>
                     <ScaleTransform x:Name="InfoColumnScale" CenterX="0" CenterY="0"/>
                 </StackPanel.RenderTransform>
@@ -328,9 +369,6 @@
                           <Grid>
                               <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Bold" 
                                          TextWrapping="Wrap" Foreground="White" LineHeight="56">
-                                 <TextBlock.Shadow>
-                                     <ThemeShadow/>
-                                 </TextBlock.Shadow>
                               </TextBlock>
                           </Grid>
                       </StackPanel>
@@ -447,14 +485,14 @@
             
                 <!-- DIRECTOR SECTION (Compact) -->
                 <Grid>
-                    <StackPanel x:Name="DirectorSection" Spacing="8" Visibility="Collapsed" Margin="0,8,0,0" Opacity="0">
+                    <StackPanel x:Name="DirectorSection" Spacing="2" Visibility="Collapsed" Margin="0" Opacity="0">
                         <StackPanel.RenderTransform>
                             <ScaleTransform x:Name="DirectorSectionScale" CenterX="0" CenterY="0"/>
                         </StackPanel.RenderTransform>
                         <TextBlock Text="Yönetmen" FontSize="14" FontWeight="SemiBold" Foreground="#88FFFFFF" CharacterSpacing="50"/>
                         <ListView x:Name="DirectorListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                                   ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" 
-                                  Height="180" Padding="25,0,25,0">
+                                  Height="145" Padding="0" Margin="0">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
                                     <Setter Property="Padding" Value="0"/>
@@ -513,14 +551,14 @@
 
                 <!-- CAST SECTION (Compact) -->
                 <Grid>
-                    <StackPanel x:Name="CastSection" Spacing="8" Visibility="Collapsed" Margin="0,8,0,0" Opacity="0">
+                    <StackPanel x:Name="CastSection" Spacing="2" Visibility="Collapsed" Margin="0" Opacity="0">
                         <StackPanel.RenderTransform>
                             <ScaleTransform x:Name="CastSectionScale" CenterX="0" CenterY="0"/>
                         </StackPanel.RenderTransform>
                         <TextBlock Text="Oyuncular" FontSize="14" FontWeight="SemiBold" Foreground="#88FFFFFF" CharacterSpacing="50"/>
                         <ListView x:Name="CastListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                                   ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" 
-                                  Height="180" Padding="25,0,25,0">
+                                  Height="145" Padding="0" Margin="0">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
                                     <Setter Property="Padding" Value="0"/>
