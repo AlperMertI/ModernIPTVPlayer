@@ -181,6 +181,7 @@ namespace ModernIPTVPlayer
             SeekSlider.AddHandler(PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerCaptureLost), true);
         }
 
+        private double _loadingTargetProgress = 0; // The goal % the animation seeks to
         private void StartLogoLoading()
         {
             if (_navArgs != null && !string.IsNullOrWhiteSpace(_navArgs.LogoUrl))
@@ -194,16 +195,22 @@ namespace ModernIPTVPlayer
                     LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, 0, 120);
 
                     _fakeLogoProgress = 0;
+                    _loadingTargetProgress = 70; // Phase 1: Network/Probe target (taking bulk of time)
+                    
                     if (_logoLoadingTimer == null)
                     {
-                        _logoLoadingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+                        _logoLoadingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(30) }; // Faster ticks for smoother anim
                         _logoLoadingTimer.Tick += (s, ev) =>
                         {
-                            if (_fakeLogoProgress < 95) 
+                            if (_fakeLogoProgress < _loadingTargetProgress) 
                             {
-                                // Slows down as it reaches 90!
-                                _fakeLogoProgress += Math.Max(0.2, (95 - _fakeLogoProgress) * 0.1);
-                                LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, (_fakeLogoProgress / 100) * 300, 120);
+                                // Smooth easing up to 70% during network resolving
+                                double distance = _loadingTargetProgress - _fakeLogoProgress;
+                                _fakeLogoProgress += Math.Max(0.1, distance * 0.02); 
+                                
+                                if (_fakeLogoProgress > _loadingTargetProgress) _fakeLogoProgress = _loadingTargetProgress;
+                                
+                                LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, (_fakeLogoProgress / 100.0) * 300, 120);
                             }
                         };
                     }
@@ -216,18 +223,56 @@ namespace ModernIPTVPlayer
         {
             if (PlayerLoadingOverlay.Visibility == Visibility.Visible)
             {
+                // Playback has definitively started, so we instantly snap to 100% 
+                // and skip waiting for the smooth animation to visually catch up.
+                _loadingTargetProgress = 100;
+                _fakeLogoProgress = 100;
                 _logoLoadingTimer?.Stop();
+                
                 LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, 300, 120);
                 
-                // Fade out softly
+                // Fade out very quickly so it doesn't block playback
+                var fadeOut = ElementCompositionPreview.GetElementVisual(this).Compositor.CreateScalarKeyFrameAnimation();
+                fadeOut.InsertKeyFrame(0f, 1f);
+                fadeOut.InsertKeyFrame(1f, 0f);
+                fadeOut.Duration = TimeSpan.FromMilliseconds(200);
+                fadeOut.DelayTime = TimeSpan.FromMilliseconds(0); 
+                
+                var visual = ElementCompositionPreview.GetElementVisual(PlayerLoadingOverlay);
+                visual.StartAnimation("Opacity", fadeOut);
+                
                 var t = Task.Run(async () => 
                 {
-                    await Task.Delay(500);
+                    await Task.Delay(250);
                     DispatcherQueue.TryEnqueue(() => 
                     {
                         PlayerLoadingOverlay.Visibility = Visibility.Collapsed;
+                        visual.Opacity = 1f; // Reset for next time
                     });
                 });
+            }
+        }
+
+        private void ShowBufferingOverlay()
+        {
+            if (PlayerLoadingOverlay.Visibility != Visibility.Visible && _isPageLoaded)
+            {
+                // Reset visual state without the initial fade-in delay
+                var visual = ElementCompositionPreview.GetElementVisual(PlayerLoadingOverlay);
+                visual.Opacity = 1f;
+
+                // Resume from Phase 2 (70%) since stream is already resolved
+                _fakeLogoProgress = 70;
+                _loadingTargetProgress = 70;
+                LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, (_fakeLogoProgress / 100.0) * 300, 120);
+                
+                PlayerLoadingOverlay.Visibility = Visibility.Visible;
+                
+                // Restart visual smoother if necessary, though mostly driven by StatsTimer_Tick now
+                if (_logoLoadingTimer != null && !_logoLoadingTimer.IsEnabled)
+                {
+                    _logoLoadingTimer.Start();
+                }
             }
         }
 
@@ -253,9 +298,64 @@ namespace ModernIPTVPlayer
                 // ---------- SEEKBAR & TIME LOGIC ----------
                 string durationStr = await _mpvPlayer.GetPropertyAsync("duration");
                 string positionStr = await _mpvPlayer.GetPropertyAsync("time-pos");
+                string coreIdleStr = await _mpvPlayer.GetPropertyAsync("core-idle");
+                string pausedForCacheStr = await _mpvPlayer.GetPropertyAsync("paused-for-cache");
+                string seekingStr = await _mpvPlayer.GetPropertyAsync("seeking");
                 
                 double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double duration);
                 double.TryParse(positionStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double position);
+
+                // --- LOGO LOADING SYNC LOGIC ---
+                // If the loading overlay is still visible, check if we are truly ready to play
+                if (PlayerLoadingOverlay.Visibility == Visibility.Visible)
+                {
+                    bool isCoreIdle = coreIdleStr == "yes";
+                    bool isBuffering = pausedForCacheStr == "yes" || seekingStr == "yes" || position < 0.1;
+
+                    // Additionally, ensure time has actually begun advancing reliably
+                    bool isTimeAdvancing = position > 0.05 && !isCoreIdle && !isBuffering;
+                    
+                    if (isTimeAdvancing)
+                    {
+                        // Playback officially started
+                        StopLogoLoading();
+                    }
+                    else if (_loadingTargetProgress != 100)
+                    {
+                        // Phase 2: MPV opened, reading cache fill status (0-100)
+                        string bufferingStateStr = await _mpvPlayer.GetPropertyAsync("cache-buffering-state");
+                        
+                        if (seekingStr == "yes")
+                        {
+                            // Reset visually during seek
+                            _loadingTargetProgress = 70;
+                            _fakeLogoProgress = 70;
+                        }
+                        else if (double.TryParse(bufferingStateStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double bufferPercentage))
+                        {
+                            // Map MPV's 0-100% buffer fill to our UI's target range (70-100%)
+                            // We set the TARGET, and the _logoLoadingTimer handles smoothing the visual progress
+                            double newTarget = 70.0 + (bufferPercentage * 0.30);
+                            
+                            // During a seek or cache drop, occasionally the buffer % genuinely falls.
+                            // Set target to exactly what MPV reports. _logoLoadingTimer handles smoothness.
+                            _loadingTargetProgress = newTarget;
+                        }
+                        else
+                        {
+                             // If buffering state isn't available but we are loading, nudge it slightly
+                             if (_loadingTargetProgress < 90) _loadingTargetProgress += 1;
+                        }
+                    }
+                }
+                else
+                {
+                    // Mid-stream buffering detection (user sought, rewound, or connection dropped)
+                    if (pausedForCacheStr == "yes" || seekingStr == "yes")
+                    {
+                         ShowBufferingOverlay();
+                    }
+                }
 
                 // ---------- HANDOFF BUFFER UNLOCK LOGIC ----------
                 // Ensuring buffer limits are lifted only after playback truly begins prevent startup race conditions.
@@ -424,9 +524,10 @@ namespace ModernIPTVPlayer
 
                             _isStaticMetadataFetched = true;
                             ShowInfoPills();
-                            StopLogoLoading();
-
-                            // [CACHE UPDATE] Update global cache with real playback data
+            {
+                // We no longer call StopLogoLoading here. It is handled organically by the StatsTimer
+                // when MPV reports it is actually ready.
+            }                  // [CACHE UPDATE] Update global cache with real playback data
                             try 
                             {
                                 bool isHdr = _cachedHdr.Contains("HDR");
@@ -999,6 +1100,10 @@ namespace ModernIPTVPlayer
                         {
                              Debug.WriteLine("[PlayerPage] Trusted Source detected. Skipping pre-check.");
                         }
+
+                        // Phase 2 Preparation: Let stats timer take over the target.
+                        // We DO NOT stop _logoLoadingTimer here, as it provides the crucial easing physics.
+                        if (_loadingTargetProgress < 70) _loadingTargetProgress = 70; 
 
                         // [Fix] Check if player was disposed during check
                         if (_mpvPlayer == null) return;

@@ -58,6 +58,7 @@ namespace ModernIPTVPlayer
         private readonly Dictionary<string, StremioSourcesCacheEntry> _stremioSourcesCache = new();
         private int _sourcesRequestVersion;
         private string _currentStremioVideoId;
+        private TaskCompletionSource<bool> _logoReadyTcs;
         private bool _isSourcesFetchInProgress;
         private bool _isCurrentSourcesComplete;
         private bool _areSourcesVisible = false; // <--- New Field
@@ -914,17 +915,17 @@ namespace ModernIPTVPlayer
                 _currentStremioVideoId = null;
                 _stremioSourcesCache.Clear();
                 _areSourcesVisible = false; // Reset sources visibility flag
+
+                // Clear list views to avoid showing stale data when switching
+                if (SourcesListView != null) SourcesListView.ItemsSource = null;
+                if (NarrowSourcesListView != null) NarrowSourcesListView.ItemsSource = null;
+                if (AddonSelectorList != null) AddonSelectorList.ItemsSource = null;
+                if (NarrowAddonSelector != null) NarrowAddonSelector.ItemsSource = null;
             }
             else
             {
                 System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Same Item loaded - Preserving sources cache");
             }
-            
-            // Clear list views to avoid showing stale data
-            if (SourcesListView != null) SourcesListView.ItemsSource = null;
-            if (NarrowSourcesListView != null) NarrowSourcesListView.ItemsSource = null;
-            if (AddonSelectorList != null) AddonSelectorList.ItemsSource = null;
-            if (NarrowAddonSelector != null) NarrowAddonSelector.ItemsSource = null;
 
             // 2. Determine if we already have data
             var existingTmdb = preFetchedTmdb ?? item.TmdbInfo;
@@ -1056,18 +1057,28 @@ namespace ModernIPTVPlayer
 
             if (!string.IsNullOrWhiteSpace(unified.LogoUrl))
             {
+                _logoReadyTcs = new TaskCompletionSource<bool>();
                 ContentLogo.Source = new BitmapImage(new Uri(unified.LogoUrl));
                 ContentLogo.Visibility = Visibility.Visible;
-                ContentLogo.Opacity = 1;
+                
+                // IMPORTANT: Match shimmer height to logo MaxHeight IMMEDIATELY while shimmer is opaque.
+                // This prevents the "jump" later because space is reserved NOW.
+                if (TitleShimmer != null) TitleShimmer.Height = 120;
+                
                 TitlePanel.Visibility = Visibility.Collapsed;
-                TitlePanel.Opacity = 0;
             }
             else
             {
+                _logoReadyTcs = null;
                 ContentLogo.Visibility = Visibility.Collapsed;
-                ContentLogo.Opacity = 0;
                 TitlePanel.Visibility = Visibility.Visible;
-                TitlePanel.Opacity = 1;
+                
+                // Set shimmer height for text (SuperTitle 72, Title 56)
+                if (TitleShimmer != null)
+                {
+                    bool hasSuper = !string.IsNullOrWhiteSpace(unified.SubTitle) || !string.IsNullOrWhiteSpace(unified.OriginalTitle);
+                    TitleShimmer.Height = hasSuper ? 72 : 56;
+                }
             }
             
             // [FEATURE] Dual Title (SuperTitle): Show secondary title (SubTitle or Original) if available and different
@@ -1139,8 +1150,9 @@ namespace ModernIPTVPlayer
             
             System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Unified Metadata Loaded via {unified.DataSource}");
 
-            // Adjust shimmers
+            // Adjust shimmers (Precise Measurement)
             AdjustTitleShimmer();
+            SyncMetadataRibbonHeight();
             this.UpdateLayout();
             AdjustOverviewShimmer(OverviewText.Text);
 
@@ -1574,14 +1586,23 @@ namespace ModernIPTVPlayer
                 }
 
                 ShowShimmer(TitleShimmer);
-                AdjustTitleShimmer();
-
+                // Note: AdjustTitleShimmer is now more proactive in LoadDetailsAsync, 
+                // but we keep a fallback here for the initial shimmer.
+                if (TitleShimmer.Height < 56) TitleShimmer.Height = 56;
                 ShowShimmer(MetadataShimmer);
                 ShowShimmer(ActionBarShimmer);
                 ShowShimmer(OverviewShimmer);
+                
+                // Show Director/Cast shimmers to reserve space and prevent jumps
+                ShowShimmer(DirectorShimmer);
+                ShowShimmer(CastShimmer);
 
                 TechBadgesContent.Visibility = Visibility.Collapsed;
                 ElementCompositionPreview.GetElementVisual(TechBadgesContent).Opacity = 0f;
+            }
+            else
+            {
+                // Transitioning away from loading is handled by StaggeredRevealContent
             }
         }
 
@@ -1624,7 +1645,21 @@ namespace ModernIPTVPlayer
             }
 
             // Sequence: Identity -> Metadata -> Actions -> Overview -> Cast
-            AnimatePair(IdentityContainer, TitleShimmer, 50);
+            // *** STABILITY FIX: Wait for Logo if needed, and sync cross-fade perfectly ***
+            _ = RevealIdentityAsync();
+
+            async Task RevealIdentityAsync()
+            {
+                UIElement idContent = (ContentLogo.Visibility == Visibility.Visible) ? (UIElement)ContentLogo : (UIElement)TitlePanel;
+                
+                // If it's a logo, wait for it to be decoded (max 2s timeout to prevent stuck UI)
+                if (_logoReadyTcs != null && idContent == ContentLogo)
+                {
+                    await Task.WhenAny(_logoReadyTcs.Task, Task.Delay(2000));
+                }
+
+                AnimatePair(idContent, TitleShimmer, 50);
+            }
             
             AnimatePair(MetadataPanel, MetadataShimmer, 100);
             MetadataRibbon.Opacity = 1;
@@ -1677,28 +1712,75 @@ namespace ModernIPTVPlayer
                 ExtraReadabilityGradient.Opacity = 1;
             }
         }
+
+        private void ContentLogo_ImageOpened(object sender, RoutedEventArgs e)
+        {
+            _logoReadyTcs?.TrySetResult(true);
+            System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Logo opened and decoded.");
+            
+            // Re-measure now that we have real dimensions
+            DispatcherQueue.TryEnqueue(() => 
+            {
+                AdjustTitleShimmer();
+            });
+        }
+
+        private void ContentLogo_ImageFailed(object sender, ExceptionRoutedEventArgs e)
+        {
+            _logoReadyTcs?.TrySetResult(false);
+            System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Logo load failed: {e.ErrorMessage}");
+        }
         
         private void AdjustTitleShimmer()
         {
             if (TitleShimmer == null || IdentityContainer == null) return;
             
-            // IdentityContainer height is the anchor for stability
-            IdentityContainer.UpdateLayout();
+            // Pro-actively measure the target content (Logo or Text) to avoid "drops"
+            UIElement target = (ContentLogo.Visibility == Visibility.Visible) ? (UIElement)ContentLogo : (UIElement)TitlePanel;
             
-            double h = IdentityContainer.ActualHeight;
+            // Force measurement ignore parent constraints
+            target.Measure(new Size(850, 200)); 
+            double h = target.DesiredSize.Height;
+
             if (h > 0)
             {
                 TitleShimmer.Height = h;
+                // Lock the container to this height to prevent jumps when shimmers are collapsed
+                IdentityContainer.MinHeight = h;
             }
             else
             {
-                // Logic-based fallback matching XAML dimensions
-                // Logo MaxHeight: 120, Title ~56, SuperTitle + Title ~72
+                // Fallback to logic-based estimates if measurement fails
                 if (ContentLogo.Visibility == Visibility.Visible) TitleShimmer.Height = 120;
                 else TitleShimmer.Height = (SuperTitleText.Visibility == Visibility.Visible) ? 72 : 56;
+                IdentityContainer.MinHeight = TitleShimmer.Height;
             }
             
             TitleShimmer.VerticalAlignment = VerticalAlignment.Bottom;
+        }
+
+        private void SyncMetadataRibbonHeight()
+        {
+            if (MetadataShimmer == null || MetadataPanel == null) return;
+            
+            MetadataPanel.Measure(new Size(850, 40));
+            double h = MetadataPanel.DesiredSize.Height;
+            if (h > 0)
+            {
+                // Sync all shimmer children in the ribbon to match exactly
+                foreach (var child in MetadataShimmer.Children)
+                {
+                    if (child is ShimmerControl sc) sc.Height = (float)h;
+                }
+            }
+            else
+            {
+                // Default 22 matches the individual shimmers in XAML
+                foreach (var child in MetadataShimmer.Children)
+                {
+                    if (child is ShimmerControl sc) sc.Height = 22;
+                }
+            }
         }
 
         private void ApplyTextShadow(TextBlock textBlock)
@@ -4193,9 +4275,18 @@ namespace ModernIPTVPlayer
 
                 if (hasVisibleSources)
                 {
+                    // Ensure ItemsSource is set if it was previously cleared
+                    if (AddonSelectorList != null && AddonSelectorList.ItemsSource == null) AddonSelectorList.ItemsSource = _addonResults;
+                    if (NarrowAddonSelector != null && NarrowAddonSelector.ItemsSource == null) NarrowAddonSelector.ItemsSource = _addonResults;
+
+                    RefreshAllAddonActiveFlags();
+                    SyncAddonSelectionToActive();
+
                     ShowSourcesPanel(true);
                     if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
                     if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
+                    
+                    ScrollToActiveSource();
                     return;
                 }
             }
@@ -4235,17 +4326,23 @@ namespace ModernIPTVPlayer
                     if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
                     if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
 
+                    RefreshAllAddonActiveFlags();
+                    
                     var activeAddon = _addonResults.FirstOrDefault(a => !a.IsLoading && a.Streams != null && a.Streams.Any(s => s.IsActive));
                     var firstAddon = _addonResults.FirstOrDefault(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0);
                     
                     if (activeAddon != null)
                     {
                          AddonSelectorList.SelectedItem = activeAddon;
+                         NarrowAddonSelector.SelectedItem = activeAddon;
                     }
                     else if (firstAddon != null && AddonSelectorList.SelectedItem == null)
                     {
                         AddonSelectorList.SelectedItem = firstAddon;
+                        NarrowAddonSelector.SelectedItem = firstAddon;
                     }
+
+                    ScrollToActiveSource();
 
                     if (autoPlay)
                     {
@@ -4303,8 +4400,12 @@ namespace ModernIPTVPlayer
 
                 System.Diagnostics.Debug.WriteLine($"[Stremio] Fetching sources for {resolvedVideoId} (Original: {videoId}) ({type}) from {addons.Count} addons.");
 
-                // Get Last Played Stream for "Active" Indication
-                string lastStreamUrl = HistoryManager.Instance.GetProgress(resolvedVideoId)?.StreamUrl;
+                // Get Last Played Stream for "Active" Indication (Check current prebuffer first)
+                string lastStreamUrl = _streamUrl;
+                if (string.IsNullOrEmpty(lastStreamUrl))
+                {
+                    lastStreamUrl = HistoryManager.Instance.GetProgress(resolvedVideoId)?.StreamUrl;
+                }
 
                 var tasks = new List<Task>();
                 
@@ -4695,25 +4796,120 @@ namespace ModernIPTVPlayer
                 try
                 {
                     // Allow UI to populate
-                    await Task.Delay(50);
+                    await Task.Delay(100);
                     
                     var list = _isWideModeIndex == 1 ? SourcesListView : NarrowSourcesListView;
                     if (list == null) return;
 
-                    System.Diagnostics.Debug.WriteLine($"[Stremio] ScrollToActiveSource: List={list.Name}, Items={list.Items?.Count}");
+                    // Determine what should be "active"
+                    string activeUrl = _streamUrl;
+                    if (string.IsNullOrEmpty(activeUrl) && !string.IsNullOrEmpty(_currentStremioVideoId))
+                    {
+                        activeUrl = HistoryManager.Instance.GetProgress(_currentStremioVideoId)?.StreamUrl;
+                    }
+
+                    System.Diagnostics.Debug.WriteLine($"[Stremio] ScrollToActiveSource: List={list.Name}, Items={list.Items?.Count}, ActiveUrl={activeUrl ?? "NONE"}");
 
                     if (list.ItemsSource is List<StremioStreamViewModel> streams)
                     {
-                        var active = streams.FirstOrDefault(s => s.IsActive);
-                        System.Diagnostics.Debug.WriteLine($"[Stremio] Active Item: {active?.Title ?? "NULL"}");
-                        if (active != null)
+                        StremioStreamViewModel activeModel = null;
+                        string activeFileName = null;
+                        if (!string.IsNullOrEmpty(activeUrl))
                         {
-                            list.ScrollIntoView(active);
+                            try { activeFileName = System.IO.Path.GetFileName(new Uri(activeUrl).LocalPath); } catch { }
+                        }
+
+                        // Refresh active state for all visible items
+                        foreach (var s in streams)
+                        {
+                            bool isActive = !string.IsNullOrEmpty(activeUrl) && s.Url == activeUrl;
+                            if (!isActive && !string.IsNullOrEmpty(activeUrl) && !string.IsNullOrEmpty(activeFileName))
+                            {
+                                try
+                                {
+                                    string currentFileName = System.IO.Path.GetFileName(new Uri(s.Url).LocalPath);
+                                    if (!string.IsNullOrEmpty(currentFileName) && currentFileName == activeFileName) isActive = true;
+                                }
+                                catch { }
+                            }
+                            
+                            s.IsActive = isActive;
+                            if (isActive) activeModel = s;
+                        }
+
+                        System.Diagnostics.Debug.WriteLine($"[Stremio] Active Item Found: {activeModel?.Title ?? "NULL"}");
+
+                        if (activeModel != null)
+                        {
+                            list.ScrollIntoView(activeModel);
                         }
                     }
                 }
-                catch { }
+                catch (Exception ex) 
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Stremio] ScrollToActiveSource Error: {ex.Message}");
+                }
             });
+        }
+
+        private void RefreshAllAddonActiveFlags()
+        {
+            try
+            {
+                if (_addonResults == null) return;
+
+                string activeUrl = _streamUrl;
+                if (string.IsNullOrEmpty(activeUrl) && !string.IsNullOrEmpty(_currentStremioVideoId))
+                {
+                    activeUrl = HistoryManager.Instance.GetProgress(_currentStremioVideoId)?.StreamUrl;
+                }
+
+                if (string.IsNullOrEmpty(activeUrl)) return;
+
+                string activeFileName = null;
+                try { activeFileName = System.IO.Path.GetFileName(new Uri(activeUrl).LocalPath); } catch { }
+
+                foreach (var addon in _addonResults)
+                {
+                    if (addon.Streams == null) continue;
+                    foreach (var stream in addon.Streams)
+                    {
+                        bool isActive = stream.Url == activeUrl;
+                        if (!isActive && !string.IsNullOrEmpty(activeFileName))
+                        {
+                            try
+                            {
+                                string currentFileName = System.IO.Path.GetFileName(new Uri(stream.Url).LocalPath);
+                                if (!string.IsNullOrEmpty(currentFileName) && currentFileName == activeFileName) isActive = true;
+                            }
+                            catch { }
+                        }
+                        stream.IsActive = isActive;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Stremio] RefreshAllAddonActiveFlags Error: {ex.Message}");
+            }
+        }
+
+        private void SyncAddonSelectionToActive()
+        {
+            try
+            {
+                if (_addonResults == null) return;
+                var activeAddon = _addonResults.FirstOrDefault(a => !a.IsLoading && a.Streams != null && a.Streams.Any(s => s.IsActive));
+                if (activeAddon != null)
+                {
+                    if (AddonSelectorList != null) AddonSelectorList.SelectedItem = activeAddon;
+                    if (NarrowAddonSelector != null) NarrowAddonSelector.SelectedItem = activeAddon;
+                }
+            }
+            catch (Exception ex)
+            {
+                 System.Diagnostics.Debug.WriteLine($"[Stremio] SyncAddonSelectionToActive Error: {ex.Message}");
+            }
         }
 
         private async void SourcesListView_ItemClick(object sender, ItemClickEventArgs e)

@@ -183,8 +183,8 @@
                 </Rectangle.Fill>
             </Rectangle>
 
-            <!-- EXTRA CONTRAST: Diagonal/Localized Grad for Actor Names & Bottom Items -->
-            <Rectangle x:Name="ExtraReadabilityGradient" VerticalAlignment="Bottom" HorizontalAlignment="Left" Width="1100" Height="750" 
+            <!-- EXTRA CONTRAST: Diagonal/Localized Grad for Actor Names & Bottom Items (Stretched to Screen Height) -->
+            <Rectangle x:Name="ExtraReadabilityGradient" VerticalAlignment="Stretch" HorizontalAlignment="Left" Width="1100" 
                        Opacity="0" IsHitTestVisible="False" Margin="-50,0,0,-50">
                 <Rectangle.Fill>
                     <LinearGradientBrush StartPoint="0,1" EndPoint="0.7,0.3">
@@ -354,10 +354,14 @@
                 </StackPanel.RenderTransform>
                  
                   <!-- IDENTITY AREA (Logo or Title) - Unified Grid to prevent jumps -->
-                  <Grid x:Name="IdentityContainer" MaxWidth="1000" HorizontalAlignment="Left" Margin="0,0,0,16">
+                  <!-- VerticalAlignment="Bottom" on children and container ensures stable baseline -->
+                  <Grid x:Name="IdentityContainer" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="0,0,0,16" Background="Transparent">
                       <!-- LOGO -->
                       <Image x:Name="ContentLogo" Stretch="Uniform" MaxHeight="120" MaxWidth="350" 
-                             HorizontalAlignment="Left" Visibility="Collapsed" Opacity="0" />
+                             HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                             Visibility="Collapsed" Opacity="0" 
+                             ImageOpened="ContentLogo_ImageOpened"
+                             ImageFailed="ContentLogo_ImageFailed" />
 
                       <!-- TITLE PANEL -->
                       <StackPanel x:Name="TitlePanel" Opacity="0" VerticalAlignment="Bottom">
@@ -373,9 +377,11 @@
                           </Grid>
                       </StackPanel>
                      
-                      <!-- SHARED SHIMMER -->
-                      <ctl:ShimmerControl x:Name="TitleShimmer" Width="400" Height="60" CornerRadius="8" 
-                                          HorizontalAlignment="Left" VerticalAlignment="Bottom"/>
+                      <!-- SHARED SHIMMER (Wrapped in a Grid to reserve bottom-aligned space) -->
+                      <Grid x:Name="TitleShimmerContainer" VerticalAlignment="Bottom" HorizontalAlignment="Left">
+                          <ctl:ShimmerControl x:Name="TitleShimmer" Width="400" Height="56" CornerRadius="8" 
+                                              HorizontalAlignment="Left" VerticalAlignment="Bottom"/>
+                      </Grid>
                   </Grid>
 
                   <!-- METADATA RIBBON (Unified for space efficiency) -->
