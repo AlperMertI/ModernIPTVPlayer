@@ -171,8 +171,10 @@ namespace ModernIPTVPlayer
                     _isWideModeIndex = newState;
                     UpdateLayoutState(isWide);
                 }
-                else if (isWide)
+                
+                if (isWide)
                 {
+                    ApplyAdaptiveScaling(width, height);
                     SyncWideHeights();
                 }
             }
@@ -301,6 +303,90 @@ namespace ModernIPTVPlayer
                 }
             }
             System.Diagnostics.Debug.WriteLine($"[LayoutDebug] SyncWideHeights: Grid={targetHeight}, Panel={EpisodesPanel?.Height}, ListMax={EpisodesListView?.MaxHeight}");
+        }
+
+        private void ApplyAdaptiveScaling(double width, double height)
+        {
+            try
+            {
+                // 1. Calculate Scaling Factors
+                // Baseline: 1200w x 900h
+                double widthFactor = Math.Clamp(width / 1200.0, 0.7, 1.3);
+                double heightFactor = Math.Clamp(height / 900.0, 0.7, 1.2);
+                
+                // globalScale provides the primary "fitting" to the viewport (2D)
+                double globalScale = Math.Min(widthFactor, heightFactor);
+                globalScale = Math.Clamp(globalScale, 0.65, 1.1);
+
+                if (InfoColumnScale != null)
+                {
+                    InfoColumnScale.ScaleX = InfoColumnScale.ScaleY = globalScale;
+                }
+
+                // 2. Title & Text Scaling (Keep font sizes mostly stable, let ScaleTransform handle fitting)
+                // We still use width-based scaling slightly for a premium feel on wide monitors
+                double textFactor = Math.Clamp(width / 1400.0, 0.9, 1.2); 
+                
+                if (TitleText != null)
+                {
+                    TitleText.FontSize = 48 * textFactor;
+                    TitleText.LineHeight = TitleText.FontSize * 1.15;
+                }
+
+                if (SuperTitleText != null)
+                {
+                    SuperTitleText.FontSize = 14 * textFactor;
+                }
+
+                if (OverviewText != null)
+                {
+                    OverviewText.FontSize = 16; // Stable base, scaled by transform
+                    OverviewText.LineHeight = 26;
+                }
+
+                // 3. Identity & Ribbon Scaling (Already covered by InfoColumnScale, but MaxHeight helps)
+                if (ContentLogo != null)
+                {
+                    ContentLogo.MaxHeight = 120; 
+                    ContentLogo.MaxWidth = 350;
+                }
+
+                // 4. Cast Section Scaling (Aggressive shrink for context)
+                // This is IN ADDITION to globalScale if narrow
+                double castFactor = (width < 1100) ? Math.Clamp(width / 1100.0, 0.75, 1.0) : 1.0;
+                
+                if (DirectorSectionScale != null) { DirectorSectionScale.ScaleX = castFactor; DirectorSectionScale.ScaleY = castFactor; }
+                if (CastSectionScale != null) { CastSectionScale.ScaleX = castFactor; CastSectionScale.ScaleY = castFactor; }
+                if (NarrowDirectorSectionScale != null) { NarrowDirectorSectionScale.ScaleX = castFactor; NarrowDirectorSectionScale.ScaleY = castFactor; }
+                if (NarrowCastSectionScale != null) { NarrowCastSectionScale.ScaleX = castFactor; NarrowCastSectionScale.ScaleY = castFactor; }
+
+                // 5. Source Panel Scaling (Desktop)
+                if (SourcesPanel != null)
+                {
+                    // Scale base width 450 using factor (clamped)
+                    SourcesPanel.Width = 450 * Math.Clamp(width / 1300.0, 0.8, 1.2);
+                }
+
+                // 6. Margin/Padding Scaling (Breathing Room)
+                if (ContentGrid != null)
+                {
+                    double sidePadding = Math.Clamp(60 * (width / 1200.0), 40, 100);
+                    ContentGrid.Padding = new Thickness(sidePadding, 0, 20, 0);
+                }
+
+                if (InfoColumn != null)
+                {
+                    double bottomMargin = Math.Clamp(40 * globalScale, 20, 80);
+                    InfoColumn.Margin = new Thickness(0, 0, 40, bottomMargin);
+                }
+
+                // 6. Shimmer stability
+                AdjustTitleShimmer();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LayoutDebug] Scaling Error: {ex.Message}");
+            }
         }
 
         private void RestoreUIVisibility()
@@ -881,17 +967,25 @@ namespace ModernIPTVPlayer
             TitleText.Text = unified.Title;
             StickyTitle.Text = unified.Title;
             
+            // Premium Readability: Apply DropShadow to text elements
+            ApplyTextShadow(TitleText);
+            ApplyTextShadow(OverviewText);
+            ApplyTextShadow(SuperTitleText);
+
             if (!string.IsNullOrWhiteSpace(unified.LogoUrl))
             {
                 ContentLogo.Source = new BitmapImage(new Uri(unified.LogoUrl));
                 ContentLogo.Visibility = Visibility.Visible;
                 ContentLogo.Opacity = 1;
                 TitlePanel.Visibility = Visibility.Collapsed;
+                TitlePanel.Opacity = 0;
             }
             else
             {
                 ContentLogo.Visibility = Visibility.Collapsed;
+                ContentLogo.Opacity = 0;
                 TitlePanel.Visibility = Visibility.Visible;
+                TitlePanel.Opacity = 1;
             }
             
             // [FEATURE] Dual Title (SuperTitle): Show secondary title (SubTitle or Original) if available and different
@@ -935,7 +1029,7 @@ namespace ModernIPTVPlayer
             }
 
             OverviewText.Text = !string.IsNullOrEmpty(unified.Overview) ? unified.Overview : "Açıklama mevcut değil.";
-            YearText.Text = unified.Year?.Split('–')[0] ?? "";
+            YearText.Text = unified.Year?.Split(new char[] { '-', '–' })[0] ?? "";
             GenresText.Text = unified.Genres;
             
             if (unified.IsSeries)
@@ -1119,6 +1213,7 @@ namespace ModernIPTVPlayer
                     else
                     {
                         DirectorSection.Visibility = Visibility.Collapsed;
+                        DirectorShimmer.Visibility = Visibility.Collapsed;
                         if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = Visibility.Collapsed;
                         AdjustDirectorShimmer(0);
                     }
@@ -1346,9 +1441,10 @@ namespace ModernIPTVPlayer
             BadgeSDR.Visibility = Visibility.Collapsed;
             BadgeCodecContainer.Visibility = Visibility.Collapsed;
             if (TechBadgesContent != null) TechBadgesContent.Visibility = Visibility.Collapsed;
-            if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
+            if (MetadataRibbon != null) MetadataRibbon.Opacity = 0;
+            if (MetadataSeparator != null) MetadataSeparator.Visibility = Visibility.Collapsed;
             if (MetadataShimmer != null) MetadataShimmer.Visibility = Visibility.Collapsed;
-            if (MetadataPanel != null) MetadataPanel.Margin = new Thickness(0);
+            if (MetadataPanel != null) MetadataPanel.Opacity = 0;
 
             // Shimmer resets
             TitleShimmer.Visibility = Visibility.Collapsed;
@@ -1365,23 +1461,20 @@ namespace ModernIPTVPlayer
             if (isLoading)
             {
                 // Reset Opacities for Loading
-                TitlePanel.Opacity = 0;
-                MetadataPanel.Opacity = 0;
-                ActionBarPanel.Opacity = 0;
-                OverviewPanel.Opacity = 0;
-                CastSection.Opacity = 0;
+                if (IdentityContainer != null) ElementCompositionPreview.GetElementVisual(IdentityContainer).Opacity = 0;
+                if (MetadataRibbon != null) MetadataRibbon.Opacity = 0;
+                if (ActionBarPanel != null) ActionBarPanel.Opacity = 0;
+                if (OverviewPanel != null) OverviewPanel.Opacity = 0;
+                if (CastSection != null) CastSection.Opacity = 0;
+                if (DirectorSection != null) DirectorSection.Opacity = 0;
 
-                // Show Shimmers & Reset Opacities
+                // Show basic shimmers immediately
                 TitleShimmer.Visibility = Visibility.Visible;
-                // Note: MetadataShimmer is managed by SetBadgeLoadingState, not here
+                AdjustTitleShimmer();
+                
+                MetadataShimmer.Visibility = Visibility.Visible;
                 ActionBarShimmer.Visibility = Visibility.Visible;
                 OverviewShimmer.Visibility = Visibility.Visible;
-                CastShimmer.Visibility = Visibility.Visible;
-
-                ElementCompositionPreview.GetElementVisual(TitleShimmer).Opacity = 1f;
-                ElementCompositionPreview.GetElementVisual(ActionBarShimmer).Opacity = 1f;
-                ElementCompositionPreview.GetElementVisual(OverviewShimmer).Opacity = 1f;
-                ElementCompositionPreview.GetElementVisual(CastShimmer).Opacity = 1f;
 
                 TechBadgesContent.Visibility = Visibility.Collapsed;
                 ElementCompositionPreview.GetElementVisual(TechBadgesContent).Opacity = 0f;
@@ -1426,17 +1519,15 @@ namespace ModernIPTVPlayer
                 batch.End();
             }
 
-            // Sequence: Metadata(Year/Runtime) -> Title -> Actions -> Overview -> Cast
-            // Note: MetadataShimmer is now decoupled and handled by UpdateTechnicalBadgesAsync
-            var mFade = _compositor.CreateScalarKeyFrameAnimation();
-            mFade.InsertKeyFrame(0f, 0f); mFade.InsertKeyFrame(1f, 1f);
-            mFade.Duration = TimeSpan.FromMilliseconds(400);
-            ElementCompositionPreview.GetElementVisual(MetadataPanel).StartAnimation("Opacity", mFade);
-            MetadataPanel.Opacity = 1;
+            // Sequence: Identity -> Metadata -> Actions -> Overview -> Cast
+            AnimatePair(IdentityContainer, TitleShimmer, 50);
+            
+            AnimatePair(MetadataPanel, MetadataShimmer, 100);
+            MetadataRibbon.Opacity = 1;
 
-            AnimatePair(TitlePanel, TitleShimmer, 50);
-            AnimatePair(ActionBarPanel, ActionBarShimmer, 100);
-            AnimatePair(OverviewPanel, OverviewShimmer, 150);
+            AnimatePair(ActionBarPanel, ActionBarShimmer, 150);
+            AnimatePair(OverviewPanel, OverviewShimmer, 200);
+
 
             // Sync badge section alignment with current badge state
             UpdateTechnicalSectionVisibility(HasVisibleBadges());
@@ -1462,25 +1553,83 @@ namespace ModernIPTVPlayer
         
         private void AdjustTitleShimmer()
         {
-            if (TitleShimmer == null || TitlePanel == null) return;
+            if (TitleShimmer == null || IdentityContainer == null) return;
             
-            // Force layout update to get real dimensions including potential SuperTitle
-            TitlePanel.UpdateLayout();
+            // IdentityContainer height is the anchor for stability
+            IdentityContainer.UpdateLayout();
             
-            double h = TitlePanel.ActualHeight;
+            double h = IdentityContainer.ActualHeight;
             if (h > 0)
             {
                 TitleShimmer.Height = h;
-                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] TitleShimmer Height adjusted to ActualHeight: {h}");
             }
             else
             {
-                // Fallback for Title only
-                TitleShimmer.Height = (SuperTitleText.Visibility == Visibility.Visible) ? 72 : 56;
+                // Logic-based fallback matching XAML dimensions
+                // Logo MaxHeight: 120, Title ~56, SuperTitle + Title ~72
+                if (ContentLogo.Visibility == Visibility.Visible) TitleShimmer.Height = 120;
+                else TitleShimmer.Height = (SuperTitleText.Visibility == Visibility.Visible) ? 72 : 56;
             }
             
-            // Ensure shimmer follows the same alignment logic to avoid empty spacing artifacts
-            TitleShimmer.VerticalAlignment = VerticalAlignment.Top;
+            TitleShimmer.VerticalAlignment = VerticalAlignment.Bottom;
+        }
+
+        private void ApplyTextShadow(TextBlock textBlock)
+        {
+            if (textBlock == null) return;
+            
+            // Premium text shadows in WinUI are best handled by placing a shadow host BEHIND the text.
+            // If the parent of the textBlock is a Grid, we can insert a shadow layer.
+            if (VisualTreeHelper.GetParent(textBlock) is Grid parent)
+            {
+                var shadowHost = new Border { Background = new SolidColorBrush(Colors.Transparent) };
+                Grid.SetRow(shadowHost, Grid.GetRow(textBlock));
+                Grid.SetColumn(shadowHost, Grid.GetColumn(textBlock));
+                Grid.SetRowSpan(shadowHost, Grid.GetRowSpan(textBlock));
+                Grid.SetColumnSpan(shadowHost, Grid.GetColumnSpan(textBlock));
+                
+                // Insert at index 0 (BEHIND everything else)
+                parent.Children.Insert(0, shadowHost);
+
+                var visual = ElementCompositionPreview.GetElementVisual(shadowHost);
+                var compositor = visual.Compositor;
+
+                var shadow = compositor.CreateDropShadow();
+                shadow.BlurRadius = 8.0f; // Softened
+                shadow.Color = Color.FromArgb(110, 0, 0, 0); // Lighter aura (approx 43%)
+                shadow.Offset = new System.Numerics.Vector3(0, 1.5f, 0);
+
+                var sprite = compositor.CreateSpriteVisual();
+                sprite.Shadow = shadow;
+                
+                // Link shadow size to textblock size for perfect tracking
+                var textVisual = ElementCompositionPreview.GetElementVisual(textBlock);
+                var bindSizeAnimation = compositor.CreateExpressionAnimation("text.Size");
+                bindSizeAnimation.SetReferenceParameter("text", textVisual);
+                sprite.StartAnimation("Size", bindSizeAnimation);
+                
+                // Also track position/offset if needed, but since it's in the same Grid cell it should align
+                ElementCompositionPreview.SetElementChildVisual(shadowHost, sprite);
+            }
+            else
+            {
+                // Fallback for non-grid parents (less ideal but still functional)
+                var visual = ElementCompositionPreview.GetElementVisual(textBlock);
+                var shadow = visual.Compositor.CreateDropShadow();
+                shadow.BlurRadius = 6.0f;
+                shadow.Color = Color.FromArgb(120, 0, 0, 0);
+                shadow.Offset = new System.Numerics.Vector3(0, 1, 0);
+
+                var sprite = visual.Compositor.CreateSpriteVisual();
+                sprite.Shadow = shadow;
+                
+                var bindSizeAnimation = visual.Compositor.CreateExpressionAnimation("visual.Size");
+                bindSizeAnimation.SetReferenceParameter("visual", visual);
+                sprite.StartAnimation("Size", bindSizeAnimation);
+
+                // This method can sometimes put it in front if the composition stack is complex.
+                ElementCompositionPreview.SetElementChildVisual(textBlock, sprite);
+            }
         }
 
         private void AdjustOverviewShimmer(string text)
@@ -1567,20 +1716,16 @@ namespace ModernIPTVPlayer
 
             CastShimmer.Visibility = Visibility.Visible;
             
-            // The first child is the "Oyuncular" text header shimmer
-            // We want to keep that, and specificially rebuild the HORIZONTAL stack panel (index 1)
             if (CastShimmer.Children.Count >= 2 && CastShimmer.Children[1] is StackPanel horizontalPanel)
             {
                 horizontalPanel.Children.Clear();
-                
-                // Limit to 5 placeholders max (screen width)
-                int displayCount = Math.Min(count, 5); 
+                int displayCount = Math.Min(count, 8); 
 
                 for (int i = 0; i < displayCount; i++)
                 {
-                    var itemStack = new StackPanel { Spacing = 8 };
-                    itemStack.Children.Add(new ShimmerControl { Width = 110, Height = 140, CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Left });
-                    itemStack.Children.Add(new ShimmerControl { Width = 110, Height = 15, CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left });
+                    var itemStack = new StackPanel { Spacing = 6 };
+                    itemStack.Children.Add(new ShimmerControl { Width = 80, Height = 100, CornerRadius = new CornerRadius(6), HorizontalAlignment = HorizontalAlignment.Left });
+                    itemStack.Children.Add(new ShimmerControl { Width = 80, Height = 12, CornerRadius = new CornerRadius(3), HorizontalAlignment = HorizontalAlignment.Left });
                     
                     horizontalPanel.Children.Add(itemStack);
                 }
@@ -1602,17 +1747,32 @@ namespace ModernIPTVPlayer
             if (DirectorShimmer.Children.Count >= 2 && DirectorShimmer.Children[1] is StackPanel horizontalPanel)
             {
                 horizontalPanel.Children.Clear();
-                int displayCount = Math.Min(count, 5); 
+                int displayCount = Math.Min(count, 4); 
 
                 for (int i = 0; i < displayCount; i++)
                 {
-                    var itemStack = new StackPanel { Spacing = 8 };
-                    itemStack.Children.Add(new ShimmerControl { Width = 110, Height = 140, CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Left });
-                    itemStack.Children.Add(new ShimmerControl { Width = 110, Height = 15, CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left });
+                    var itemStack = new StackPanel { Spacing = 6 };
+                    itemStack.Children.Add(new ShimmerControl { Width = 80, Height = 100, CornerRadius = new CornerRadius(6), HorizontalAlignment = HorizontalAlignment.Left });
+                    itemStack.Children.Add(new ShimmerControl { Width = 80, Height = 12, CornerRadius = new CornerRadius(3), HorizontalAlignment = HorizontalAlignment.Left });
+                    
                     horizontalPanel.Children.Add(itemStack);
                 }
             }
         }
+
+        private void UpdateTechnicalSectionVisibility(bool hasExtra)
+        {
+            if (MetadataRibbon == null || MetadataSeparator == null) return;
+
+            TechBadgesContent.Visibility = hasExtra ? Visibility.Visible : Visibility.Collapsed;
+            MetadataSeparator.Visibility = hasExtra ? Visibility.Visible : Visibility.Collapsed;
+            
+            if (hasExtra)
+            {
+                ElementCompositionPreview.GetElementVisual(TechBadgesContent).Opacity = 1f;
+            }
+        }
+
 
 
 
@@ -4873,7 +5033,7 @@ namespace ModernIPTVPlayer
 
             if (isLoading)
             {
-                if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
+                if (MetadataRibbon != null) MetadataRibbon.Visibility = Visibility.Visible;
                 MetadataShimmer.Width = double.NaN;
                 MetadataShimmer.Visibility = Visibility.Visible;
                 ElementCompositionPreview.GetElementVisual(MetadataShimmer).Opacity = 1f;
@@ -4900,7 +5060,7 @@ namespace ModernIPTVPlayer
                     visContent.StartAnimation("Opacity", fadeIn);
                     TechBadgesContent.Opacity = 1;
 
-                    if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
+                    if (MetadataRibbon != null) MetadataRibbon.Visibility = Visibility.Visible;
                 }
 
                 // Fade Out Shimmer
@@ -5062,12 +5222,12 @@ namespace ModernIPTVPlayer
                         if (hasVisibleBadges && shimmerWidth > 0 && TechBadgesContent.ActualWidth < shimmerWidth)
                         {
                             TechBadgesContent.MinWidth = shimmerWidth;
-                            if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
+                            if (MetadataRibbon != null) MetadataRibbon.Visibility = Visibility.Visible;
                         }
                         else
                         {
                             TechBadgesContent.MinWidth = 0; // Reset
-                            if (TechBadgeSection != null) TechBadgeSection.Visibility = hasVisibleBadges ? Visibility.Visible : Visibility.Collapsed;
+                            if (MetadataRibbon != null) MetadataRibbon.Visibility = hasVisibleBadges ? Visibility.Visible : Visibility.Collapsed;
                         }
                         
                         // Sync Shimmer to Content only if Content is WIDER (to cover it)
@@ -5157,26 +5317,6 @@ namespace ModernIPTVPlayer
             BadgeSDR.Visibility == Visibility.Visible ||
             BadgeCodecContainer.Visibility == Visibility.Visible;
 
-        /// <summary>
-        /// Manages TechBadgeSection visibility and MetadataPanel margin based on badge presence.
-        /// When badges are visible, adds a 16px left gap before MetadataPanel.
-        /// When no badges, collapses the entire section and resets margin to 0.
-        /// </summary>
-        private void UpdateTechnicalSectionVisibility(bool hasBadges)
-        {
-            if (hasBadges)
-            {
-                if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Visible;
-                if (MetadataPanel != null) MetadataPanel.Margin = new Thickness(16, 0, 0, 0);
-            }
-            else
-            {
-                if (MetadataShimmer != null) MetadataShimmer.Visibility = Visibility.Collapsed;
-                if (TechBadgesContent != null) TechBadgesContent.Visibility = Visibility.Collapsed;
-                if (TechBadgeSection != null) TechBadgeSection.Visibility = Visibility.Collapsed;
-                if (MetadataPanel != null) MetadataPanel.Margin = new Thickness(0);
-            }
-        }
 
         private void AnimateOpacity(UIElement element, double toOpacity, TimeSpan duration)
         {
@@ -6232,6 +6372,49 @@ namespace ModernIPTVPlayer
             return null;
         }
         #endregion
+        private void CastItem_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is FrameworkElement element)
+            {
+                // CRITICAL: Set ZIndex on the actual ListViewItem container to prevent sibling clipping
+                var container = FindParent<ListViewItem>(element);
+                if (container != null) Canvas.SetZIndex(container, 100);
+                
+                var visual = ElementCompositionPreview.GetElementVisual(element);
+                var compositor = visual.Compositor;
+
+                // Ensure CenterPoint is set
+                visual.CenterPoint = new System.Numerics.Vector3((float)element.ActualWidth / 2, (float)element.ActualHeight / 2, 0);
+
+                var scaleAnim = compositor.CreateVector3KeyFrameAnimation();
+                scaleAnim.InsertKeyFrame(1f, new System.Numerics.Vector3(1.08f, 1.08f, 1.0f));
+                scaleAnim.Duration = TimeSpan.FromMilliseconds(250);
+                visual.StartAnimation("Scale", scaleAnim);
+            }
+        }
+
+        private void CastItem_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is FrameworkElement element)
+            {
+                var container = FindParent<ListViewItem>(element);
+                if (container != null) Canvas.SetZIndex(container, 0);
+                
+                var visual = ElementCompositionPreview.GetElementVisual(element);
+                var scaleAnim = visual.Compositor.CreateVector3KeyFrameAnimation();
+                scaleAnim.InsertKeyFrame(1f, new System.Numerics.Vector3(1.0f, 1.0f, 1.0f));
+                scaleAnim.Duration = TimeSpan.FromMilliseconds(200);
+                visual.StartAnimation("Scale", scaleAnim);
+            }
+        }
+
+        private T FindParent<T>(DependencyObject child) where T : DependencyObject
+        {
+            DependencyObject parentObject = VisualTreeHelper.GetParent(child);
+            if (parentObject == null) return null;
+            if (parentObject is T parent) return parent;
+            return FindParent<T>(parentObject);
+        }
     }
 }
 
