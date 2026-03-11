@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -42,6 +42,15 @@ namespace ModernIPTVPlayer
         public App()
         {
             this.InitializeComponent();
+
+            // [LOGGING] Capture all Debug.WriteLine to a file for easier analysis
+            try
+            {
+                var logPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ModernIPTV_Debug.log");
+                System.Diagnostics.Debug.WriteLine($"[App] Initializing File Logger at: {logPath}");
+                System.Diagnostics.Trace.Listeners.Add(new ModernIPTVPlayer.Services.FileLoggerListener(logPath));
+            }
+            catch { }
 
             // ESKİ KODUNUZU (Sadece Debugger.Break() yapan) YORUMA ALIN VEYA SİLİN:
             // UnhandledException += (sender, e) =>

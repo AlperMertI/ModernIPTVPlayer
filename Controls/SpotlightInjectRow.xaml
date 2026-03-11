@@ -60,25 +60,6 @@
                 <!-- Image Fallback -->
                 <Image x:Name="FallbackImage" Stretch="UniformToFill" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
 
-                <!-- Gradients for Text Legibility -->
-                <Border IsHitTestVisible="False">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
-                            <GradientStop Color="#E6000000" Offset="0"/>
-                            <GradientStop Color="#99000000" Offset="0.4"/>
-                            <GradientStop Color="Transparent" Offset="0.8"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
-                <Border IsHitTestVisible="False">
-                    <Border.Background>
-                        <LinearGradientBrush StartPoint="0,1" EndPoint="0,0">
-                            <GradientStop Color="#B3000000" Offset="0"/>
-                            <GradientStop Color="Transparent" Offset="0.3"/>
-                        </LinearGradientBrush>
-                    </Border.Background>
-                </Border>
-
                 <!-- WebView for Video -->
                 <Grid x:Name="VideoContainer" Opacity="0" IsHitTestVisible="False" />
 

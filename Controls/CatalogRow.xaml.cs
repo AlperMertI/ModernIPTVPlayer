@@ -95,8 +95,8 @@ namespace ModernIPTVPlayer.Controls
 
 
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> ItemClicked;
-        public event EventHandler<PosterCard> HoverStarted;
-        public event EventHandler<PosterCard> HoverEnded;
+        public event EventHandler<FrameworkElement> HoverStarted;
+        public event EventHandler<FrameworkElement> HoverEnded;
         public event EventHandler ScrollStarted;
         public event EventHandler ScrollEnded;
         public event EventHandler LoadMoreAction;
@@ -144,7 +144,7 @@ namespace ModernIPTVPlayer.Controls
 
         private void PosterCard_HoverStarted(object sender, EventArgs e)
         {
-            if (sender is PosterCard card)
+            if (sender is FrameworkElement card)
             {
                 HoverStarted?.Invoke(this, card);
             }
@@ -152,11 +152,14 @@ namespace ModernIPTVPlayer.Controls
 
         private void PosterCard_HoverEnded(object sender, EventArgs e)
         {
-            if (sender is PosterCard card)
+            if (sender is FrameworkElement card)
             {
                 HoverEnded?.Invoke(this, card);
             }
         }
+        
+        private void LandscapeCard_HoverStarted(object sender, EventArgs e) => PosterCard_HoverStarted(sender, e);
+        private void LandscapeCard_HoverEnded(object sender, EventArgs e) => PosterCard_HoverEnded(sender, e);
 
         // ==========================================
         // SCROLL & DRAG LOGIC

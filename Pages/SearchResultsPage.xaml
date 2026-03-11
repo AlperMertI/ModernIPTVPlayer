@@ -13,12 +13,12 @@
     <Page.Resources>
         <!-- Grid Panel Template -->
         <ItemsPanelTemplate x:Key="SearchGridPanelTemplate">
-            <ItemsWrapGrid Orientation="Horizontal" HorizontalAlignment="Left"/>
+            <ItemsWrapGrid Orientation="Horizontal" HorizontalAlignment="Center"/>
         </ItemsPanelTemplate>
 
         <!-- Result Item Template -->
         <DataTemplate x:Key="SearchResultTemplate" x:DataType="models:IMediaStream">
-            <Grid Width="160" Margin="0,0,12,24">
+            <Grid Width="160" Margin="6,0,6,24">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="240"/> <!-- Poster -->
                     <RowDefinition Height="Auto"/> <!-- Meta -->

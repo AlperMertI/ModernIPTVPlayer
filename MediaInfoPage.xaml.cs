@@ -48,6 +48,7 @@ namespace ModernIPTVPlayer
         public ObservableCollection<SeasonItem> Seasons { get; private set; } = new();
         public ObservableCollection<EpisodeItem> CurrentEpisodes { get; private set; } = new();
         public ObservableCollection<CastItem> CastList { get; private set; } = new();
+        public ObservableCollection<CastItem> DirectorList { get; private set; } = new();
 
         private EpisodeItem _selectedEpisode;
         private SeasonItem _selectedSeason;
@@ -78,6 +79,12 @@ namespace ModernIPTVPlayer
         private const double TrailerDefaultHeight = 562;
         private CancellationTokenSource _trailerCts;
 
+        // Mouse Drag-to-Scroll State
+        private bool _isMainDragging = false;
+        private Windows.Foundation.Point _lastMainPointerPos;
+        private bool _isCastDragging = false;
+        private Windows.Foundation.Point _lastCastPointerPos;
+
         public MediaInfoPage()
         {
             this.InitializeComponent();
@@ -102,6 +109,20 @@ namespace ModernIPTVPlayer
             System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Constructor completed.");
             this.NavigationCacheMode = NavigationCacheMode.Required;
             SetupProfessionalAnimations();
+
+            // Robust Drag-to-Scroll Registration (Vertical)
+            RootScrollViewer.AddHandler(PointerPressedEvent, new PointerEventHandler(OnMainPointerPressed), true);
+            RootScrollViewer.AddHandler(PointerMovedEvent, new PointerEventHandler(OnMainPointerMoved), true);
+            RootScrollViewer.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnMainPointerReleased), true);
+            RootScrollViewer.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnMainPointerReleased), true);
+            RootScrollViewer.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnMainPointerReleased), true);
+
+            // Robust Drag-to-Scroll Registration (Horizontal - Cast)
+            CastListView.AddHandler(PointerPressedEvent, new PointerEventHandler(OnCastPointerPressed), true);
+            CastListView.AddHandler(PointerMovedEvent, new PointerEventHandler(OnCastPointerMoved), true);
+            CastListView.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnCastPointerReleased), true);
+            CastListView.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnCastPointerReleased), true);
+            CastListView.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnCastPointerReleased), true);
         }
 
         private int _isWideModeIndex = -1; // -1: undefined, 0: narrow, 1: wide
@@ -387,7 +408,10 @@ namespace ModernIPTVPlayer
 
                     if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Collapsed;
                     if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
+                    if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = Visibility.Collapsed;
+                    
                     if (CastSection != null) CastSection.Visibility = (CastList != null && CastList.Count > 0) ? Visibility.Visible : Visibility.Collapsed;
+                    if (DirectorSection != null) DirectorSection.Visibility = (DirectorList != null && DirectorList.Count > 0) ? Visibility.Visible : Visibility.Collapsed;
                 }
                 else
                 {
@@ -414,13 +438,15 @@ namespace ModernIPTVPlayer
                     
                     if (isSeries)
                     {
-                        if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Visible;
-                        if (NarrowCastSection != null) NarrowCastSection.Visibility = (CastList != null && CastList.Count > 0) ? Visibility.Visible : Visibility.Collapsed;
+                         if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Visible;
+                         if (NarrowCastSection != null) NarrowCastSection.Visibility = (CastList != null && CastList.Count > 0) ? Visibility.Visible : Visibility.Collapsed;
+                         if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = (DirectorList != null && DirectorList.Count > 0) ? Visibility.Visible : Visibility.Collapsed;
                     }
                     else
                     {
                          if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Collapsed;
                          if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
+                         if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = Visibility.Collapsed;
                     }
 
                     // Handle sources visibility in Narrow mode
@@ -431,7 +457,8 @@ namespace ModernIPTVPlayer
                         if (NarrowEpisodesSection != null) NarrowEpisodesSection.Visibility = Visibility.Collapsed;
                     }
 
-                    if (CastSection != null) CastSection.Visibility = Visibility.Collapsed;
+                     if (CastSection != null) CastSection.Visibility = Visibility.Collapsed;
+                     if (DirectorSection != null) DirectorSection.Visibility = Visibility.Collapsed;
                 }
                 
                 // Final Check after a short delay to allow layout to settle
@@ -595,10 +622,14 @@ namespace ModernIPTVPlayer
                         else if (!string.IsNullOrEmpty(args.Stream?.PosterUrl))
                             seedUrl = args.Stream.PosterUrl;
 
-                        if (!string.IsNullOrEmpty(seedUrl))
+                        if (!string.IsNullOrEmpty(seedUrl) && !ImageHelper.IsPlaceholder(seedUrl))
                         {
                             HeroImage.Source = new BitmapImage(new Uri(seedUrl));
                             HeroImage.Opacity = 1;
+                        }
+                        else if (!string.IsNullOrEmpty(seedUrl))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Seed URL Filtered (Placeholder): {seedUrl}");
                         }
                     }
                     else
@@ -850,6 +881,19 @@ namespace ModernIPTVPlayer
             TitleText.Text = unified.Title;
             StickyTitle.Text = unified.Title;
             
+            if (!string.IsNullOrWhiteSpace(unified.LogoUrl))
+            {
+                ContentLogo.Source = new BitmapImage(new Uri(unified.LogoUrl));
+                ContentLogo.Visibility = Visibility.Visible;
+                ContentLogo.Opacity = 1;
+                TitlePanel.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                ContentLogo.Visibility = Visibility.Collapsed;
+                TitlePanel.Visibility = Visibility.Visible;
+            }
+            
             // [FEATURE] Dual Title (SuperTitle): Show secondary title (SubTitle or Original) if available and different
             if (string.IsNullOrWhiteSpace(unified.SubTitle) &&
                 item is Models.Stremio.StremioMediaStream stremioForSubtitle &&
@@ -959,8 +1003,25 @@ namespace ModernIPTVPlayer
             try
             {
                 CastList.Clear();
-                if (unified.TmdbInfo != null && AppSettings.IsTmdbEnabled)
+                
+                // 1. Check if Catalog/Unified already provided cast with portraits
+                if (unified.Cast != null && unified.Cast.Count > 0 && unified.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl)))
                 {
+                    System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Using Cast from Catalog/Unified (Already has portraits).");
+                    foreach (var c in unified.Cast.Take(10))
+                    {
+                        CastList.Add(new CastItem 
+                        { 
+                            Name = c.Name, 
+                            Character = c.Character, 
+                            FullProfileUrl = c.ProfileUrl 
+                        });
+                    }
+                }
+                // 2. Otherwise fallback to TMDB fetch
+                else if (unified.TmdbInfo != null && AppSettings.IsTmdbEnabled)
+                {
+                    System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Catalog cast incomplete, fetching from TMDB.");
                     var credits = await TmdbHelper.GetCreditsAsync(unified.TmdbInfo.Id, unified.IsSeries);
                     if (credits?.Cast != null)
                     {
@@ -971,12 +1032,17 @@ namespace ModernIPTVPlayer
                     }
                 }
                 
-                // FALLBACK: Use Stremio Cast (Names only) if TMDB didn't provide any
+                // 3. FINAL FALLBACK: Names only from Stremio if TMDB also failed
                 if (CastList.Count == 0 && unified.Cast != null && unified.Cast.Count > 0)
                 {
-                    foreach (var name in unified.Cast.Take(10))
+                    foreach (var c in unified.Cast.Take(10))
                     {
-                        CastList.Add(new CastItem { Name = name, Character = "", FullProfileUrl = null });
+                        CastList.Add(new CastItem 
+                        { 
+                            Name = c.Name, 
+                            Character = c.Character ?? "", 
+                            FullProfileUrl = null 
+                        });
                     }
                 }
                 
@@ -993,6 +1059,74 @@ namespace ModernIPTVPlayer
                     CastSection.Visibility = Visibility.Collapsed;
                     if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
                     AdjustCastShimmer(0);
+                }
+
+                // Fetch Directors
+                try
+                {
+                    DirectorList.Clear();
+                    
+                    // 1. Try metadata-unified directors (might have portraits from catalog)
+                    if (unified.Directors != null && unified.Directors.Count > 0)
+                    {
+                        foreach (var d in unified.Directors.Take(5))
+                        {
+                            DirectorList.Add(new CastItem 
+                            { 
+                                Name = d.Name, 
+                                Character = "Yönetmen", 
+                                FullProfileUrl = d.ProfileUrl 
+                            });
+                        }
+                    }
+
+                    // 2. Enrichment from TMDB if images are missing
+                    bool needsDirectorImages = DirectorList.Any(d => string.IsNullOrEmpty(d.FullProfileUrl));
+                    if (needsDirectorImages && unified.TmdbInfo != null && AppSettings.IsTmdbEnabled)
+                    {
+                        var credits = await TmdbHelper.GetCreditsAsync(unified.TmdbInfo.Id, unified.IsSeries);
+                        if (credits?.Crew != null)
+                        {
+                            var tmdbDirectors = credits.Crew.Where(c => c.Job == "Director").ToList();
+                            foreach(var d in DirectorList)
+                            {
+                                if (string.IsNullOrEmpty(d.FullProfileUrl))
+                                {
+                                    var match = tmdbDirectors.FirstOrDefault(tc => tc.Name.Equals(d.Name, StringComparison.OrdinalIgnoreCase));
+                                    if (match != null) d.FullProfileUrl = match.FullProfileUrl;
+                                }
+                            }
+                            
+                            // If DirectorList was empty but TMDB has them, add them
+                            if (DirectorList.Count == 0 && tmdbDirectors.Count > 0)
+                            {
+                                foreach(var td in tmdbDirectors.Take(5))
+                                {
+                                    DirectorList.Add(new CastItem { Name = td.Name, Character = "Yönetmen", FullProfileUrl = td.FullProfileUrl });
+                                }
+                            }
+                        }
+                    }
+
+                    if (DirectorList.Count > 0) 
+                    {
+                        DirectorSection.Visibility = (ActualWidth >= 900) ? Visibility.Visible : Visibility.Collapsed;
+                        if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = (ActualWidth < 900) ? Visibility.Visible : Visibility.Collapsed;
+                        DirectorListView.ItemsSource = DirectorList;
+                        if (NarrowDirectorListView != null) NarrowDirectorListView.ItemsSource = DirectorList;
+                        AdjustDirectorShimmer(DirectorList.Count);
+                    }
+                    else
+                    {
+                        DirectorSection.Visibility = Visibility.Collapsed;
+                        if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = Visibility.Collapsed;
+                        AdjustDirectorShimmer(0);
+                    }
+                }
+                catch { 
+                    DirectorSection.Visibility = Visibility.Collapsed; 
+                    if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = Visibility.Collapsed;
+                    AdjustDirectorShimmer(0); 
                 }
 
                 // --- SLIDESHOW & SOURCE INFO ---
@@ -1307,9 +1441,18 @@ namespace ModernIPTVPlayer
             // Sync badge section alignment with current badge state
             UpdateTechnicalSectionVisibility(HasVisibleBadges());
 
+            if (DirectorSection.Visibility == Visibility.Visible)
+            {
+                AnimatePair(DirectorSection, DirectorShimmer, 175);
+            }
+            else
+            {
+                DirectorShimmer.Visibility = Visibility.Collapsed;
+            }
+
             if (CastSection.Visibility == Visibility.Visible)
             {
-                AnimatePair(CastSection, CastShimmer, 200);
+                AnimatePair(CastSection, CastShimmer, 250);
             }
             else
             {
@@ -1439,6 +1582,33 @@ namespace ModernIPTVPlayer
                     itemStack.Children.Add(new ShimmerControl { Width = 110, Height = 140, CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Left });
                     itemStack.Children.Add(new ShimmerControl { Width = 110, Height = 15, CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left });
                     
+                    horizontalPanel.Children.Add(itemStack);
+                }
+            }
+        }
+
+        private void AdjustDirectorShimmer(int count)
+        {
+            if (DirectorShimmer == null) return;
+            
+            if (count <= 0)
+            {
+                DirectorShimmer.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            DirectorShimmer.Visibility = Visibility.Visible;
+            
+            if (DirectorShimmer.Children.Count >= 2 && DirectorShimmer.Children[1] is StackPanel horizontalPanel)
+            {
+                horizontalPanel.Children.Clear();
+                int displayCount = Math.Min(count, 5); 
+
+                for (int i = 0; i < displayCount; i++)
+                {
+                    var itemStack = new StackPanel { Spacing = 8 };
+                    itemStack.Children.Add(new ShimmerControl { Width = 110, Height = 140, CornerRadius = new CornerRadius(8), HorizontalAlignment = HorizontalAlignment.Left });
+                    itemStack.Children.Add(new ShimmerControl { Width = 110, Height = 15, CornerRadius = new CornerRadius(4), HorizontalAlignment = HorizontalAlignment.Left });
                     horizontalPanel.Children.Add(itemStack);
                 }
             }
@@ -3720,13 +3890,19 @@ namespace ModernIPTVPlayer
                 
                 // Navigate
                 Debug.WriteLine($"[MediaInfoPage:Handoff] Navigating to PlayerPage for {url} | StartSeconds: {startSeconds} | HasHandoff: {App.HandoffPlayer != null}");
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl, GetLogoUrl()));
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[MediaInfoPage:Handoff] ERROR: {ex}");
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl, GetLogoUrl()));
             }
+        }
+
+        private string GetLogoUrl()
+        {
+            if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.LogoUrl)) return _unifiedMetadata.LogoUrl;
+            return null;
         }
 
         private string GetCurrentBackdrop()
@@ -3841,7 +4017,7 @@ namespace ModernIPTVPlayer
                             var stremioMeta = (_item as Models.Stremio.StremioMediaStream)?.Meta;
                             string autoParentIdStr = stremioMeta != null && (stremioMeta.Type == "series" || stremioMeta.Type == "tv") ? stremioMeta.Id : null;
                             string autoStreamType = (stremioMeta?.Type == "series" || stremioMeta?.Type == "tv") ? "series" : "movie";
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, resolvedVideoId, autoParentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType, GetCurrentBackdrop()));
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, resolvedVideoId, autoParentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType, GetCurrentBackdrop(), GetLogoUrl()));
                             return;
                         }
                     }
@@ -4037,7 +4213,7 @@ namespace ModernIPTVPlayer
                                                     autoPlay = false; SetLoadingState(false);
                                                     string parentIdStr = _item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv") ? sms.Meta.Id : null;
                                                     string autoStreamType = (_item is Models.Stremio.StremioMediaStream sms2 && (sms2.Meta.Type == "series" || sms2.Meta.Type == "tv")) ? "series" : "movie";
-                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, resolvedVideoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType, GetCurrentBackdrop()));
+                                                    Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, resolvedVideoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType, GetCurrentBackdrop(), GetLogoUrl()));
                                                     return;
                                                 }
                                             }
@@ -4404,7 +4580,7 @@ namespace ModernIPTVPlayer
                         {
                             Debug.WriteLine($"[SourceSelect] URL switch failed: {ex.Message}. Falling back to direct navigate.");
                             // Fallback: direct navigation
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop()));
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop(), GetLogoUrl()));
                             return;
                         }
 
@@ -4415,7 +4591,7 @@ namespace ModernIPTVPlayer
                         // CASE 3: No active player — direct navigation (fresh start)
                         Debug.WriteLine($"[SourceSelect] No active player — direct navigate for fresh start.");
                         _streamUrl = vm.Url;
-                        Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop()));
+                        Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop(), GetLogoUrl()));
                     }
                 }
                 else if (!string.IsNullOrEmpty(vm.ExternalUrl))
@@ -5054,6 +5230,12 @@ namespace ModernIPTVPlayer
         {
             if (string.IsNullOrEmpty(url) || _backdropUrls == null) return;
             
+            if (ImageHelper.IsPlaceholder(url))
+            {
+                System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Backdrop Filtered (Placeholder): {url}");
+                return;
+            }
+
             string key = GetNormalizedImageKey(url);
             if (_backdropKeys.Contains(key)) return;
 
@@ -5911,6 +6093,145 @@ namespace ModernIPTVPlayer
 
         public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
+    public partial class MediaInfoPage
+    {
+        #region Mouse Drag-to-Scroll Logic
+        private void OnMainPointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse)
+            {
+                _isMainDragging = true;
+                _lastMainPointerPos = ptr.Position;
+                // [FIX] Don't capture yet! Wait for movement.
+                // RootScrollViewer.CapturePointer(e.Pointer);
+                // e.Handled = true;
+            }
+        }
+
+        private void OnMainPointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (_isMainDragging)
+            {
+                // Conflict resolution: if cast dragging is active, abort main drag
+                if (_isCastDragging)
+                {
+                    _isMainDragging = false;
+                    return;
+                }
+
+                var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
+                
+                // Safety: check if left button is still pressed
+                if (!ptr.Properties.IsLeftButtonPressed)
+                {
+                    _isMainDragging = false;
+                    try { RootScrollViewer.ReleasePointerCapture(e.Pointer); } catch {}
+                    return;
+                }
+
+                double deltaY = _lastMainPointerPos.Y - ptr.Position.Y;
+                
+                // [FIX] Threshold-based capture: only handle if we've actually moved enough. 
+                // This allows static clicks to fall through to child items.
+                if (Math.Abs(deltaY) > 3.0) 
+                {
+                    if (RootScrollViewer.PointerCaptures == null || !RootScrollViewer.PointerCaptures.Any(c => c.PointerId == e.Pointer.PointerId))
+                    {
+                        RootScrollViewer.CapturePointer(e.Pointer);
+                    }
+
+                    RootScrollViewer.ChangeView(null, RootScrollViewer.VerticalOffset + deltaY, null, true);
+                    _lastMainPointerPos = ptr.Position;
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private void OnMainPointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (_isMainDragging)
+            {
+                _isMainDragging = false;
+                RootScrollViewer.ReleasePointerCapture(e.Pointer);
+            }
+        }
+
+        // Horizontal (Cast) Drag Logic
+        private void OnCastPointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse)
+            {
+                _isCastDragging = true;
+                _lastCastPointerPos = ptr.Position;
+                // [FIX] Don't capture yet! Wait for movement.
+                // CastListView.CapturePointer(e.Pointer);
+                
+                // Abort main scroll to prevent simultaneous dragging
+                _isMainDragging = false;
+                // e.Handled = true; // Handled only after movement threshold
+            }
+        }
+
+        private void OnCastPointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (_isCastDragging)
+            {
+                var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
+
+                // Safety check
+                if (!ptr.Properties.IsLeftButtonPressed)
+                {
+                    _isCastDragging = false;
+                    try { CastListView.ReleasePointerCapture(e.Pointer); } catch {}
+                    return;
+                }
+
+                double deltaX = _lastCastPointerPos.X - ptr.Position.X;
+                
+                // [FIX] Threshold-based capture for cast scrolling too
+                if (Math.Abs(deltaX) > 3.0)
+                {
+                    if (CastListView.PointerCaptures == null || !CastListView.PointerCaptures.Any(c => c.PointerId == e.Pointer.PointerId))
+                    {
+                        CastListView.CapturePointer(e.Pointer);
+                    }
+
+                    var scroll = GetScrollViewer(CastListView);
+                    if (scroll != null)
+                    {
+                        scroll.ChangeView(scroll.HorizontalOffset + deltaX, null, null, true);
+                        _lastCastPointerPos = ptr.Position;
+                        e.Handled = true;
+                    }
+                }
+            }
+        }
+
+        private void OnCastPointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (_isCastDragging)
+            {
+                _isCastDragging = false;
+                CastListView.ReleasePointerCapture(e.Pointer);
+            }
+        }
+
+        private ScrollViewer GetScrollViewer(DependencyObject element)
+        {
+            if (element is ScrollViewer sv) return sv;
+            int childrenCount = VisualTreeHelper.GetChildrenCount(element);
+            for (int i = 0; i < childrenCount; i++)
+            {
+                var child = VisualTreeHelper.GetChild(element, i);
+                var result = GetScrollViewer(child);
+                if (result != null) return result;
+            }
+            return null;
+        }
+        #endregion
     }
 }
 

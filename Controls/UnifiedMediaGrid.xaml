@@ -13,7 +13,7 @@
 
     <UserControl.Resources>
         <Style x:Key="MediaCardStyle" TargetType="GridViewItem">
-            <Setter Property="Margin" Value="8"/>
+            <Setter Property="Margin" Value="2"/>
             <Setter Property="Padding" Value="0"/>
             <Setter Property="CornerRadius" Value="12"/>
             <Setter Property="CanDrag" Value="False"/>
@@ -65,8 +65,8 @@
                         ShowProgress="{Binding ShowProgress}"
                         ShowBadge="{Binding ShowBadge}"
                         IsTitleVisible="{Binding ShowTitles, ElementName=RootGridControl}"
-                        Width="200" 
-                        Height="300"
+                        Width="212" 
+                        Height="312"
                         ColorsExtracted="PosterCard_ColorsExtracted"
                         HoverStarted="Card_HoverStarted"
                         HoverEnded="Card_HoverEnded"/>
@@ -81,7 +81,7 @@
                   IsHitTestVisible="False">
             <GridView.ItemTemplate>
                 <DataTemplate>
-                    <local:ShimmerCard Margin="8"/>
+                    <local:ShimmerCard Width="212" Height="312" Margin="2"/>
                 </DataTemplate>
             </GridView.ItemTemplate>
         </GridView>

@@ -308,6 +308,9 @@
 
             <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,40"> 
                  
+                 <!-- LOGO -->
+                 <Image x:Name="ContentLogo" Stretch="Uniform" MaxHeight="120" MaxWidth="350" HorizontalAlignment="Left" Margin="0,0,0,16" Visibility="Collapsed" Opacity="0" />
+
                  <!-- BADGES & METADATA -->
                   <StackPanel Orientation="Horizontal" Spacing="0" VerticalAlignment="Center" Margin="2,0,0,0">
                       <!-- 1. Technical Section (Dynamic: Shimmer or Badges) -->
@@ -423,6 +426,60 @@
                      </StackPanel>
                  </Grid>
             
+                <!-- DIRECTOR SECTION -->
+                <Grid>
+                    <StackPanel x:Name="DirectorSection" Spacing="12" Visibility="Collapsed" Margin="0,8,0,0" Opacity="0">
+                        <TextBlock Text="Yönetmen" FontSize="18" FontWeight="SemiBold" Foreground="#DDD"/>
+                        <ListView x:Name="DirectorListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                                  ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None">
+                            <ListView.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="16"/>
+                                </ItemsPanelTemplate>
+                            </ListView.ItemsPanel>
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Width="110">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                            <RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        
+                                        <!-- Profile Image or Placeholder -->
+                                        <Border CornerRadius="8" Height="140" Width="110" Background="#1AFFFFFF">
+                                            <Grid CornerRadius="8">
+                                                <!-- Fallback Icon if Image is missing -->
+                                                <FontIcon Glyph="&#xE77B;" FontSize="40" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                <!-- Image -->
+                                                <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
+                                            </Grid>
+                                        </Border>
+                                        
+                                        <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="12" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
+                                        <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="11" Foreground="#AAA" TextTrimming="CharacterEllipsis"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </StackPanel>
+                    
+                    <!-- Director Shimmer -->
+                    <StackPanel x:Name="DirectorShimmer" Spacing="12" Margin="0,8,0,0" HorizontalAlignment="Left"> 
+                        <ctl:ShimmerControl Width="120" Height="24" CornerRadius="4" HorizontalAlignment="Left"/>
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <StackPanel Spacing="8">
+                                <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
+                                <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                            <StackPanel Spacing="8">
+                                <ctl:ShimmerControl Width="110" Height="140" CornerRadius="8" HorizontalAlignment="Left"/>
+                                <ctl:ShimmerControl Width="110" Height="15" CornerRadius="4" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+
                 <!-- CAST SECTION -->
                 <Grid>
                     <StackPanel x:Name="CastSection" Spacing="12" Visibility="Collapsed" Margin="0,8,0,0" Opacity="0">
@@ -445,7 +502,7 @@
                                         
                                         <!-- Profile Image or Placeholder -->
                                         <Border CornerRadius="8" Height="140" Width="110" Background="#1AFFFFFF">
-                                            <Grid>
+                                            <Grid CornerRadius="8">
                                                 <!-- Fallback Icon if Image is missing -->
                                                 <FontIcon Glyph="&#xE77B;" FontSize="40" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                                 <!-- Image -->
@@ -1120,6 +1177,42 @@
                 </StackPanel>
 
                 
+                <StackPanel x:Name="NarrowDirectorSection" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" 
+                             Visibility="Collapsed" Spacing="12" Margin="0,4,0,0">
+                    <TextBlock Text="Yönetmen" FontSize="20" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>
+                    <ListView x:Name="NarrowDirectorListView" 
+                              Height="150"
+                              ScrollViewer.HorizontalScrollMode="Enabled" 
+                              ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                              ScrollViewer.VerticalScrollMode="Disabled" 
+                              SelectionMode="None">
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <ItemsStackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Width="90" Margin="0,0,16,0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="110"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Border CornerRadius="8" Height="110" Width="90">
+                                        <Border.Background>
+                                            <ImageBrush ImageSource="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
+                                        </Border.Background>
+                                    </Border>
+                                    <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="10" FontWeight="SemiBold" 
+                                               Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,4,0,0"/>
+                                    <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="10" Foreground="#AAA" TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </StackPanel>
+
                 <StackPanel x:Name="NarrowCastSection" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" 
                              Visibility="Collapsed" Spacing="12" Margin="0,4,0,0">
                     <TextBlock Text="Oyuncular" FontSize="20" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>

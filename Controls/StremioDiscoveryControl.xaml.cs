@@ -752,8 +752,8 @@ namespace ModernIPTVPlayer.Controls
             ItemClicked?.Invoke(this, e);
         }
 
-        private void CatalogRow_HoverStarted(object sender, PosterCard e) => CardHoverStarted?.Invoke(this, e);
-        private void CatalogRow_HoverEnded(object sender, PosterCard e) => CardHoverEnded?.Invoke(this, e);
+        private void CatalogRow_HoverStarted(object sender, FrameworkElement e) => CardHoverStarted?.Invoke(this, e);
+        private void CatalogRow_HoverEnded(object sender, FrameworkElement e) => CardHoverEnded?.Invoke(this, e);
         private void CatalogRow_ScrollStarted(object sender, EventArgs e) => RowScrollStarted?.Invoke(this, e);
         private void CatalogRow_ScrollEnded(object sender, EventArgs e) => RowScrollEnded?.Invoke(this, e);
 

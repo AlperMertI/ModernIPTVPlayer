@@ -256,7 +256,7 @@ namespace ModernIPTVPlayer.Controls
             {
                 try
                 {
-                    var detailUnified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(currentItem, Services.Metadata.MetadataContext.Detail);
+                    var detailUnified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(currentItem, Services.Metadata.MetadataContext.Spotlight);
                     if (currentItem != _items[_currentIndex]) return;
 
                     if (detailUnified != null)
@@ -599,9 +599,12 @@ namespace ModernIPTVPlayer.Controls
             _pendingTrailerId = null;
             if (_webView != null)
             {
-                try
+                    try
                 {
-                    _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+                    if (_webView.CoreWebView2 != null)
+                    {
+                        _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
+                    }
                     _webView.Close();
                 }
                 catch { }

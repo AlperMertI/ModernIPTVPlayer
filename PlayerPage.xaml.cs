@@ -29,7 +29,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer
 {
-    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1, string PosterUrl = null, string Type = null, string BackdropUrl = null);
+    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1, string PosterUrl = null, string Type = null, string BackdropUrl = null, string LogoUrl = null);
 
     public sealed partial class PlayerPage : Page
     {
@@ -136,6 +136,9 @@ namespace ModernIPTVPlayer
         private bool _savedIsFullScreen;
         private OverlappedPresenterState _savedPresenterState;
 
+        private DispatcherTimer _logoLoadingTimer;
+        private double _fakeLogoProgress = 0;
+
         public PlayerPage()
         {
             this.InitializeComponent();
@@ -178,10 +181,58 @@ namespace ModernIPTVPlayer
             SeekSlider.AddHandler(PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerCaptureLost), true);
         }
 
+        private void StartLogoLoading()
+        {
+            if (_navArgs != null && !string.IsNullOrWhiteSpace(_navArgs.LogoUrl))
+            {
+                try
+                {
+                    var uri = new Uri(_navArgs.LogoUrl);
+                    SilhoutteLogo.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri);
+                    ColoredLogo.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri);
+                    PlayerLoadingOverlay.Visibility = Visibility.Visible;
+                    LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, 0, 120);
+                    PlayerLoadingPercentageText.Text = "%0";
 
+                    _fakeLogoProgress = 0;
+                    if (_logoLoadingTimer == null)
+                    {
+                        _logoLoadingTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+                        _logoLoadingTimer.Tick += (s, ev) =>
+                        {
+                            if (_fakeLogoProgress < 95) 
+                            {
+                                // Slows down as it reaches 90!
+                                _fakeLogoProgress += Math.Max(0.2, (95 - _fakeLogoProgress) * 0.1);
+                                LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, (_fakeLogoProgress / 100) * 300, 120);
+                                PlayerLoadingPercentageText.Text = $"%{(int)_fakeLogoProgress}";
+                            }
+                        };
+                    }
+                    _logoLoadingTimer.Start();
+                } catch { } // URI parsing might fail
+            }
+        }
 
-        
-
+        private void StopLogoLoading()
+        {
+            if (PlayerLoadingOverlay.Visibility == Visibility.Visible)
+            {
+                _logoLoadingTimer?.Stop();
+                LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, 300, 120);
+                PlayerLoadingPercentageText.Text = "%100";
+                
+                // Fade out softly
+                var t = Task.Run(async () => 
+                {
+                    await Task.Delay(500);
+                    DispatcherQueue.TryEnqueue(() => 
+                    {
+                        PlayerLoadingOverlay.Visibility = Visibility.Collapsed;
+                    });
+                });
+            }
+        }
 
         private void BackButton_Click(object sender, RoutedEventArgs e)
         {
@@ -376,6 +427,7 @@ namespace ModernIPTVPlayer
 
                             _isStaticMetadataFetched = true;
                             ShowInfoPills();
+                            StopLogoLoading();
 
                             // [CACHE UPDATE] Update global cache with real playback data
                             try 
@@ -676,6 +728,7 @@ namespace ModernIPTVPlayer
 
             // 1. Stop timer IMMEDIATELY
             _statsTimer?.Stop();
+            _logoLoadingTimer?.Stop();
             StopCursorTimer();
             _seekDebounceTimer?.Stop();
             _isPageLoaded = false;
@@ -788,6 +841,8 @@ namespace ModernIPTVPlayer
                 _navigationError = null;
                 return;
             }
+
+            StartLogoLoading();
 
             if (_useMpvPlayer)
             {

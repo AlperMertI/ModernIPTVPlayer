@@ -20,6 +20,10 @@ namespace ModernIPTVPlayer.Services.Stremio
         // In-Memory Cache for Catalogs to speed up switching
         private Dictionary<string, List<StremioMediaStream>> _catalogCache = new();
 
+        // Global High-Performance Index for Metadata across all catalogs
+        private readonly Dictionary<string, HashSet<StremioMediaStream>> _globalMetaIndex = new();
+        private readonly object _indexLock = new();
+
         private StremioService()
         {
             _client = HttpHelper.Client;
@@ -110,6 +114,13 @@ namespace ModernIPTVPlayer.Services.Stremio
                     }
                     
                     _catalogCache[cacheKey] = result; // Cache it
+                    
+                    // Update Global Index
+                    lock (_indexLock)
+                    {
+                        foreach (var stream in result) IndexStreamInternal(stream);
+                    }
+
                     return result;
                 }
             }
@@ -251,6 +262,12 @@ namespace ModernIPTVPlayer.Services.Stremio
             // Flatten
             var allResults = resultsArray.SelectMany(x => x).ToList();
 
+            // Update Global Index
+            lock (_indexLock)
+            {
+                foreach (var stream in allResults) IndexStreamInternal(stream);
+            }
+
             // DEBUG: Log Raw Results
             System.Diagnostics.Debug.WriteLine($"[StremioService] Total Raw Results: {allResults.Count}");
             foreach (var item in allResults)
@@ -291,6 +308,12 @@ namespace ModernIPTVPlayer.Services.Stremio
                 var root = await GetCatalogAsync(url);
                 var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = args.AddonId }).ToList() ?? new List<StremioMediaStream>();
                 
+                // Update Global Index
+                lock (_indexLock)
+                {
+                    foreach (var item in items) IndexStreamInternal(item);
+                }
+
                 // No need for validation here since the user manually clicked this option from the manifest!
                 return items;
             }
@@ -396,6 +419,45 @@ namespace ModernIPTVPlayer.Services.Stremio
 
             // Returning unique items exactly as they came from addons (Zero Logic)
             return uniqueItems;
+        }
+
+        private void IndexStreamInternal(StremioMediaStream stream)
+        {
+            if (stream?.Meta == null) return;
+
+            void AddToIndex(string? id)
+            {
+                if (string.IsNullOrWhiteSpace(id)) return;
+                string key = id.Trim().ToLowerInvariant();
+                if (!_globalMetaIndex.TryGetValue(key, out var set))
+                {
+                    set = new HashSet<StremioMediaStream>();
+                    _globalMetaIndex[key] = set;
+                }
+                set.Add(stream);
+            }
+
+            AddToIndex(stream.Meta.Id);
+            AddToIndex(stream.Meta.ImdbId);
+            AddToIndex(stream.IMDbId);
+            
+            // Index by TMDB if available
+            if (stream.Meta.MovieDbId != null) AddToIndex($"tmdb:{stream.Meta.MovieDbId}");
+        }
+
+        public List<StremioMediaStream> GetGlobalMetaCache(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return new List<StremioMediaStream>();
+            string key = id.Trim().ToLowerInvariant();
+
+            lock (_indexLock)
+            {
+                if (_globalMetaIndex.TryGetValue(key, out var set))
+                {
+                    return set.ToList();
+                }
+            }
+            return new List<StremioMediaStream>();
         }
 
         private string NormalizeTitle(string title)

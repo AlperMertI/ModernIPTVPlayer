@@ -104,6 +104,19 @@ namespace ModernIPTVPlayer.Controls
 
             _closeCts?.Cancel();
 
+            // [FIX] Robust Hover Management: Reset previous cards immediately when moving to a new one.
+            // This prevents "sticky" hover states when moving mouse quickly between adjacent posters.
+            if (_activeSourceCard != null && _activeSourceCard != card)
+            {
+                if (_activeSourceCard is PosterCard p) p.ResetHoverState();
+                else if (_activeSourceCard is LandscapeCard l) l.ResetHoverState();
+            }
+            if (_pendingHoverCard != null && _pendingHoverCard != card)
+            {
+                if (_pendingHoverCard is PosterCard p) p.ResetHoverState();
+                else if (_pendingHoverCard is LandscapeCard l) l.ResetHoverState();
+            }
+
             var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
             TryStopAnimation(visual, "Opacity");
             TryStopAnimation(visual, "Scale");
@@ -133,8 +146,9 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        public async Task CloseExpandedCardAsync(bool force = false)
+        public async Task CloseExpandedCardAsync(FrameworkElement? sourceCard = null, bool force = false)
         {
+            if (sourceCard != null && _activeSourceCard != sourceCard && !force) return;
             if (_isInCinemaMode && !force) return;
             if (_isPointerOverCard && !force) return;
             if (_isClosing && !force) return;
@@ -702,6 +716,9 @@ namespace ModernIPTVPlayer.Controls
 
         private void FinalizeCloseVisualState()
         {
+            if (_activeSourceCard is PosterCard p) p.ResetHoverState();
+            else if (_activeSourceCard is LandscapeCard l) l.ResetHoverState();
+            
             _expandedCard.Visibility = Visibility.Collapsed;
             _overlayCanvas.Visibility = Visibility.Collapsed;
             _activeSourceCard = null;

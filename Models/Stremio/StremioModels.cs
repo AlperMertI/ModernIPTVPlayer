@@ -166,6 +166,66 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         [JsonPropertyName("trailerStreams")]
         public List<StremioTrailerStream> TrailerStreams { get; set; }
+
+        [JsonPropertyName("credits_cast")]
+        public List<StremioCreditCast> CreditsCast { get; set; }
+
+        [JsonPropertyName("credits_crew")]
+        public List<StremioCreditCrew> CreditsCrew { get; set; }
+
+        [JsonPropertyName("app_extras")]
+        public StremioAppExtras AppExtras { get; set; }
+    }
+
+    public class StremioAppExtras
+    {
+        [JsonPropertyName("cast")]
+        public List<StremioAppCast> Cast { get; set; }
+    }
+
+    public class StremioAppCast
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("character")]
+        public string Character { get; set; }
+
+        [JsonPropertyName("photo")]
+        public string Photo { get; set; }
+    }
+
+    public class StremioCreditCast
+    {
+        [JsonPropertyName("id")]
+        public object Id { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("character")]
+        public string Character { get; set; }
+
+        [JsonPropertyName("profile_path")]
+        public string ProfilePath { get; set; }
+    }
+
+    public class StremioCreditCrew
+    {
+        [JsonPropertyName("id")]
+        public object Id { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("department")]
+        public string Department { get; set; }
+
+        [JsonPropertyName("job")]
+        public string Job { get; set; }
+
+        [JsonPropertyName("profile_path")]
+        public string ProfilePath { get; set; }
     }
 
     public class StremioTrailerStream

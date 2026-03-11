@@ -119,16 +119,9 @@ namespace ModernIPTVPlayer.Controls
         public LandscapeCard()
         {
             this.InitializeComponent();
-            MainBorder.SizeChanged += (s, e) => UpdateClip();
         }
 
-        private void UpdateClip()
-        {
-            var visual = ElementCompositionPreview.GetElementVisual(MainBorder);
-            var compositor = visual.Compositor;
-            var clip = compositor.CreateInsetClip();
-            visual.Clip = clip;
-        }
+
 
         private void UpdateImage()
         {
@@ -179,36 +172,55 @@ namespace ModernIPTVPlayer.Controls
             UpdateImage();
         }
 
+        private void Card_Unloaded(object sender, RoutedEventArgs e)
+        {
+            // [FIX] Ensure hover state is reset when card is recycled/unloaded
+            ResetHoverState();
+        }
+
         private void OnPointerEntered(object sender, PointerRoutedEventArgs e)
         {
             IsHovered = true;
+            Canvas.SetZIndex(this, 10);
             HoverInStoryboard.Begin();
             HoverStarted?.Invoke(this, EventArgs.Empty);
-            
             PlayButtonContainer.Opacity = 1.0;
         }
 
         private void OnPointerExited(object sender, PointerRoutedEventArgs e)
         {
-             var point = e.GetCurrentPoint(RootGrid).Position;
-             if (point.X >= 0 && point.Y >= 0 && point.X <= RootGrid.ActualWidth && point.Y <= RootGrid.ActualHeight)
-                 return;
-
-             IsHovered = false;
-             HoverOutStoryboard.Begin();
-             HoverEnded?.Invoke(this, EventArgs.Empty);
+             // Safety: Check if we are really outside the bounds
+             // This prevents the card from closing when the ExpandedCard overlay appears and "steals" focus
+             // [FIX] Bounds Check relative to MainBorder
+             var point = e.GetCurrentPoint(MainBorder).Position;
              
-             TiltProjection.RotationX = 0;
-             TiltProjection.RotationY = 0;
-             PlayButtonContainer.Opacity = 0.8;
+             if (point.X >= 0 && point.Y >= 0 && 
+                 point.X <= MainBorder.ActualWidth && 
+                 point.Y <= MainBorder.ActualHeight)
+             {
+                 return;
+             }
+
+             ResetHoverState();
+        }
+
+        public void ResetHoverState()
+        {
+            if (!IsHovered) return;
+            IsHovered = false;
+            Canvas.SetZIndex(this, 0);
+            HoverOutStoryboard.Begin();
+            HoverEnded?.Invoke(this, EventArgs.Empty);
+            TiltProjection.RotationX = 0;
+            TiltProjection.RotationY = 0;
         }
 
         private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
         {
             if (IsHovered)
             {
-                var pointerPosition = e.GetCurrentPoint(RootGrid).Position;
-                var center = new Windows.Foundation.Point(RootGrid.ActualWidth / 2, RootGrid.ActualHeight / 2);
+                var pointerPosition = e.GetCurrentPoint(MainBorder).Position;
+                var center = new Windows.Foundation.Point(MainBorder.ActualWidth / 2, MainBorder.ActualHeight / 2);
                 
                 var xDiff = pointerPosition.X - center.X;
                 var yDiff = pointerPosition.Y - center.Y;

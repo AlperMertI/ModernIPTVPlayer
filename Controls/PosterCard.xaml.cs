@@ -131,20 +131,7 @@ namespace ModernIPTVPlayer.Controls
         public PosterCard()
         {
             this.InitializeComponent();
-            MainBorder.SizeChanged += (s, e) => UpdateClip();
         }
-
-        private void UpdateClip()
-        {
-            var visual = ElementCompositionPreview.GetElementVisual(MainBorder);
-            var compositor = visual.Compositor;
-            
-            // WinUI 3: RoundedRectangleClip requires newer SDK. 
-            // Fallback to InsetClip to match bounds, Border.CornerRadius handles visual rounding.
-            var clip = compositor.CreateInsetClip();
-            visual.Clip = clip;
-        }
-
 
 
         private void UpdateImage()
@@ -180,11 +167,9 @@ namespace ModernIPTVPlayer.Controls
             // 2. Extract Colors using RenderTargetBitmap (No extra network request!)
             try
             {
-                // Only extract if needed (e.g. for hover glow or parent background)
-                // For now we always extract to be safe
-                
-                // Check for 0 size to avoid ArgumentException
-                if (PosterImage.ActualWidth > 0 && PosterImage.ActualHeight > 0)
+                // Only extract if needed
+                // Check for 0 size and visual tree status to avoid ArgumentException
+                if (PosterImage.ActualWidth > 0 && PosterImage.ActualHeight > 0 && PosterImage.XamlRoot != null)
                 {
                     var rtb = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
                     await rtb.RenderAsync(PosterImage);
@@ -299,13 +284,15 @@ namespace ModernIPTVPlayer.Controls
 
         private void PosterCard_Unloaded(object sender, RoutedEventArgs e)
         {
-            //System.Diagnostics.Debug.WriteLine($"[PosterCard] Unloaded: {Title}");
-            // Optimization: Cancel pending image loads?
+            // System.Diagnostics.Debug.WriteLine($"[PosterCard] Unloaded: {Title}");
+            // [FIX] Ensure hover state is reset when card is recycled/unloaded
+            ResetHoverState();
         }
 
         private void OnPointerEntered(object sender, PointerRoutedEventArgs e)
         {
             IsHovered = true;
+            Canvas.SetZIndex(this, 10); // Bring to front
             HoverInStoryboard.Begin();
             HoverStarted?.Invoke(this, EventArgs.Empty);
             
@@ -316,36 +303,43 @@ namespace ModernIPTVPlayer.Controls
 
         private void OnPointerExited(object sender, PointerRoutedEventArgs e)
         {
-             // Fix: Check if we are really outside the bounds
-             // This prevents the card from closing when the ExpandedCard overlay appears and "steals" focus
-             var point = e.GetCurrentPoint(RootGrid).Position;
-             if (point.X >= 0 && point.Y >= 0 && point.X <= RootGrid.ActualWidth && point.Y <= RootGrid.ActualHeight)
+             // [FIX] Bounds Check relative to MainBorder
+             var point = e.GetCurrentPoint(MainBorder).Position;
+             
+             if (point.X >= 0 && point.Y >= 0 && 
+                 point.X <= MainBorder.ActualWidth && 
+                 point.Y <= MainBorder.ActualHeight)
              {
-                 // Still inside (likely moved over child element or the ExpandedCard overlay covers us), ignore
                  return;
              }
 
-             IsHovered = false;
-             HoverOutStoryboard.Begin();
-             HoverEnded?.Invoke(this, EventArgs.Empty);
+             ResetHoverState();
+        }
+
+        public void ResetHoverState()
+        {
+            if (!IsHovered) return;
+            IsHovered = false;
+            Canvas.SetZIndex(this, 0); // Reset ZIndex
+            HoverOutStoryboard.Begin();
+            HoverEnded?.Invoke(this, EventArgs.Empty);
              
-             TiltProjection.RotationX = 0;
-             TiltProjection.RotationY = 0;
+            TiltProjection.RotationX = 0;
+            TiltProjection.RotationY = 0;
         }
 
         private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
         {
-            if (IsHovered && IsTiltEnabled)
+            if (IsHovered)
             {
-                var pointerPosition = e.GetCurrentPoint(RootGrid).Position;
-                var center = new Windows.Foundation.Point(RootGrid.ActualWidth / 2, RootGrid.ActualHeight / 2);
+                var pointerPosition = e.GetCurrentPoint(MainBorder).Position;
+                var center = new Windows.Foundation.Point(MainBorder.ActualWidth / 2, MainBorder.ActualHeight / 2);
                 
                 var xDiff = pointerPosition.X - center.X;
                 var yDiff = pointerPosition.Y - center.Y;
 
-                // Simple Tilt
-                TiltProjection.RotationY = -xDiff / 15.0;
-                TiltProjection.RotationX = yDiff / 15.0;
+                TiltProjection.RotationY = -xDiff / 25.0; 
+                TiltProjection.RotationX = yDiff / 25.0;
             }
         }
         public void PrepareConnectedAnimation()

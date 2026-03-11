@@ -227,6 +227,29 @@
                    HorizontalAlignment="Stretch"
                    VerticalAlignment="Stretch"/>
 
+        <!-- 2.5 Logo Loading Overlay -->
+        <Grid x:Name="PlayerLoadingOverlay" 
+              Visibility="Collapsed" 
+              HorizontalAlignment="Center" 
+              VerticalAlignment="Center"
+              IsHitTestVisible="False"
+              Canvas.ZIndex="50">
+            <!-- 1. Silüet Logo -->
+            <Image x:Name="SilhoutteLogo" Stretch="Uniform" Height="120" Width="300" Opacity="0.15" />
+            
+            <!-- 2. Renkli Logo (Kırpılmış) -->
+            <Image x:Name="ColoredLogo" Stretch="Uniform" Height="120" Width="300">
+                <Image.Clip>
+                    <RectangleGeometry x:Name="LogoProgressClip" Rect="0,0,0,120" />
+                </Image.Clip>
+            </Image>
+            
+            <TextBlock x:Name="PlayerLoadingPercentageText" Text="%0" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,-30" FontSize="16" FontWeight="Bold"/>
+
+            <!-- Optional Glow (Removed due to WinUI 3 Effect constraints) -->
+            <Ellipse Fill="#11FFFFFF" Width="200" Height="200" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+        </Grid>
+
         <!-- 3. OSD Overlay (Center Notification) -->
         <Border x:Name="OsdOverlay"
                 Visibility="Collapsed"

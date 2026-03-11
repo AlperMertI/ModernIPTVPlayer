@@ -211,5 +211,28 @@ namespace ModernIPTVPlayer
                 (byte)Math.Min(255, color.B * factor)
             );
         }
+
+        public static bool IsPlaceholder(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return true;
+
+            // Known generic placeholders
+            if (url.Contains("stremio.torbox.app/background/default", StringComparison.OrdinalIgnoreCase)) return true;
+            if (url.Contains("images.metahub.space/background/small/", StringComparison.OrdinalIgnoreCase) && url.EndsWith("/img")) return true;
+            
+            // Generic keywords in URL that usually indicate no content
+            string lowerUrl = url.ToLowerInvariant();
+            if (lowerUrl.Contains("placeholder") || 
+                lowerUrl.Contains("no-image") || 
+                lowerUrl.Contains("default_backdrop") || 
+                lowerUrl.Contains("no_poster") ||
+                lowerUrl.Contains("image-not-found") ||
+                lowerUrl.Contains("blank-profile")) 
+            {
+                return true;
+            }
+
+            return false;
+        }
     }
 }

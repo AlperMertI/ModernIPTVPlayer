@@ -622,6 +622,9 @@ namespace ModernIPTVPlayer
     {
         [JsonPropertyName("cast")]
         public List<TmdbCast> Cast { get; set; }
+
+        [JsonPropertyName("crew")]
+        public List<TmdbCrew> Crew { get; set; }
     }
 
     public class TmdbImages
@@ -644,6 +647,23 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("character")]
         public string Character { get; set; }
         
+        [JsonPropertyName("profile_path")]
+        public string ProfilePath { get; set; }
+
+        public string FullProfileUrl => !string.IsNullOrEmpty(ProfilePath) ? $"https://image.tmdb.org/t/p/w185{ProfilePath}" : "ms-appx:///Assets/StoreLogo.png";
+    }
+
+    public class TmdbCrew
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("job")]
+        public string Job { get; set; }
+
+        [JsonPropertyName("department")]
+        public string Department { get; set; }
+
         [JsonPropertyName("profile_path")]
         public string ProfilePath { get; set; }
 

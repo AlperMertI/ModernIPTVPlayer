@@ -63,6 +63,9 @@ namespace ModernIPTVPlayer
             // Auto-Restore Opacity when Window is Activated
             this.Activated += MainWindow_Activated;
 
+            // Set Window Icon explicitly for Taskbar/Switcher visibility in Debug
+            SetIcon("Assets\\Square44x44Logo.targetsize-256.png");
+
            InitializeSidebarBehavior();
         }
 
@@ -782,6 +785,29 @@ namespace ModernIPTVPlayer
                 "SettingsPage" => typeof(SettingsPage),
                 _ => typeof(MoviesPage) // Default fallback
             };
+        }
+
+        private void SetIcon(string iconPath)
+        {
+            try
+            {
+                var hWnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+                Microsoft.UI.WindowId windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hWnd);
+                var appWindow = Microsoft.UI.Windowing.AppWindow.GetFromWindowId(windowId);
+                
+                if (appWindow != null)
+                {
+                    string fullPath = System.IO.Path.Combine(AppContext.BaseDirectory, iconPath);
+                    if (System.IO.File.Exists(fullPath))
+                    {
+                        appWindow.SetIcon(fullPath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to set icon: {ex.Message}");
+            }
         }
 
     }

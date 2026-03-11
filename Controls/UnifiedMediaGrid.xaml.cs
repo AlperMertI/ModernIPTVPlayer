@@ -16,7 +16,7 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<MediaNavigationArgs>? DetailsAction;
         public event EventHandler<IMediaStream>? AddListAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)>? ColorExtracted;
-        public event EventHandler? HoverEnded;
+        public event EventHandler<FrameworkElement>? HoverEnded;
 
         public static readonly DependencyProperty ItemClickCommandProperty =
             DependencyProperty.Register("ItemClickCommand", typeof(ICommand), typeof(UnifiedMediaGrid), new PropertyMetadata(null));
@@ -158,11 +158,11 @@ namespace ModernIPTVPlayer.Controls
 
         private async void Card_HoverStarted(object sender, EventArgs e)
         {
-            if (sender is not PosterCard card) return;
+            if (sender is not FrameworkElement card) return;
 
-            if (!string.IsNullOrEmpty(card.ImageUrl))
+            if (card is PosterCard pc && !string.IsNullOrEmpty(pc.ImageUrl))
             {
-                var colors = await ImageHelper.GetOrExtractColorAsync(card.ImageUrl);
+                var colors = await ImageHelper.GetOrExtractColorAsync(pc.ImageUrl);
                 if (colors.HasValue)
                 {
                     ColorExtracted?.Invoke(this, colors.Value);
@@ -174,7 +174,10 @@ namespace ModernIPTVPlayer.Controls
 
         private void Card_HoverEnded(object sender, EventArgs e)
         {
-            HoverEnded?.Invoke(this, EventArgs.Empty);
+            if (sender is FrameworkElement card)
+            {
+                HoverEnded?.Invoke(this, card);
+            }
         }
 
         public Task CloseExpandedCardAsync() => _expandedCardOverlay.CloseExpandedCardAsync();

@@ -17,10 +17,8 @@
           Background="Transparent" 
           RenderTransformOrigin="0.5,0.5"
           Loaded="Card_Loaded"
-          PointerEntered="OnPointerEntered"
-          PointerExited="OnPointerExited"
-          PointerMoved="OnPointerMoved"
-          Margin="4">
+          Unloaded="Card_Unloaded"
+          Padding="12"> <!-- Using padding to provide internal "bleed" room for hover zoom on wide cards -->
 
         <Grid.Resources>
             <Storyboard x:Name="HoverInStoryboard">
@@ -49,15 +47,19 @@
             </Storyboard>
         </Grid.Resources>
 
-        <Grid.RenderTransform>
-            <ScaleTransform x:Name="ScaleTrans" ScaleX="1.0" ScaleY="1.0"/>
-        </Grid.RenderTransform>
-        <Grid.Projection>
-            <PlaneProjection x:Name="TiltProjection"/>
-        </Grid.Projection>
+        <!-- Viewport safety -->
 
         <!-- Main Content -->
-        <Border x:Name="MainBorder" CornerRadius="12" Background="#FF1a1a1a">
+        <Border x:Name="MainBorder" CornerRadius="12" Background="#FF1a1a1a" RenderTransformOrigin="0.5,0.5"
+                PointerEntered="OnPointerEntered"
+                PointerExited="OnPointerExited"
+                PointerMoved="OnPointerMoved">
+            <Border.RenderTransform>
+                <ScaleTransform x:Name="ScaleTrans" ScaleX="1.0" ScaleY="1.0"/>
+            </Border.RenderTransform>
+            <Border.Projection>
+                <PlaneProjection x:Name="TiltProjection"/>
+            </Border.Projection>
             <Grid>
                 <local:ShimmerCard x:Name="PosterShimmer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
                 

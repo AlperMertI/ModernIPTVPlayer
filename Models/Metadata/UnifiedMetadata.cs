@@ -5,6 +5,10 @@ namespace ModernIPTVPlayer.Models.Metadata
 {
     public class UnifiedMetadata
     {
+        private readonly object _lock = new object();
+        [JsonIgnore]
+        public object SyncRoot => _lock;
+
         public string Title { get; set; }
         public string OriginalTitle { get; set; } // Feature #OriginalTitleForMovies
         public string SubTitle { get; set; } // Secondary title (e.g. English title when Turkish is primary)
@@ -17,8 +21,8 @@ namespace ModernIPTVPlayer.Models.Metadata
         public string Year { get; set; }
         public string Runtime { get; set; }
         public string Genres { get; set; }
-        public List<string> Cast { get; set; }
-        public List<string> Directors { get; set; }
+        public List<UnifiedCast> Cast { get; set; } = new List<UnifiedCast>();
+        public List<UnifiedCast> Directors { get; set; } = new List<UnifiedCast>();
         public string TrailerUrl { get; set; }
         public string ImdbId { get; set; }
         public string MetadataId { get; set; } // e.g. "tt1234567" or Stremio internal ID
@@ -63,5 +67,12 @@ namespace ModernIPTVPlayer.Models.Metadata
         public string StreamUrl { get; set; } // For virtual episodes, this might be null until resolved
         
         public string RuntimeFormatted { get; set; } 
+    }
+
+    public class UnifiedCast
+    {
+        public string Name { get; set; }
+        public string Character { get; set; }
+        public string ProfileUrl { get; set; }
     }
 }

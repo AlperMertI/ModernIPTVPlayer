@@ -275,7 +275,7 @@ namespace ModernIPTVPlayer
             BackdropControl.TransitionTo(e.Primary, e.Secondary);
         }
 
-        private void WatchlistGrid_HoverEnded(object sender, EventArgs e)
+        private void WatchlistGrid_HoverEnded(object sender, FrameworkElement card)
         {
             // Reset to dark neutral or keep last color
             // BackdropControl.TransitionTo(Windows.UI.Color.FromArgb(255, 13, 13, 13), Windows.UI.Color.FromArgb(255, 13, 13, 13));

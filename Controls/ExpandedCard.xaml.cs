@@ -35,13 +35,159 @@ namespace ModernIPTVPlayer.Controls
         private Microsoft.UI.Composition.Compositor _compositor;
         private System.Threading.CancellationTokenSource _trailerCts;
 
+        // Mouse Drag-to-Scroll State
+        private bool _isDataDragging = false;
+        private Windows.Foundation.Point _lastPointerPos;
+        private bool _isCastDragging = false;
+        private Windows.Foundation.Point _lastCastPointerPos;
+
+        public System.Collections.ObjectModel.ObservableCollection<CastItem> CastList { get; private set; } = new();
+        public System.Collections.ObjectModel.ObservableCollection<CastItem> DirectorList { get; private set; } = new();
+
         public Image BannerImage => BackdropImage;
 
         public ExpandedCard()
         {
             this.InitializeComponent();
             _compositor = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(this).Compositor;
+
+            // Robust Drag-to-Scroll Registration (Vertical)
+            ContentScrollViewer.AddHandler(PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPointerPressed), true);
+            ContentScrollViewer.AddHandler(PointerMovedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPointerMoved), true);
+            ContentScrollViewer.AddHandler(PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPointerReleased), true);
+            ContentScrollViewer.AddHandler(PointerCanceledEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPointerReleased), true);
+            ContentScrollViewer.AddHandler(PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(OnPointerReleased), true);
+
+            // Robust Drag-to-Scroll Registration (Horizontal - Cast List)
+            CastListView.AddHandler(PointerPressedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(CastListView_PointerPressed), true);
+            CastListView.AddHandler(PointerMovedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(CastListView_PointerMoved), true);
+            CastListView.AddHandler(PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(CastListView_PointerReleased), true);
+            CastListView.AddHandler(PointerCanceledEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(CastListView_PointerReleased), true);
+            CastListView.AddHandler(PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(CastListView_PointerReleased), true);
         }
+
+        #region Drag-to-Scroll Logic (Vertical)
+        private void OnPointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            // Conflict Resolution: If we are already dragging the horizontal list, ignore vertical start
+            if (_isCastDragging) return;
+
+            var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse)
+            {
+                _isDataDragging = true;
+                _lastPointerPos = ptr.Position;
+                ContentScrollViewer.CapturePointer(e.Pointer);
+                e.Handled = true;
+            }
+        }
+
+        private void OnPointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (_isDataDragging)
+            {
+                // Conflict Resolution: If horizontal dragging started somehow, stop vertical
+                if (_isCastDragging)
+                {
+                    _isDataDragging = false;
+                    ContentScrollViewer.ReleasePointerCapture(e.Pointer);
+                    return;
+                }
+
+                var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
+                
+                // Safety: check if left button is still pressed
+                if (!ptr.Properties.IsLeftButtonPressed)
+                {
+                    _isDataDragging = false;
+                    ContentScrollViewer.ReleasePointerCapture(e.Pointer);
+                    return;
+                }
+
+                double deltaY = _lastPointerPos.Y - ptr.Position.Y;
+                if (Math.Abs(deltaY) > 0.1)
+                {
+                    ContentScrollViewer.ChangeView(null, ContentScrollViewer.VerticalOffset + deltaY, null, true);
+                    _lastPointerPos = ptr.Position;
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private void OnPointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (_isDataDragging)
+            {
+                _isDataDragging = false;
+                ContentScrollViewer.ReleasePointerCapture(e.Pointer);
+                e.Handled = true;
+            }
+        }
+        #endregion
+
+        #region Drag-to-Scroll Logic (Horizontal - Cast List)
+        private void CastListView_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse)
+            {
+                _isCastDragging = true;
+                _lastCastPointerPos = ptr.Position;
+                CastListView.CapturePointer(e.Pointer);
+                e.Handled = true;
+            }
+        }
+
+        private void CastListView_PointerMoved(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (_isCastDragging)
+            {
+                var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
+
+                // Safety: check if left button is still pressed
+                if (!ptr.Properties.IsLeftButtonPressed)
+                {
+                    _isCastDragging = false;
+                    CastListView.ReleasePointerCapture(e.Pointer);
+                    return;
+                }
+
+                double deltaX = _lastCastPointerPos.X - ptr.Position.X;
+                if (Math.Abs(deltaX) > 0.1)
+                {
+                    var sv = GetScrollViewer(CastListView);
+                    if (sv != null)
+                    {
+                        sv.ChangeView(sv.HorizontalOffset + deltaX, null, null, true);
+                    }
+                    _lastCastPointerPos = ptr.Position;
+                    e.Handled = true;
+                }
+            }
+        }
+
+        private void CastListView_PointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (_isCastDragging)
+            {
+                _isCastDragging = false;
+                CastListView.ReleasePointerCapture(e.Pointer);
+                e.Handled = true;
+            }
+        }
+
+        private ScrollViewer GetScrollViewer(DependencyObject depObj)
+        {
+            if (depObj is ScrollViewer) return depObj as ScrollViewer;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(depObj); i++)
+            {
+                var child = VisualTreeHelper.GetChild(depObj, i);
+                var result = GetScrollViewer(child);
+                if (result != null) return result;
+            }
+            return null;
+        }
+        #endregion
         
         /// <summary>
         /// Call this when user hovers on a poster (before card is shown).
@@ -492,6 +638,16 @@ namespace ModernIPTVPlayer.Controls
                 // Reset loading ring
                 LoadingRing.IsActive = true;
                 LoadingRing.Visibility = Visibility.Visible;
+
+                // Reset Cast
+                CastList.Clear();
+                CastHeaderText.Visibility = Visibility.Collapsed;
+                CastListView.Visibility = Visibility.Collapsed;
+
+                // Reset Director
+                DirectorList.Clear();
+                DirectorHeaderText.Visibility = Visibility.Collapsed;
+                DirectorListView.Visibility = Visibility.Collapsed;
             }
             else
             {
@@ -567,7 +723,7 @@ namespace ModernIPTVPlayer.Controls
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Fetching Metadata for: {stream.Title}");
                 
-                var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream);
+                var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream, Services.Metadata.MetadataContext.ExpandedCard);
                 if (loadNonce != _loadNonce) return;
 
                 if (unified != null)
@@ -1282,13 +1438,93 @@ namespace ModernIPTVPlayer.Controls
                 BackdropImage.Source = new BitmapImage(new Uri(backdropUrl));
             }
 
-            // Mood Tag Logic (Mock)
             if (unified.Rating > 8.0)
             {
                 MoodTag.Visibility = Visibility.Visible;
                 MoodText.Text = "Top Rated";
                 MoodTag.Background = new SolidColorBrush(Color.FromArgb(255, 0, 180, 0));
             }
+
+            // --- CAST LOGIC ---
+            _ = UpdateCastListAsync(unified);
+            _ = UpdateDirectorListAsync(unified);
+        }
+
+        private async Task UpdateDirectorListAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
+        {
+            if (unified == null) return;
+            
+            try
+            {
+                DirectorList.Clear();
+
+                if (unified.Directors != null && unified.Directors.Count > 0)
+                {
+                    foreach (var d in unified.Directors.Take(5))
+                    {
+                        DirectorList.Add(new CastItem { Name = d.Name, FullProfileUrl = d.ProfileUrl });
+                    }
+                }
+
+                if (DirectorList.Count > 0)
+                {
+                    DirectorHeaderText.Visibility = Visibility.Visible;
+                    DirectorListView.Visibility = Visibility.Visible;
+                    DirectorListView.ItemsSource = DirectorList;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Director Error: {ex.Message}");
+            }
+        }
+
+        private async Task UpdateCastListAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
+        {
+            if (unified == null) return;
+            
+            try
+            {
+                CastList.Clear();
+
+                // 1. Check if Catalog/Unified already provided cast with portraits
+                if (unified.Cast != null && unified.Cast.Count > 0 && unified.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl)))
+                {
+                    foreach (var c in unified.Cast.Take(10))
+                    {
+                        CastList.Add(new CastItem { Name = c.Name, FullProfileUrl = c.ProfileUrl });
+                    }
+                }
+                // 2. Otherwise fallback to TMDB fetch
+                else if (unified.TmdbInfo != null && ModernIPTVPlayer.AppSettings.IsTmdbEnabled)
+                {
+                    var credits = await TmdbHelper.GetCreditsAsync(unified.TmdbInfo.Id, unified.IsSeries);
+                    if (credits?.Cast != null)
+                    {
+                        foreach (var c in credits.Cast.Take(10))
+                        {
+                            CastList.Add(new CastItem { Name = c.Name, FullProfileUrl = c.FullProfileUrl });
+                        }
+                    }
+                }
+
+                if (CastList.Count > 0)
+                {
+                    CastHeaderText.Visibility = Visibility.Visible;
+                    CastListView.Visibility = Visibility.Visible;
+                    CastListView.ItemsSource = CastList;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Cast Error: {ex.Message}");
+            }
+        }
+
+        public class CastItem
+        {
+            public string Name { get; set; }
+            public string FullProfileUrl { get; set; }
         }
 
         private void StaggeredRevealContent()

@@ -16,10 +16,9 @@
         
         <DataTemplate x:Key="StandardCardTemplate" x:DataType="stremioModels:StremioMediaStream">
             <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" 
-                              Subtext="{x:Bind Description, Mode=OneWay}"
                               ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
                               ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
-                              Width="160" Height="240" 
+                              Width="172" Height="252" 
                               HoverStarted="PosterCard_HoverStarted" 
                               HoverEnded="PosterCard_HoverEnded"
                               Tapped="PosterCard_Tapped"
@@ -34,7 +33,7 @@
                                  ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
                                  ShowMeta="{x:Bind IsContinueWatching, Converter={StaticResource InverseBooleanConverter}, Mode=OneWay}"
                                  ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
-                                 Width="280" Height="160" 
+                                 Width="296" Height="176" 
                                  HoverStarted="LandscapeCard_HoverStarted" 
                                  HoverEnded="LandscapeCard_HoverEnded"
                                  Tapped="PosterCard_Tapped"

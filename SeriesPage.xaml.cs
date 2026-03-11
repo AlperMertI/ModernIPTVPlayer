@@ -77,7 +77,7 @@ namespace ModernIPTVPlayer
             
             // Wire Hover Events
             StremioControl.CardHoverStarted += (s, card) => _stremioExpandedCardOverlay.OnHoverStarted(card);
-            StremioControl.CardHoverEnded += async (s, card) => await _stremioExpandedCardOverlay.CloseExpandedCardAsync();
+            StremioControl.CardHoverEnded += async (s, card) => await _stremioExpandedCardOverlay.CloseExpandedCardAsync(card);
             StremioControl.RowScrollStarted += (s, e) => 
             {
                 _stremioExpandedCardOverlay.CancelPendingShow();
@@ -474,8 +474,10 @@ namespace ModernIPTVPlayer
             BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
         }
 
-        private void MediaGrid_HoverEnded(object sender, EventArgs e)
+        private async void MediaGrid_HoverEnded(object sender, FrameworkElement card)
         {
+            _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync(card);
+
             if (_heroColors.HasValue)
             {
                 BackdropControl.TransitionTo(_heroColors.Value.Primary, _heroColors.Value.Secondary);

@@ -89,11 +89,11 @@
         <!-- 2. INFO AREA -->
         <Grid Grid.Row="1">
             <!-- Real Content -->
-            <ScrollViewer VerticalScrollBarVisibility="Auto" VerticalScrollMode="Auto">
+            <ScrollViewer x:Name="ContentScrollViewer" VerticalScrollBarVisibility="Auto" VerticalScrollMode="Auto" Background="Transparent">
                 <StackPanel x:Name="RealContentPanel" Padding="16,10,16,10" Spacing="4" Tapped="DetailsArea_Tapped" Background="Transparent" Opacity="0">
                     <TextBlock x:Name="TitleText" Text="Movie Title" 
-                               Style="{StaticResource TitleTextBlockStyle}" 
-                               FontSize="19" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,0,2"/>
+                                Style="{StaticResource TitleTextBlockStyle}" 
+                                FontSize="19" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,0,2"/>
 
                     <Grid>
                         <!-- Badge Skeleton (Visible during Probe) -->
@@ -128,6 +128,92 @@
                                FontSize="12.5" 
                                TextWrapping="Wrap" 
                                LineHeight="18"/>
+
+                    <TextBlock x:Name="CastHeaderText" Text="Oyuncular" FontSize="12" FontWeight="Bold" Foreground="#DDD" Margin="0,10,0,4" Visibility="Collapsed"/>
+                    <ListView x:Name="CastListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                              ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" Height="92" Margin="0,0,0,4" Visibility="Collapsed"
+                              Background="Transparent">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0"/>
+                                <Setter Property="MinHeight" Value="0"/>
+                                <Setter Property="VerticalAlignment" Value="Top"/>
+                                <Setter Property="VerticalContentAlignment" Value="Top"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Top"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Width="50" VerticalAlignment="Top">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="50"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Border Grid.Row="0" CornerRadius="25" Height="50" Width="50" Background="#1AFFFFFF" BorderBrush="#33FFFFFF" BorderThickness="1">
+                                        <Grid CornerRadius="25">
+                                             <FontIcon Glyph="&#xE77B;" FontSize="20" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                             <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill" Margin="-1"/>
+                                        </Grid>
+                                    </Border>
+                                    <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="9" Foreground="#AAFFFFFF" 
+                                               TextAlignment="Center" TextWrapping="Wrap" MaxLines="2" 
+                                               TextTrimming="CharacterEllipsis" LineHeight="12" Margin="0,4,0,0"/>
+                                    <ToolTipService.ToolTip>
+                                        <ToolTip Content="{Binding Name}"/>
+                                    </ToolTipService.ToolTip>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <TextBlock x:Name="DirectorHeaderText" Text="Yönetmen" FontSize="12" FontWeight="Bold" Foreground="#DDD" Margin="0,10,0,4" Visibility="Collapsed"/>
+                    <ListView x:Name="DirectorListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                              ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" Height="92" Margin="0,0,0,4" Visibility="Collapsed"
+                              Background="Transparent">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0"/>
+                                <Setter Property="MinHeight" Value="0"/>
+                                <Setter Property="VerticalAlignment" Value="Top"/>
+                                <Setter Property="VerticalContentAlignment" Value="Top"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Top"/>
+                            </ItemsPanelTemplate>
+                        </ListView.ItemsPanel>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Width="50" VerticalAlignment="Top">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="50"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+                                    <Border Grid.Row="0" CornerRadius="25" Height="50" Width="50" Background="#1AFFFFFF" BorderBrush="#33FFFFFF" BorderThickness="1">
+                                        <Grid CornerRadius="25">
+                                             <FontIcon Glyph="&#xE77B;" FontSize="20" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                             <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill" Margin="-1"/>
+                                        </Grid>
+                                    </Border>
+                                    <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="9" Foreground="#AAFFFFFF" 
+                                               TextAlignment="Center" TextWrapping="Wrap" MaxLines="2" 
+                                               TextTrimming="CharacterEllipsis" LineHeight="12" Margin="0,4,0,0"/>
+                                    <ToolTipService.ToolTip>
+                                        <ToolTip Content="{Binding Name}"/>
+                                    </ToolTipService.ToolTip>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
                 </StackPanel>
             </ScrollViewer>
 
