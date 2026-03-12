@@ -67,31 +67,24 @@
     </UserControl.Resources>
 
     <Grid>
-        <ScrollViewer x:Name="DiscoveryScrollViewer" 
-                      VerticalScrollBarVisibility="Hidden" 
-                      HorizontalScrollBarVisibility="Disabled"
-                      ViewChanged="ScrollViewer_ViewChanged">
-            <StackPanel Spacing="0" Padding="0,0,0,48">
-                
-                <!-- HERO SECTION -->
+        <!-- DYNAMIC CATALOG ROWS - Now the root scrollable element for virtualization -->
+        <ListView x:Name="DiscoveryRows" 
+                  SelectionMode="None" 
+                  IsItemClickEnabled="False"
+                  ItemTemplateSelector="{StaticResource DiscoveryRowTemplateSelector}"
+                  Padding="0,0,0,48"
+                  Loaded="DiscoveryRows_Loaded">
+            <ListView.Header>
                 <local:HeroSectionControl x:Name="HeroControl" />
-
-                <!-- DYNAMIC CATALOG ROWS -->
-                <ListView x:Name="DiscoveryRows" 
-                          SelectionMode="None" 
-                          IsItemClickEnabled="False"
-                          ItemTemplateSelector="{StaticResource DiscoveryRowTemplateSelector}">
-                    <ListView.ItemContainerStyle>
-                        <Style TargetType="ListViewItem">
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                            <Setter Property="Padding" Value="0"/>
-                            <Setter Property="Margin" Value="0"/>
-                            <Setter Property="MinWidth" Value="0"/>
-                        </Style>
-                    </ListView.ItemContainerStyle>
-                </ListView>
-                
-            </StackPanel>
-        </ScrollViewer>
+            </ListView.Header>
+            <ListView.ItemContainerStyle>
+                <Style TargetType="ListViewItem">
+                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                    <Setter Property="Padding" Value="0"/>
+                    <Setter Property="Margin" Value="0"/>
+                    <Setter Property="MinWidth" Value="0"/>
+                </Style>
+            </ListView.ItemContainerStyle>
+        </ListView>
     </Grid>
 </UserControl>

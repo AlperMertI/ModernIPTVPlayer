@@ -76,7 +76,7 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler RowScrollEnded;
 
         // Exposed properties for Controller linkage
-        public ScrollViewer MainScrollViewer => DiscoveryScrollViewer;
+        public ScrollViewer MainScrollViewer => VisualTreeHelper.GetChild(DiscoveryRows, 0) as ScrollViewer;
 
         private ObservableCollection<CatalogRowViewModel> _discoveryRows = new();
         private int _rowCount = 0;
@@ -109,6 +109,30 @@ namespace ModernIPTVPlayer.Controls
 
             // Listen for addon changes to invalidate local state
             StremioAddonManager.Instance.AddonsChanged += OnAddonsChanged;
+
+            this.Unloaded += StremioDiscoveryControl_Unloaded;
+        }
+
+        private void DiscoveryRows_Loaded(object sender, RoutedEventArgs e)
+        {
+            var sv = MainScrollViewer;
+            if (sv != null)
+            {
+                sv.ViewChanged -= ScrollViewer_ViewChanged;
+                sv.ViewChanged += ScrollViewer_ViewChanged;
+            }
+        }
+
+        private void StremioDiscoveryControl_Unloaded(object sender, RoutedEventArgs e)
+        {
+            // [CRITICAL] Unsubscribe from static event to prevent leak
+            StremioAddonManager.Instance.AddonsChanged -= OnAddonsChanged;
+
+            var sv = MainScrollViewer;
+            if (sv != null)
+            {
+                sv.ViewChanged -= ScrollViewer_ViewChanged;
+            }
         }
 
         private void OnAddonsChanged(object sender, EventArgs e)

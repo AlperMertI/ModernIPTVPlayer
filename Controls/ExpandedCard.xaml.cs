@@ -10,6 +10,7 @@ using Windows.UI;
 using ModernIPTVPlayer;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -211,7 +212,7 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                await TrailerWebView.EnsureCoreWebView2Async();
+                await TrailerWebView.EnsureCoreWebView2Async(await WebView2Service.GetSharedEnvironmentAsync());
                 
                 // Listen for messages
                 TrailerWebView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived; // Prevent duplicates

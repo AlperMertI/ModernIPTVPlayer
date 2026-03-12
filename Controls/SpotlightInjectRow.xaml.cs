@@ -4,6 +4,7 @@ using Microsoft.Web.WebView2.Core;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services.Stremio;
+using ModernIPTVPlayer.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -17,10 +18,11 @@ namespace ModernIPTVPlayer.Controls
     public sealed partial class SpotlightInjectRow : UserControl
     {
         private WebView2 _webView;
+        // Shared WebView2 environment is now managed by WebView2Service
+        private readonly string _instanceId = Guid.NewGuid().ToString("N");
         private List<StremioMediaStream> _items = new List<StremioMediaStream>();
         private int _currentIndex = 0;
         private bool _isTrailerPlaying = false;
-        private readonly string _instanceId = Guid.NewGuid().ToString("N");
         private readonly List<string> _currentImageCandidates = new List<string>();
         private int _currentImageCandidateIndex = 0;
 
@@ -494,23 +496,22 @@ namespace ModernIPTVPlayer.Controls
             
             try
             {
+                // 0. Ensure environment is ready (Managed by WebView2Service)
+                var env = await WebView2Service.GetSharedEnvironmentAsync();
+
                 _webView = new WebView2();
                 _webView.HorizontalAlignment = HorizontalAlignment.Stretch;
                 _webView.VerticalAlignment = VerticalAlignment.Stretch;
                 
                 VideoContainer.Children.Add(_webView);
 
-                string envFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTVPlayer_Spotlight", "env_" + _instanceId);
-                System.IO.Directory.CreateDirectory(envFolder);
-                var env = await CoreWebView2Environment.CreateWithOptionsAsync(null, envFolder, null);
                 if (_webView == null) return;
                 await _webView.EnsureCoreWebView2Async(env);
                 if (_webView == null || _webView.CoreWebView2 == null) return;
                 
-                string contentFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTVPlayer_Spotlight", "content_" + _instanceId);
-                System.IO.Directory.CreateDirectory(contentFolder);
-
                 string virtualHost = $"spotlight-{_instanceId}.moderniptv.local";
+                string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTV_Spotlight", _instanceId);
+                System.IO.Directory.CreateDirectory(tempDir);
                 
                 string htmlContent = $@"<!DOCTYPE html>
 <html>
@@ -538,14 +539,16 @@ namespace ModernIPTVPlayer.Controls
         function onYouTubeIframeAPIReady() {{
             player = new YT.Player('player', {{
                 height: '100%', width: '100%',
-                videoId: '{ytId}', host: 'https://www.youtube-nocookie.com',
+                videoId: '{ytId}', 
+                host: 'https://www.youtube-nocookie.com',
                 playerVars: {{
                     autoplay: 1, mute: 1, controls: 0, disablekb: 1,
                     fs: 0, rel: 0, modestbranding: 1, showinfo: 0,
-                    iv_load_policy: 3, playsinline: 1, loop: 1, playlist: '{ytId}'
+                    iv_load_policy: 3, playsinline: 1, loop: 1, playlist: '{ytId}',
+                    origin: 'https://{virtualHost}'
                 }},
                 events: {{
-                    'onReady': function(e) {{ e.target.mute(); e.target.playVideo(); window.chrome.webview.postMessage('READY'); }}
+                    'onReady': function(e) {{ e.target.mute(); e.target.playVideo(); try {{ window.chrome.webview.postMessage('READY'); }} catch(ex) {{}} }}
                 }}
             }});
         }}
@@ -554,24 +557,24 @@ namespace ModernIPTVPlayer.Controls
             if (player && player.loadVideoById) {{
                 player.loadVideoById({{'videoId': newId, 'startSeconds': 0}});
                 player.playVideo();
-                window.chrome.webview.postMessage('READY');
+                try {{ window.chrome.webview.postMessage('READY'); }} catch(ex) {{}}
             }}
         }}
     </script>
 </body>
 </html>";
                 
-                string htmlFilePath = System.IO.Path.Combine(contentFolder, "spotlight.html");
-                await System.IO.File.WriteAllTextAsync(htmlFilePath, htmlContent);
+                string htmlPath = System.IO.Path.Combine(tempDir, "index.html");
+                await System.IO.File.WriteAllTextAsync(htmlPath, htmlContent);
                 
                 if (_webView == null || _webView.CoreWebView2 == null) return;
 
                 _webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
-                    virtualHost, contentFolder, Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
+                    virtualHost, tempDir, Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
 
                 _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
                 _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
-                _webView.Source = new Uri($"https://{virtualHost}/spotlight.html");
+                _webView.Source = new Uri($"https://{virtualHost}/index.html");
             }
             catch (Exception ex)
             {
@@ -603,7 +606,7 @@ namespace ModernIPTVPlayer.Controls
             _pendingTrailerId = null;
             if (_webView != null)
             {
-                    try
+                try
                 {
                     if (_webView.CoreWebView2 != null)
                     {
@@ -622,13 +625,9 @@ namespace ModernIPTVPlayer.Controls
 
                 try
                 {
-                    string basePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTVPlayer_Spotlight");
-                    string envFolder = System.IO.Path.Combine(basePath, "env_" + _instanceId);
-                    string contentFolder = System.IO.Path.Combine(basePath, "content_" + _instanceId);
-                    if (System.IO.Directory.Exists(contentFolder))
-                        System.IO.Directory.Delete(contentFolder, true);
-                    if (System.IO.Directory.Exists(envFolder))
-                        _ = Task.Run(async () => { await Task.Delay(2000); try { System.IO.Directory.Delete(envFolder, true); } catch { } });
+                    string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTV_Spotlight", _instanceId);
+                    if (System.IO.Directory.Exists(tempDir))
+                        System.IO.Directory.Delete(tempDir, true);
                 }
                 catch { }
             }

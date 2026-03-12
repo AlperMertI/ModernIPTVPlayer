@@ -60,6 +60,11 @@ namespace ModernIPTVPlayer.Controls
         private void HeroSectionControl_Unloaded(object sender, RoutedEventArgs e)
         {
             StopAutoRotation();
+            if (_lastSubscribedItem != null)
+            {
+                _lastSubscribedItem.PropertyChanged -= Item_PropertyChanged;
+                _lastSubscribedItem = null;
+            }
         }
 
         public void SetItems(IEnumerable<StremioMediaStream> items)
@@ -208,7 +213,12 @@ namespace ModernIPTVPlayer.Controls
             // Trigger color extraction via hidden image
             if (!string.IsNullOrEmpty(imgUrl))
             {
-                ColorExtractionImage.Source = new BitmapImage(new Uri(imgUrl));
+                // Tiny decode for extraction only - satisfies technical need for Image control
+                // while keeping memory footprint negligible (kb vs mb).
+                var bitmap = new BitmapImage();
+                bitmap.DecodePixelWidth = 50; 
+                bitmap.UriSource = new Uri(imgUrl);
+                ColorExtractionImage.Source = bitmap;
             }
 
             if (animate && _heroVisual != null && !_heroTransitioning)

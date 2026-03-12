@@ -105,6 +105,7 @@ namespace ModernIPTVPlayer.Controls
         {
             this.InitializeComponent();
             this.Loaded += CatalogRow_Loaded;
+            this.Unloaded += CatalogRow_Unloaded;
         }
 
         private void CatalogRow_Loaded(object sender, RoutedEventArgs e)
@@ -241,6 +242,21 @@ namespace ModernIPTVPlayer.Controls
             }
             _scrollEndTimer.Stop();
             _scrollEndTimer.Start();
+        }
+
+        private void CatalogRow_Unloaded(object sender, RoutedEventArgs e)
+        {
+            if (_scrollViewer != null)
+            {
+                _scrollViewer.ViewChanged -= ScrollViewer_ViewChanged;
+                _scrollViewer = null;
+            }
+
+            if (_scrollEndTimer != null)
+            {
+                _scrollEndTimer.Stop();
+                _scrollEndTimer = null;
+            }
         }
 
         private ScrollViewer FindScrollViewer(DependencyObject parent)

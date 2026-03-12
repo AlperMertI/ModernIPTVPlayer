@@ -15,6 +15,7 @@ using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Metadata;
 using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Models; // Ensure Models namespace is included
+using ModernIPTVPlayer.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -3504,7 +3505,7 @@ namespace ModernIPTVPlayer
             
             try
             {
-                await TrailerWebView.EnsureCoreWebView2Async();
+                await TrailerWebView.EnsureCoreWebView2Async(await WebView2Service.GetSharedEnvironmentAsync());
                 System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] CoreWebView2 Initialized.");
 
                 TrailerWebView.CoreWebView2.WebMessageReceived -= TrailerWebView_WebMessageReceived;
