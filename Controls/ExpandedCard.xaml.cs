@@ -210,6 +210,8 @@ namespace ModernIPTVPlayer.Controls
         /// </summary>
         private async Task PreInitializeWebViewAsync()
         {
+            if (_webViewInitialized) return;
+            
             try
             {
                 await TrailerWebView.EnsureCoreWebView2Async(await WebView2Service.GetSharedEnvironmentAsync());
@@ -250,7 +252,10 @@ namespace ModernIPTVPlayer.Controls
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Pre-init error: {ex.Message}");
-                _isInitializing = false; // Allow retry
+            }
+            finally
+            {
+                _isInitializing = false;
             }
         }
         

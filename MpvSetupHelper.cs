@@ -50,6 +50,13 @@ namespace ModernIPTVPlayer
 
                     await player.SetPropertyAsync("user-agent", userAgent);
                     await player.SetPropertyAsync("http-header-fields", headers);
+
+                    // [FIX] YouTube Bot Detection: Apply browser-like headers for yt-dlp
+                    if (streamUrl.Contains("youtube.com") || streamUrl.Contains("youtu.be"))
+                    {
+                        await player.SetPropertyAsync("ytdl-raw-options", $"user-agent=\"{userAgent}\",no-check-certificate=");
+                        AppLogger.Info("Applied yt-dlp workaround for YouTube.");
+                    }
                 }
 
 

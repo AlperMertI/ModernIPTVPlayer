@@ -3535,10 +3535,22 @@ namespace ModernIPTVPlayer
                 void OnNavigationCompleted(object s, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs e)
                 {
                     TrailerWebView.CoreWebView2.NavigationCompleted -= OnNavigationCompleted;
-                    System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Navigation Completed. Success: {e.IsSuccess}");
+                    if (!e.IsSuccess)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Navigation FAILED: {e.WebErrorStatus}");
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Navigation Completed.");
+                    }
                     tcs.TrySetResult(e.IsSuccess);
                 }
                 TrailerWebView.CoreWebView2.NavigationCompleted += OnNavigationCompleted;
+                
+                // [NEW] Monitor Process Failures (Crash/Hang)
+                TrailerWebView.CoreWebView2.ProcessFailed += (s, args) => {
+                    System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] WebView Process Failed: {args.ProcessFailedKind}, Error: {args.Reason}");
+                };
 
                 TrailerWebView.CoreWebView2.Navigate($"https://{_trailerVirtualHost}/player.html");
 

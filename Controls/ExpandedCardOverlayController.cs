@@ -142,7 +142,7 @@ namespace ModernIPTVPlayer.Controls
                 _hoverTimer.Stop();
                 _pendingHoverCard = card;
                 _hoverTimer.Start();
-                _expandedCard.PrepareForTrailer();
+                // [FIX] Defer PrepareForTrailer to the timer tick to avoid spamming YouTube
             }
         }
 
@@ -242,6 +242,7 @@ namespace ModernIPTVPlayer.Controls
             _flightTimer?.Stop();
             if (_pendingHoverCard != null && IsCardHovered(_pendingHoverCard))
             {
+                _expandedCard.PrepareForTrailer();
                 ShowExpandedCard(_pendingHoverCard);
             }
         }
@@ -251,6 +252,7 @@ namespace ModernIPTVPlayer.Controls
             _hoverTimer?.Stop();
             if (_pendingHoverCard != null && IsCardHovered(_pendingHoverCard))
             {
+                _expandedCard.PrepareForTrailer();
                 ShowExpandedCard(_pendingHoverCard);
             }
         }
