@@ -1545,7 +1545,7 @@ namespace ModernIPTVPlayer
             BadgeSDR.Visibility = Visibility.Collapsed;
             BadgeCodecContainer.Visibility = Visibility.Collapsed;
             if (TechBadgesContent != null) TechBadgesContent.Visibility = Visibility.Collapsed;
-            if (MetadataRibbon != null) MetadataRibbon.Opacity = 0;
+            if (MetadataRibbon != null) MetadataRibbon.Opacity = 1; // Keep visible for shimmers
             if (MetadataSeparator != null) MetadataSeparator.Visibility = Visibility.Collapsed;
             if (MetadataShimmer != null) MetadataShimmer.Visibility = Visibility.Collapsed;
             if (MetadataPanel != null) MetadataPanel.Opacity = 0;
@@ -1567,7 +1567,7 @@ namespace ModernIPTVPlayer
                 // Reset Opacities for Loading (Don't hide parents that hold shimmers)
                 if (IdentityContainer != null) ElementCompositionPreview.GetElementVisual(IdentityContainer).Opacity = 1;
                 if (TitlePanel != null) TitlePanel.Opacity = 0;
-                if (MetadataRibbon != null) MetadataRibbon.Opacity = 0;
+                if (MetadataRibbon != null) MetadataRibbon.Opacity = 1; // [FIX] Ensure parent is visible for shimmers
                 if (ActionBarPanel != null) ActionBarPanel.Opacity = 0;
                 if (OverviewPanel != null) OverviewPanel.Opacity = 0;
                 if (CastSection != null) CastSection.Opacity = 0;
@@ -1866,11 +1866,8 @@ namespace ModernIPTVPlayer
         {
             if (CastShimmer == null) return;
             
-            if (count <= 0)
-            {
-                CastShimmer.Visibility = Visibility.Collapsed;
-                return;
-            }
+            // [FIX] Ensure we show at least 5 cards during loading/initial state
+            int effectiveCount = count <= 0 ? 5 : count;
 
             ElementCompositionPreview.GetElementVisual(CastShimmer).Opacity = 1f;
             CastShimmer.Visibility = Visibility.Visible;
@@ -1878,7 +1875,7 @@ namespace ModernIPTVPlayer
             if (CastShimmer.Children.Count >= 2 && CastShimmer.Children[1] is StackPanel horizontalPanel)
             {
                 horizontalPanel.Children.Clear();
-                int displayCount = Math.Min(count, 8); 
+                int displayCount = Math.Min(effectiveCount, 8); 
 
                 for (int i = 0; i < displayCount; i++)
                 {
@@ -1895,11 +1892,8 @@ namespace ModernIPTVPlayer
         {
             if (DirectorShimmer == null) return;
             
-            if (count <= 0)
-            {
-                DirectorShimmer.Visibility = Visibility.Collapsed;
-                return;
-            }
+            // [FIX] Ensure we show at least 2 cards during loading
+            int effectiveCount = count <= 0 ? 2 : count;
 
             ElementCompositionPreview.GetElementVisual(DirectorShimmer).Opacity = 1f;
             DirectorShimmer.Visibility = Visibility.Visible;
@@ -1907,7 +1901,7 @@ namespace ModernIPTVPlayer
             if (DirectorShimmer.Children.Count >= 2 && DirectorShimmer.Children[1] is StackPanel horizontalPanel)
             {
                 horizontalPanel.Children.Clear();
-                int displayCount = Math.Min(count, 4); 
+                int displayCount = Math.Min(effectiveCount, 4); 
 
                 for (int i = 0; i < displayCount; i++)
                 {
@@ -2520,7 +2514,9 @@ namespace ModernIPTVPlayer
                         }
                     }
                 }
-                else if (CurrentEpisodes.Count > 0)
+                // [UI FIX] User requested NO auto-selection on page load
+                /*
+                if (CurrentEpisodes.Count > 0)
                 {
                     // Select first by default if no history
                     _isProgrammaticSelection = true;
@@ -2535,6 +2531,7 @@ namespace ModernIPTVPlayer
                         _isProgrammaticSelection = false;
                     }
                 }
+                */
             }
         }
 
@@ -2629,51 +2626,12 @@ namespace ModernIPTVPlayer
                           _streamUrl = history.StreamUrl;
                           System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored StreamUrl from history: {_streamUrl}");
                      }
-                     
-                     // Sync narrow list
-                     if (NarrowEpisodesListView != null)
+                               // Sync narrow list
+                    if (NarrowEpisodesListView != null)
                         NarrowEpisodesListView.SelectedItem = ep;
-                     
-                     // UPDATE UI FOR SELECTED EPISODE
-                     if (TitleText != null) 
-                     {
-                         TitleText.Text = ep.Title;
-                         if (StickyTitle != null) StickyTitle.Text = ep.Title;
-                         
-                         // Fix: Always show Series Name as SuperTitle when looking at an episode
-                         if (SuperTitleText != null)
-                         {
-                             SuperTitleText.Text = (_unifiedMetadata?.Title ?? _item?.Title ?? "").ToUpperInvariant();
-                             SuperTitleText.Visibility = Visibility.Visible;
-                         }
-                     }
 
-                     // Update Overview with Episode Synopsis
-                     if (OverviewText != null)
-                     {
-                         OverviewText.Text = !string.IsNullOrEmpty(ep.Overview) ? ep.Overview : _unifiedMetadata?.Overview ?? "";
-                     }
-                     
-                     // Update Play Button
-                     if (PlayButtonText != null)
-                     {
-                         if (ep.HasProgress && ep.ProgressPercent < 95)
-                         {
-                             PlayButtonText.Text = "Devam Et";
-                             if (PlayButtonSubtext != null)
-                             {
-                                 PlayButtonSubtext.Visibility = Visibility.Visible;
-                                 PlayButtonSubtext.Text = ep.ProgressText;
-                             }
-                             if (RestartButton != null) RestartButton.Visibility = Visibility.Visible;
-                         }
-                         else
-                         {
-                             PlayButtonText.Text = _item is StremioMediaStream ? "Kaynak Bul" : "Oynat";
-                             if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                             if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
-                         }
-                     }
+                    // UPDATE INFO PANEL
+                    UpdateInfoPanelVisibility(true);
 
                     // AUTO-RESUME TRIGGER (Series Episode)
                     if (_shouldAutoResume)
@@ -2696,7 +2654,12 @@ namespace ModernIPTVPlayer
                  {
                      _isSelectionSyncing = false;
                  }
-             }
+            }
+            else if (EpisodesListView.SelectedItem == null && !_isProgrammaticSelection)
+            {
+                // DESELECTION logic handled
+                DeselectEpisode();
+            }
         }
 
         private void NarrowEpisodesListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -2720,26 +2683,13 @@ namespace ModernIPTVPlayer
                     {
                          _streamUrl = history.StreamUrl;
                     }
-                    
                     // Sync selection with main list
                     if (EpisodesListView != null)
-                         EpisodesListView.SelectedItem = ep;
-                         
-                    // Sync Title UI
-                    if (TitleText != null)
-                    {
-                        TitleText.Text = ep.Title ?? "";
-                        if (StickyTitle != null) StickyTitle.Text = ep.Title ?? "";
+                        EpisodesListView.SelectedItem = ep;
 
-                        // Fix: Ensure SuperTitle is updated here too (Redundant but safe)
-                        if (SuperTitleText != null)
-                        {
-                            string seriesTitle = _unifiedMetadata?.Title ?? _item?.Title ?? "";
-                            SuperTitleText.Text = seriesTitle.ToUpperInvariant();
-                            SuperTitleText.Visibility = Visibility.Visible;
-                        }
-                    }
-                    
+                    // Update UI
+                    UpdateInfoPanelVisibility(true);
+
                     // Update Play Button
                     if (PlayButtonText != null)
                     {
@@ -2760,14 +2710,15 @@ namespace ModernIPTVPlayer
                             if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
                         }
                     }
-
-                    // PREVIEW
-                    StartPrebuffering(_streamUrl, history?.Position ?? 0);
                 }
                 finally
                 {
                     _isSelectionSyncing = false;
                 }
+            }
+            else if (NarrowEpisodesListView.SelectedItem == null && !_isProgrammaticSelection)
+            {
+                DeselectEpisode();
             }
         }
 
@@ -4679,6 +4630,9 @@ namespace ModernIPTVPlayer
                     SourcesPanel.Visibility = Visibility.Collapsed;
                     NarrowSourcesSection.Visibility = Visibility.Visible;
                 }
+
+                // Update info panel to show Episode Info
+                UpdateInfoPanelVisibility(true);
             }
             else
             {
@@ -4698,6 +4652,9 @@ namespace ModernIPTVPlayer
                     EpisodesPanel.Visibility = Visibility.Visible;
                     NarrowEpisodesSection.Visibility = Visibility.Visible;
                 }
+
+                // Restore Series Info
+                UpdateInfoPanelVisibility(false);
             }
         }
 
@@ -5046,15 +5003,6 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void BtnCloseSources_Click(object sender, RoutedEventArgs e)
-        {
-            ShowSourcesPanel(false);
-        }
-
-        private void BtnBackToEpisodes_Click(object sender, RoutedEventArgs e)
-        {
-            ShowSourcesPanel(false);
-        }
 
         private void ObsidianTray_TrayClosed(object sender, EventArgs e)
         {
@@ -6688,6 +6636,108 @@ namespace ModernIPTVPlayer
             if (parentObject == null) return null;
             if (parentObject is T parent) return parent;
             return FindParent<T>(parentObject);
+        }
+        private void DeselectEpisode()
+        {
+            _isProgrammaticSelection = true;
+            try
+            {
+                if (EpisodesListView != null) EpisodesListView.SelectedItem = null;
+                if (NarrowEpisodesListView != null) NarrowEpisodesListView.SelectedItem = null;
+                _selectedEpisode = null;
+                _streamUrl = null;
+                
+                // Close Sources
+                ShowSourcesPanel(false);
+                
+                // Restore Series Info
+                UpdateInfoPanelVisibility(false);
+                
+                // Restore Play Button
+                if (PlayButtonText != null)
+                {
+                    PlayButtonText.Text = "Oynat";
+                    if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                }
+                if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
+            }
+            finally
+            {
+                _isProgrammaticSelection = false;
+            }
+        }
+
+        private void UpdateInfoPanelVisibility(bool showEpisode)
+        {
+            if (showEpisode && _selectedEpisode != null)
+            {
+                // EPISODE VIEW
+                if (TitleText != null)
+                {
+                    TitleText.Text = _selectedEpisode.Title;
+                    if (StickyTitle != null) StickyTitle.Text = _selectedEpisode.Title;
+                    
+                    // Always show Series Name as SuperTitle when looking at an episode
+                    if (SuperTitleText != null)
+                    {
+                        SuperTitleText.Text = (_unifiedMetadata?.Title ?? _item?.Title ?? "").ToUpperInvariant();
+                        SuperTitleText.Visibility = Visibility.Visible;
+                    }
+
+                    // Hide Logo to show episode title text
+                    if (ContentLogo != null) ContentLogo.Visibility = Visibility.Collapsed;
+                    if (TitlePanel != null) TitlePanel.Visibility = Visibility.Visible;
+                    if (TitlePanel != null) TitlePanel.Opacity = 1;
+                    AdjustTitleShimmer();
+                }
+
+                if (OverviewText != null)
+                {
+                    OverviewText.Text = !string.IsNullOrEmpty(_selectedEpisode.Overview) 
+                        ? _selectedEpisode.Overview 
+                        : _unifiedMetadata?.Overview ?? "";
+                }
+            }
+            else
+            {
+                // SERIES/MOVIE VIEW
+                if (TitleText != null)
+                {
+                    TitleText.Text = _unifiedMetadata?.Title ?? _item?.Title ?? "";
+                    if (StickyTitle != null) StickyTitle.Text = TitleText.Text;
+                    
+                    if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
+
+                    // Show Logo if available
+                    if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.LogoUrl))
+                    {
+                        if (ContentLogo != null) ContentLogo.Visibility = Visibility.Visible;
+                        if (TitlePanel != null) TitlePanel.Visibility = Visibility.Collapsed;
+                    }
+                    else
+                    {
+                        if (ContentLogo != null) ContentLogo.Visibility = Visibility.Collapsed;
+                        if (TitlePanel != null) TitlePanel.Visibility = Visibility.Visible;
+                        if (TitlePanel != null) TitlePanel.Opacity = 1;
+                    }
+                    AdjustTitleShimmer();
+                }
+
+                if (OverviewText != null)
+                {
+                    OverviewText.Text = _unifiedMetadata?.Overview ?? _item?.Description ?? "";
+                }
+            }
+        }
+
+        private void BtnCloseSources_Click(object sender, RoutedEventArgs e)
+        {
+            DeselectEpisode();
+        }
+
+        private void BtnBackToEpisodes_Click(object sender, RoutedEventArgs e)
+        {
+            ShowSourcesPanel(false);
         }
     }
 }

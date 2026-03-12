@@ -255,6 +255,13 @@ namespace ModernIPTVPlayer.Services.Metadata
                         if (seededKeys.Contains(key)) continue;
 
                         SeedFromCatalogMetadata(metadata, fragment, trace, quiet: true);
+                        
+                        // [NEW] Merge episodes from all fragments (SKIP during grid discovery for performance)
+                        if (metadata.IsSeries && fragment.Meta?.Videos != null && context != MetadataContext.Discovery)
+                        {
+                            MergeStremioEpisodes(fragment.Meta, metadata, false);
+                        }
+
                         seededKeys.Add(key);
                     }
                     trace.Log("GlobalSeed", $"Seeded from {seededKeys.Count} unique cached fragments.");
@@ -469,7 +476,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                     AddUniqueBackdrop(metadata, entry.Meta.Background, onBackdropFound);
                                 }
 
-                                if (metadata.IsSeries)
+                                if (metadata.IsSeries && context != MetadataContext.Discovery)
                                 {
                                     MergeStremioEpisodes(entry.Meta, metadata, overwritePrimary);
                                 }
@@ -501,6 +508,11 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 trace.Log("Error", ex.Message);
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CRITICAL ERROR: {ex.Message}");
+            }
+
+            if (metadata.IsSeries)
+            {
+                SortSeasons(metadata);
             }
 
             var finalMissing = GetMissingFields(metadata, GetRequiredFields(context));
@@ -597,6 +609,12 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             // Mapping core fields (using thorough shared logic)
             MapStremioToUnified(stream.Meta, metadata, canOverwriteSeedFields, quiet);
+
+            // [NEW] Merge episodes from catalog metadata
+            if (metadata.IsSeries && stream.Meta?.Videos != null)
+            {
+                MergeStremioEpisodes(stream.Meta, metadata, canOverwriteSeedFields);
+            }
 
             if (stream.Meta.ImdbRating != null)
             {
@@ -988,7 +1006,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 metadata.Seasons.Add(season);
                             }
                         }
-                         metadata.Seasons = metadata.Seasons.OrderBy(s => s.SeasonNumber).ToList();
+                          metadata.Seasons = metadata.Seasons
+                             .OrderBy(s => s.SeasonNumber == 0 ? int.MaxValue : s.SeasonNumber)
+                             .ToList();
                     }
                     
                     metadata.DataSource += " + IPTV";
@@ -1370,7 +1390,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
                 
                 if (tmdb == null)
-                    tmdb = await TmdbHelper.GetTvByExternalIdAsync(metadata.ImdbId);
+                {
+                    var searchResult = await TmdbHelper.GetTvByExternalIdAsync(metadata.ImdbId);
+                    if (searchResult != null)
+                    {
+                        // [FIX] External lookup returns search-level result. Must fetch FULL details for seasons.
+                        tmdb = await TmdbHelper.GetTvByIdAsync(searchResult.Id);
+                    }
+                }
             }
             else
             {
@@ -1427,41 +1454,36 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             if (stremio?.Videos == null) return;
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int added = 0;
+            int updated = 0;
+
+            // Pre-create dictionaries for O(1) lookups
+            var seasonMap = metadata.Seasons.ToDictionary(s => s.SeasonNumber);
+
             var grouped = stremio.Videos
                 .Where(v => v.Season >= 0)
-                .GroupBy(v => v.Season)
-                .OrderBy(g => g.Key);
+                .GroupBy(v => v.Season);
 
             foreach (var group in grouped)
             {
-                var season = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == group.Key);
-                if (season == null)
+                int sNum = group.Key;
+                if (!seasonMap.TryGetValue(sNum, out var season))
                 {
                     season = new UnifiedSeason
                     {
-                        SeasonNumber = group.Key,
-                        Name = group.Key == 0 ? "Özel Bölümler" : $"{group.Key}. Sezon"
+                        SeasonNumber = sNum,
+                        Name = sNum == 0 ? "Özel Bölümler" : $"{sNum}. Sezon"
                     };
                     metadata.Seasons.Add(season);
+                    seasonMap[sNum] = season;
                 }
+
+                var episodeMap = season.Episodes.ToDictionary(e => e.EpisodeNumber);
 
                 foreach (var vid in group.OrderBy(v => v.Episode))
                 {
-                    var existingEpisode = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == vid.Episode);
-                    if (existingEpisode == null)
-                    {
-                        season.Episodes.Add(new UnifiedEpisode
-                        {
-                            Id = vid.Id,
-                            SeasonNumber = vid.Season,
-                            EpisodeNumber = vid.Episode,
-                            Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
-                            Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description,
-                            ThumbnailUrl = vid.Thumbnail,
-                            AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
-                        });
-                    }
-                    else
+                    if (episodeMap.TryGetValue(vid.Episode, out var existingEpisode))
                     {
                         // Update missing fields OR override if overwrite is true
                         bool isGenericTitle = IsGenericEpisodeTitle(existingEpisode.Title, metadata.Title);
@@ -1494,9 +1516,31 @@ namespace ModernIPTVPlayer.Services.Metadata
                             
                         if ((overwrite || existingEpisode.AirDate == null) && !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d2))
                             existingEpisode.AirDate = d2;
+
+                        updated++;
+                    }
+                    else
+                    {
+                        var newEp = new UnifiedEpisode
+                        {
+                            Id = vid.Id,
+                            SeasonNumber = vid.Season,
+                            EpisodeNumber = vid.Episode,
+                            Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
+                            Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description,
+                            ThumbnailUrl = vid.Thumbnail,
+                            AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
+                        };
+                        season.Episodes.Add(newEp);
+                        episodeMap[vid.Episode] = newEp;
+                        added++;
                     }
                 }
             }
+            
+            sw.Stop();
+            if (sw.ElapsedMilliseconds > 10)
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] MergeStremioEpisodes took {sw.ElapsedMilliseconds}ms for {stremio.Videos.Count} vids (Added:{added}, Updated:{updated})");
         }
 
         private bool IsGenericEpisodeTitle(string title, string seriesTitle = null)
@@ -1530,12 +1574,14 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (int.TryParse(t, out _)) return true; // e.g., "1", "02", "12"
             
             // Extract only the letters from the title (e.g., "1. Bölüm" -> "bölüm")
-            string lettersOnly = new string(t.Where(c => char.IsLetter(c)).ToArray());
+            // [FIX] Turkish characters handling for generic title check
+            string lettersOnly = new string(t.Replace("ı", "i").Replace("ö", "o").Replace("ü", "u").Replace("ş", "s").Replace("ç", "c").Replace("ğ", "g")
+                .Where(c => char.IsLetter(c)).ToArray());
             
             if (string.IsNullOrEmpty(lettersOnly)) return true; // empty like "1.0", "1-2"
 
             // Check for generic episode/season naming patterns
-            return lettersOnly == "bölüm" || 
+            return lettersOnly == "bolum" || 
                    lettersOnly == "episode" || 
                    lettersOnly == "ep" || 
                    lettersOnly == "sezon" || 
@@ -1591,9 +1637,16 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                  metadata.Seasons.Add(new UnifiedSeason { SeasonNumber = 1, Name = "1. Sezon" });
             }
-            
-            // Ensure correct order
-            metadata.Seasons = metadata.Seasons.OrderBy(s => s.SeasonNumber).ToList();
+        }
+
+        private void SortSeasons(UnifiedMetadata metadata)
+        {
+            if (metadata.Seasons == null || metadata.Seasons.Count <= 1) return;
+
+            // Ensure correct order: 1..N, then 0 (Specials)
+            metadata.Seasons = metadata.Seasons
+                .OrderBy(s => s.SeasonNumber == 0 ? int.MaxValue : s.SeasonNumber)
+                .ToList();
         }
 
         private void AddUniqueBackdrop(UnifiedMetadata metadata, string url, Action<string> onBackdropFound = null)

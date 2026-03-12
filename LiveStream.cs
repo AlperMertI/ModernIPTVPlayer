@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.ComponentModel;
@@ -15,6 +15,7 @@ namespace ModernIPTVPlayer
         public int Id => StreamId;
         public string? IMDbId => null;
         public string Title => Name;
+        public string? Description => null;
         public string PosterUrl => IconUrl;
         public string? BackdropUrl => null; // Live streams don't typically have backdrops
         

@@ -15,6 +15,7 @@ namespace ModernIPTVPlayer
         public int Id => StreamId;
         public string? IMDbId => null; // VODs usually don't have IMDB ID directly unless parsed
         public string Title => Name;
+        public string? Description => null;
         public string PosterUrl => IconUrl;
         public string? BackdropUrl => null;
         public string StreamUrl { get; set; } = "";

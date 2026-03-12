@@ -72,6 +72,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string LandscapeImageUrl => !string.IsNullOrEmpty(Banner) ? Banner : PosterUrl;
 
         public bool IsContinueWatching { get; set; }
+        public bool IsNotContinueWatching => !IsContinueWatching;
         public bool IsMovie => Meta.Type?.ToLower() == "movie";
         public bool IsSeries => Meta.Type?.ToLower() == "series" || Meta.Type?.ToLower() == "tv";
 

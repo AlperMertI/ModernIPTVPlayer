@@ -950,7 +950,7 @@
 
                                                   <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="6">
                                                       <!-- File Name -->
-                                                      <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="15" Foreground="White" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+                                                      <TextBlock Text="{Binding Title}" ToolTipService.ToolTip="{Binding Title}" FontWeight="Bold" FontSize="15" Foreground="White" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
                                                       
                                                       <StackPanel Orientation="Horizontal" Spacing="8">
                                                           <!-- Quality -->
@@ -968,7 +968,7 @@
                                                       </StackPanel>
 
                                                       <!-- Metadata Info -->
-                                                      <TextBlock Text="{Binding Name}" FontSize="12" Foreground="#CCC" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
+                                                      <TextBlock Text="{Binding Name}" ToolTipService.ToolTip="{Binding Name}" FontSize="12" Foreground="#CCC" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
                                                   </StackPanel>
                                               </Grid>
                                               
@@ -1210,7 +1210,7 @@
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="Bold" Opacity="0.7"/>
+                                <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="Bold" Opacity="0.7"/>
                             </DataTemplate>
                         </ListView.ItemTemplate>
                     </ListView>
@@ -1230,7 +1230,7 @@
                                           <TextBlock Text="{Binding ProviderText}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="1"/>
                                       </Border>
                                       <StackPanel Grid.Column="1" Spacing="6">
-                                           <TextBlock Text="{Binding Title}" FontWeight="Bold" FontSize="14" Foreground="White" TextWrapping="Wrap" MaxLines="3"/>
+                                           <TextBlock Text="{Binding Title}" ToolTipService.ToolTip="{Binding Title}" FontWeight="Bold" FontSize="14" Foreground="White" TextWrapping="Wrap" MaxLines="3"/>
                                            
                                            <StackPanel Orientation="Horizontal" Spacing="6">
                                                <!-- Quality -->
@@ -1247,7 +1247,7 @@
                                                </Border>
                                            </StackPanel>
                                            
-                                           <TextBlock Text="{Binding Name}" FontSize="11" Foreground="#888" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
+                                            <TextBlock Text="{Binding Name}" ToolTipService.ToolTip="{Binding Name}" FontSize="11" Foreground="#888" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
                                       </StackPanel>
                                       
                                       <!-- Active State Overlay -->

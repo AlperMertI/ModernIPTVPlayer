@@ -12,8 +12,6 @@
     d:DesignHeight="1000"
     d:DesignWidth="1200">
     <UserControl.Resources>
-        <converters:InverseBooleanConverter x:Key="InverseBooleanConverter"/>
-        
         <DataTemplate x:Key="StandardCardTemplate" x:DataType="stremioModels:StremioMediaStream">
             <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" 
                               ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
@@ -31,7 +29,7 @@
                                  Year="{x:Bind Year, Mode=OneWay}"
                                  RatingText="{x:Bind Rating, Mode=OneWay}"
                                  ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
-                                 ShowMeta="{x:Bind IsContinueWatching, Converter={StaticResource InverseBooleanConverter}, Mode=OneWay}"
+                                 ShowMeta="{x:Bind IsNotContinueWatching, Mode=OneWay}"
                                  ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
                                  Width="296" Height="176" 
                                  HoverStarted="LandscapeCard_HoverStarted" 
