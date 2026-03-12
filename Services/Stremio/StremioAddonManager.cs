@@ -10,13 +10,32 @@ namespace ModernIPTVPlayer.Services.Stremio
 {
     public class StremioAddonManager
     {
+        private static readonly object _instanceLock = new();
         private static StremioAddonManager _instance;
-        public static StremioAddonManager Instance => _instance ??= new StremioAddonManager();
+        public static StremioAddonManager Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    lock (_instanceLock)
+                    {
+                        _instance ??= new StremioAddonManager();
+                    }
+                }
+                return _instance;
+            }
+        }
 
         private const string ADDONS_KEY = "StremioInstalledAddons";
         private const string MANIFEST_CACHE_FILE = "stremio_manifests.json";
-        private List<string> _addonUrls;
+        
+        private readonly object _addonLock = new();
+        private List<string> _addonUrls = new();
         private Dictionary<string, StremioManifest> _manifestCache = new Dictionary<string, StremioManifest>();
+        
+        private bool _isInitializing = false;
+        private readonly object _initLock = new();
 
         public event EventHandler AddonsChanged;
 
@@ -30,39 +49,58 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         private async Task InitializeAsync()
         {
-            await LoadManifestsFromDiskAsync();
-            if (_manifestCache.Count > 0)
+            lock (_initLock)
             {
-                // Notify UI immediately that we have cached manifests
-                AddonsChanged?.Invoke(this, EventArgs.Empty);
+                if (_isInitializing) return;
+                _isInitializing = true;
             }
-            await RefreshManifestsAsync();
+
+            try
+            {
+                await LoadManifestsFromDiskAsync();
+                if (_manifestCache.Count > 0)
+                {
+                    // Notify UI immediately that we have cached manifests
+                    AddonsChanged?.Invoke(this, EventArgs.Empty);
+                }
+                await RefreshManifestsAsync();
+            }
+            finally
+            {
+                lock (_initLock) { _isInitializing = false; }
+            }
         }
 
         private void LoadAddons()
         {
-            var localSettings = ApplicationData.Current.LocalSettings;
-            if (localSettings.Values.ContainsKey(ADDONS_KEY))
+            lock (_addonLock)
             {
-                string json = localSettings.Values[ADDONS_KEY] as string;
-                _addonUrls = JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
-            }
-            else
-            {
-                // Default: Cinemeta (Official Catalog)
-                _addonUrls = new List<string>
+                var localSettings = ApplicationData.Current.LocalSettings;
+                if (localSettings.Values.ContainsKey(ADDONS_KEY))
                 {
-                    "https://v3-cinemeta.strem.io"
-                };
-                SaveAddons();
+                    string json = localSettings.Values[ADDONS_KEY] as string;
+                    _addonUrls = JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
+                }
+                else
+                {
+                    // Default: Cinemeta (Official Catalog)
+                    _addonUrls = new List<string>
+                    {
+                        "https://v3-cinemeta.strem.io"
+                    };
+                    SaveAddons();
+                }
             }
         }
 
         private void SaveAddons()
         {
-            var localSettings = ApplicationData.Current.LocalSettings;
-            string json = JsonSerializer.Serialize(_addonUrls);
-            localSettings.Values[ADDONS_KEY] = json;
+            lock (_addonLock)
+            {
+                var localSettings = ApplicationData.Current.LocalSettings;
+                string json = JsonSerializer.Serialize(_addonUrls);
+                localSettings.Values[ADDONS_KEY] = json;
+            }
         }
 
         private async Task LoadManifestsFromDiskAsync()
@@ -76,16 +114,20 @@ namespace ModernIPTVPlayer.Services.Stremio
                     var file = await folder.GetFileAsync(MANIFEST_CACHE_FILE);
                     string json = await FileIO.ReadTextAsync(file);
                     var cache = JsonSerializer.Deserialize<Dictionary<string, StremioManifest>>(json);
+                    
                     if (cache != null)
                     {
-                        _manifestCache = cache;
-                        System.Diagnostics.Debug.WriteLine($"[StremioAddonManager] Loaded {_manifestCache.Count} manifests from disk.");
+                        lock (_addonLock)
+                        {
+                            _manifestCache = cache;
+                        }
+                        AppLogger.Info($"[StremioAddonManager] Loaded {cache.Count} manifests from disk.");
                     }
                 }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioAddonManager] Error loading manifest cache: {ex.Message}");
+                AppLogger.Error($"[StremioAddonManager] Error loading manifest cache: {ex.Message}");
             }
         }
 
@@ -93,14 +135,19 @@ namespace ModernIPTVPlayer.Services.Stremio
         {
             try
             {
+                string json;
+                lock (_addonLock)
+                {
+                    json = JsonSerializer.Serialize(_manifestCache);
+                }
+
                 var folder = ApplicationData.Current.LocalFolder;
                 var file = await folder.CreateFileAsync(MANIFEST_CACHE_FILE, CreationCollisionOption.ReplaceExisting);
-                string json = JsonSerializer.Serialize(_manifestCache);
                 await FileIO.WriteTextAsync(file, json);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioAddonManager] Error saving manifest cache: {ex.Message}");
+                AppLogger.Error($"[StremioAddonManager] Error saving manifest cache: {ex.Message}");
             }
         }
         
@@ -109,14 +156,11 @@ namespace ModernIPTVPlayer.Services.Stremio
             var client = HttpHelper.Client;
             bool changed = false;
 
-            foreach (var url in _addonUrls)
-            {
-                // If we already have it in memory, skip remote fetch for now?
-                // Or maybe fetch to update? Let's treat memory cache as "good enough" for quick start,
-                // but maybe verify if we shouldn't refresh periodically.
-                // For now, only fetch if MISSING.
-                // Removed: if (_manifestCache.ContainsKey(url)) continue;
+            List<string> urls;
+            lock (_addonLock) { urls = _addonUrls.ToList(); }
 
+            foreach (var url in urls)
+            {
                 try
                 {
                     string manifestUrl = $"{url.TrimEnd('/')}/manifest.json";
@@ -130,14 +174,17 @@ namespace ModernIPTVPlayer.Services.Stremio
                         var manifest = JsonSerializer.Deserialize<StremioManifest>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                         if (manifest != null)
                         {
-                            _manifestCache[url] = manifest;
+                            lock (_addonLock)
+                            {
+                                _manifestCache[url] = manifest;
+                            }
                             changed = true;
                         }
                     }
                 }
                 catch (Exception ex)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[StremioAddonManager] Failed to fetch manifest for {url}: {ex.Message}");
+                    AppLogger.Warn($"[StremioAddonManager] Failed to fetch manifest for {url}: {ex.Message}");
                 }
             }
 
@@ -148,20 +195,29 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
         }
 
-        public List<string> GetAddons() => _addonUrls;
+        public List<string> GetAddons()
+        {
+            lock (_addonLock)
+            {
+                return _addonUrls.ToList();
+            }
+        }
         
         public List<(string BaseUrl, StremioManifest Manifest)> GetAddonsWithManifests()
         {
             var list = new List<(string, StremioManifest)>();
-            foreach(var url in _addonUrls)
+            lock (_addonLock)
             {
-                if (_manifestCache.TryGetValue(url, out var manifest))
+                foreach(var url in _addonUrls)
                 {
-                    list.Add((url, manifest));
-                }
-                else
-                {
-                    list.Add((url, null));
+                    if (_manifestCache.TryGetValue(url, out var manifest))
+                    {
+                        list.Add((url, manifest));
+                    }
+                    else
+                    {
+                        list.Add((url, null));
+                    }
                 }
             }
             return list;
@@ -169,9 +225,18 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         public async void AddAddon(string url)
         {
-            if (!_addonUrls.Contains(url))
+            bool added = false;
+            lock (_addonLock)
             {
-                _addonUrls.Add(url);
+                if (!_addonUrls.Contains(url))
+                {
+                    _addonUrls.Add(url);
+                    added = true;
+                }
+            }
+
+            if (added)
+            {
                 SaveAddons();
                 await RefreshManifestsAsync(); // Will fetch and save
                 AddonsChanged?.Invoke(this, EventArgs.Empty);
@@ -180,11 +245,20 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         public void RemoveAddon(string url)
         {
-            if (_addonUrls.Contains(url))
+            bool removed = false;
+            lock (_addonLock)
             {
-                _addonUrls.Remove(url);
+                if (_addonUrls.Contains(url))
+                {
+                    _addonUrls.Remove(url);
+                    if (_manifestCache.ContainsKey(url)) _manifestCache.Remove(url);
+                    removed = true;
+                }
+            }
+
+            if (removed)
+            {
                 SaveAddons();
-                if (_manifestCache.ContainsKey(url)) _manifestCache.Remove(url);
                 _ = SaveManifestsToDiskAsync();
                 AddonsChanged?.Invoke(this, EventArgs.Empty);
             }
@@ -192,25 +266,34 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         public void UpdateAddonOrder(List<string> orderedUrls)
         {
-            _addonUrls = orderedUrls;
+            lock (_addonLock)
+            {
+                _addonUrls = orderedUrls;
+            }
             SaveAddons();
             AddonsChanged?.Invoke(this, EventArgs.Empty);
         }
 
         public string GetAddonName(string url)
         {
-            if (_manifestCache.TryGetValue(url, out var manifest) && manifest != null)
+            lock (_addonLock)
             {
-                return manifest.Name;
+                if (_manifestCache.TryGetValue(url, out var manifest) && manifest != null)
+                {
+                    return manifest.Name;
+                }
             }
             return null;
         }
 
         public string GetAddonIcon(string url)
         {
-             if (_manifestCache.TryGetValue(url, out var manifest) && manifest != null && !string.IsNullOrEmpty(manifest.Logo))
+            lock (_addonLock)
             {
-                return manifest.Logo;
+                if (_manifestCache.TryGetValue(url, out var manifest) && manifest != null && !string.IsNullOrEmpty(manifest.Logo))
+                {
+                    return manifest.Logo;
+                }
             }
             return null;
         }

@@ -212,6 +212,128 @@ namespace ModernIPTVPlayer
             );
         }
 
+        /// <summary>
+        /// APCA (Advanced Perceptual Contrast Algorithm) implementation for modern readability.
+        /// Returns Lc (Contrast Value) between -106 and 106.
+        /// </summary>
+        public static double GetContrastAPCA(Color textColor, Color backgroundColor)
+        {
+            double txtY = GetPerceptualLuminance(textColor);
+            double bgY = GetPerceptualLuminance(backgroundColor);
+
+            double contrast = 0;
+            double sapcScale = 1.14;
+
+            if (bgY > txtY)
+            {
+                // Light background, dark text
+                contrast = (Math.Pow(bgY, 0.56) - Math.Pow(txtY, 0.57)) * sapcScale;
+                contrast = (contrast < 0.022) ? 0 : (contrast - 0.027) * 40.0;
+            }
+            else
+            {
+                // Dark background, light text
+                contrast = (Math.Pow(bgY, 0.62) - Math.Pow(txtY, 0.65)) * sapcScale;
+                contrast = (contrast > -0.022) ? 0 : (contrast + 0.027) * 40.0;
+            }
+
+            // APCA result is already scaled by 40.0 to be in the 0-100 range.
+            // Redundant * 100.0 was causing values to always hit the clamp.
+            return Math.Clamp(contrast, -108, 108);
+        }
+
+        private static double GetPerceptualLuminance(Color c)
+        {
+            // Simple sRGB to Luminance with APCA weights
+            double r = Math.Pow(c.R / 255.0, 2.4);
+            double g = Math.Pow(c.G / 255.0, 2.4);
+            double b = Math.Pow(c.B / 255.0, 2.4);
+            
+            // APCA 0.98G weights
+            return (r * 0.2126729) + (g * 0.7151522) + (b * 0.0721750);
+        }
+
+        public static Color GetContrastSafeColor(Color baseColor, Color backgroundColor, double targetLc = 75)
+        {
+            // Evaluate both directions to find the best inherent contrast
+            double whiteLc = Math.Abs(GetContrastAPCA(Color.FromArgb(255, 255, 255, 255), backgroundColor));
+            double blackLc = Math.Abs(GetContrastAPCA(Color.FromArgb(255, 0, 0, 0), backgroundColor));
+
+            bool currentIsReadable = Math.Abs(GetContrastAPCA(baseColor, backgroundColor)) >= targetLc;
+            if (currentIsReadable) return baseColor;
+
+            // Pick direction based on what can potentially reach higher contrast.
+            // Bias heavily towards "lighten" (White text) because our UI system can 
+            // protect white text with darkening gradients, but can't easily protect dark text.
+            bool lighten = whiteLc >= (blackLc - 25);
+
+            Color current = baseColor;
+            for (int i = 0; i < 12; i++)
+            {
+                if (lighten)
+                {
+                    // Lighten text
+                    current = Color.FromArgb(255, 
+                        (byte)Math.Min(255, current.R + 25), 
+                        (byte)Math.Min(255, current.G + 25), 
+                        (byte)Math.Min(255, current.B + 25));
+                }
+                else
+                {
+                    // Darken text
+                    current = Color.FromArgb(255, 
+                        (byte)Math.Max(0, current.R - 25), 
+                        (byte)Math.Max(0, current.G - 25), 
+                        (byte)Math.Max(0, current.B - 25));
+                }
+
+                if (Math.Abs(GetContrastAPCA(current, backgroundColor)) >= targetLc)
+                    return current;
+            }
+
+            return lighten ? Color.FromArgb(255, 255, 255, 255) : Color.FromArgb(255, 0, 0, 0);
+        }
+
+        public static Color ExtractAreaAverageColor(byte[] pixels, int width, int height, double areaLeft, double areaTop, double areaWidth, double areaHeight)
+        {
+            try
+            {
+                long sumR = 0, sumG = 0, sumB = 0, count = 0;
+
+                int xStart = (int)(areaLeft * width);
+                int yStart = (int)(areaTop * height);
+                int xEnd = (int)((areaLeft + areaWidth) * width);
+                int yEnd = (int)((areaTop + areaHeight) * height);
+
+                xStart = Math.Clamp(xStart, 0, width - 1);
+                yStart = Math.Clamp(yStart, 0, height - 1);
+                xEnd = Math.Clamp(xEnd, 0, width);
+                yEnd = Math.Clamp(yEnd, 0, height);
+
+                for (int y = yStart; y < yEnd; y++)
+                {
+                    for (int x = xStart; x < xEnd; x++)
+                    {
+                        int i = (y * width + x) * 4;
+                        if (i + 3 >= pixels.Length) continue;
+
+                        sumB += pixels[i];
+                        sumG += pixels[i + 1];
+                        sumR += pixels[i + 2];
+                        count++;
+                    }
+                }
+
+                if (count == 0) return Color.FromArgb(255, 20, 20, 20);
+
+                return Color.FromArgb(255, (byte)(sumR / count), (byte)(sumG / count), (byte)(sumB / count));
+            }
+            catch
+            {
+                return Color.FromArgb(255, 20, 20, 20);
+            }
+        }
+
         public static bool IsPlaceholder(string url)
         {
             if (string.IsNullOrWhiteSpace(url)) return true;

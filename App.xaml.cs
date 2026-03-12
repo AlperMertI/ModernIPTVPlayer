@@ -17,6 +17,7 @@ using Windows.Foundation;
 using Windows.Foundation.Collections;
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using ModernIPTVPlayer.Services;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -43,102 +44,120 @@ namespace ModernIPTVPlayer
         {
             this.InitializeComponent();
 
-            // [LOGGING] Capture all Debug.WriteLine to a file for easier analysis
+            // 1. Initialize Logging as early as possible
             try
             {
-                var logPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ModernIPTV_Debug.log");
-                System.Diagnostics.Debug.WriteLine($"[App] Initializing File Logger at: {logPath}");
-                System.Diagnostics.Trace.Listeners.Add(new ModernIPTVPlayer.Services.FileLoggerListener(logPath));
+                var localFolder = Windows.Storage.ApplicationData.Current.LocalFolder.Path;
+                var logDir = System.IO.Path.Combine(localFolder, "logs");
+                var logPath = System.IO.Path.Combine(logDir, "app.log");
+                
+                // Capture all Trace/Debug output to file
+                Trace.Listeners.Add(new ModernIPTVPlayer.Services.FileLoggerListener(logPath));
+                AppLogger.Info("--- App Starting ---");
+                AppLogger.Info($"Log Path: {logPath}");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[FATAL] Could not initialize logger: {ex.Message}");
+            }
 
-            // ESKİ KODUNUZU (Sadece Debugger.Break() yapan) YORUMA ALIN VEYA SİLİN:
-            // UnhandledException += (sender, e) =>
-            // {
-            //     if (global::System.Diagnostics.Debugger.IsAttached) global::System.Diagnostics.Debugger.Break();
-            // };
-
-            // YENİ, DETAYLI LOGLAMA YAPAN KODU EKLEYİN:
+            // 2. Setup Global Exception Handlers
+            
+            // UI Thread Exceptions (WinUI 3)
             UnhandledException += (sender, e) =>
             {
-                string errorMessage = $@"
-=================================================================================
-[UNHANDLED EXCEPTION] - {DateTime.Now}
-=================================================================================
-Hata Mesajı: {e.Message}
-
-Hata Tipi: {e.Exception?.GetType().FullName ?? "Bilinmiyor"}
-
-Stack Trace:
-{e.Exception?.ToString() ?? "Stack trace bilgisi yok."}
-=================================================================================";
-
-                // Hatayı hem konsola hem de bir dosyaya yazdır
-                System.Diagnostics.Debug.WriteLine(errorMessage);
-
-                try 
-                {
-                    var logPath = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "ModernIPTV_Crash.log");
-                    System.IO.File.WriteAllText(logPath, errorMessage);
-                }
-                catch { }
-
-                // KULLANICIYA GÖSTER: Native MessageBox (çünkü WinUI penceresi henüz hazır olmayabilir)
-                MessageBox(IntPtr.Zero, errorMessage, "KRİTİK HATA (Modern IPTV Player)", 0x10);
-
-                // Hata ayıklayıcı (debugger) bağlıysa, dur
-                if (global::System.Diagnostics.Debugger.IsAttached)
-                {
-                    global::System.Diagnostics.Debugger.Break();
-                }
+                e.Handled = true; // Try to prevent total crash if possible, but still log
+                HandleFatalException(e.Exception, "WinUI UnhandledException");
             };
 
+            // Non-UI Thread Exceptions
+            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+            {
+                HandleFatalException(e.ExceptionObject as Exception, "AppDomain UnhandledException");
+            };
+
+            // Async Task Exceptions
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender, e) =>
+            {
+                HandleFatalException(e.Exception, "UnobservedTaskException");
+                e.SetObserved(); // Prevent crash
+            };
+            // 3. Load Dependencies
+            try
+            {
+                HandleDllLoading();
+            }
+            catch (Exception ex)
+            {
+                HandleFatalException(ex, "App Constructor (DLL Load)");
+            }
+        }
+
+        private void HandleFatalException(Exception? ex, string source)
+        {
+            AppLogger.Critical($"FATAL EXCEPTION from {source}", ex);
+            Trace.Flush(); // Force write to file
+
+            string errorMessage = ex?.ToString() ?? "Bilinmeyen kritik hata.";
+            
+            // Show alert even if window is not ready
+            MessageBox(IntPtr.Zero, 
+                $"Uygulama beklenmedik bir hata nedeniyle çökebilir.\n\nKaynak: {source}\n\nHata: {ex?.Message}\n\nDetaylar log dosyasına kaydedildi.", 
+                "Kritik Hata (Modern IPTV Player)", 
+                0x10);
+
+            if (global::System.Diagnostics.Debugger.IsAttached)
+            {
+                global::System.Diagnostics.Debugger.Break();
+            }
+        }
+
+        private void HandleDllLoading()
+        {
             // DLL LOADING LOGIC: libmpv-2.dll ve bağımlılıklarını açıkça yükle
             try
             {
                 string baseDir = AppContext.BaseDirectory;
-                SetDllDirectory(baseDir); // Bağımlılık araması için dizini ayarla
+                AppLogger.Info($"Base Directory: {baseDir}");
+
+                SetDllDirectory(baseDir); 
 
                 string mpvPath = System.IO.Path.Combine(baseDir, "libmpv-2.dll");
                 string pthreadPath = System.IO.Path.Combine(baseDir, "libwinpthread-1.dll");
                 string unwindPath = System.IO.Path.Combine(baseDir, "libunwind.dll");
                 
-                string debugInfo = $"BaseDir: {baseDir}\n";
                 if (File.Exists(pthreadPath)) {
                     var h1 = LoadLibrary(pthreadPath);
-                    debugInfo += $"libwinpthread-1.dll: {(h1 != IntPtr.Zero ? "OK" : "FAIL")}\n";
+                    AppLogger.Info($"libwinpthread-1.dll: {(h1 != IntPtr.Zero ? "OK" : "FAIL")}");
                 }
                 if (File.Exists(unwindPath)) {
                     var h2 = LoadLibrary(unwindPath);
-                    debugInfo += $"libunwind.dll: {(h2 != IntPtr.Zero ? "OK" : "FAIL")}\n";
+                    AppLogger.Info($"libunwind.dll: {(h2 != IntPtr.Zero ? "OK" : "FAIL")}");
                 }
 
-                // Ana DLL'i yükle
                 if (File.Exists(mpvPath))
                 {
                     var hMpv = LoadLibrary(mpvPath);
                     if (hMpv == IntPtr.Zero)
                     {
                         uint lastError = GetLastError();
-                        debugInfo += $"libmpv-2.dll: FAIL (Error: {lastError})\n";
-                        MessageBox(IntPtr.Zero, debugInfo, "DLL Yükleme Hatası", 0x10);
+                        AppLogger.Critical($"libmpv-2.dll: FAIL (Error: {lastError})");
+                        MessageBox(IntPtr.Zero, $"libmpv-2.dll yüklenemedi. Hata Kodu: {lastError}", "DLL Yükleme Hatası", 0x10);
                     }
                     else
                     {
-                        debugInfo += $"libmpv-2.dll: SUCCESS (Handle: {hMpv})\n";
-                        // Başarılıysa kullanıcıyı yormayalım, sadece logla
-                        Debug.WriteLine(debugInfo);
+                        AppLogger.Info($"libmpv-2.dll: SUCCESS (Handle: {hMpv})");
                     }
                 }
                 else
                 {
-                    debugInfo += $"libmpv-2.dll: NOT FOUND at {mpvPath}\n";
-                    MessageBox(IntPtr.Zero, debugInfo, "DLL Bulunamadı", 0x10);
+                    AppLogger.Warn($"libmpv-2.dll: NOT FOUND at {mpvPath}");
+                    MessageBox(IntPtr.Zero, "libmpv-2.dll dosyası bulunamadı. Lütfen kurulumu kontrol edin.", "DLL Bulunamadı", 0x10);
                 }
             }
             catch (Exception ex)
             {
-                MessageBox(IntPtr.Zero, $"Kritik Hata: {ex.Message}", "DLL Load Exception", 0x10);
+                AppLogger.Error("DLL loading exception", ex);
             }
         }
 

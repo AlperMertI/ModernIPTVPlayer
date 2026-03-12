@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Threading.Tasks;
 using System.Collections;
 using System.Diagnostics;
+using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer
 {
@@ -33,7 +34,7 @@ namespace ModernIPTVPlayer
                 // Bypass headers for local bridge to avoid 400 Bad Request
                 if (streamUrl.Contains("127.0.0.1"))
                 {
-                    Debug.WriteLine("[MpvSetupHelper] Local Bridge URL detected. Skipping external headers.");
+                    AppLogger.Info("Local Bridge URL detected. Skipping external headers.");
                 }
                 else
                 {
@@ -44,7 +45,7 @@ namespace ModernIPTVPlayer
                     if (!string.IsNullOrEmpty(cookieHeader))
                     {
                         headers += $"Cookie: {cookieHeader}\n";
-                        Debug.WriteLine($"[MpvSetupHelper] Cookies applied for {streamUrl}");
+                        AppLogger.Info($"Cookies applied for {streamUrl}");
                     }
 
                     await player.SetPropertyAsync("user-agent", userAgent);
@@ -209,7 +210,7 @@ namespace ModernIPTVPlayer
                 // HTTP Reconnect Logic (Crucial for unstable IPTV servers)
                 // The correct property name is 'demuxer-lavf-o'
                 // Added reconnect_on_network_error and increased robustness
-                Debug.WriteLine($"[MpvSetupHelper] Applied Headers: {headers.Replace("\n", " | ")}");
+                AppLogger.Info($"Applied Headers: {headers.Replace("\n", " | ")}");
                 // reconnect_on_http_error=4xx,5xx: Handle temporary server errors
                 // reconnect_at_eof=1: vital for some live streams that close cleanly but aren't done
                 await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=30,reconnect_on_network_error=1,reconnect_on_http_error=4xx,5xx,reconnect_at_eof=1");
@@ -254,11 +255,11 @@ namespace ModernIPTVPlayer
                     }
                 }
 
-                Debug.WriteLine($"[MpvSetupHelper] Configuration Complete. Profile: {pSettings.Profile}, Secondary: {isSecondary}");
+                AppLogger.Info($"Configuration Complete. Profile: {pSettings.Profile}, Secondary: {isSecondary}");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[MpvSetupHelper] Error configuring player: {ex.Message}");
+                AppLogger.Error("Error configuring player", ex);
                 throw;
             }
         }
@@ -275,7 +276,7 @@ namespace ModernIPTVPlayer
                 // 2. If valid cookies found, use them. If not, Dump ALL cookies (fallback).
                 if (cookies.Count == 0)
                 {
-                    Debug.WriteLine("[MpvSetupHelper] GetCookies(uri) returned 0. Trying Reflection for ALL cookies...");
+                    AppLogger.Warn("GetCookies(uri) returned 0. Trying Reflection for ALL cookies...");
                     cookies = GetAllCookies(HttpHelper.CookieContainer);
                 }
 
@@ -286,7 +287,7 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[MpvSetupHelper] Cookie Extraction Error: {ex.Message}");
+                AppLogger.Error("Cookie Extraction Error", ex);
             }
             return cookieHeader;
         }
@@ -299,7 +300,7 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[MpvSetupHelper] Optional property '{name}' could not be set: {ex.Message}");
+                AppLogger.Warn($"Optional property '{name}' could not be set: {ex.Message}");
             }
         }
 

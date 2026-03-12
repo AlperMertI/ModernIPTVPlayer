@@ -35,8 +35,22 @@ namespace ModernIPTVPlayer
 
     public class HistoryManager
     {
+        private static readonly object _instanceLock = new object();
         private static HistoryManager _instance;
-        public static HistoryManager Instance => _instance ??= new HistoryManager();
+        public static HistoryManager Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    lock (_instanceLock)
+                    {
+                        _instance ??= new HistoryManager();
+                    }
+                }
+                return _instance;
+            }
+        }
 
         private Dictionary<string, HistoryItem> _history = new();
         private const string FILENAME = "watch_history.json";
@@ -60,7 +74,11 @@ namespace ModernIPTVPlayer
                     
                     lock (_lock)
                     {
-                        _history = list.ToDictionary(x => x.Id, x => x);
+                        _history = new Dictionary<string, HistoryItem>();
+                        foreach (var item_val in list)
+                        {
+                            if (item_val?.Id != null) _history[item_val.Id] = item_val;
+                        }
                     }
                 }
                 _loaded = true;

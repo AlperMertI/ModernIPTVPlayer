@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer.Services.Metadata
 {
@@ -28,7 +29,8 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         public void Log(string stage, string message)
         {
-            Debug.WriteLine($"[Metadata][{OperationId}][{ContextName}][{stage}] Item='{Title}' Key='{ContentKey}' {message}");
+            // Metadata logları performansı etkilediği için susturuldu.
+            // Sadece hata durumlarında AppLogger.Error/Warn doğrudan çağrılmalı.
         }
     }
 }

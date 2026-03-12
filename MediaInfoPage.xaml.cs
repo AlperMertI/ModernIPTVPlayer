@@ -1338,7 +1338,7 @@ namespace ModernIPTVPlayer
             if (string.IsNullOrEmpty(unified.BackdropUrl))
             {
                  // Fallback if no backdrop: default to blue/theme
-                 ApplyPremiumAmbience(Color.FromArgb(255, 0, 120, 215));
+                 ApplyPremiumAmbience(Color.FromArgb(255, 0, 120, 215), Color.FromArgb(255, 13, 13, 13));
             }
 
             // Resume Logic (Unified for Movies/Live)
@@ -2226,32 +2226,166 @@ namespace ModernIPTVPlayer
                 var pixelBuffer = await rtb.GetPixelsAsync();
                 var pixels = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(pixelBuffer);
 
+                // 1. Dominant colors for UI accents
                 var colors = ImageHelper.ExtractColorsFromPixels(pixels, rtb.PixelWidth, rtb.PixelHeight, (_item?.PosterUrl ?? "hero"));
-                ApplyPremiumAmbience(colors.Primary);
+
+                // 2. Area specific color for text readability
+                // We analyze the left-center quadrant where most text sits
+                var areaColor = ImageHelper.ExtractAreaAverageColor(pixels, rtb.PixelWidth, rtb.PixelHeight, 0.0, 0.2, 0.4, 0.6);
+
+                ApplyPremiumAmbience(colors.Primary, areaColor);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Hero color extraction failed: {ex.Message}");
-                // Fallback to default blue/theme
-                ApplyPremiumAmbience(Color.FromArgb(255, 0, 120, 215));
+                // Fallback: Default blue/theme and dark area color
+                ApplyPremiumAmbience(Color.FromArgb(255, 0, 120, 215), Color.FromArgb(255, 13, 13, 13));
             }
         }
 
-        private void ApplyPremiumAmbience(Color primary)
+        private Color _lastAreaColor;
+        private void ApplyPremiumAmbience(Color primary, Color areaBackground)
         {
+            // Redundancy Guard: Skip if color hasn't changed meaningfully (avoids double-logging)
+            if (Math.Abs(_lastAreaColor.R - areaBackground.R) < 2 && 
+                Math.Abs(_lastAreaColor.G - areaBackground.G) < 2 && 
+                Math.Abs(_lastAreaColor.B - areaBackground.B) < 2 && 
+                _lastAreaColor.A != 0) return;
+            
+            _lastAreaColor = areaBackground;
+
             try
             {
-                // 1. Prepare Base Tints
+                // 1. Prepare Base Tints for UI elements
                 var btnTint = Color.FromArgb(50, primary.R, primary.G, primary.B);
                 var mixedPanelTint = Color.FromArgb(180, (byte)(primary.R * 0.2), (byte)(primary.G * 0.2), (byte)(primary.B * 0.2));
                 var playButtonTint = Color.FromArgb(90, primary.R, primary.G, primary.B);
                 var playBorderTint = Color.FromArgb(140, primary.R, primary.G, primary.B);
+                
+                // 2. Analyze Background Area
+                double areaL = (0.2126 * areaBackground.R + 0.7152 * areaBackground.G + 0.0722 * areaBackground.B) / 255.0;
+                
+                // Calculate vibrancy (Max - Min difference) to detect neutral/greyish backgrounds
+                int maxV = Math.Max(areaBackground.R, Math.Max(areaBackground.G, areaBackground.B));
+                int minV = Math.Min(areaBackground.R, Math.Min(areaBackground.G, areaBackground.B));
+                int vibrancy = maxV - minV;
 
-                // 2. Animate Global Theme Brush (used by various controls)
+                // 3. Calculate Contrast-Safe Text Colors using APCA
+                Color headerColor, descriptionColor;
+
+                if (vibrancy < 30)
+                {
+                    // Neutral background (Grey/White/Black): Pick pure White or Dark-Grey for maximum clarity
+                    double whiteLc = Math.Abs(ImageHelper.GetContrastAPCA(Color.FromArgb(255, 255, 255, 255), areaBackground));
+                    double darkLc = Math.Abs(ImageHelper.GetContrastAPCA(Color.FromArgb(255, 20, 20, 22), areaBackground));
+                    
+                    // "Safety-First" Logic: 
+                    // We only switch to Dark text if it offers significantly better AND safe contrast (Lc > 50).
+                    // If contrast is mediocre (Lc < 50) for both, we favor White because 
+                    // we can protect White text with our darkening gradients. 
+                    // Darkening the background to protect Dark text is counter-productive.
+                    bool useDarkText = darkLc > (whiteLc + 15) && darkLc > 50;
+                    
+                    if (!useDarkText)
+                    {
+                        headerColor = Color.FromArgb(255, 255, 255, 255);
+                        descriptionColor = Color.FromArgb(255, 224, 224, 224);
+                    }
+                    else
+                    {
+                        headerColor = Color.FromArgb(255, 20, 20, 22);
+                        descriptionColor = Color.FromArgb(255, 55, 55, 60);
+                    }
+                    
+                    System.Diagnostics.Debug.WriteLine($"[AMBIENCE] Neutral branch | L:{areaL:F2} | WhiteLc: {whiteLc:F1} | DarkLc: {darkLc:F1} | Selected: {(headerColor.R > 200 ? "White" : "Dark")}");
+                }
+                else
+                {
+                    // Colorful background: Use primary-tinted text with best APCA direction
+                    headerColor = ImageHelper.GetContrastSafeColor(primary, areaBackground, 92);
+                    descriptionColor = ImageHelper.GetContrastSafeColor(headerColor, areaBackground, 72);
+                    
+                    double finalLc = Math.Abs(ImageHelper.GetContrastAPCA(headerColor, areaBackground));
+                    System.Diagnostics.Debug.WriteLine($"[AMBIENCE] Colorful branch | FinalLc: {finalLc:F1}");
+                }
+
+                // DIAGNOSTIC LOG (Enhanced)
+                System.Diagnostics.Debug.WriteLine($"[AMBIENCE] Area:{areaBackground.R},{areaBackground.G},{areaBackground.B} | L:{areaL:F2} | V:{vibrancy} | Text:{headerColor.R},{headerColor.G},{headerColor.B}");
+
+                // 4. Adaptive Cinematic Gradient Scaling (The "Just Enough" Logic)
+                // We scale the protective gradient based on how much contrast the COLOR choice provides.
+                double rawLc = Math.Abs(ImageHelper.GetContrastAPCA(headerColor, areaBackground));
+                
+                // VIBRANCY BONUS: High vibrancy colors provide better perceptual separation.
+                // We add a virtual contrast bonus to Lc to reduce gradient intensity on vibrant scenes.
+                double vibrancyBonus = Math.Clamp((vibrancy - 40) / 4.0, 0, 25);
+                double lc = rawLc + vibrancyBonus;
+                
+                bool isDarkText = headerColor.R < 100; // Text is dark (inverse polarity)
+
+                // If we are using Dark text, we MUST suppress the darkening gradient 
+                // because darkening the background will reduce contrast for dark text.
+                double contrastFactor;
+                double powerScale;
+
+                if (isDarkText)
+                {
+                    contrastFactor = 0.15; // Minimum background darkening
+                    powerScale = 1.8;      // Very soft curve
+                }
+                else
+                {
+                    // For White/Light text, use Lc-based protection.
+                    // Slightly more aggressive slope to protect busy mid-tones.
+                    contrastFactor = Math.Clamp((105 - lc) / 60.0, 0.1, 1.4);
+                    powerScale = lc < 40 ? 0.8 : 1.5; // Very flat curve if contrast is truly poor
+                }
+
+                // DAMPENING FOR DARK SCENES:
+                // If the background is already naturally dark (L < 0.25), we completely zero out 
+                // the protective gradient as white text is perfectly readable.
+                // Linear transition from 0% at L=0.25 to 100% at L=0.45
+                double darkDampening = Math.Clamp((areaL - 0.25) / 0.2, 0.0, 1.0);
+
+                // BRIGHT-VIBRANT SUPPRESSION (Yellow/Cyan):
+                // On very bright and vibrant scenes (like L=0.68, V=224), even small gradients 
+                // feel heavy and redundant because the color itself provides good isolation.
+                if (areaL > 0.6 && vibrancy > 150) darkDampening *= 0.4;
+
+                double gradBase = Math.Pow(areaL, powerScale) * darkDampening;
+                double horizontalOpacity = Math.Clamp(gradBase * 1.1 * contrastFactor, 0.0, 0.95);
+                double verticalOpacity = Math.Clamp(gradBase * 0.85 * contrastFactor, 0.0, 0.75);
+                
+                if (LocalInfoGradient != null) AnimateOpacity(LocalInfoGradient, horizontalOpacity);
+                if (ExtraReadabilityGradient != null) AnimateOpacity(ExtraReadabilityGradient, verticalOpacity);
+                if (BottomReadabilityGradient != null) AnimateOpacity(BottomReadabilityGradient, horizontalOpacity); // Sync with horizontal
+                
+                System.Diagnostics.Debug.WriteLine($"[AMBIENCE] Protection | Lc: {rawLc:F1} + Bonus: {vibrancyBonus:F1} | Damp: {darkDampening:F2} | Opacity: {horizontalOpacity:F2}");
+
+                // 5. Animate Global Theme Brushes (used by various controls)
                 if (_themeTintBrush == null) _themeTintBrush = new SolidColorBrush(btnTint);
                 else AnimateBrushColor(_themeTintBrush, btnTint);
 
-                // 3. Animate Specific UI Elements
+                // 6. Animate Text Colors
+                UpdateTextColor(TitleText, headerColor);
+                UpdateTextColor(YearText, headerColor);
+                UpdateTextColor(RuntimeText, headerColor);
+                UpdateTextColor(GenresText, headerColor);
+                UpdateTextColor(OverviewText, descriptionColor);
+                UpdateTextColor(SuperTitleText, headerColor);
+                UpdateTextColor(BadgeResText, headerColor);
+                UpdateTextColor(BadgeCodec, headerColor);
+                UpdateTextColor(DirectorHeader, headerColor);
+                UpdateTextColor(CastHeader, headerColor);
+                UpdateTextColor(StickyTitle, headerColor);
+
+                // Narrow Mode Headers
+                UpdateTextColor(NarrowEpisodesHeader, headerColor);
+                UpdateTextColor(NarrowSourcesHeader, headerColor);
+                UpdateTextColor(NarrowDirectorHeader, headerColor);
+                UpdateTextColor(NarrowCastHeader, headerColor);
+
+                // 6. Animate Specific UI Elements
                 if (EpisodesPanel.Background is SolidColorBrush epBrush) AnimateBrushColor(epBrush, mixedPanelTint);
 
                 // Action Buttons
@@ -2267,6 +2401,17 @@ namespace ModernIPTVPlayer
                 if (StickyPlayButton.Background is SolidColorBrush bSPlay) AnimateBrushColor(bSPlay, playButtonTint);
                 if (StickyPlayButton.BorderBrush is SolidColorBrush brSPlay) AnimateBrushColor(brSPlay, playBorderTint);
 
+                // Adaptive Play Button Foreground:
+                // If headerColor is White (meaning backdrop is dark), ensure Play button text is readable.
+                // We use headerColor for the FOREGROUND of the play button if the button is tinted.
+                // Actually, playButtonTint is just 90 opacity primary. 
+                // To be safe, if we are in "White Text Mode", use White for the play button text.
+                Color playForeground = isDarkText ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 255, 255, 255);
+                UpdateTextColor(PlayButtonText, playForeground);
+                UpdateIconColor(PlayButtonIcon, playForeground);
+                UpdateTextColor(StickyPlayButtonText, playForeground);
+                UpdateIconColor(StickyPlayButtonIcon, playForeground);
+
                 // Initial State Sync
                 UpdateWatchlistState(false);
             }
@@ -2274,6 +2419,51 @@ namespace ModernIPTVPlayer
             {
                 System.Diagnostics.Debug.WriteLine($"[ApplyAmbience] Error: {ex.Message}");
             }
+        }
+
+        private void UpdateIconColor(IconElement icon, Color color)
+        {
+            if (icon == null) return;
+            if (icon.Foreground is not SolidColorBrush brush)
+            {
+                icon.Foreground = new SolidColorBrush(color);
+                brush = (SolidColorBrush)icon.Foreground;
+            }
+            AnimateBrushColor(brush, color);
+        }
+
+        private void UpdateTextColor(TextBlock textBlock, Color color)
+        {
+            if (textBlock == null) return;
+            
+            // Ensure we have a local SolidColorBrush to animate 
+            // (fixes issues with shared immutable brushes from StaticResources)
+            if (textBlock.Foreground is not SolidColorBrush brush)
+            {
+                textBlock.Foreground = new SolidColorBrush(color);
+                brush = (SolidColorBrush)textBlock.Foreground;
+            }
+            
+            AnimateBrushColor(brush, color, 1.0);
+        }
+
+        private void AnimateOpacity(UIElement element, double opacity, double durationSeconds = 1.0)
+        {
+            if (element == null) return;
+            
+            var animation = new DoubleAnimation
+            {
+                To = opacity,
+                Duration = TimeSpan.FromSeconds(durationSeconds),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
+            };
+
+            Storyboard.SetTarget(animation, element);
+            Storyboard.SetTargetProperty(animation, "Opacity");
+
+            var sb = new Storyboard();
+            sb.Children.Add(animation);
+            sb.Begin();
         }
 
         private void AnimateBrushColor(SolidColorBrush brush, Color targetColor, double durationSeconds = 1.2)

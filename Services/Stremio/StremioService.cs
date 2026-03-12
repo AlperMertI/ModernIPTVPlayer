@@ -11,8 +11,22 @@ namespace ModernIPTVPlayer.Services.Stremio
 {
     public class StremioService
     {
+        private static readonly object _instanceLock = new object();
         private static StremioService _instance;
-        public static StremioService Instance => _instance ??= new StremioService();
+        public static StremioService Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    lock (_instanceLock)
+                    {
+                        _instance ??= new StremioService();
+                    }
+                }
+                return _instance;
+            }
+        }
 
         private HttpClient _client;
         private JsonSerializerOptions _jsonOptions;
@@ -39,10 +53,9 @@ namespace ModernIPTVPlayer.Services.Stremio
         // ==========================================
         public async Task<StremioManifest> GetManifestAsync(string baseUrl)
         {
+            string url = baseUrl.Trim();
             try
             {
-                string url = baseUrl.Trim();
-                
                 // Handle stremio:// protocol
                 if (url.StartsWith("stremio://", StringComparison.OrdinalIgnoreCase))
                 {
@@ -59,7 +72,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioService] Error fetching manifest: {ex.Message}");
+                AppLogger.Error($"Error fetching manifest (URL: {url})", ex);
                 return null;
             }
         }
@@ -130,7 +143,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioService] JSON Error for {url} ({baseUrl}): {ex.Message}");
+                AppLogger.Error($"JSON Error for {url} ({baseUrl})", ex);
             }
 
             return new List<StremioMediaStream>();
@@ -153,7 +166,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             catch (Exception ex)
             {
                 string failedUrl = $"{baseUrl.TrimEnd('/')}/meta/{type}/{id}.json";
-                System.Diagnostics.Debug.WriteLine($"[StremioService] Error fetching meta ({type}:{id}) from {failedUrl}: {ex.Message}");
+                AppLogger.Error($"Error fetching meta ({type}:{id}) from {failedUrl}", ex);
                 return null;
             }
         }

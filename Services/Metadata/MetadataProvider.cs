@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using ModernIPTVPlayer.Models.Metadata;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services.Stremio;
+using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer;
 
 namespace ModernIPTVPlayer.Services.Metadata
@@ -77,7 +78,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             if (!string.IsNullOrWhiteSpace(id) && id != rawId)
             {
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Canonical ID resolved at entry: {rawId} -> {id}");
+                AppLogger.Info($"Canonical ID resolved at entry: {rawId} -> {id}");
             }
 
             // 0. Global Check: composite/non-standard IDs should not abort metadata flow.
@@ -87,11 +88,11 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 id = cachedCanonical;
                 isCanonical = true;
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Canonical ID restored from raw-cache: {rawId} -> {cachedCanonical}");
+                AppLogger.Info($"Canonical ID restored from raw-cache: {rawId} -> {cachedCanonical}");
             }
             if (!isCanonical && rawId != null && (rawId.Contains(",") || rawId.Contains(" ") || rawId.Length > 100))
             {
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Non-standard ID detected, using title fallback. RawId: {rawId}");
+                AppLogger.Warn($"Non-standard ID detected, using title fallback. RawId: {rawId}");
                 id = null;
             }
 
@@ -144,7 +145,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             // 2. Check Active Tasks (Deduplication) - Use Lazy to ensure atomic task creation
-            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] START Fetching ({context}): {id ?? stream.Title} | Type: {type}");
+            AppLogger.Info($"START Fetching ({context}): {id ?? stream.Title} | Type: {type}");
             return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, type, stream, cacheKey, context, onBackdropFound))).Value;
         }
 
@@ -205,7 +206,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         string newKey = $"{result.ImdbId}_{type}";
                         if (context == MetadataContext.Discovery) newKey += "_discovery";
                         _resultCache[newKey] = (result, expiry);
-                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Multi-cached: {cacheKey} AND {newKey}");
+                        AppLogger.Info($"[MetadataProvider] Multi-cached: {cacheKey} AND {newKey}");
                     }
                 }
                 
@@ -507,7 +508,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             catch (Exception ex)
             {
                 trace.Log("Error", ex.Message);
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CRITICAL ERROR: {ex.Message}");
+                AppLogger.Critical("CRITICAL ERROR in GetMetadataAsync", ex);
             }
 
             if (metadata.IsSeries)
@@ -613,7 +614,10 @@ namespace ModernIPTVPlayer.Services.Metadata
             // [NEW] Merge episodes from catalog metadata
             if (metadata.IsSeries && stream.Meta?.Videos != null)
             {
-                MergeStremioEpisodes(stream.Meta, metadata, canOverwriteSeedFields);
+                lock (metadata.SyncRoot)
+                {
+                    MergeStremioEpisodes(stream.Meta, metadata, canOverwriteSeedFields);
+                }
             }
 
             if (stream.Meta.ImdbRating != null)
@@ -1458,86 +1462,98 @@ namespace ModernIPTVPlayer.Services.Metadata
             int added = 0;
             int updated = 0;
 
-            // Pre-create dictionaries for O(1) lookups
-            var seasonMap = metadata.Seasons.ToDictionary(s => s.SeasonNumber);
-
-            var grouped = stremio.Videos
-                .Where(v => v.Season >= 0)
-                .GroupBy(v => v.Season);
-
-            foreach (var group in grouped)
+            lock (metadata.SyncRoot)
             {
-                int sNum = group.Key;
-                if (!seasonMap.TryGetValue(sNum, out var season))
+                // Pre-create dictionaries for O(1) lookups, but handle duplicates safely
+                // Some addons return the same season/episode multiple times
+                var seasonMap = new Dictionary<int, UnifiedSeason>();
+                foreach (var s in metadata.Seasons)
                 {
-                    season = new UnifiedSeason
-                    {
-                        SeasonNumber = sNum,
-                        Name = sNum == 0 ? "Özel Bölümler" : $"{sNum}. Sezon"
-                    };
-                    metadata.Seasons.Add(season);
-                    seasonMap[sNum] = season;
+                    if (s != null) seasonMap[s.SeasonNumber] = s;
                 }
 
-                var episodeMap = season.Episodes.ToDictionary(e => e.EpisodeNumber);
+                var grouped = stremio.Videos
+                    .Where(v => v.Season >= 0)
+                    .GroupBy(v => v.Season);
 
-                foreach (var vid in group.OrderBy(v => v.Episode))
+                foreach (var group in grouped)
                 {
-                    if (episodeMap.TryGetValue(vid.Episode, out var existingEpisode))
+                    int sNum = group.Key;
+                    if (!seasonMap.TryGetValue(sNum, out var season))
                     {
-                        // Update missing fields OR override if overwrite is true
-                        bool isGenericTitle = IsGenericEpisodeTitle(existingEpisode.Title, metadata.Title);
-                        bool isGenericOverview = IsGenericEpisodeOverview(existingEpisode.Overview);
-
-                        if (overwrite || isGenericTitle)
+                        season = new UnifiedSeason
                         {
-                            string newTitle = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title;
-                            bool isNewGeneric = IsGenericEpisodeTitle(newTitle, metadata.Title);
-
-                            // Prefer real titles over generic ones, or accept whatever if overwrite is true
-                            if (overwrite || !isNewGeneric || string.IsNullOrEmpty(existingEpisode.Title))
-                                existingEpisode.Title = newTitle;
-                        }
-
-                        if (overwrite || isGenericOverview || string.IsNullOrEmpty(existingEpisode.Overview))
-                        {
-                            string newOverview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description;
-                            if (!string.IsNullOrEmpty(newOverview) && !IsGenericEpisodeOverview(newOverview))
-                                existingEpisode.Overview = newOverview;
-                            else if (string.IsNullOrEmpty(existingEpisode.Overview))
-                                existingEpisode.Overview = newOverview; // accept placeholder if we have nothing better
-                        }
-
-                        if (overwrite || string.IsNullOrEmpty(existingEpisode.ThumbnailUrl))
-                        {
-                            if (!string.IsNullOrEmpty(vid.Thumbnail))
-                                existingEpisode.ThumbnailUrl = vid.Thumbnail;
-                        }
-                            
-                        if ((overwrite || existingEpisode.AirDate == null) && !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d2))
-                            existingEpisode.AirDate = d2;
-
-                        updated++;
-                    }
-                    else
-                    {
-                        var newEp = new UnifiedEpisode
-                        {
-                            Id = vid.Id,
-                            SeasonNumber = vid.Season,
-                            EpisodeNumber = vid.Episode,
-                            Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
-                            Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description,
-                            ThumbnailUrl = vid.Thumbnail,
-                            AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
+                            SeasonNumber = sNum,
+                            Name = sNum == 0 ? "Özel Bölümler" : $"{sNum}. Sezon"
                         };
-                        season.Episodes.Add(newEp);
-                        episodeMap[vid.Episode] = newEp;
-                        added++;
+                        metadata.Seasons.Add(season);
+                        seasonMap[sNum] = season;
+                    }
+
+                    var episodeMap = new Dictionary<int, UnifiedEpisode>();
+                    foreach (var e in season.Episodes)
+                    {
+                        if (e != null) episodeMap[e.EpisodeNumber] = e;
+                    }
+
+                    foreach (var vid in group.OrderBy(v => v.Episode))
+                    {
+                        if (episodeMap.TryGetValue(vid.Episode, out var existingEpisode))
+                        {
+                            // Update missing fields OR override if overwrite is true
+                            bool isGenericTitle = IsGenericEpisodeTitle(existingEpisode.Title, metadata.Title);
+                            bool isGenericOverview = IsGenericEpisodeOverview(existingEpisode.Overview);
+
+                            if (overwrite || isGenericTitle)
+                            {
+                                string newTitle = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title;
+                                bool isNewGeneric = IsGenericEpisodeTitle(newTitle, metadata.Title);
+
+                                // Prefer real titles over generic ones, or accept whatever if overwrite is true
+                                if (overwrite || !isNewGeneric || string.IsNullOrEmpty(existingEpisode.Title))
+                                    existingEpisode.Title = newTitle;
+                            }
+
+                            if (overwrite || isGenericOverview || string.IsNullOrEmpty(existingEpisode.Overview))
+                            {
+                                string newOverview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description;
+                                if (!string.IsNullOrEmpty(newOverview) && !IsGenericEpisodeOverview(newOverview))
+                                    existingEpisode.Overview = newOverview;
+                                else if (string.IsNullOrEmpty(existingEpisode.Overview))
+                                    existingEpisode.Overview = newOverview; // accept placeholder if we have nothing better
+                            }
+
+                            if (overwrite || string.IsNullOrEmpty(existingEpisode.ThumbnailUrl))
+                            {
+                                if (!string.IsNullOrEmpty(vid.Thumbnail))
+                                    existingEpisode.ThumbnailUrl = vid.Thumbnail;
+                            }
+
+                            if ((overwrite || existingEpisode.AirDate == null) && !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d2))
+                                existingEpisode.AirDate = d2;
+
+                            updated++;
+                        }
+                        else
+                        {
+                            var newEp = new UnifiedEpisode
+                            {
+                                Id = vid.Id,
+                                SeasonNumber = vid.Season,
+                                EpisodeNumber = vid.Episode,
+                                Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
+                                Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description,
+                                ThumbnailUrl = vid.Thumbnail,
+                                AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
+                            };
+                            season.Episodes.Add(newEp);
+                            episodeMap[vid.Episode] = newEp;
+                            added++;
+                        }
                     }
                 }
             }
-            
+
             sw.Stop();
             if (sw.ElapsedMilliseconds > 10)
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] MergeStremioEpisodes took {sw.ElapsedMilliseconds}ms for {stremio.Videos.Count} vids (Added:{added}, Updated:{updated})");
