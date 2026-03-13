@@ -378,6 +378,30 @@ namespace ModernIPTVPlayer
             catch { return null; }
         }
 
+        public static async Task<List<TmdbMovieResult>> GetRecommendationsAsync(int id, bool isTv = false)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return new List<TmdbMovieResult>();
+            try
+            {
+                string type = isTv ? "tv" : "movie";
+                var cacheKey = $"recommendations_{type}_{id}";
+                if (TmdbCacheService.Instance.Get<List<TmdbMovieResult>>(cacheKey) is List<TmdbMovieResult> cached) return cached;
+
+                var url = $"{BASE_URL}/{type}/{id}/recommendations?api_key={API_KEY}&language=tr-TR";
+                var json = await _client.GetStringAsync(url);
+                var result = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+
+                var recommendations = result?.Results ?? new List<TmdbMovieResult>();
+                TmdbCacheService.Instance.Set(cacheKey, recommendations);
+                return recommendations;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Recommendations Error: {ex.Message}");
+                return new List<TmdbMovieResult>();
+            }
+        }
+
         public static async Task<TmdbMovieResult?> GetTvByExternalIdAsync(string externalId)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
@@ -507,6 +531,44 @@ namespace ModernIPTVPlayer
             if (string.IsNullOrEmpty(path)) return null;
             if (!path.StartsWith("/")) path = "/" + path;
             return $"https://image.tmdb.org/t/p/{size}{path}";
+        }
+
+        public static async Task<List<TmdbMovieResult>> GetMovieRecommendationsAsync(string tmdbId)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || string.IsNullOrEmpty(tmdbId)) return new List<TmdbMovieResult>();
+            try
+            {
+                var cacheKey = $"movie_recs_{tmdbId}";
+                if (TmdbCacheService.Instance.Get<List<TmdbMovieResult>>(cacheKey) is List<TmdbMovieResult> cached) return cached;
+
+                var url = $"{BASE_URL}/movie/{tmdbId}/recommendations?api_key={API_KEY}&language=tr-TR";
+                var json = await _client.GetStringAsync(url);
+                var response = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+                var results = response?.Results ?? new List<TmdbMovieResult>();
+
+                TmdbCacheService.Instance.Set(cacheKey, results);
+                return results;
+            }
+            catch { return new List<TmdbMovieResult>(); }
+        }
+
+        public static async Task<List<TmdbMovieResult>> GetTvRecommendationsAsync(string tmdbId)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || string.IsNullOrEmpty(tmdbId)) return new List<TmdbMovieResult>();
+            try
+            {
+                var cacheKey = $"tv_recs_{tmdbId}";
+                if (TmdbCacheService.Instance.Get<List<TmdbMovieResult>>(cacheKey) is List<TmdbMovieResult> cached) return cached;
+
+                var url = $"{BASE_URL}/tv/{tmdbId}/recommendations?api_key={API_KEY}&language=tr-TR";
+                var json = await _client.GetStringAsync(url);
+                var response = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+                var results = response?.Results ?? new List<TmdbMovieResult>();
+
+                TmdbCacheService.Instance.Set(cacheKey, results);
+                return results;
+            }
+            catch { return new List<TmdbMovieResult>(); }
         }
     }
 

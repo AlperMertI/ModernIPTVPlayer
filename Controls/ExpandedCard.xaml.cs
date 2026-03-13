@@ -513,11 +513,17 @@ namespace ModernIPTVPlayer.Controls
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] StopTrailer called. ForceDestroy={forceDestroy}");
 
                 // Stop the player via JS explicitly before hiding
-                if (_webViewInitialized && TrailerWebView.CoreWebView2 != null)
+                // [CRITICAL FIX] Check IsLoaded and WebView validity before execution
+                if (_webViewInitialized && TrailerWebView != null && TrailerWebView.CoreWebView2 != null && this.IsLoaded)
                 {
                      try 
                      {
-                         await TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();");
+                         var jsTask = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();").AsTask();
+                         // Don't hang if WebView process is unresponsive
+                         if (await Task.WhenAny(jsTask, Task.Delay(500)) == jsTask)
+                         {
+                             await jsTask;
+                         }
                      }
                      catch(Exception ex) 
                      {
@@ -530,7 +536,10 @@ namespace ModernIPTVPlayer.Controls
                     try
                     {
                         // Nuclear option for navigation: Kill the WebView content to ensure no audio persists
-                        TrailerWebView.Source = new Uri("about:blank");
+                        if (TrailerWebView != null && this.IsLoaded)
+                        {
+                            TrailerWebView.Source = new Uri("about:blank");
+                        }
                         _webViewInitialized = false; // Mark as uninitialized so it reloads next time
                     }
                     catch { }

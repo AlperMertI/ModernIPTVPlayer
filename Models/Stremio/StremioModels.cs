@@ -328,6 +328,9 @@ namespace ModernIPTVPlayer.Models.Stremio
         
         [JsonPropertyName("behaviorHints")]
         public BehaviorHints BehaviorHints { get; set; }
+
+        [JsonIgnore]
+        public string AddonUrl { get; set; } // Internal tracking
     }
     
     public class BehaviorHints

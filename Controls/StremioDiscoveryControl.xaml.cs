@@ -646,7 +646,7 @@ namespace ModernIPTVPlayer.Controls
                         }
                     }));
                 }
-
+ 
                 await Task.WhenAll(tasks);
                 
                 DispatcherQueue.TryEnqueue(() => 

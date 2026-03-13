@@ -112,7 +112,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null, string subUrl = null, string posterUrl = null, string type = null, string backdropUrl = null)
+        public void UpdateProgress(string id, string title, string url, double pos, double dur, string parentId = null, string seriesName = null, int s = 0, int e = 0, string aid = null, string sid = null, string subUrl = null, string posterUrl = null, string type = null, string backdropUrl = null, bool forceFinished = false)
         {
             if (string.IsNullOrEmpty(id)) return;
             
@@ -140,7 +140,11 @@ namespace ModernIPTVPlayer
                 {
                     item.Position = pos;
                     item.Duration = dur;
-                    item.IsFinished = (pos / dur) > 0.95;
+                    item.IsFinished = forceFinished || (pos / dur) > 0.95;
+                }
+                else if (forceFinished)
+                {
+                    item.IsFinished = true;
                 }
 
                 item.Timestamp = DateTime.Now;

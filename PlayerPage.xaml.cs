@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Windows.UI;
 using Microsoft.UI.Windowing;
 using Microsoft.UI;
 using WinRT.Interop;
@@ -26,10 +27,13 @@ using Microsoft.UI.Input;
 using Microsoft.UI.Xaml.Input;
 using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Helpers;
+using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Text;
 
 namespace ModernIPTVPlayer
 {
-    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1, string PosterUrl = null, string Type = null, string BackdropUrl = null, string LogoUrl = null);
+    public record PlayerNavigationArgs(string Url, string Title, string Id = null, string ParentId = null, string SeriesName = null, int Season = 0, int Episode = 0, double StartSeconds = -1, string PosterUrl = null, string Type = null, string BackdropUrl = null, string LogoUrl = null, string PrimaryColor = null, string SourceAddonUrl = null);
 
     public sealed partial class PlayerPage : Page
     {
@@ -139,6 +143,18 @@ namespace ModernIPTVPlayer
         private DispatcherTimer _logoLoadingTimer;
         private double _fakeLogoProgress = 0;
 
+        // ---------- PLAYER ENHANCEMENTS ----------
+        private DispatcherTimer _inactivityTimer;
+        private DateTime _pauseStartTime;
+        private bool _isInactivityOverlayVisible = false;
+        private Color _primaryColor = Color.FromArgb(255, 0, 191, 165);
+        private bool _isNextEpisodeOverlayVisible = false;
+        private DispatcherTimer _nextEpCountdownTimer;
+        private int _nextEpCountdown = 10;
+        private string? _sourceAddonUrl;
+        private string? _primaryColorHex;
+        private EpisodeItem _nextEpisode;
+
         public PlayerPage()
         {
             this.InitializeComponent();
@@ -179,6 +195,13 @@ namespace ModernIPTVPlayer
             SeekSlider.AddHandler(PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerReleased), true);
             SeekSlider.AddHandler(PointerCanceledEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerReleased), true);
             SeekSlider.AddHandler(PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(SeekSlider_PointerCaptureLost), true);
+
+            // Inactivity Timer
+            _inactivityTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _inactivityTimer.Tick += InactivityTimer_Tick;
+
+            // MainGrid Tap for Play/Pause - Use AddHandler to catch even if handled by children
+            MainGrid.AddHandler(TappedEvent, new TappedEventHandler(MainGrid_Tapped), true);
         }
 
         private double _loadingTargetProgress = 0; // The goal % the animation seeks to
@@ -255,6 +278,8 @@ namespace ModernIPTVPlayer
 
         private void ShowBufferingOverlay()
         {
+            if (_isInactivityOverlayVisible) return;
+
             if (PlayerLoadingOverlay.Visibility != Visibility.Visible && _isPageLoaded)
             {
                 // Reset visual state without the initial fade-in delay
@@ -293,7 +318,23 @@ namespace ModernIPTVPlayer
             {
                 // Sync Play/Pause State
                 bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
-                PlayPauseIcon.Glyph = isPaused ? "\uE768" : "\uE769";
+                PlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE"; // Sync with improved glyphs
+                if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE";
+
+                // ---------- INACTIVITY TIMER MANAGEMENT ----------
+                if (isPaused)
+                {
+                    if (!_inactivityTimer.IsEnabled && !_isInactivityOverlayVisible)
+                    {
+                        _pauseStartTime = DateTime.Now;
+                        _inactivityTimer.Start();
+                    }
+                }
+                else
+                {
+                    if (_inactivityTimer.IsEnabled) _inactivityTimer.Stop();
+                    if (_isInactivityOverlayVisible) HideInactivityOverlay();
+                }
 
                 // ---------- SEEKBAR & TIME LOGIC ----------
                 string durationStr = await _mpvPlayer.GetPropertyAsync("duration");
@@ -426,9 +467,15 @@ namespace ModernIPTVPlayer
                     
                     TimeSpan tPos = TimeSpan.FromSeconds(position);
                     TimeSpan tDur = TimeSpan.FromSeconds(duration);
-                    TimeTextBlock.Text = tDur.TotalHours >= 1 
-                        ? $"{tPos:hh\\:mm\\:ss} / {tDur:hh\\:mm\\:ss}"
-                        : $"{tPos:mm\\:ss} / {tDur:mm\\:ss}";
+                    TimeTextBlock.Text = $"{tPos:mm\\:ss} / {tDur:mm\\:ss}";
+
+                    // Check for Next Episode (Series) or Recommendations (Movie) nearing end
+                    CheckEndContentFlow(position, duration);
+
+                    if (_isInactivityOverlayVisible)
+                    {
+                        UpdateInactivityRemainingTime();
+                    }
                 }
                 else
                 {
@@ -795,6 +842,46 @@ namespace ModernIPTVPlayer
                 StatsOverlay.Visibility = StatsOverlay.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
                 e.Handled = true;
             }
+            else if (e.Key == Windows.System.VirtualKey.Space)
+            {
+                TogglePlayPause();
+                e.Handled = true;
+            }
+        }
+
+        private async void TogglePlayPause()
+        {
+            if (_mpvPlayer == null) return;
+            bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
+            await _mpvPlayer.SetPropertyAsync("pause", isPaused ? "no" : "yes");
+            
+            // Logic is now handled reactively in StatsTimer_Tick
+            
+            // Ensure focus is kept on MainGrid for keyboard shortcuts
+            MainGrid.Focus(FocusState.Programmatic);
+        }
+
+        private void MainGrid_Tapped(object sender, TappedRoutedEventArgs e)
+        {
+            // Only toggle if we're not touching controls or overlays
+            if (e.OriginalSource is FrameworkElement fe)
+            {
+                // List of element names that should NOT trigger play/pause when tapped
+                string[] excludedNames = { "SeekSlider", "VolumeSlider", "SpeedOverlay", "TracksOverlay", "BackButton", "PlayPauseButton" };
+                
+                if (excludedNames.Contains(fe.Name)) return;
+
+                // Also check if we are inside an interactive overlay or container
+                var parent = fe;
+                while (parent != null && parent != MainGrid)
+                {
+                    if (parent is Button || parent is Slider) return;
+                    if (parent.Name == "ControlsBorder") return; // Don't toggle when clicking control bar area
+                    parent = VisualTreeHelper.GetParent(parent) as FrameworkElement;
+                }
+
+                TogglePlayPause();
+            }
         }
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -813,6 +900,13 @@ namespace ModernIPTVPlayer
                 _streamUrl = args.Url;
                 VideoTitleText.Text = args.Title;
                 _navArgs = args;
+
+                if (!string.IsNullOrEmpty(args.PrimaryColor))
+                {
+                    try { _primaryColor = AppColorHelper.ToColor(args.PrimaryColor); } catch { }
+                    _primaryColorHex = args.PrimaryColor;
+                }
+                _sourceAddonUrl = args.SourceAddonUrl;
             }
             else
             {
@@ -820,6 +914,9 @@ namespace ModernIPTVPlayer
             }
 
             _navigationError = null;
+            
+            // Initial UI Coloring
+            ApplyPrimaryColorToUi();
         }
         protected override async void OnNavigatedFrom(NavigationEventArgs e)
         {
@@ -847,6 +944,9 @@ namespace ModernIPTVPlayer
             }
 
             base.OnNavigatedFrom(e);
+            Services.SleepPreventionService.AllowSleep();
+            _inactivityTimer?.Stop();
+            _nextEpCountdownTimer?.Stop();
 
             // 2. Cleanup MPV carefully
             if (_mpvPlayer is not null)
@@ -913,6 +1013,470 @@ namespace ModernIPTVPlayer
             await dialog.ShowAsync();
         }
 
+        private void ApplyPrimaryColorToUi()
+        {
+            try
+            {
+                var brush = new SolidColorBrush(_primaryColor);
+                if (SeekSlider != null) SeekSlider.Foreground = brush;
+                if (InactivityTitle != null) InactivityTitle.Foreground = brush;
+            }
+            catch { }
+        }
+
+        private void InactivityTimer_Tick(object sender, object e)
+        {
+            if (_mpvPlayer == null) return;
+
+            var idleTime = (DateTime.Now - _pauseStartTime).TotalSeconds;
+            if (idleTime >= 30 && !_isInactivityOverlayVisible)
+            {
+                ShowInactivityOverlay();
+            }
+        }
+        private async void ShowInactivityOverlay()
+        {
+            if (InactivityOverlay == null) return;
+            
+            _isInactivityOverlayVisible = true;
+            InactivityOverlay.Visibility = Visibility.Visible;
+            
+            // Apply blur immediately before any potential await delays (e.g. metadata fetching)
+            if (_mpvPlayer != null)
+            {
+                _ = _mpvPlayer.ExecuteCommandAsync("vf", "add", "@inact:gblur=sigma=15");
+            }
+            
+            // Hide buffering overlay if it's visible so it doesn't overlap the panel
+            if (PlayerLoadingOverlay.Visibility == Visibility.Visible)
+            {
+                PlayerLoadingOverlay.Visibility = Visibility.Collapsed;
+            }
+            
+            // 1. Populate metadata from args (initial)
+            if (_navArgs != null)
+            {
+                InactivityTitle.Text = _navArgs.Type == "series" ? (_navArgs.SeriesName ?? _navArgs.Title) : _navArgs.Title;
+                InactivityDescription.Text = _navArgs.Title; 
+                
+                if (!string.IsNullOrEmpty(_navArgs.LogoUrl))
+                {
+                    InactivityLogo.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(_navArgs.LogoUrl));
+                    InactivityLogo.Visibility = Visibility.Visible;
+                    InactivityTitle.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    InactivityLogo.Visibility = Visibility.Collapsed;
+                    InactivityTitle.Visibility = Visibility.Visible;
+                }
+
+                if (_navArgs.Type == "movie")
+                {
+                    string durationStr = await _mpvPlayer.GetPropertyAsync("duration");
+                    double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double duration);
+                    TimeSpan tDur = TimeSpan.FromSeconds(duration);
+                    InactivityDuration.Text = tDur.TotalHours >= 1 ? $"{tDur.Hours}s {tDur.Minutes}dk" : $"{tDur.Minutes}dk";
+                    InactivityChapterInfo.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    InactivityDuration.Text = $"S{_navArgs.Season} E{_navArgs.Episode}";
+                    InactivityChapterInfo.Text = _navArgs.Title;
+                    InactivityChapterInfo.Visibility = Visibility.Visible;
+                }
+
+                // 2. Fetch full metadata for enhanced details (Consistency with MediaInfoPage)
+                try 
+                {
+                    var metaId = _navArgs.Type == "series" ? _navArgs.ParentId : _navArgs.Id;
+                    var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(
+                        new Models.Stremio.StremioMediaStream(new StremioMeta { Id = metaId, Type = _navArgs.Type }));
+
+                    if (unified != null) 
+                    {
+                        if (_navArgs.Type == "series")
+                        {
+                            var ep = unified.Seasons?
+                                .FirstOrDefault(s => s.SeasonNumber == _navArgs.Season)?
+                                .Episodes.FirstOrDefault(e => e.EpisodeNumber == _navArgs.Episode);
+                            
+                            InactivityDescription.Text = !string.IsNullOrEmpty(ep?.Overview) ? ep.Overview : unified.Overview;
+                        }
+                        else
+                        {
+                            InactivityDescription.Text = unified.Overview;
+                        }
+                        
+                        InactivityYear.Text = unified.Year?.Split('-', '–')[0] ?? "";
+                        InactivityRating.Text = unified.Rating > 0 ? unified.Rating.ToString("F1", CultureInfo.InvariantCulture) : "";
+                        InactivityRatingBorder.Visibility = unified.Rating > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    }
+                } 
+                catch {}
+
+                PopulateTechnicalBadges();
+                UpdateInactivityRemainingTime();
+            }
+
+            AnimateOpacity(InactivityOverlay, 1.0, 0.5);
+        }
+
+        private void PopulateTechnicalBadges()
+        {
+            if (InactivityBadges == null) return;
+            InactivityBadges.Children.Clear();
+
+            // 1. HDR / SDR
+            bool isHdr = TxtHdr.Text != "-" && !string.IsNullOrEmpty(TxtHdr.Text) && TxtHdr.Text.Contains("HDR", StringComparison.OrdinalIgnoreCase);
+            if (isHdr)
+                AddBadge("HDR", "SilverGradient", isGradient: true);
+            else
+                AddBadge("SDR", "#66FFFFFF", isGradient: false);
+
+            // 2. Resolution (4K / 1080P / etc)
+            string res = TxtResolution.Text;
+            bool is4K = res.Contains("3840") || res.Contains("4K") || res.Contains("2160");
+            if (is4K)
+                AddBadge("4K UHD", "GoldGradient", isGradient: true);
+            else if (!string.IsNullOrWhiteSpace(res) && res != "-")
+            {
+                string displayRes = res;
+                if (displayRes.Contains("x")) displayRes = displayRes.Split('x').LastOrDefault() + "P";
+                AddBadge(displayRes.ToUpperInvariant(), "#66FFFFFF", isGradient: false);
+            }
+
+            // 3. Codec
+            if (!string.IsNullOrWhiteSpace(TxtCodec.Text) && TxtCodec.Text != "-")
+            {
+                AddBadge(TxtCodec.Text.ToUpperInvariant(), "#66FFFFFF", isGradient: false);
+            }
+        }
+
+        private void AddBadge(string text, string colorKeyOrHex, bool isGradient)
+        {
+            var border = new Border
+            {
+                BorderThickness = new Thickness(1.5),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(8, 2, 8, 2),
+                Background = new SolidColorBrush(Color.FromArgb(68, 0, 0, 0)) // #44000000
+            };
+
+            var textBlock = new TextBlock
+            {
+                Text = text,
+                FontSize = 11,
+                FontWeight = FontWeights.Bold
+            };
+
+            if (isGradient)
+            {
+                border.BorderBrush = (Brush)Resources[colorKeyOrHex];
+                textBlock.Foreground = (Brush)Resources[colorKeyOrHex];
+            }
+            else
+            {
+                var brush = new SolidColorBrush(AppColorHelper.ToWindowsColor(colorKeyOrHex));
+                border.BorderBrush = brush;
+                textBlock.Foreground = brush;
+                border.BorderThickness = new Thickness(1);
+            }
+
+            border.Child = textBlock;
+            InactivityBadges.Children.Add(border);
+        }
+
+        private async void UpdateInactivityRemainingTime()
+        {
+            if (!_isInactivityOverlayVisible) return;
+            
+            string posStr = await _mpvPlayer.GetPropertyAsync("time-pos");
+            string durStr = await _mpvPlayer.GetPropertyAsync("duration");
+            
+            double.TryParse(posStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double pos);
+            double.TryParse(durStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double dur);
+            
+            if (dur > 0)
+            {
+                TimeSpan remaining = TimeSpan.FromSeconds(dur - pos);
+                string remainingStr = "";
+                
+                if (remaining.TotalHours >= 1)
+                {
+                    remainingStr = $"{(int)remaining.TotalHours}sa {remaining.Minutes}dk kaldı";
+                }
+                else if (remaining.TotalMinutes >= 1)
+                {
+                    remainingStr = $"{remaining.Minutes}dk kaldı";
+                }
+                else
+                {
+                    remainingStr = $"{remaining.Seconds}sn kaldı";
+                }
+
+                InactivityRemainingTime.Text = remainingStr;
+            }
+        }
+
+        private void HideInactivityOverlay()
+        {
+            if (InactivityOverlay == null || !_isInactivityOverlayVisible) return;
+            
+            _isInactivityOverlayVisible = false;
+            
+            if (_mpvPlayer != null)
+            {
+                _ = _mpvPlayer.ExecuteCommandAsync("vf", "remove", "@inact");
+            }
+
+            AnimateOpacity(InactivityOverlay, 0.0, 0.3);
+            
+            _ = Task.Run(async () => {
+                await Task.Delay(350);
+                DispatcherQueue.TryEnqueue(() => {
+                    if (!_isInactivityOverlayVisible) InactivityOverlay.Visibility = Visibility.Collapsed;
+                });
+            });
+        }
+
+        private void AnimateOpacity(UIElement element, double to, double durationSeconds)
+        {
+            var anim = _compositor.CreateScalarKeyFrameAnimation();
+            anim.InsertKeyFrame(1f, (float)to);
+            anim.Duration = TimeSpan.FromSeconds(durationSeconds);
+            
+            var visual = ElementCompositionPreview.GetElementVisual(element);
+            visual.StartAnimation("Opacity", anim);
+        }
+
+        private void NextEpPlayNowBtn_Click(object sender, RoutedEventArgs e)
+        {
+            PlayNextEpisode();
+        }
+
+        private void NextEpSelectSourceBtn_Click(object sender, RoutedEventArgs e)
+        {
+            _nextEpCountdownTimer?.Stop();
+
+            // Mark current as finished so it's cleared from continue watching
+            if (_navArgs != null)
+            {
+                string id = !string.IsNullOrEmpty(_navArgs.Id) ? _navArgs.Id : _navArgs.Url;
+                HistoryManager.Instance.UpdateProgress(id, null, null, 0, 0, forceFinished: true);
+                _ = HistoryManager.Instance.SaveAsync();
+            }
+
+            // Navigate back with special intent: "Select source for next episode"
+            if (_nextEpisode != null)
+            {
+                var dict = new Dictionary<string, object>
+                {
+                    { "Intent", "SelectSource" },
+                    { "Season", _nextEpisode.SeasonNumber },
+                    { "Episode", _nextEpisode.EpisodeNumber }
+                };
+                // We use a shared state or find a way to pass it back. 
+                // Since Frame.GoBack() doesn't take parameters, we'll use a static property in MediaInfoPage or App.
+                App.LastPlayerIntent = dict;
+            }
+            if (Frame.CanGoBack) Frame.GoBack();
+        }
+
+        private async void PlayNextEpisode()
+        {
+             _nextEpCountdownTimer?.Stop();
+             if (_nextEpisode == null) return;
+
+             // Mark current as finished before navigating to next
+             if (_navArgs != null)
+             {
+                 string currentId = !string.IsNullOrEmpty(_navArgs.Id) ? _navArgs.Id : _navArgs.Url;
+                 HistoryManager.Instance.UpdateProgress(currentId, null, null, 0, 0, forceFinished: true);
+                 _ = HistoryManager.Instance.SaveAsync();
+             }
+
+             try 
+             {
+                 // 1. Search for stream for next episode
+                 string type = "series";
+                 string id = $"{_navArgs.ParentId}:{_nextEpisode.SeasonNumber}:{_nextEpisode.EpisodeNumber}";
+                 
+                 var addonUrls = Services.Stremio.StremioAddonManager.Instance.GetAddons();
+                 var streams = await Services.Stremio.StremioService.Instance.GetStreamsAsync(addonUrls, type, id);
+                 
+                 if (streams == null || streams.Count == 0)
+                 {
+                     if (Frame.CanGoBack) Frame.GoBack();
+                     return;
+                 }
+
+                 // [REFINEMENT] Pick best stream: Prioritize the SAME ADDON that was used for the current episode
+                 var bestStream = streams.FirstOrDefault(s => s.AddonUrl == _sourceAddonUrl) 
+                                 ?? streams.FirstOrDefault();
+
+                 var nextArgs = new PlayerNavigationArgs(
+                     bestStream.Url,
+                     _nextEpisode.Title,
+                     id,
+                     _navArgs.ParentId,
+                     _navArgs.SeriesName ?? _navArgs.Title,
+                     _nextEpisode.SeasonNumber,
+                     _nextEpisode.EpisodeNumber,
+                     0, // StartSeconds
+                     _navArgs.PosterUrl,
+                     "series",
+                     _navArgs.BackdropUrl,
+                     _navArgs.LogoUrl,
+                     _primaryColorHex,
+                     _sourceAddonUrl
+                 );
+
+                 // Navigate to new PlayerPage
+                 Frame.Navigate(typeof(PlayerPage), nextArgs);
+             }
+             catch (Exception ex)
+             {
+                 Debug.WriteLine($"[PlayerPage] PlayNextEpisode Error: {ex}");
+                 if (Frame.CanGoBack) Frame.GoBack();
+             }
+        }
+
+        private bool _isNextEpLoading = false;
+        private void CheckEndContentFlow(double position, double duration)
+        {
+            if (duration <= 0 || _isNextEpLoading) return;
+
+            double remaining = duration - position;
+            
+            // Show Next Episode overlay 2 minutes before end for series
+            if (_navArgs?.Type == "series" && remaining < 120 && remaining > 5 && !_isNextEpisodeOverlayVisible)
+            {
+                _isNextEpLoading = true;
+                _ = LoadNextEpisodeAsync();
+            }
+            // Show Recommendations 2 minutes before end for movies
+            else if (_navArgs?.Type == "movie" && remaining < 120 && remaining > 5 && !RecommendationsOverlay.Visibility.HasFlag(Visibility.Visible))
+            {
+                 // _ = LoadRecommendationsAsync();
+            }
+        }
+
+        private async Task LoadNextEpisodeAsync()
+        {
+            try
+            {
+                if (_navArgs == null || _navArgs.Type != "series") return;
+
+                // 1. Fetch Series Metadata to find next episode
+                var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(new Models.Stremio.StremioMediaStream(new StremioMeta { Id = _navArgs.ParentId, Type = "series" }));
+                if (unified == null) return;
+
+                var currentSeason = unified.Seasons.FirstOrDefault(s => s.SeasonNumber == _navArgs.Season);
+                if (currentSeason == null) return;
+
+                var nextEp = currentSeason.Episodes
+                    .OrderBy(e => e.EpisodeNumber)
+                    .FirstOrDefault(e => e.EpisodeNumber > _navArgs.Episode);
+
+                if (nextEp == null)
+                {
+                    // Look in next season
+                    var nextSeason = unified.Seasons.OrderBy(s => s.SeasonNumber).FirstOrDefault(s => s.SeasonNumber > _navArgs.Season);
+                    if (nextSeason != null)
+                    {
+                        nextEp = nextSeason.Episodes.OrderBy(e => e.EpisodeNumber).FirstOrDefault();
+                    }
+                }
+
+                if (nextEp != null)
+                {
+                    _nextEpisode = new EpisodeItem
+                    {
+                        Id = nextEp.Id,
+                        Title = nextEp.Title,
+                        SeasonNumber = nextEp.SeasonNumber,
+                        EpisodeNumber = nextEp.EpisodeNumber,
+                        Overview = nextEp.Overview,
+                        ImageUrl = nextEp.ThumbnailUrl
+                    };
+                    
+                    DispatcherQueue.TryEnqueue(() => {
+                        NextEpTitle.Text = nextEp.Title;
+                        NextEpInfo.Text = $"S{nextEp.SeasonNumber} E{nextEp.EpisodeNumber}";
+                        if (!string.IsNullOrEmpty(nextEp.ThumbnailUrl))
+                            NextEpThumbnail.Source = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(nextEp.ThumbnailUrl));
+                        
+                        NextEpisodeOverlay.Visibility = Visibility.Visible;
+                        _isNextEpisodeOverlayVisible = true;
+                        AnimateOpacity(NextEpisodeOverlay, 1.0, 0.5);
+                        StartNextEpCountdown();
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[PlayerPage] LoadNextEpisode Error: {ex.Message}");
+            }
+            finally
+            {
+                _isNextEpLoading = false;
+            }
+        }
+
+        private async Task LoadRecommendationsAsync()
+        {
+             try
+             {
+                 if (_navArgs == null || string.IsNullOrEmpty(_navArgs.Id)) return;
+                 // Extract numeric TMDB ID if possible
+                 string tmdbId = _navArgs.Id;
+                 if (tmdbId.StartsWith("tmdb:")) tmdbId = tmdbId.Substring(5);
+                 
+                 if (!int.TryParse(tmdbId, out _)) return;
+
+                 var recs = await TmdbHelper.GetMovieRecommendationsAsync(tmdbId);
+                 if (recs != null && recs.Count > 0)
+                 {
+                     DispatcherQueue.TryEnqueue(() => {
+                         RecommendationsListView.ItemsSource = recs;
+                         RecommendationsOverlay.Visibility = Visibility.Visible;
+                         AnimateOpacity(RecommendationsOverlay, 1.0, 0.5);
+                     });
+                 }
+             }
+             catch { }
+        }
+
+        private void RecommendationItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is TmdbMovieResult movie)
+            {
+                // Navigate to MediaInfoPage for the recommended movie
+                var stream = new Models.Stremio.StremioMediaStream(new StremioMeta { Id = movie.Id.ToString(), Type = "movie", Name = movie.Title });
+                Frame.Navigate(typeof(MediaInfoPage), stream);
+            }
+        }
+
+        private void StartNextEpCountdown()
+        {
+            _nextEpCountdown = 10;
+            if (_nextEpCountdownTimer == null)
+            {
+                _nextEpCountdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+                _nextEpCountdownTimer.Tick += (s, e) => {
+                    _nextEpCountdown--;
+                    NextEpCountdownText.Text = $"Oynat ({_nextEpCountdown})";
+                    if (_nextEpCountdown <= 0)
+                    {
+                        _nextEpCountdownTimer.Stop();
+                        PlayNextEpisode();
+                    }
+                };
+            }
+            _nextEpCountdownTimer.Start();
+        }
+
         // Helper to extract ALL cookies from a CookieContainer (ignoring Domain restrictions)
         // MOVED TO MpvSetupHelper
 
@@ -923,6 +1487,14 @@ namespace ModernIPTVPlayer
             if (_isPageLoaded) return;
             
             _isPageLoaded = true;
+
+            // Ensure keyboard shortcuts work immediately
+            _ = Task.Run(async () => {
+                await Task.Delay(200);
+                DispatcherQueue.TryEnqueue(() => {
+                    MainGrid.Focus(FocusState.Programmatic);
+                });
+            });
             _isStaticMetadataFetched = false;
             _cachedResolution = "-";
             _cachedFps = "-";
@@ -966,6 +1538,9 @@ namespace ModernIPTVPlayer
 
 
                     _mpvPlayer.Redraw();
+
+                    ApplyPrimaryColorToUi();
+                    Services.SleepPreventionService.PreventSleep();
 
                     // 1. Initial State Restoration & UI Activation
                     _statsTimer?.Start(); 
@@ -1129,7 +1704,9 @@ namespace ModernIPTVPlayer
 
                         await _mpvPlayer.OpenAsync(_streamUrl);
 
-                        
+                        ApplyPrimaryColorToUi();
+                        Services.SleepPreventionService.PreventSleep();
+
                         // Detect Physical Refresh Rate
                         try
                         {
@@ -3100,7 +3677,7 @@ namespace ModernIPTVPlayer
                 // Use a small range to avoid triggering "Download" limits if possible, 
                 // but some servers hate Range. Let's try standard request headers only first.
                 
-                var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(8));
+                var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(25));
                 HttpResponseMessage response;
 
                 try 

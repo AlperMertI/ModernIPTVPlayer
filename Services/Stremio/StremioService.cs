@@ -191,10 +191,10 @@ namespace ModernIPTVPlayer.Services.Stremio
                         var response = JsonSerializer.Deserialize<StremioStreamResponse>(json, _jsonOptions);
                         if (response?.Streams != null)
                         {
-                            foreach(var s in response.Streams)
+                            foreach (var s in response.Streams)
                             {
-                                // Tag the stream with source logic if needed, 
-                                // or just ensure name is set properly
+                                // Tag the stream with source logic
+                                s.AddonUrl = baseUrl;
                                 if (string.IsNullOrEmpty(s.Name)) s.Name = "Addon";
                             }
                             return response.Streams;

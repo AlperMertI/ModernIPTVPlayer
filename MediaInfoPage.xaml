@@ -149,6 +149,74 @@
         </LinearGradientBrush>
 
 
+        <Style x:Key="PremiumEpisodeItemStyle" TargetType="ListViewItem">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0,4"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+            <Setter Property="MinHeight" Value="96"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                        <Grid x:Name="RootGrid" Background="Transparent" CornerRadius="14">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="PointerOver">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.08" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.12" Duration="0:0:0.1"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                                <VisualStateGroup x:Name="SelectionStates">
+                                    <VisualState x:Name="Unselected">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="SelectionBackground" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.1"/>
+                                            <DoubleAnimation Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.1"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Selected">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="SelectionBackground" Storyboard.TargetProperty="Opacity" To="0.15" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="SelectedUnfocused">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="SelectionBackground" Storyboard.TargetProperty="Opacity" To="0.1" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.1"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+
+                            <!-- Selection Background -->
+                            <Border x:Name="SelectionBackground" Background="White" Opacity="0" CornerRadius="14"/>
+                            
+                            <!-- Hover Overlay -->
+                            <Border x:Name="HoverOverlay" Background="White" Opacity="0" CornerRadius="14"/>
+
+                            <!-- Selection Indicator (Left accent pill) -->
+                            <Border x:Name="SelectionIndicator" Background="{StaticResource GoldGradient}" 
+                                    Width="4" Height="24" CornerRadius="2" HorizontalAlignment="Left" Margin="4,0,0,0" Opacity="0"/>
+
+                            <ContentPresenter x:Name="ContentPresenter"
+                                            Content="{TemplateBinding Content}"
+                                            ContentTemplate="{TemplateBinding ContentTemplate}"
+                                            Padding="8"
+                                            HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Page.Resources>
 
     <Grid x:Name="RootGrid">
@@ -356,30 +424,32 @@
                   <!-- IDENTITY AREA (Logo or Title) - Unified Grid to prevent jumps -->
                   <!-- VerticalAlignment="Bottom" on children and container ensures stable baseline -->
                   <Grid x:Name="IdentityContainer" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="0,0,0,16" Background="Transparent">
-                      <!-- LOGO -->
-                      <Image x:Name="ContentLogo" Stretch="Uniform" MaxHeight="120" MaxWidth="350" 
-                             HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                             Visibility="Collapsed" Opacity="0" 
-                             ImageOpened="ContentLogo_ImageOpened"
-                             ImageFailed="ContentLogo_ImageFailed" />
+                      <StackPanel x:Name="IdentityStack" VerticalAlignment="Bottom">
+                          <!-- LOGO -->
+                          <Image x:Name="ContentLogo" Stretch="Uniform" MaxHeight="120" MaxWidth="350" 
+                                 HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                 Visibility="Collapsed" Opacity="0" 
+                                 ImageOpened="ContentLogo_ImageOpened"
+                                 ImageFailed="ContentLogo_ImageFailed" />
 
-                      <!-- TITLE PANEL -->
-                      <StackPanel x:Name="TitlePanel" Opacity="0" VerticalAlignment="Bottom">
-                          <Grid>
-                              <TextBlock x:Name="SuperTitleText" Text="" FontSize="16" FontWeight="SemiBold" Visibility="Collapsed"
-                                         Foreground="{StaticResource GoldGradient}" Opacity="0.8" Margin="2,0,0,-4"
-                                         CharacterSpacing="100"/>
-                          </Grid>
-                          <Grid>
-                              <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Bold" 
-                                         TextWrapping="Wrap" Foreground="White" LineHeight="56">
-                              </TextBlock>
-                          </Grid>
+                          <!-- TITLE PANEL -->
+                          <StackPanel x:Name="TitlePanel" Opacity="0" VerticalAlignment="Bottom">
+                              <Grid>
+                                  <TextBlock x:Name="SuperTitleText" Text="" FontSize="16" FontWeight="SemiBold" Visibility="Collapsed"
+                                             Foreground="{StaticResource GoldGradient}" Opacity="0.8" Margin="2,0,0,-4"
+                                             CharacterSpacing="100"/>
+                              </Grid>
+                              <Grid>
+                                  <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Bold" 
+                                             TextWrapping="Wrap" Foreground="White" LineHeight="56">
+                                  </TextBlock>
+                              </Grid>
+                          </StackPanel>
                       </StackPanel>
                      
                       <!-- SHARED SHIMMER (Wrapped in a Grid to reserve bottom-aligned space) -->
                       <Grid x:Name="TitleShimmerContainer" VerticalAlignment="Bottom" HorizontalAlignment="Left">
-                          <ctl:ShimmerControl x:Name="TitleShimmer" Width="400" Height="56" CornerRadius="8" 
+                          <ctl:ShimmerControl x:Name="TitleShimmer" Width="400" Height="56" CornerRadius="8" Visibility="Collapsed"
                                               HorizontalAlignment="Left" VerticalAlignment="Bottom"/>
                       </Grid>
                   </Grid>
@@ -460,7 +530,7 @@
                     </StackPanel>
                     
                     <!-- Shimmer -->
-                    <StackPanel x:Name="ActionBarShimmer" Orientation="Horizontal" Spacing="16">
+                    <StackPanel x:Name="ActionBarShimmer" Orientation="Horizontal" Spacing="16" Visibility="Collapsed">
                         <ctl:ShimmerControl Width="140" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
                         <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
                         <ctl:ShimmerControl Width="52" Height="52" CornerRadius="26" HorizontalAlignment="Left"/>
@@ -481,7 +551,7 @@
                          </Grid>
                      </StackPanel>
                      
-                     <StackPanel x:Name="OverviewShimmer" Spacing="6" HorizontalAlignment="Left">
+                     <StackPanel x:Name="OverviewShimmer" Spacing="6" HorizontalAlignment="Left" Visibility="Collapsed">
                         <ctl:ShimmerControl Width="250" Height="22" CornerRadius="4" HorizontalAlignment="Left" Margin="0,0,0,4"/>
                         <ctl:ShimmerControl Width="650" Height="20" CornerRadius="4" HorizontalAlignment="Left"/>
                         <ctl:ShimmerControl Width="620" Height="20" CornerRadius="4" HorizontalAlignment="Left"/>
@@ -540,7 +610,7 @@
                     </StackPanel>
                     
                     <!-- Director Shimmer (Compact) -->
-                    <StackPanel x:Name="DirectorShimmer" Spacing="8" Margin="0,8,0,0" HorizontalAlignment="Left"> 
+                    <StackPanel x:Name="DirectorShimmer" Spacing="8" Margin="0,8,0,0" HorizontalAlignment="Left" Visibility="Collapsed"> 
                         <ctl:ShimmerControl Width="80" Height="18" CornerRadius="4" HorizontalAlignment="Left"/>
                         <StackPanel Orientation="Horizontal" Spacing="12">
                             <StackPanel Spacing="6">
@@ -606,7 +676,7 @@
                     </StackPanel>
                     
                     <!-- Cast Shimmer (Compact) -->
-                    <StackPanel x:Name="CastShimmer" Spacing="8" Margin="0,8,0,0" HorizontalAlignment="Left"> 
+                    <StackPanel x:Name="CastShimmer" Spacing="8" Margin="0,8,0,0" HorizontalAlignment="Left" Visibility="Collapsed"> 
                         <ctl:ShimmerControl Width="80" Height="18" CornerRadius="4" HorizontalAlignment="Left"/>
                         <StackPanel Orientation="Horizontal" Spacing="12">
                             <StackPanel Spacing="6">
@@ -654,19 +724,13 @@
                                  <ListView x:Name="EpisodesListView" Grid.Row="1" SelectionMode="Single" 
                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
                                            ScrollViewer.VerticalScrollMode="Enabled"
-                                           SelectionChanged="EpisodesListView_SelectionChanged" Padding="16,0,16,20">
+                                           SelectionChanged="EpisodesListView_SelectionChanged" Padding="8,0,8,20">
                                      <ListView.ItemContainerStyle>
-                                         <Style TargetType="ListViewItem">
-                                             <Setter Property="Padding" Value="0"/>
-                                             <Setter Property="Margin" Value="0,6"/>
-                                             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                                             <Setter Property="CornerRadius" Value="8"/>
-                                             <Setter Property="MinHeight" Value="88"/>
-                                         </Style>
+                                         <StaticResource ResourceKey="PremiumEpisodeItemStyle"/>
                                      </ListView.ItemContainerStyle>
                                      <ListView.ItemTemplate>
                                          <DataTemplate x:DataType="local:EpisodeItem">
-                                             <Grid MinHeight="88" Background="Transparent" Padding="0,4" CornerRadius="8">
+                                             <Grid Background="Transparent" Padding="0" CornerRadius="12">
                                                  <Grid.ContextFlyout>
                                                      <MenuFlyout>
                                                          <MenuFlyoutItem Text="İzlendi Olarak İşaretle" Click="MarkWatched_Click" Tag="{x:Bind}"/>
@@ -677,12 +741,12 @@
                                                  </Grid.ContextFlyout>
                                                  
                                                  <Grid.ColumnDefinitions>
-                                                     <ColumnDefinition Width="140"/>
+                                                     <ColumnDefinition Width="150"/>
                                                      <ColumnDefinition Width="*"/>
                                                  </Grid.ColumnDefinitions>
                                                  
                                                  <!-- Thumbnail -->
-                                                <Grid CornerRadius="10,0,0,10" Height="80">
+                                                <Grid CornerRadius="12" Height="80" HorizontalAlignment="Left" VerticalAlignment="Center">
                                                     <Image Source="{x:Bind ImageUrl, Converter={StaticResource StringToImage}}" Stretch="UniformToFill"/>
                                                     
                                                     <!-- Dark Gradient Overlay -->
@@ -714,7 +778,7 @@
                                                  </Grid>
                                                  
                                                      <!-- Info -->
-                                                     <Grid Grid.Column="1" Padding="16,10" VerticalAlignment="Center">
+                                                     <Grid Grid.Column="1" Padding="16,0,0,0" VerticalAlignment="Center">
                                                          <Grid.RowDefinitions>
                                                              <RowDefinition Height="Auto"/>
                                                              <RowDefinition Height="Auto"/>
@@ -1129,6 +1193,11 @@
                               ScrollViewer.VerticalScrollMode="Disabled" 
                               SelectionMode="Single"
                               SelectionChanged="NarrowEpisodesListView_SelectionChanged">
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem" BasedOn="{StaticResource PremiumEpisodeItemStyle}">
+                                <Setter Property="Margin" Value="0,0,16,0"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
                         <ListView.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <ItemsStackPanel Orientation="Horizontal"/>
@@ -1149,9 +1218,11 @@
                                     </Border>
                                     <!-- Dark Overlay -->
                                     <Grid Background="#44000000" CornerRadius="12,12,0,0"/>
-                                    <!-- Play Icon -->
+                                    <!-- Play Icon (Selection state aware) -->
                                     <FontIcon Glyph="&#xE768;" FontSize="24" Foreground="White" 
-                                              HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0.9"/>
+                                              HorizontalAlignment="Center" VerticalAlignment="Center" 
+                                              Opacity="0.9"
+                                              Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}"/>
                                     <!-- Progress Bar -->
                                     <ProgressBar Value="{Binding ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
                                                  Visibility="{Binding HasProgress, Converter={StaticResource BoolToVis}}" 

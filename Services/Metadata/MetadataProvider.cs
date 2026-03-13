@@ -59,6 +59,10 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
         }
 
+        private MetadataProvider()
+        {
+        }
+
         private readonly ConcurrentDictionary<string, Lazy<Task<UnifiedMetadata>>> _activeTasks = new();
         private readonly ConcurrentDictionary<string, (UnifiedMetadata Data, DateTime Expiry)> _resultCache = new();
         private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(2); // Short term cache
@@ -67,6 +71,51 @@ namespace ModernIPTVPlayer.Services.Metadata
         private readonly ConcurrentDictionary<string, string> _rawToCanonicalIdCache = new(StringComparer.OrdinalIgnoreCase);
         private readonly TimeSpan _addonMetaPositiveCacheDuration = TimeSpan.FromMinutes(20);
         private readonly TimeSpan _addonMetaNegativeCacheDuration = TimeSpan.FromMinutes(3);
+
+        /// <summary>
+        /// Synchronously checks if metadata is already in cache.
+        /// Useful for preventing UI flicker during loading states.
+        /// </summary>
+        public UnifiedMetadata? TryPeekMetadata(Models.IMediaStream stream, MetadataContext context = MetadataContext.Detail)
+        {
+            if (stream == null) return null;
+
+            try
+            {
+                string rawId = stream.IMDbId;
+                string? id = ResolveBestInitialId(stream) ?? NormalizeId(rawId) ?? rawId;
+                string type = (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms_entry && (sms_entry.Meta.Type == "series" || sms_entry.Meta.Type == "tv"))) ? "series" : "movie";
+
+                string addonHash = GetAddonOrderHash();
+                string cacheKey = $"{id ?? stream.Title}_{type}_{addonHash}";
+                if (context == MetadataContext.Discovery) cacheKey += "_discovery";
+
+                // 1. Check Primary Cache
+                if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
+                {
+                    return cached.Data;
+                }
+
+                // 2. Check Detail-from-Discovery promotion
+                if (context == MetadataContext.Detail)
+                {
+                    string discoveryKey = cacheKey + "_discovery";
+                    if (_resultCache.TryGetValue(discoveryKey, out var disc) && DateTime.Now < disc.Expiry)
+                    {
+                        if (IsSatisfied(disc.Data, MetadataContext.Detail))
+                        {
+                            return disc.Data;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Peek should be silent and safe
+            }
+
+            return null;
+        }
 
         public async Task<UnifiedMetadata> GetMetadataAsync(Models.IMediaStream stream, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null)
         {
@@ -97,6 +146,8 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             string type = (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms_entry && (sms_entry.Meta.Type == "series" || sms_entry.Meta.Type == "tv"))) ? "series" : "movie";
+            string normalizedId = NormalizeId(id) ?? id;
+            
             string fetchId = id ?? rawId ?? stream.Title;
             
             string addonHash = GetAddonOrderHash();
@@ -114,11 +165,10 @@ namespace ModernIPTVPlayer.Services.Metadata
                 {
                     lock (cached.Data.SyncRoot)
                     {
-                        SeedFromCatalogMetadata(cached.Data, stremioStream, trace);
+                        SeedFromCatalogMetadata(cached.Data, stremioStream, trace, context: MetadataContext.Detail);
                     }
                 }
 
-                // If cached, trigger callback for all existing backdrops immediately
                 if (onBackdropFound != null && cached.Data.BackdropUrls != null)
                 {
                     foreach (var bg in cached.Data.BackdropUrls) onBackdropFound(bg);
@@ -235,37 +285,27 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 if (sourceStream is StremioMediaStream stremioStream)
                 {
-                    SeedFromCatalogMetadata(metadata, stremioStream, trace);
+                    SeedFromCatalogMetadata(metadata, stremioStream, trace, context: context);
                 }
 
-                // [NEW] GLOBAL CATALOG SEEDING
-                // Search for all fragments of this item across ALL previously loaded catalogs
-                var cachedFragments = _stremioService.GetGlobalMetaCache(id);
-                if (cachedFragments != null && cachedFragments.Count > 0)
+                // Global Catalog Seeding (from current cache)
+                var initialFragments = _stremioService.GetGlobalMetaCache(id);
+                if (initialFragments != null)
                 {
-                    // Deduplicate fragments to avoid merging exact same data multiple times (e.g. same item in different categories)
                     var seededKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    if (sourceStream is StremioMediaStream sms)
-                        seededKeys.Add($"{sms.SourceAddon}_{sms.Meta.Id}");
+                    if (sourceStream is StremioMediaStream sms) seededKeys.Add($"{sms.SourceAddon}_{sms.Meta.Id}");
 
-                    foreach (var fragment in cachedFragments)
+                    foreach (var fragment in initialFragments)
                     {
-                        if (fragment == sourceStream) continue;
-                        
                         string key = $"{fragment.SourceAddon}_{fragment.Meta.Id}";
                         if (seededKeys.Contains(key)) continue;
-
-                        SeedFromCatalogMetadata(metadata, fragment, trace, quiet: true);
-                        
-                        // [NEW] Merge episodes from all fragments (SKIP during grid discovery for performance)
-                        if (metadata.IsSeries && fragment.Meta?.Videos != null && context != MetadataContext.Discovery)
+                        SeedFromCatalogMetadata(metadata, fragment, trace, quiet: true, context: context);
+                        if (metadata.IsSeries && fragment.Meta?.Videos != null && context != MetadataContext.Discovery && context != MetadataContext.ExpandedCard)
                         {
-                            MergeStremioEpisodes(fragment.Meta, metadata, false);
+                            MergeStremioEpisodes(fragment.Meta, metadata, GetHostSafe(fragment.SourceAddon), false);
                         }
-
                         seededKeys.Add(key);
                     }
-                    trace.Log("GlobalSeed", $"Seeded from {seededKeys.Count} unique cached fragments.");
                 }
 
                 MetadataField required = GetRequiredFields(context);
@@ -381,11 +421,19 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 missing = GetMissingFields(metadata, required);
                                 if (missing == MetadataField.None)
                                 {
-                                    // [PRIORITY REFINEMENT] Even if satisfied, we MUST probe higher priority addons
+                                    // Even if all required fields are present, if episode titles are generic,
+                                    // we MUST continue probing lower-priority addons (e.g. Cinemeta) to get real titles.
+                                    bool hasGenericEpTitles = metadata.IsSeries && HasGenericEpisodeTitles(metadata);
+                                    
+                                    // Even if satisfied, we MUST probe higher priority addons
                                     // to ensure that the preferred source (e.g. AioStreams) logic is applied.
                                     if (index < primaryPriority)
                                     {
                                         trace.Log("Addon", $"Satisfied but {GetHostSafe(url)} (Prio:{index}) has higher priority than current (Prio:{primaryPriority}). Probing for better data.");
+                                    }
+                                    else if (hasGenericEpTitles)
+                                    {
+                                        trace.Log("Addon", $"Fields satisfied but episode titles are generic. Continuing probe to {GetHostSafe(url)} for better episode data.");
                                     }
                                     else
                                     {
@@ -479,7 +527,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                                 if (metadata.IsSeries && context != MetadataContext.Discovery)
                                 {
-                                    MergeStremioEpisodes(entry.Meta, metadata, overwritePrimary);
+                                    MergeStremioEpisodes(entry.Meta, metadata, GetHostSafe(url), overwritePrimary);
                                 }
                             }
                         }
@@ -528,14 +576,18 @@ namespace ModernIPTVPlayer.Services.Metadata
                 return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop;
             }
 
-            return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop | MetadataField.Trailer;
+            // [FIX] Add Seasons to required fields for Detail context to ensure probe loop correctly identifies series needs
+            return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop | MetadataField.Trailer | MetadataField.Seasons;
         }
 
         private MetadataField GetMissingFields(UnifiedMetadata metadata, MetadataField required)
         {
             MetadataField missing = MetadataField.None;
             if (required.HasFlag(MetadataField.Title) && string.IsNullOrWhiteSpace(metadata.Title)) missing |= MetadataField.Title;
-            if (required.HasFlag(MetadataField.Overview) && string.IsNullOrWhiteSpace(metadata.Overview)) missing |= MetadataField.Overview;
+            
+            bool hasRealOverview = !string.IsNullOrWhiteSpace(metadata.Overview) && !IsPlaceholderOverview(metadata.Overview);
+            if (required.HasFlag(MetadataField.Overview) && !hasRealOverview) missing |= MetadataField.Overview;
+            
             if (required.HasFlag(MetadataField.Year) && string.IsNullOrWhiteSpace(metadata.Year)) missing |= MetadataField.Year;
             if (required.HasFlag(MetadataField.Rating) && metadata.Rating <= 0) missing |= MetadataField.Rating;
             if (required.HasFlag(MetadataField.Genres) && string.IsNullOrWhiteSpace(metadata.Genres)) missing |= MetadataField.Genres;
@@ -544,6 +596,14 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (required.HasFlag(MetadataField.Trailer) && string.IsNullOrWhiteSpace(metadata.TrailerUrl)) missing |= MetadataField.Trailer;
             if (required.HasFlag(MetadataField.Runtime) && string.IsNullOrWhiteSpace(metadata.Runtime)) missing |= MetadataField.Runtime;
             if (required.HasFlag(MetadataField.Logo) && string.IsNullOrWhiteSpace(metadata.LogoUrl)) missing |= MetadataField.Logo;
+            
+            // [NEW] Check for generic episode titles in series
+            if (metadata.IsSeries && required.HasFlag(MetadataField.Seasons))
+            {
+                if (metadata.Seasons == null || metadata.Seasons.Count == 0 || HasGenericEpisodeTitles(metadata))
+                    missing |= MetadataField.Seasons;
+            }
+
             return missing;
         }
 
@@ -553,7 +613,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             return addonUrls.FindIndex(a => string.Equals(a?.TrimEnd('/'), addonUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase));
         }
 
-        private void SeedFromCatalogMetadata(UnifiedMetadata metadata, StremioMediaStream stream, MetadataTrace trace, bool quiet = false)
+        private void SeedFromCatalogMetadata(UnifiedMetadata metadata, StremioMediaStream stream, MetadataTrace trace, MetadataContext context, bool quiet = false)
         {
             if (stream?.Meta == null) return;
 
@@ -611,13 +671,10 @@ namespace ModernIPTVPlayer.Services.Metadata
             // Mapping core fields (using thorough shared logic)
             MapStremioToUnified(stream.Meta, metadata, canOverwriteSeedFields, quiet);
 
-            // [NEW] Merge episodes from catalog metadata
-            if (metadata.IsSeries && stream.Meta?.Videos != null)
+            // Merge episodes from catalog metadata (SKIP during grid discovery for performance)
+            if (metadata.IsSeries && stream.Meta?.Videos != null && context != MetadataContext.Discovery && context != MetadataContext.ExpandedCard)
             {
-                lock (metadata.SyncRoot)
-                {
-                    MergeStremioEpisodes(stream.Meta, metadata, canOverwriteSeedFields);
-                }
+                 MergeStremioEpisodes(stream.Meta, metadata, GetHostSafe(stream.SourceAddon), canOverwriteSeedFields);
             }
 
             if (stream.Meta.ImdbRating != null)
@@ -771,22 +828,18 @@ namespace ModernIPTVPlayer.Services.Metadata
                 _activeAddonMetaTasks.TryRemove(cacheKey, out _);
             }
         }
-
         private bool IsSatisfied(UnifiedMetadata metadata, MetadataContext context)
         {
-            // [OPTIMIZATION] Discovery satisfies if basic fields are present.
-            // But we also check for Trailer here so we can PROMOTE it to Detail context without a second fetch.
+            // Discovery satisfies if basic fields are present.
             bool discoveryComplete = IsDiscoveryComplete(metadata);
-            bool hasImages = metadata.BackdropUrls.Count >= 2;
-            bool hasTrailer = !string.IsNullOrEmpty(metadata.TrailerUrl);
-            bool hasLogo = !string.IsNullOrEmpty(metadata.LogoUrl) || metadata.IsSeries;
-
             if (context == MetadataContext.Discovery) return discoveryComplete;
 
-            // For Detail mode: 
-            // We want Title, Overview, Trailer, and Logo.
-            // Backdrop count: 2 is usually enough for movies from Stremio addons.
-            
+            // For Detail context, we need more:
+            bool hasRealOverview = !string.IsNullOrWhiteSpace(metadata.Overview) && !IsPlaceholderOverview(metadata.Overview);
+            bool hasTrailer = !string.IsNullOrEmpty(metadata.TrailerUrl);
+            bool hasLogo = !string.IsNullOrEmpty(metadata.LogoUrl) || metadata.IsSeries;
+            bool hasImages = metadata.BackdropUrls != null && metadata.BackdropUrls.Count >= 2;
+
             // [FIX] PORTRAIT REQUIREMENT: If cast exists, at least some should have portraits
             bool hasPortraits = true;
             if (metadata.Cast != null && metadata.Cast.Count > 0)
@@ -794,20 +847,16 @@ namespace ModernIPTVPlayer.Services.Metadata
                 hasPortraits = metadata.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl));
             }
 
-            bool satisfied = discoveryComplete && hasTrailer && hasLogo && hasImages && hasPortraits;
-            
-            if (!satisfied)
+            // [FIX] EPISODE REQUIREMENT: Series MUST have non-generic episode titles for Detail context
+            bool episodesComplete = true;
+            if (metadata.IsSeries)
             {
-                var reasons = new List<string>();
-                if (!discoveryComplete) reasons.Add("Discovery incomplete (missing Title/Overview/Rating/Year/Genres)");
-                if (!hasTrailer) reasons.Add("Missing Trailer");
-                if (!hasLogo) reasons.Add("Missing Logo");
-                if (!hasImages) reasons.Add($"Insufficient images ({metadata.BackdropUrls.Count}/2)");
-                if (!hasPortraits) reasons.Add("Missing Cast Portraits");
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Not satisfied for Detail: {string.Join(", ", reasons)}");
+                bool hasEpisodes = metadata.Seasons != null && metadata.Seasons.Any(s => s.Episodes != null && s.Episodes.Count > 0);
+                bool hasRealTitles = !HasGenericEpisodeTitles(metadata);
+                episodesComplete = hasEpisodes && hasRealTitles;
             }
 
-            return satisfied;
+            return discoveryComplete && hasRealOverview && hasTrailer && hasLogo && hasImages && hasPortraits && episodesComplete;
         }
 
         private string GetHostSafe(string? url)
@@ -835,7 +884,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             return !string.IsNullOrEmpty(metadata.Title) && 
                    !string.IsNullOrEmpty(metadata.BackdropUrl) &&
                    !string.IsNullOrEmpty(metadata.Year) &&
-                   !string.IsNullOrEmpty(metadata.Overview) &&
+                   !IsPlaceholderOverview(metadata.Overview) &&
                    (metadata.Rating > 0 || metadata.DataSource.Contains("AioStreams")) && // AioStreams is high priority enough to break early
                    !string.IsNullOrEmpty(metadata.Genres);
         }
@@ -1084,18 +1133,19 @@ namespace ModernIPTVPlayer.Services.Metadata
             // [REFINEMENT] If overwritePrimary is true, only overwrite if source has data (don't overwrite with null)
             string previousTitle = unified.Title;
             
-            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Name)) || string.IsNullOrEmpty(unified.Title) || unified.Title == unified.MetadataId)
+            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Name) && !IsGenericEpisodeTitle(stremio.Name, unified.Title)) || string.IsNullOrEmpty(unified.Title) || unified.Title == unified.MetadataId)
                 unified.Title = stremio.Name;
             else if (!overwritePrimary && !string.IsNullOrEmpty(stremio.Name) && stremio.Name != unified.Title)
             {
                 // Secondary title (e.g. English title from Cinemeta when Turkish is primary)
-                if (string.IsNullOrEmpty(unified.SubTitle))
+                if (string.IsNullOrEmpty(unified.SubTitle) && !IsGenericEpisodeTitle(stremio.Name, unified.Title))
                     unified.SubTitle = stremio.Name;
             }
 
             if (string.IsNullOrWhiteSpace(unified.SubTitle) &&
                 !string.IsNullOrWhiteSpace(stremio.OriginalName) &&
-                !string.Equals(stremio.OriginalName, unified.Title, StringComparison.OrdinalIgnoreCase))
+                !string.Equals(stremio.OriginalName, unified.Title, StringComparison.OrdinalIgnoreCase) && 
+                !IsGenericEpisodeTitle(stremio.OriginalName, unified.Title))
             {
                 unified.SubTitle = stremio.OriginalName;
             }
@@ -1105,13 +1155,21 @@ namespace ModernIPTVPlayer.Services.Metadata
                 !string.IsNullOrWhiteSpace(previousTitle) &&
                 !string.IsNullOrWhiteSpace(unified.Title) &&
                 !string.Equals(previousTitle, unified.Title, StringComparison.OrdinalIgnoreCase) &&
-                previousTitle != unified.MetadataId)
+                previousTitle != unified.MetadataId && 
+                !IsGenericEpisodeTitle(previousTitle, unified.Title))
             {
                 unified.SubTitle = previousTitle;
             }
 
-            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Description)) || string.IsNullOrEmpty(unified.Overview) || unified.Overview == "Açıklama mevcut değil.")
+            bool currentIsPlaceholder = IsPlaceholderOverview(unified.Overview);
+            bool newIsPlaceholder = IsPlaceholderOverview(stremio.Description);
+
+            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Description) && !newIsPlaceholder) || 
+                string.IsNullOrEmpty(unified.Overview) || 
+                (currentIsPlaceholder && !newIsPlaceholder))
+            {
                 unified.Overview = stremio.Description;
+            }
 
             if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Poster)) || string.IsNullOrEmpty(unified.PosterUrl))
             {
@@ -1454,7 +1512,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             return tmdb;
         }
 
-        private void MergeStremioEpisodes(StremioMeta stremio, UnifiedMetadata metadata, bool overwrite = false)
+        private void MergeStremioEpisodes(StremioMeta stremio, UnifiedMetadata metadata, string source, bool overwrite = false)
         {
             if (stremio?.Videos == null) return;
 
@@ -1502,25 +1560,28 @@ namespace ModernIPTVPlayer.Services.Metadata
                         {
                             // Update missing fields OR override if overwrite is true
                             bool isGenericTitle = IsGenericEpisodeTitle(existingEpisode.Title, metadata.Title);
-                            bool isGenericOverview = IsGenericEpisodeOverview(existingEpisode.Overview);
+                            bool isGenericOverview = IsPlaceholderOverview(existingEpisode.Overview);
 
                             if (overwrite || isGenericTitle)
                             {
                                 string newTitle = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title;
                                 bool isNewGeneric = IsGenericEpisodeTitle(newTitle, metadata.Title);
 
-                                // Prefer real titles over generic ones, or accept whatever if overwrite is true
-                                if (overwrite || !isNewGeneric || string.IsNullOrEmpty(existingEpisode.Title))
+                                // NEVER replace a real title with a generic one, even if overwrite is true.
+                                if ((overwrite && !isNewGeneric) || (!isNewGeneric && isGenericTitle) || string.IsNullOrEmpty(existingEpisode.Title))
+                                {
                                     existingEpisode.Title = newTitle;
+                                }
                             }
 
                             if (overwrite || isGenericOverview || string.IsNullOrEmpty(existingEpisode.Overview))
                             {
                                 string newOverview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description;
-                                if (!string.IsNullOrEmpty(newOverview) && !IsGenericEpisodeOverview(newOverview))
+                                bool isNewGeneric = IsPlaceholderOverview(newOverview);
+
+                                // NEVER replace a real overview with a placeholder one, even if overwrite is true.
+                                if ((overwrite && !isNewGeneric) || (!isNewGeneric && isGenericOverview) || string.IsNullOrEmpty(existingEpisode.Overview))
                                     existingEpisode.Overview = newOverview;
-                                else if (string.IsNullOrEmpty(existingEpisode.Overview))
-                                    existingEpisode.Overview = newOverview; // accept placeholder if we have nothing better
                             }
 
                             if (overwrite || string.IsNullOrEmpty(existingEpisode.ThumbnailUrl))
@@ -1539,12 +1600,12 @@ namespace ModernIPTVPlayer.Services.Metadata
                             var newEp = new UnifiedEpisode
                             {
                                 Id = vid.Id,
-                                SeasonNumber = vid.Season,
+                                SeasonNumber = sNum,
                                 EpisodeNumber = vid.Episode,
-                                Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : vid.Title,
+                                Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : (vid.Title ?? $"{vid.Episode}. Bölüm"),
                                 Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description,
                                 ThumbnailUrl = vid.Thumbnail,
-                                AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d) ? d : null
+                                AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d3) ? d3 : null
                             };
                             season.Episodes.Add(newEp);
                             episodeMap[vid.Episode] = newEp;
@@ -1554,12 +1615,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
             }
 
-            sw.Stop();
-            if (sw.ElapsedMilliseconds > 10)
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] MergeStremioEpisodes took {sw.ElapsedMilliseconds}ms for {stremio.Videos.Count} vids (Added:{added}, Updated:{updated})");
+            if (added > 0 || updated > 0)
+            {
+                sw.Stop();
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] MergeStremioEpisodes: Added {added}, Updated {updated} in {sw.ElapsedMilliseconds}ms");
+            }
         }
 
-        private bool IsGenericEpisodeTitle(string title, string seriesTitle = null)
+        public static bool IsGenericEpisodeTitle(string title, string seriesTitle = null)
         {
             if (string.IsNullOrWhiteSpace(title)) return true;
             
@@ -1596,8 +1659,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             
             if (string.IsNullOrEmpty(lettersOnly)) return true; // empty like "1.0", "1-2"
 
-            // Check for generic episode/season naming patterns
-            return lettersOnly == "bolum" || 
+            bool isGeneric = lettersOnly == "bolum" || 
                    lettersOnly == "episode" || 
                    lettersOnly == "ep" || 
                    lettersOnly == "sezon" || 
@@ -1609,11 +1671,18 @@ namespace ModernIPTVPlayer.Services.Metadata
                    lettersOnly == "sno" ||
                    lettersOnly == "episodeid" ||
                    lettersOnly == "epno";
+
+            return isGeneric;
         }
 
-        private bool IsGenericEpisodeOverview(string? overview)
+        private bool IsPlaceholderOverview(string? overview)
         {
             if (string.IsNullOrWhiteSpace(overview)) return true;
+            if (overview == "Açıklama mevcut değil.") return true;
+            if (overview == "Açıklama mevcut değil") return true;
+            if (overview.Contains("açıklama mevcut değil", StringComparison.OrdinalIgnoreCase)) return true;
+            if (overview.Contains("description not available", StringComparison.OrdinalIgnoreCase)) return true;
+            
             string o = overview.ToLowerInvariant();
             
             // Patterns like "Full Title: ... Size: 3GB" or technical filenames
@@ -1624,7 +1693,26 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (o.Length < 30 && IsGenericEpisodeTitle(o, null))
                 return true;
 
+            // Very short overviews that look like filenames or technical tags
+            if (overview.Length < 10)
+            {
+                if (overview.Contains(".") || overview.Contains("-")) return true;
+            }
+
             return false;
+        }
+
+        private bool HasGenericEpisodeTitles(UnifiedMetadata metadata)
+        {
+            if (!metadata.IsSeries || metadata.Seasons == null || metadata.Seasons.Count == 0) return false;
+            
+            // Check ANY non-specials season. If ANY full season has only generic episode titles,
+            // we should consider it as having generic titles and keep probing for better data
+            // (e.g., Season 1 might be properly named, but Season 2 might be just "1. Bölüm").
+            var normalSeasons = metadata.Seasons.Where(s => s.SeasonNumber > 0).ToList();
+            if (normalSeasons.Count == 0) return false;
+
+            return normalSeasons.Any(s => s.Episodes != null && s.Episodes.Count > 0 && s.Episodes.All(e => IsGenericEpisodeTitle(e.Title, metadata.Title)));
         }
 
         private void ReconcileTmdbSeasons(UnifiedMetadata metadata, TmdbMovieResult tmdb)
