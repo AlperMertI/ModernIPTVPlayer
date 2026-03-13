@@ -2663,7 +2663,18 @@ namespace ModernIPTVPlayer
                 if (NarrowEpisodesListView != null)
                     NarrowEpisodesListView.ItemsSource = CurrentEpisodes;
 
-                if (_pendingAutoSelectEpisode != null)
+                // Restore selection state - always update IsSelected based on _selectedEpisode
+                if (_selectedEpisode != null)
+                {
+                    var matchingEpisode = CurrentEpisodes.FirstOrDefault(e => e.Id == _selectedEpisode.Id);
+                    if (matchingEpisode != null)
+                    {
+                        EpisodesListView.SelectedItem = matchingEpisode;
+                        if (NarrowEpisodesListView != null) NarrowEpisodesListView.SelectedItem = matchingEpisode;
+                        System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored selection: {matchingEpisode.Title}");
+                    }
+                }
+                else if (_pendingAutoSelectEpisode != null)
                 {
                     var matchingEpisode = CurrentEpisodes.FirstOrDefault(e => e.Id == _pendingAutoSelectEpisode.Id);
                      
@@ -2743,22 +2754,25 @@ namespace ModernIPTVPlayer
 
                          uiSeason.Episodes = newEpList;
                          
-                         // If this is the currently selected season, update the View
-                         if (SeasonComboBox.SelectedItem == uiSeason)
-                         {
-                              // Save selection
-                              var selectedEpNum = (EpisodesListView.SelectedItem as EpisodeItem)?.EpisodeNumber;
-                              
-                              CurrentEpisodes.Clear();
-                              foreach(var ep in newEpList) CurrentEpisodes.Add(ep);
-                              
-                              // Restore selection
-                              if (selectedEpNum.HasValue)
-                              {
-                                  var toSelect = CurrentEpisodes.FirstOrDefault(x => x.EpisodeNumber == selectedEpNum.Value);
-                                  if (toSelect != null) EpisodesListView.SelectedItem = toSelect;
-                              }
-                         }
+                          // If this is the currently selected season, update the View
+                          if (SeasonComboBox.SelectedItem == uiSeason)
+                          {
+                               // Save selection
+                               var selectedEpNum = (EpisodesListView.SelectedItem as EpisodeItem)?.EpisodeNumber;
+                               
+                               CurrentEpisodes.Clear();
+                               foreach(var ep in newEpList) CurrentEpisodes.Add(ep);
+                               
+                               // Restore selection
+                               if (selectedEpNum.HasValue)
+                               {
+                                   var toSelect = CurrentEpisodes.FirstOrDefault(x => x.EpisodeNumber == selectedEpNum.Value);
+                                   if (toSelect != null) 
+                                   {
+                                       EpisodesListView.SelectedItem = toSelect;
+                                   }
+                               }
+                          }
                      }
                  });
              }
@@ -2777,9 +2791,6 @@ namespace ModernIPTVPlayer
                  _isSelectionSyncing = true;
                  try
                  {
-                     // Update IsSelected for visual binding
-                     foreach (var item in CurrentEpisodes) item.IsSelected = (item == ep);
-
                      _selectedEpisode = ep;
                      _streamUrl = ep.StreamUrl;
 
@@ -2827,18 +2838,16 @@ namespace ModernIPTVPlayer
                     }
      
                      // PREVIEW
-                     // History already loaded above
-                     StartPrebuffering(_streamUrl, history?.Position ?? 0);
+                      // History already loaded above
+                      StartPrebuffering(_streamUrl, history?.Position ?? 0);
 
-                     if (!string.IsNullOrEmpty(_streamUrl))
-                          _ = UpdateTechnicalBadgesAsync(_streamUrl);
-                     else if (_item is Models.Stremio.StremioMediaStream && !_isProgrammaticSelection && !_isInitializingSeriesUi)
-                          _ = PlayStremioContent(ep.Id, false);
-                 }
-                 finally
-                 {
-                     _isSelectionSyncing = false;
-                 }
+                      if (!string.IsNullOrEmpty(_streamUrl))
+                           _ = UpdateTechnicalBadgesAsync(_streamUrl);
+                  }
+                  finally
+                  {
+                      _isSelectionSyncing = false;
+                  }
             }
             else if (EpisodesListView.SelectedItem == null && !_isProgrammaticSelection)
             {
@@ -2856,9 +2865,6 @@ namespace ModernIPTVPlayer
                 _isSelectionSyncing = true;
                 try
                 {
-                    // Update IsSelected for visual binding
-                    foreach (var item in CurrentEpisodes) item.IsSelected = (item == ep);
-
                     _selectedEpisode = ep;
                     _streamUrl = ep.StreamUrl;
                     
@@ -2894,12 +2900,6 @@ namespace ModernIPTVPlayer
                             if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
                             if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
                         }
-                    }
-
-                    // [FIX] Trigger Source Discovery for Stremio items in Narrow View
-                    if (_item is Models.Stremio.StremioMediaStream && !_isProgrammaticSelection && !_isInitializingSeriesUi)
-                    {
-                        _ = PlayStremioContent(ep.Id, false);
                     }
                 }
                 finally
@@ -3296,6 +3296,25 @@ namespace ModernIPTVPlayer
                       await PerformHandoverAndNavigate(ep.StreamUrl, ep.Title, ep.Id, parentId, _item.Title, ep.SeasonNumber, ep.EpisodeNumber);
                  }
              }
+        }
+
+        private async void EpisodeArrowButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag is EpisodeItem ep)
+            {
+                _selectedEpisode = ep;
+                EpisodesListView.SelectedItem = ep;
+
+                if (_item is Models.Stremio.StremioMediaStream)
+                {
+                    await PlayStremioContent(ep.Id, showGlobalLoading: false);
+                }
+                else if (_item is SeriesStream ss)
+                {
+                    string parentId = ss.SeriesId.ToString();
+                    await PerformHandoverAndNavigate(ep.StreamUrl, ep.Title, ep.Id, parentId, _item.Title, ep.SeasonNumber, ep.EpisodeNumber);
+                }
+            }
         }
 
         private async void TrailerButton_Click(object sender, RoutedEventArgs e)
@@ -6866,12 +6885,6 @@ namespace ModernIPTVPlayer
             {
                 if (EpisodesListView != null) EpisodesListView.SelectedItem = null;
                 if (NarrowEpisodesListView != null) NarrowEpisodesListView.SelectedItem = null;
-
-                // [FIX] Explicitly clear model-level selection flags to avoid duplicate visuals
-                if (CurrentEpisodes != null)
-                {
-                    foreach (var episode in CurrentEpisodes) episode.IsSelected = false;
-                }
 
                 _selectedEpisode = null;
                 _streamUrl = null;

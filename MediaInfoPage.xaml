@@ -161,49 +161,35 @@
                         <Grid x:Name="RootGrid" Background="Transparent" CornerRadius="14">
                             <VisualStateManager.VisualStateGroups>
                                 <VisualStateGroup x:Name="CommonStates">
-                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="Normal">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.15"/>
+                                        </Storyboard>
+                                    </VisualState>
                                     <VisualState x:Name="PointerOver">
                                         <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.08" Duration="0:0:0.2"/>
+                                            <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.08" Duration="0:0:0.15"/>
                                         </Storyboard>
                                     </VisualState>
                                     <VisualState x:Name="Pressed">
                                         <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.12" Duration="0:0:0.1"/>
-                                        </Storyboard>
-                                    </VisualState>
-                                </VisualStateGroup>
-                                <VisualStateGroup x:Name="SelectionStates">
-                                    <VisualState x:Name="Unselected">
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="SelectionBackground" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.1"/>
-                                            <DoubleAnimation Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.1"/>
-                                        </Storyboard>
-                                    </VisualState>
-                                    <VisualState x:Name="Selected">
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="SelectionBackground" Storyboard.TargetProperty="Opacity" To="0.15" Duration="0:0:0.2"/>
-                                            <DoubleAnimation Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.2"/>
-                                        </Storyboard>
-                                    </VisualState>
-                                    <VisualState x:Name="SelectedUnfocused">
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="SelectionBackground" Storyboard.TargetProperty="Opacity" To="0.1" Duration="0:0:0.2"/>
-                                            <DoubleAnimation Storyboard.TargetName="SelectionIndicator" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.1"/>
+                                            <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.12" Duration="0:0:0.05"/>
                                         </Storyboard>
                                     </VisualState>
                                 </VisualStateGroup>
                             </VisualStateManager.VisualStateGroups>
 
                             <!-- Selection Background -->
-                            <Border x:Name="SelectionBackground" Background="White" Opacity="0" CornerRadius="14"/>
+                            <Border x:Name="SelectionBackground" Background="White" Opacity="0.15" CornerRadius="14"
+                                    Visibility="{Binding IsSelected, RelativeSource={RelativeSource Mode=TemplatedParent}, Converter={StaticResource BoolToVis}}"/>
                             
                             <!-- Hover Overlay -->
                             <Border x:Name="HoverOverlay" Background="White" Opacity="0" CornerRadius="14"/>
 
                             <!-- Selection Indicator (Left accent pill) -->
                             <Border x:Name="SelectionIndicator" Background="{StaticResource GoldGradient}" 
-                                    Width="4" Height="24" CornerRadius="2" HorizontalAlignment="Left" Margin="4,0,0,0" Opacity="0"/>
+                                    Width="4" Height="24" CornerRadius="2" HorizontalAlignment="Left" Margin="4,0,0,0" 
+                                    Visibility="{Binding IsSelected, RelativeSource={RelativeSource Mode=TemplatedParent}, Converter={StaticResource BoolToVis}}"/>
 
                             <ContentPresenter x:Name="ContentPresenter"
                                             Content="{TemplateBinding Content}"
@@ -740,17 +726,18 @@
                                                      </MenuFlyout>
                                                  </Grid.ContextFlyout>
                                                  
-                                                 <Grid.ColumnDefinitions>
-                                                     <ColumnDefinition Width="150"/>
-                                                     <ColumnDefinition Width="*"/>
-                                                 </Grid.ColumnDefinitions>
-                                                 
-                                                 <!-- Thumbnail -->
-                                                <Grid CornerRadius="12" Height="80" HorizontalAlignment="Left" VerticalAlignment="Center">
-                                                    <Image Source="{x:Bind ImageUrl, Converter={StaticResource StringToImage}}" Stretch="UniformToFill"/>
-                                                    
-                                                    <!-- Dark Gradient Overlay -->
-                                                    <Grid Background="#33000000"/>
+                                                  <Grid.ColumnDefinitions>
+                                                      <ColumnDefinition Width="150"/>
+                                                      <ColumnDefinition Width="*"/>
+                                                      <ColumnDefinition Width="Auto"/>
+                                                  </Grid.ColumnDefinitions>
+                                                  
+                                                  <!-- Thumbnail -->
+                                                 <Grid Grid.Column="0" CornerRadius="12" Height="80" HorizontalAlignment="Left" VerticalAlignment="Center" Width="150">
+                                                     <Image Source="{x:Bind ImageUrl, Converter={StaticResource StringToImage}}" Stretch="UniformToFill"/>
+                                                     
+                                                     <!-- Dark Gradient Overlay -->
+                                                     <Grid Background="#33000000"/>
 
                                                     <!-- Premium Watched Overlay -->
                                                      <Grid Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}"
@@ -759,37 +746,29 @@
                                                                        Spacing="4" Padding="6,3" Background="#99000000" CornerRadius="0,6,0,10">
                                                                 <FontIcon Glyph="&#xE73E;" FontSize="10" Foreground="{StaticResource GoldGradient}"/>
                                                                 <TextBlock Text="İZLENDİ" FontSize="9" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
-                                                           </StackPanel>
-                                                           <Border BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" CornerRadius="10,0,0,10"/>
-                                                     </Grid>
- 
-                                                    <!-- Play Overlay ON SELECTED -->
-                                                     <Button Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
-                                                             Style="{StaticResource GlassButtonStyle}" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                             Width="48" Height="48" CornerRadius="24"
-                                                             Padding="0" BorderThickness="0" Background="#CC000000" Click="EpisodePlayButton_Click" Tag="{x:Bind}">
-                                                          <FontIcon Glyph="&#xE768;" Foreground="White" FontSize="20" Margin="2,0,0,0"/>
-                                                     </Button>
-                                                     
-                                                     <!-- Premium Progress Bar -->
-                                                     <ProgressBar Value="{x:Bind ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
-                                                                  Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
-                                                                  Foreground="#E50914" Background="#44000000" BorderThickness="0" Margin="0"/>
-                                                 </Grid>
-                                                 
-                                                     <!-- Info -->
-                                                     <Grid Grid.Column="1" Padding="16,0,0,0" VerticalAlignment="Center">
-                                                         <Grid.RowDefinitions>
-                                                             <RowDefinition Height="Auto"/>
-                                                             <RowDefinition Height="Auto"/>
-                                                             <RowDefinition Height="Auto"/>
-                                                             <RowDefinition Height="Auto"/>
-                                                         </Grid.RowDefinitions>
-                                                         
-                                                         <!-- Top Row: Episode Number & Duration & Watched Status -->
-                                                         <Grid Opacity="0.7">
-                                                             <Grid.ColumnDefinitions>
-                                                                 <ColumnDefinition Width="Auto"/>
+                                                            </StackPanel>
+                                                            <Border BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" CornerRadius="10,0,0,10"/>
+                                                      </Grid>
+                                                      
+                                                      <!-- Premium Progress Bar -->
+                                                      <ProgressBar Value="{x:Bind ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
+                                                                   Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                                                                   Foreground="#E50914" Background="#44000000" BorderThickness="0" Margin="0"/>
+                                                  </Grid>
+                                                  
+                                                  <!-- Info -->
+                                                  <Grid Grid.Column="1" Padding="16,0,8,0" VerticalAlignment="Center">
+                                                      <Grid.RowDefinitions>
+                                                          <RowDefinition Height="Auto"/>
+                                                          <RowDefinition Height="Auto"/>
+                                                          <RowDefinition Height="Auto"/>
+                                                          <RowDefinition Height="Auto"/>
+                                                      </Grid.RowDefinitions>
+                                                      
+                                                      <!-- Top Row: Episode Number & Duration & Watched Status -->
+                                                      <Grid Opacity="0.7">
+                                                          <Grid.ColumnDefinitions>
+                                                              <ColumnDefinition Width="Auto"/>
                                                                  <ColumnDefinition Width="*"/>
                                                                  <ColumnDefinition Width="Auto"/>
                                                              </Grid.ColumnDefinitions>
@@ -821,14 +800,22 @@
                                                              <!-- Overview (only if released or generally) -->
                                                              <TextBlock Text="{x:Bind Overview}" FontSize="12" Foreground="#C8C8C8"
                                                                         TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
-                                                         </StackPanel>
-                                                         
-                                                         <!-- Progress Text -->
-                                                         <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA"
-                                                                    Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
-                                                     </Grid>
-                                             </Grid>
-                                         </DataTemplate>
+                                                          </StackPanel>
+                                                          
+                                                          <!-- Progress Text -->
+                                                          <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA"
+                                                                     Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
+                                                      </Grid>
+                                                      
+                                                      <!-- Right Arrow Button - Go to Sources -->
+                                                      <Button Grid.Column="2" Style="{StaticResource GlassButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                              Width="40" Height="40" CornerRadius="20" Margin="8,0,0,0"
+                                                              Padding="0" BorderThickness="0" Background="#99000000" Click="EpisodeArrowButton_Click" Tag="{x:Bind}"
+                                                              ToolTipService.ToolTip="Kaynakları Gör">
+                                                          <FontIcon Glyph="&#xE76C;" Foreground="{StaticResource GoldGradient}" FontSize="18"/>
+                                                      </Button>
+                                              </Grid>
+                                          </DataTemplate>
                                      </ListView.ItemTemplate>
                                   </ListView>
                                   
@@ -1218,11 +1205,6 @@
                                     </Border>
                                     <!-- Dark Overlay -->
                                     <Grid Background="#44000000" CornerRadius="12,12,0,0"/>
-                                    <!-- Play Icon (Selection state aware) -->
-                                    <FontIcon Glyph="&#xE768;" FontSize="24" Foreground="White" 
-                                              HorizontalAlignment="Center" VerticalAlignment="Center" 
-                                              Opacity="0.9"
-                                              Visibility="{Binding IsSelected, Converter={StaticResource BoolToVis}}"/>
                                     <!-- Progress Bar -->
                                     <ProgressBar Value="{Binding ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
                                                  Visibility="{Binding HasProgress, Converter={StaticResource BoolToVis}}" 
