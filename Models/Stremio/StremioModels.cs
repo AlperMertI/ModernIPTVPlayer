@@ -181,6 +181,21 @@ namespace ModernIPTVPlayer.Models.Stremio
     {
         [JsonPropertyName("cast")]
         public List<StremioAppCast> Cast { get; set; }
+
+        [JsonPropertyName("logo")]
+        public string Logo { get; set; }
+
+        [JsonPropertyName("trailer")]
+        public string Trailer { get; set; }
+
+        [JsonPropertyName("backdrops")]
+        public List<StremioAppBackdrop> Backdrops { get; set; }
+    }
+
+    public class StremioAppBackdrop
+    {
+        [JsonPropertyName("url")]
+        public string Url { get; set; }
     }
 
     public class StremioAppCast

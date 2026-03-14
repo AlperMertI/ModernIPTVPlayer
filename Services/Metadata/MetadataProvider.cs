@@ -31,7 +31,9 @@ namespace ModernIPTVPlayer.Services.Metadata
         Logo = 1 << 9,
         Cast = 1 << 10,
         Seasons = 1 << 11,
-        OriginalTitle = 1 << 12
+        OriginalTitle = 1 << 12,
+        Gallery = 1 << 13,
+        CastPortraits = 1 << 14
     }
     
     public class MetadataProvider
@@ -189,14 +191,38 @@ namespace ModernIPTVPlayer.Services.Metadata
                     }
                     // [SEED] If not fully satisfied, seed the Detail fetch with Discovery data!
                     // This allows skipping addons that were already probed.
-                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] SEEDING Detail fetch with Discovery data for: {cacheKey}");
+                    // [SEED] If not fully satisfied, seed the Detail fetch with Discovery data!
+                    // This allows skipping addons that were already probed.
+                    var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail));
+                    string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
+                    AppLogger.Info($"[MetadataProvider] SEEDING Detail fetch ({id ?? stream.Title}) | Reason: {seedReason}");
                     return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, type, stream, cacheKey, context, onBackdropFound, disc.Data))).Value;
                 }
             }
 
             // 2. Check Active Tasks (Deduplication) - Use Lazy to ensure atomic task creation
-            AppLogger.Info($"START Fetching ({context}): {id ?? stream.Title} | Type: {type}");
-            return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, type, stream, cacheKey, context, onBackdropFound))).Value;
+            
+            // Refine fetch reason by seeing what we already have from the stream/catalog data
+            var tempMetadata = new UnifiedMetadata();
+            if (stream is ModernIPTVPlayer.Models.Stremio.StremioMediaStream sms)
+                SeedFromCatalogMetadata(tempMetadata, sms, new MetadataTrace("Reasoning", cacheKey, stream.Title), context, quiet: true);
+            var missing = GetMissingFields(tempMetadata, GetRequiredFields(context));
+            
+            // [NEW] Early exit if catalog/discovery data already satisfies current context requirements
+            if (missing == MetadataField.None)
+            {
+                // Result found and satisfied without background task
+                var expiry = DateTime.Now.Add(_cacheDuration);
+                _resultCache[cacheKey] = (tempMetadata, expiry);
+                return tempMetadata;
+            }
+
+            var fetchReason = missing.ToString();
+            return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
+            {
+                AppLogger.Info($"START Fetching ({context}): {id ?? stream.Title} | Type: {type} | Reason: {fetchReason}");
+                return GetMetadataInternalAsync(fetchId, type, stream, cacheKey, context, onBackdropFound);
+            })).Value;
         }
 
         private string? ResolveBestInitialId(Models.IMediaStream stream)
@@ -370,7 +396,15 @@ namespace ModernIPTVPlayer.Services.Metadata
                     if (addonUrls.Count > 0)
                     {
                         int sourcePriority = GetAddonPriorityIndex(addonUrls, metadata.CatalogSourceAddonUrl);
-                        int primaryPriority = sourcePriority >= 0 ? sourcePriority : int.MaxValue;
+                        int existingPrimaryPriority = GetAddonPriorityIndex(addonUrls, metadata.PrimaryMetadataAddonUrl);
+
+                        // [FIX] Initial priority should be the BEST (lowest index) priority we already have. 
+                        // This prevents lower-priority catalog sources (like Cinemeta) from demoting higher-priority data (like AioStreams)
+                        // that was already discovered and seeded into this fetch.
+                        int primaryPriority = Math.Min(
+                            sourcePriority >= 0 ? sourcePriority : int.MaxValue,
+                            existingPrimaryPriority >= 0 ? existingPrimaryPriority : int.MaxValue
+                        );
                         string rawCatalogId = (sourceStream as StremioMediaStream)?.Meta?.Id ?? sourceStream?.IMDbId ?? id;
                         string currentSearchId = NormalizeId(metadata.ImdbId) ?? NormalizeId(id) ?? id;
                         if (!IsCanonicalId(currentSearchId) && !string.IsNullOrWhiteSpace(rawCatalogId) &&
@@ -506,29 +540,80 @@ namespace ModernIPTVPlayer.Services.Metadata
                                     trace.Log("ID", $"Upgraded search id to canonical IMDb: {discoveredImdbId}. Allowing full addon loop.");
                                 }
 
-                                bool overwritePrimary = index <= primaryPriority;
-                                MapStremioToUnified(entry.Meta, metadata, overwritePrimary);
-                                if (overwritePrimary)
-                                {
-                                    primaryPriority = index;
-                                    metadata.PrimaryMetadataAddonUrl = url;
-                                    metadata.MetadataSourceInfo = $"{GetHostSafe(url)} (Primary)";
-                                    trace.Log("Priority", $"Primary source switched to {GetHostSafe(url)}");
-                                }
-                                else
-                                {
-                                    trace.Log("Priority", $"{GetHostSafe(url)} used as gap filler.");
-                                }
+                                 bool overwritePrimary = index <= primaryPriority;
 
-                                if (!string.IsNullOrEmpty(entry.Meta.Background) && metadata.BackdropUrls.Count <= 20)
-                                {
-                                    AddUniqueBackdrop(metadata, entry.Meta.Background, onBackdropFound);
-                                }
+                                 var missingBefore = GetMissingFields(metadata, GetRequiredFields(context));
+                                 
+                                 MapStremioToUnified(entry.Meta, metadata, overwritePrimary);
 
-                                if (metadata.IsSeries && context != MetadataContext.Discovery)
-                                {
-                                    MergeStremioEpisodes(entry.Meta, metadata, GetHostSafe(url), overwritePrimary);
-                                }
+                                 if (overwritePrimary)
+                                 {
+                                     primaryPriority = index;
+                                     metadata.PrimaryMetadataAddonUrl = url;
+                                     metadata.MetadataSourceInfo = $"{GetHostSafe(url)} (Primary)";
+                                     trace.Log("Priority", $"Primary source switched to {GetHostSafe(url)}");
+                                 }
+                                 else
+                                 {
+                                     trace.Log("Priority", $"{GetHostSafe(url)} used as gap filler.");
+                                 }
+
+                                 if (!string.IsNullOrEmpty(entry.Meta.Background) && metadata.BackdropUrls.Count <= 20)
+                                 {
+                                     AddUniqueBackdrop(metadata, entry.Meta.Background, onBackdropFound);
+                                 }
+
+                                 if (metadata.IsSeries && context != MetadataContext.Discovery)
+                                 {
+                                     int epChanges = MergeStremioEpisodes(entry.Meta, metadata, GetHostSafe(url), overwritePrimary);
+                                     if (epChanges > 0)
+                                     {
+                                         // Credit the addon for episode contributions even if the "Seasons" bit isn't fully cleared
+                                         trace.Log("Merge", $"Addon {GetHostSafe(url)} contributed {epChanges} episode updates.");
+                                         string addonName = GetHostSafe(url);
+                                         string priorityTag = overwritePrimary ? "Primary" : "Gaps";
+                                         string epTag = $"(Episodes: {epChanges}) [{priorityTag}]";
+                                         
+                                         if (string.IsNullOrEmpty(metadata.DataSource))
+                                             metadata.DataSource = $"{addonName} {epTag}";
+                                         else if (!metadata.DataSource.Contains(addonName))
+                                             metadata.DataSource += $" + {addonName} {epTag}";
+                                         else if (!metadata.DataSource.Contains("Episodes:"))
+                                             metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} {epTag}");
+                                     }
+                                 }
+
+                                 var missingAfter = GetMissingFields(metadata, GetRequiredFields(context));
+
+                                 // Track field-level contributions (Title, Overview, etc.)
+                                 var contributedFields = missingBefore & ~missingAfter;
+                                 if (contributedFields != MetadataField.None)
+                                 {
+                                     string addonName = GetHostSafe(url);
+                                     string fieldStr = contributedFields.ToString();
+                                     string priorityTag = overwritePrimary ? "Primary" : "Gaps";
+                                     
+                                     if (string.IsNullOrEmpty(metadata.DataSource))
+                                         metadata.DataSource = $"{addonName} ({fieldStr}) [{priorityTag}]";
+                                     else if (!metadata.DataSource.Contains(addonName))
+                                         metadata.DataSource += $" + {addonName} ({fieldStr}) [{priorityTag}]";
+                                     else if (!metadata.DataSource.Contains($"({fieldStr})"))
+                                         metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} ({fieldStr})");
+                                 }
+
+                                 // [BREAK LOGIC] If everything satisfied, stop early
+                                 if (missingAfter == MetadataField.None)
+                                 {
+                                     trace.Log("Addon", "All required fields satisfied. Breaking probe chain.");
+                                     break;
+                                 }
+
+                                 // [OPTIMIZATION] Best-effort break for series (One Piece fix)
+                                 if (metadata.IsSeries && missingAfter == MetadataField.Seasons && index >= 1)
+                                 {
+                                     trace.Log("Addon", "Found best-effort episode titles. Breaking probe chain to save time.");
+                                     break;
+                                 }
                             }
                         }
                     }
@@ -576,8 +661,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop;
             }
 
-            // [FIX] Add Seasons to required fields for Detail context to ensure probe loop correctly identifies series needs
-            return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop | MetadataField.Trailer | MetadataField.Seasons;
+            // Detail context requirements
+            return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop | 
+                   MetadataField.Trailer | MetadataField.Seasons | MetadataField.Logo | MetadataField.Gallery | MetadataField.CastPortraits;
         }
 
         private MetadataField GetMissingFields(UnifiedMetadata metadata, MetadataField required)
@@ -589,7 +675,14 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (required.HasFlag(MetadataField.Overview) && !hasRealOverview) missing |= MetadataField.Overview;
             
             if (required.HasFlag(MetadataField.Year) && string.IsNullOrWhiteSpace(metadata.Year)) missing |= MetadataField.Year;
-            if (required.HasFlag(MetadataField.Rating) && metadata.Rating <= 0) missing |= MetadataField.Rating;
+            
+            if (required.HasFlag(MetadataField.Rating) && metadata.Rating <= 0)
+            {
+                // [FIX] AioStreams exemption: If we have AioStreams data, we don't strictly require a rating to be satisfied
+                bool isAio = metadata.DataSource?.Contains("AioStreams", StringComparison.OrdinalIgnoreCase) == true;
+                if (!isAio) missing |= MetadataField.Rating;
+            }
+
             if (required.HasFlag(MetadataField.Genres) && string.IsNullOrWhiteSpace(metadata.Genres)) missing |= MetadataField.Genres;
             if (required.HasFlag(MetadataField.Poster) && string.IsNullOrWhiteSpace(metadata.PosterUrl)) missing |= MetadataField.Poster;
             if (required.HasFlag(MetadataField.Backdrop) && string.IsNullOrWhiteSpace(metadata.BackdropUrl)) missing |= MetadataField.Backdrop;
@@ -597,10 +690,22 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (required.HasFlag(MetadataField.Runtime) && string.IsNullOrWhiteSpace(metadata.Runtime)) missing |= MetadataField.Runtime;
             if (required.HasFlag(MetadataField.Logo) && string.IsNullOrWhiteSpace(metadata.LogoUrl)) missing |= MetadataField.Logo;
             
+            if (required.HasFlag(MetadataField.Gallery))
+            {
+                if (metadata.BackdropUrls == null || metadata.BackdropUrls.Count < 2) missing |= MetadataField.Gallery;
+            }
+
+            if (required.HasFlag(MetadataField.CastPortraits))
+            {
+                if (metadata.Cast != null && metadata.Cast.Count > 0 && !metadata.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl)))
+                    missing |= MetadataField.CastPortraits;
+            }
+
             // [NEW] Check for generic episode titles in series
             if (metadata.IsSeries && required.HasFlag(MetadataField.Seasons))
             {
-                if (metadata.Seasons == null || metadata.Seasons.Count == 0 || HasGenericEpisodeTitles(metadata))
+                bool hasEpisodes = metadata.Seasons != null && metadata.Seasons.Any(s => s.Episodes != null && s.Episodes.Count > 0);
+                if (!hasEpisodes || HasGenericEpisodeTitles(metadata))
                     missing |= MetadataField.Seasons;
             }
 
@@ -610,18 +715,35 @@ namespace ModernIPTVPlayer.Services.Metadata
         private int GetAddonPriorityIndex(List<string> addonUrls, string? addonUrl)
         {
             if (string.IsNullOrWhiteSpace(addonUrl)) return -1;
-            return addonUrls.FindIndex(a => string.Equals(a?.TrimEnd('/'), addonUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase));
+            string host = GetHostSafe(addonUrl);
+            return addonUrls.FindIndex(a => string.Equals(GetHostSafe(a), host, StringComparison.OrdinalIgnoreCase));
         }
 
         private void SeedFromCatalogMetadata(UnifiedMetadata metadata, StremioMediaStream stream, MetadataTrace trace, MetadataContext context, bool quiet = false)
         {
             if (stream?.Meta == null) return;
 
+            string? addonUrl = stream.SourceAddon;
+            
+            // [FALLBACK] If SourceAddon is missing (common for CW items), check Discovery Cache
+            if (string.IsNullOrEmpty(addonUrl))
+            {
+                // Improved fallback: Search all discovery keys for a match to this ID to recover original source info
+                string? bestId = ResolveBestInitialId(stream) ?? stream.IMDbId ?? stream.Id.ToString();
+                if (!string.IsNullOrEmpty(bestId))
+                {
+                    var discoveryEntry = _resultCache.FirstOrDefault(kvp => kvp.Key.Contains(bestId) && kvp.Key.EndsWith("_discovery")).Value;
+                    if (discoveryEntry.Data != null && !string.IsNullOrEmpty(discoveryEntry.Data.CatalogSourceAddonUrl))
+                    {
+                        addonUrl = discoveryEntry.Data.CatalogSourceAddonUrl;
+                        if (!quiet) trace.Log("Fallback", $"Source addon recovered from discovery cache: {GetHostSafe(addonUrl)}");
+                    }
+                }
+            }
+
             // [FIX] CROSS-CATALOG TITLE SEEDING
-            // If we already have a title from another catalog, we want to maintain both if they differ.
-            // This ensures consistent SuperTitle display regardless of which catalog entry is used.
             var addonUrls = StremioAddonManager.Instance.GetAddons();
-            int currentCatalogPriority = GetAddonPriorityIndex(addonUrls, stream.SourceAddon);
+            int currentCatalogPriority = GetAddonPriorityIndex(addonUrls, addonUrl);
             int primaryCatalogPriority = GetAddonPriorityIndex(addonUrls, metadata.CatalogSourceAddonUrl);
 
             if (currentCatalogPriority < 0) currentCatalogPriority = int.MaxValue;
@@ -674,7 +796,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             // Merge episodes from catalog metadata (SKIP during grid discovery for performance)
             if (metadata.IsSeries && stream.Meta?.Videos != null && context != MetadataContext.Discovery && context != MetadataContext.ExpandedCard)
             {
-                 MergeStremioEpisodes(stream.Meta, metadata, GetHostSafe(stream.SourceAddon), canOverwriteSeedFields);
+                  MergeStremioEpisodes(stream.Meta, metadata, GetHostSafe(addonUrl), canOverwriteSeedFields);
             }
 
             if (stream.Meta.ImdbRating != null)
@@ -687,13 +809,13 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             // Always link the Catalog Source Info during seeding if available
-            if (!string.IsNullOrEmpty(stream.SourceAddon))
+            if (!string.IsNullOrEmpty(addonUrl))
             {
                 // Only update SourceAddon/Info if we are actually overwriting or if it's currently empty
                 if (canOverwriteSeedFields || string.IsNullOrEmpty(metadata.CatalogSourceAddonUrl))
                 {
-                    metadata.CatalogSourceAddonUrl = stream.SourceAddon;
-                    metadata.CatalogSourceInfo = GetHostSafe(stream.SourceAddon);
+                    metadata.CatalogSourceAddonUrl = addonUrl;
+                    metadata.CatalogSourceInfo = GetHostSafe(addonUrl);
                 }
             }
             else if (string.IsNullOrEmpty(metadata.CatalogSourceInfo))
@@ -709,7 +831,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             if (string.IsNullOrWhiteSpace(metadata.DataSource))
             {
-                metadata.DataSource = "Catalog";
+                metadata.DataSource = !string.IsNullOrEmpty(metadata.CatalogSourceInfo) ? $"{metadata.CatalogSourceInfo} (Catalog)" : "Catalog";
             }
             else if (!metadata.DataSource.Contains("Catalog", StringComparison.OrdinalIgnoreCase))
             {
@@ -754,26 +876,60 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
             }
 
-            // [FIX] ENRICH SEEDED CAST PORTRAITS: Map Portraits from Catalog Meta if available
-            if (canOverwriteSeedFields || metadata.Cast == null || metadata.Cast.Count == 0)
+            if ((canOverwriteSeedFields && !string.IsNullOrEmpty(stream.Meta.Logo)) || string.IsNullOrEmpty(metadata.LogoUrl))
             {
-                if (stream.Meta.AppExtras?.Cast?.Count > 0)
+                if (!string.IsNullOrEmpty(stream.Meta.Logo)) metadata.LogoUrl = stream.Meta.Logo;
+            }
+
+            // Enrich backdrop list for slideshows
+            if (!string.IsNullOrEmpty(stream.Meta.Background))
+            {
+                AddUniqueBackdrop(metadata, UpgradeImageUrl(stream.Meta.Background));
+            }
+
+            if (stream.Meta.AppExtras != null)
+            {
+                if (!string.IsNullOrEmpty(stream.Meta.AppExtras.Logo) && (canOverwriteSeedFields || string.IsNullOrEmpty(metadata.LogoUrl)))
+                    metadata.LogoUrl = stream.Meta.AppExtras.Logo;
+
+                if (!string.IsNullOrEmpty(stream.Meta.AppExtras.Trailer) && (canOverwriteSeedFields || string.IsNullOrEmpty(metadata.TrailerUrl)))
+                    metadata.TrailerUrl = stream.Meta.AppExtras.Trailer;
+
+                if (stream.Meta.AppExtras.Backdrops?.Count > 0)
                 {
-                    metadata.Cast = stream.Meta.AppExtras.Cast.Take(25).Select(c => new UnifiedCast
+                    foreach (var bg in stream.Meta.AppExtras.Backdrops.Take(10))
                     {
-                        Name = c.Name,
-                        Character = c.Character,
-                        ProfileUrl = c.Photo
-                    }).ToList();
+                        if (!string.IsNullOrEmpty(bg.Url))
+                            AddUniqueBackdrop(metadata, UpgradeImageUrl(bg.Url), null);
+                    }
                 }
-                else if (stream.Meta.CreditsCast?.Count > 0)
+            }
+
+            // [FIX] ENRICH SEEDED CAST PORTRAITS: Map Portraits from Catalog Meta if available
+            lock (metadata.SyncRoot)
+            {
+                if (canOverwriteSeedFields || metadata.Cast == null || metadata.Cast.Count == 0)
                 {
-                    metadata.Cast = stream.Meta.CreditsCast.Take(25).Select(c => new UnifiedCast
+                    if (stream.Meta.AppExtras?.Cast?.Count > 0)
                     {
-                        Name = c.Name,
-                        Character = c.Character,
-                        ProfileUrl = !string.IsNullOrEmpty(c.ProfilePath) ? $"https://image.tmdb.org/t/p/w185{c.ProfilePath}" : null
-                    }).ToList();
+                        var incoming = stream.Meta.AppExtras.Cast.Take(25).Select(c => new UnifiedCast
+                        {
+                            Name = c.Name,
+                            Character = c.Character,
+                            ProfileUrl = c.Photo
+                        }).ToList();
+                        
+                        if (metadata.Cast != null && metadata.Cast.Count > 0) 
+                        {
+                            foreach(var ic in incoming) {
+                                if (string.IsNullOrEmpty(ic.ProfileUrl)) {
+                                    var ex = metadata.Cast.FirstOrDefault(oc => string.Equals(oc.Name, ic.Name, StringComparison.OrdinalIgnoreCase));
+                                    if (ex != null) ic.ProfileUrl = ex.ProfileUrl;
+                                }
+                            }
+                        }
+                        metadata.Cast = incoming;
+                    }
                 }
             }
 
@@ -790,7 +946,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
             }
 
-            if (!quiet) trace.Log("Seed", $"Catalog seed applied from {GetHostSafe(stream.SourceAddon)}");
+            if (!quiet) trace.Log("Seed", $"Catalog seed applied from {GetHostSafe(addonUrl)}");
         }
 
         private async Task<AddonMetaCacheEntry> GetAddonMetaCachedAsync(string addonUrl, string type, string id, MetadataTrace trace)
@@ -828,35 +984,10 @@ namespace ModernIPTVPlayer.Services.Metadata
                 _activeAddonMetaTasks.TryRemove(cacheKey, out _);
             }
         }
+
         private bool IsSatisfied(UnifiedMetadata metadata, MetadataContext context)
         {
-            // Discovery satisfies if basic fields are present.
-            bool discoveryComplete = IsDiscoveryComplete(metadata);
-            if (context == MetadataContext.Discovery) return discoveryComplete;
-
-            // For Detail context, we need more:
-            bool hasRealOverview = !string.IsNullOrWhiteSpace(metadata.Overview) && !IsPlaceholderOverview(metadata.Overview);
-            bool hasTrailer = !string.IsNullOrEmpty(metadata.TrailerUrl);
-            bool hasLogo = !string.IsNullOrEmpty(metadata.LogoUrl) || metadata.IsSeries;
-            bool hasImages = metadata.BackdropUrls != null && metadata.BackdropUrls.Count >= 2;
-
-            // [FIX] PORTRAIT REQUIREMENT: If cast exists, at least some should have portraits
-            bool hasPortraits = true;
-            if (metadata.Cast != null && metadata.Cast.Count > 0)
-            {
-                hasPortraits = metadata.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl));
-            }
-
-            // [FIX] EPISODE REQUIREMENT: Series MUST have non-generic episode titles for Detail context
-            bool episodesComplete = true;
-            if (metadata.IsSeries)
-            {
-                bool hasEpisodes = metadata.Seasons != null && metadata.Seasons.Any(s => s.Episodes != null && s.Episodes.Count > 0);
-                bool hasRealTitles = !HasGenericEpisodeTitles(metadata);
-                episodesComplete = hasEpisodes && hasRealTitles;
-            }
-
-            return discoveryComplete && hasRealOverview && hasTrailer && hasLogo && hasImages && hasPortraits && episodesComplete;
+            return GetMissingFields(metadata, GetRequiredFields(context)) == MetadataField.None;
         }
 
         private string GetHostSafe(string? url)
@@ -1239,53 +1370,56 @@ namespace ModernIPTVPlayer.Services.Metadata
             if ((overwritePrimary && stremio.Genres?.Count > 0) || string.IsNullOrEmpty(unified.Genres))
                 unified.Genres = (stremio.Genres != null && stremio.Genres.Count > 0) ? string.Join(", ", stremio.Genres) : "";
 
-            if (overwritePrimary || unified.Cast == null || unified.Cast.Count == 0)
+            lock (unified.SyncRoot)
             {
-                List<UnifiedCast> incomingCast = null;
-                if (stremio.AppExtras?.Cast?.Count > 0)
+                if (overwritePrimary || unified.Cast == null || unified.Cast.Count == 0 || unified.Cast.All(c => string.IsNullOrEmpty(c.ProfileUrl)))
                 {
-                    incomingCast = stremio.AppExtras.Cast.Take(25).Select(c => new UnifiedCast 
-                    { 
-                        Name = c.Name, 
-                        Character = c.Character,
-                        ProfileUrl = c.Photo // Support for addons that return 'photo'
-                    }).ToList();
-                }
-                else if (stremio.CreditsCast?.Count > 0)
-                {
-                    incomingCast = stremio.CreditsCast.Take(25).Select(c => new UnifiedCast 
-                    { 
-                        Name = c.Name, 
-                        Character = c.Character,
-                        ProfileUrl = !string.IsNullOrEmpty(c.ProfilePath) ? $"https://image.tmdb.org/t/p/w185{c.ProfilePath}" : null
-                    }).ToList();
-                }
-                else if (stremio.Cast?.Count > 0)
-                {
-                    incomingCast = stremio.Cast.Take(25).Select(name => new UnifiedCast { Name = name }).ToList();
-                }
-
-                if (incomingCast != null)
-                {
-                    if (unified.Cast != null && unified.Cast.Count > 0)
+                    List<UnifiedCast> incomingCast = null;
+                    if (stremio.AppExtras?.Cast?.Count > 0)
                     {
-                        // Smart Cast Merging: 
-                        // 1. Prioritize order and details from the new (Primary) source.
-                        // 2. Preserve portraits from the old list if the new one is missing them.
-                        // 3. Append actors from the old list who are NOT in the new list.
-                        foreach (var n in incomingCast)
-                        {
-                            if (string.IsNullOrEmpty(n.ProfileUrl))
-                            {
-                                var existing = unified.Cast.FirstOrDefault(c => string.Equals(c.Name, n.Name, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(c.ProfileUrl));
-                                if (existing != null) n.ProfileUrl = existing.ProfileUrl;
-                            }
-                        }
-
-                        var nonMatches = unified.Cast.Where(oc => !incomingCast.Any(nc => string.Equals(nc.Name, oc.Name, StringComparison.OrdinalIgnoreCase))).ToList();
-                        incomingCast.AddRange(nonMatches.Take(15)); // Limit total size but be inclusive
+                        incomingCast = stremio.AppExtras.Cast.Take(25).Select(c => new UnifiedCast 
+                        { 
+                            Name = c.Name, 
+                            Character = c.Character,
+                            ProfileUrl = c.Photo // Support for addons that return 'photo'
+                        }).ToList();
                     }
-                    unified.Cast = incomingCast;
+                    else if (stremio.CreditsCast?.Count > 0)
+                    {
+                        incomingCast = stremio.CreditsCast.Take(25).Select(c => new UnifiedCast 
+                        { 
+                            Name = c.Name, 
+                            Character = c.Character,
+                            ProfileUrl = !string.IsNullOrEmpty(c.ProfilePath) ? $"https://image.tmdb.org/t/p/w185{c.ProfilePath}" : null
+                        }).ToList();
+                    }
+                    else if (stremio.Cast?.Count > 0)
+                    {
+                        incomingCast = stremio.Cast.Take(25).Select(name => new UnifiedCast { Name = name }).ToList();
+                    }
+
+                    if (incomingCast != null)
+                    {
+                        if (unified.Cast != null && unified.Cast.Count > 0)
+                        {
+                            // Smart Cast Merging: 
+                            // 1. Prioritize order and details from the new (Primary) source.
+                            // 2. Preserve portraits from the old list if the new one is missing them.
+                            // 3. Append actors from the old list who are NOT in the new list.
+                            foreach (var n in incomingCast)
+                            {
+                                if (string.IsNullOrEmpty(n.ProfileUrl))
+                                {
+                                    var existing = unified.Cast.FirstOrDefault(c => string.Equals(c.Name, n.Name, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(c.ProfileUrl));
+                                    if (existing != null) n.ProfileUrl = existing.ProfileUrl;
+                                }
+                            }
+
+                            var nonMatches = unified.Cast.Where(oc => !incomingCast.Any(nc => string.Equals(nc.Name, oc.Name, StringComparison.OrdinalIgnoreCase))).ToList();
+                            incomingCast.AddRange(nonMatches.Take(15)); // Limit total size but be inclusive
+                        }
+                        unified.Cast = incomingCast;
+                    }
                 }
             }
 
@@ -1512,9 +1646,9 @@ namespace ModernIPTVPlayer.Services.Metadata
             return tmdb;
         }
 
-        private void MergeStremioEpisodes(StremioMeta stremio, UnifiedMetadata metadata, string source, bool overwrite = false)
+        private int MergeStremioEpisodes(ModernIPTVPlayer.Models.Stremio.StremioMeta stremio, UnifiedMetadata metadata, string source, bool overwrite = false)
         {
-            if (stremio?.Videos == null) return;
+            if (stremio?.Videos == null) return 0;
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             int added = 0;
@@ -1620,6 +1754,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                 sw.Stop();
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] MergeStremioEpisodes: Added {added}, Updated {updated} in {sw.ElapsedMilliseconds}ms");
             }
+
+            return added + updated;
         }
 
         public static bool IsGenericEpisodeTitle(string title, string seriesTitle = null)

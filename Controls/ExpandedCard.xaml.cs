@@ -1572,8 +1572,8 @@ namespace ModernIPTVPlayer.Controls
 
                         Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.SetIsTranslationEnabled(element, true);
                         
-                        visual.StartAnimation("Opacity", fadeIn);
-                        visual.StartAnimation("Translation", moveUp);
+                        try { visual.StartAnimation("Opacity", fadeIn); } catch { }
+                        try { visual.StartAnimation("Translation", moveUp); } catch { }
                     }
                     catch (Exception ex)
                     {

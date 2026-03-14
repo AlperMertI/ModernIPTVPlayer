@@ -90,17 +90,18 @@ namespace ModernIPTVPlayer
         private Windows.Foundation.Point _lastCastPointerPos;
         
         // Resize Optimization
-        private DispatcherTimer _resizeDebounceTimer;
         private int _isWideModeIndex = -1; // -1: Unknown, 0: Narrow, 1: Wide
         private double _lastReportedWidth;
         private double _lastReportedHeight;
         private double _lastAppliedWidth;
         private double _lastAppliedHeight;
+        private SpringVector3NaturalMotionAnimation _driftAnimation;
 
         public MediaInfoPage()
         {
             this.InitializeComponent();
             _compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
+            SetupRealTimeComposition();
 
             // UI Audio Feedback Setup
             this.ElementSoundMode = global::Microsoft.UI.Xaml.ElementSoundMode.Off;
@@ -108,13 +109,6 @@ namespace ModernIPTVPlayer
             
             // Manual Layout Management
             this.SizeChanged += MediaInfoPage_SizeChanged;
-
-            // Resize Optimization Setup (Phase 2: Higher interval for complex layout)
-            _resizeDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-            _resizeDebounceTimer.Tick += (s, e) => {
-                _resizeDebounceTimer.Stop();
-                HandleDebouncedResize();
-            };
             
             // Critical: Also listen to the ScrollViewer's size to sync height
             RootScrollViewer.SizeChanged += (s, e) => 
@@ -128,6 +122,7 @@ namespace ModernIPTVPlayer
             System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Constructor completed.");
             this.NavigationCacheMode = NavigationCacheMode.Required;
             SetupProfessionalAnimations();
+            SetupActionBarDynamics();
 
             // Robust Drag-to-Scroll Registration (Vertical)
             RootScrollViewer.AddHandler(PointerPressedEvent, new PointerEventHandler(OnMainPointerPressed), true);
@@ -172,7 +167,7 @@ namespace ModernIPTVPlayer
             _lastReportedHeight = e.NewSize.Height;
 
             // Immediate fast-path for critical layout boundaries
-            bool isWide = _lastReportedWidth >= 900;
+            bool isWide = _lastReportedWidth >= 800;
             int newState = isWide ? 1 : 0;
             
             if (_isWideModeIndex != newState)
@@ -180,50 +175,400 @@ namespace ModernIPTVPlayer
                 // Breakpoint hit: Update states immediately for visual correctness
                 _isWideModeIndex = newState;
                 UpdateLayoutState(isWide);
+                
+                // FORCE layout pass to ensure ActualWidth/ActualHeight are updated for the split
+                this.UpdateLayout();
             }
 
-            // Debounce the heavy scaling logic
-            _resizeDebounceTimer.Stop();
-            _resizeDebounceTimer.Start();
+            // [PERFORMANCE] Apply visual scaling/translation instantly for real-time feedback
+            UpdateRealTimeScaling(_lastReportedWidth, _lastReportedHeight, isWide);
+
+            // [SYNC] Force immediate height synchronization to avoid gaps during fast vertical resize
+            ApplyImmediateLayoutSync(_lastReportedHeight, isWide);
+
+            // NEW: Real-time Trailer & Component updates (No more debounce)
+            EnsureTrailerOverlayBounds();
+            if (TrailerOverlay?.Visibility == Visibility.Visible)
+            {
+                ApplyTrailerFullscreenLayout(_isTrailerFullscreen);
+            }
+            
+            if (isWide)
+            {
+                SyncWideHeights();
+            }
+
+            _lastAppliedWidth = _lastReportedWidth;
+            _lastAppliedHeight = _lastReportedHeight;
         }
 
-        private void HandleDebouncedResize()
+        private void ApplyImmediateLayoutSync(double height, bool isWide)
+        {
+            if (ContentGrid != null)
+            {
+                if (isWide)
+                {
+                    // Wide Mode: Force "fit-to-screen" layout
+                    ContentGrid.Height = Math.Max(0, height);
+                    ContentGrid.MaxHeight = Math.Max(0, height);
+
+                    // Instant constraint update for wide panels
+                    if (EpisodesPanel != null) EpisodesPanel.MaxHeight = Math.Max(0, height - 120);
+                    if (SourcesPanel != null) SourcesPanel.MaxHeight = Math.Max(0, height - 120);
+                }
+                else
+                {
+                    // Narrow Mode: Allow natural height for scrolling
+                    ContentGrid.Height = double.NaN;
+                    ContentGrid.MaxHeight = double.PositiveInfinity;
+
+                    // [SCROLL FIX] Remove height constraints to allow RootScrollViewer to handle everything
+                    if (NarrowSectionsContainer != null)
+                    {
+                        NarrowSectionsContainer.Visibility = Visibility.Visible;
+                        NarrowSectionsContainer.Height = double.NaN;
+                        NarrowSectionsContainer.MaxHeight = double.PositiveInfinity;
+                    }
+                }
+            }
+        }
+
+        private void UpdateRealTimeScaling(double width, double height, bool isWide)
         {
             try
             {
-                double width = _lastReportedWidth;
-                double height = _lastReportedHeight;
-                bool isWide = width >= 900;
-
-                // THRESHOLD: Avoid processing if change is negligible (< 10px)
-                if (Math.Abs(width - _lastAppliedWidth) < 10 && Math.Abs(height - _lastAppliedHeight) < 10)
-                {
-                    return;
-                }
+                if (InfoColumn == null) return;
                 
-                _lastAppliedWidth = width;
-                _lastAppliedHeight = height;
+                // 1. Unified Scaling Factor
+                double baseWidth = isWide ? 1400 : 800;
+                double baseHeight = isWide ? 900 : 700;
+                
+                double widthFactor = width / baseWidth;
+                double heightFactor = height / baseHeight;
+                double rawScale = isWide ? Math.Min(widthFactor, heightFactor) : widthFactor;
 
-                EnsureTrailerOverlayBounds();
-                if (TrailerOverlay?.Visibility == Visibility.Visible)
+                if (isWide && width < 1100)
                 {
-                    ApplyTrailerFullscreenLayout(_isTrailerFullscreen);
+                    double squeeze = (width - 800) / 300.0;
+                    rawScale *= (0.85 + (squeeze * 0.15));
                 }
 
-                // Apply universal scaling regardless of mode (now optimized for 2D)
-                ApplyAdaptiveScaling(width, height);
+                double globalScale = isWide 
+                    ? Math.Clamp(rawScale, 0.7, 1.4) 
+                    : Math.Clamp(rawScale, 0.6, 1.0); 
+
+                var visual = ElementCompositionPreview.GetElementVisual(InfoColumn);
+                ElementCompositionPreview.SetIsTranslationEnabled(InfoColumn, true);
+
+                // [DYNAMIC PIVOT & OVERFLOW LOGIC]
+                double currentActualHeight = InfoColumn.ActualHeight > 0 ? InfoColumn.ActualHeight : 600;
+                double scaledHeight = currentActualHeight * globalScale;
+                double verticalMargin = isWide ? 60 : 40; 
                 
+                // Wide Mode: Bottom Pivot for tracking the floor. Narrow Mode: Top/Center for vertical stack stability.
+                float pivotX = isWide ? 0f : (float)(InfoColumn.ActualWidth / 2.0);
+                float pivotY = isWide ? (float)currentActualHeight : 0f; 
+
+                visual.CenterPoint = new Vector3(pivotX, pivotY, 0);
+                visual.Scale = new Vector3((float)globalScale, (float)globalScale, 1.0f);
+
                 if (isWide)
                 {
-                    SyncWideHeights();
+                    // [OVERFLOW OFFSET] - Only for Wide mode to prevent button cropping
+                    double availableHeight = height - verticalMargin;
+                    float overflowShift = (scaledHeight > availableHeight) ? (float)(availableHeight - scaledHeight) : 0f;
+                    visual.Offset = new Vector3(visual.Offset.X, overflowShift, 0);
+                    
+                    // 1.5 [STABLE PANEL WIDTH] Predefined width for sources/episodes to avoid "runaway" expansion
+                    if (SourcesPanel != null) SourcesPanel.Width = 450 * Math.Clamp(width / 1600.0, 0.9, 1.1);
+                    if (EpisodesPanel != null) EpisodesPanel.Width = 450 * Math.Clamp(width / 1600.0, 0.9, 1.1);
+
+                    // Prevent Info vs Source overlap
+                    double sidePanelWidth = Math.Max(EpisodesPanel?.Width ?? 0, SourcesPanel?.Width ?? 0);
+                    if (sidePanelWidth < 100) sidePanelWidth = 450;
+                    
+                    double buffer = 220; 
+                    double availableInfoWidth = (width - sidePanelWidth - buffer) / globalScale; 
+                    InfoColumn.MaxWidth = Math.Clamp(availableInfoWidth, 350, 1200);
                 }
+                else
+                {
+                    // Narrow Mode: Reset offset (allow native scrolling) and set responsive width
+                    visual.Offset = Vector3.Zero;
+                    InfoColumn.MaxWidth = Math.Max(0, width - 40);
+                    if (SourcesPanel != null) SourcesPanel.Width = double.NaN;
+                    if (EpisodesPanel != null) EpisodesPanel.Width = double.NaN;
+
+                    // [GAP COMPENSATION]
+                    // Instead of Margin, use Composition Translation on the FOLLOWING container for smoothness.
+                    double deltaHeight = currentActualHeight * (1.0 - globalScale);
+                    InfoColumn.Margin = new Thickness(0, 20, 0, 20); // Steady fixed gap
+
+                    if (NarrowSectionsContainer != null)
+                    {
+                        var narrowVisual = ElementCompositionPreview.GetElementVisual(NarrowSectionsContainer);
+                        ElementCompositionPreview.SetIsTranslationEnabled(NarrowSectionsContainer, true);
+                        
+                        // Pull the next section up to meet the scaled bottom of the info panel
+                        float pullUp = (float)(-deltaHeight);
+                        narrowVisual.Properties.InsertVector3("Translation", new Vector3(0, pullUp, 0));
+                    }
+                }
+                
+                // 2. [DYNAMICS] Synchronized Micro-Layouts
+                SyncMicroLayouts(width, height, globalScale, isWide);
+
+                // 3. Spring Physics
+                ApplySpringDrift(visual, width, isWide);
+
+                // 4. Real-time Cast Scaling
+                ApplyCastScaling(width);
+
+                // 5. [SYNC] Structural Updates (Moved from debounced path)
+                double targetBottomMargin = isWide ? 60 : ((height < 700) ? 10 : 25);
+                double targetRightMargin = isWide ? 40 : 0;
+                
+                if (Math.Abs(InfoColumn.Margin.Bottom - targetBottomMargin) > 1 || 
+                    Math.Abs(InfoColumn.Margin.Right - targetRightMargin) > 1)
+                {
+                    InfoColumn.Margin = new Thickness(0, 0, targetRightMargin, Math.Max(0, targetBottomMargin));
+                }
+
+                if (ContentGrid != null)
+                {
+                    double sidePadding = isWide ? 60 : 20;
+                    double topPadding = isWide ? 0 : 140; 
+                    double bottomPadding = isWide ? 0 : 40;
+
+                    if (Math.Abs(ContentGrid.Padding.Left - sidePadding) > 1 || 
+                        Math.Abs(ContentGrid.Padding.Top - topPadding) > 1)
+                    {
+                        ContentGrid.Padding = new Thickness(sidePadding, topPadding, 20, bottomPadding);
+                        ContentGrid.VerticalAlignment = isWide ? VerticalAlignment.Stretch : VerticalAlignment.Top;
+                    }
+                }
+                
+                // Align text and components
+                var align = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Center;
+                var textAlign = isWide ? TextAlignment.Left : TextAlignment.Center;
+
+                if (IdentityContainer != null) IdentityContainer.HorizontalAlignment = align;
+                if (MetadataRibbon != null) MetadataRibbon.HorizontalAlignment = align;
+                if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+                if (TitleText != null) TitleText.TextAlignment = textAlign;
+                if (OverviewText != null) OverviewText.TextAlignment = textAlign;
+                if (GenresText != null) GenresText.TextAlignment = textAlign;
             }
-            catch (Exception ex)
+            catch { /* Silent fail for performance */ }
+        }
+
+        private void SyncMicroLayouts(double width, double height, double scale, bool isWide)
+        {
+            if (_compositor == null) return;
+
+            // 1. Unified Squeeze Factor (Continuous)
+            float squeeze = (float)Math.Clamp((1300 - width) / 600.0, 0, 1.0); 
+            
+            // 2. InfoColumn Nudge (Organic padding interpolate)
+            var infoVisual = ElementCompositionPreview.GetElementVisual(InfoColumn);
+            if (isWide)
             {
-                System.Diagnostics.Debug.WriteLine($"[LayoutDebug] Error in HandleDebouncedResize: {ex.Message}");
+                float targetOffset = (width < 1200) ? (float)((width - 800) / 400.0 * 40.0) : 40.0f;
+                infoVisual.Offset = new Vector3(targetOffset, 0, 0);
+            }
+            else
+            {
+                infoVisual.Offset = Vector3.Zero;
+            }
+
+            // 5. [CROSS-FADE] Panels
+            float widePanelOpacity = isWide ? (float)Math.Clamp((width - 800) / 100.0, 0, 1.0) : 0f;
+            float narrowPanelOpacity = 1f - widePanelOpacity;
+
+            if (EpisodesPanel != null) ElementCompositionPreview.GetElementVisual(EpisodesPanel).Opacity = widePanelOpacity;
+            if (SourcesPanel != null) ElementCompositionPreview.GetElementVisual(SourcesPanel).Opacity = widePanelOpacity;
+            if (NarrowSectionsContainer != null) ElementCompositionPreview.GetElementVisual(NarrowSectionsContainer).Opacity = narrowPanelOpacity;
+
+            // 6. [REAL-TIME] Unified Squeeze & Scale
+            UpdateActionBarRealTime(width, height, isWide);
+        }
+
+        private void SetupActionBarDynamics()
+        {
+            if (ActionBarPanel == null || _compositor == null) return;
+
+            // 1. Implicit Offset Animations (For smooth wrapping)
+            var elementImplicitAnimation = _compositor.CreateImplicitAnimationCollection();
+            var offsetAnimation = _compositor.CreateVector3KeyFrameAnimation();
+            offsetAnimation.Target = "Offset";
+            
+            var easing = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.3f, 0.3f), new Vector2(0.0f, 1.0f));
+            offsetAnimation.InsertExpressionKeyFrame(1.0f, "this.FinalValue", easing);
+            offsetAnimation.Duration = TimeSpan.FromMilliseconds(400);
+            
+            elementImplicitAnimation["Offset"] = offsetAnimation;
+
+            // Apply to all children of ActionBarPanel
+            foreach (var child in ActionBarPanel.Children)
+            {
+                if (child is FrameworkElement fe)
+                {
+                    var visual = ElementCompositionPreview.GetElementVisual(fe);
+                    visual.ImplicitAnimations = elementImplicitAnimation;
+                    
+                    // Enable translation for scaling math
+                    ElementCompositionPreview.SetIsTranslationEnabled(fe, true);
+
+                    // Add pointer events for high-fidelity hover (prevents "stuck" states)
+                    if (fe is Button btn)
+                    {
+                        btn.PointerEntered -= OnActionButtonPointerEntered;
+                        btn.PointerEntered += OnActionButtonPointerEntered;
+                        btn.PointerExited -= OnActionButtonPointerExited;
+                        btn.PointerExited += OnActionButtonPointerExited;
+
+                        // NEW: Robust Cleanup for stuck states
+                        btn.PointerCanceled -= OnActionButtonPointerExited;
+                        btn.PointerCanceled += OnActionButtonPointerExited;
+                        btn.PointerCaptureLost -= OnActionButtonPointerExited;
+                        btn.PointerCaptureLost += OnActionButtonPointerExited;
+                    }
+                }
             }
         }
 
+        private HashSet<Button> _hoveredActionButtons = new HashSet<Button>();
+        private float _currentActionBarBaseScale = 1.0f;
+
+        private void OnActionButtonPointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is Button btn)
+            {
+                _hoveredActionButtons.Add(btn);
+                UpdateActionBarRealTime(_lastReportedWidth, _lastReportedHeight, _lastReportedWidth >= 800);
+            }
+        }
+
+        private void OnActionButtonPointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is Button btn)
+            {
+                _hoveredActionButtons.Remove(btn);
+                UpdateActionBarRealTime(_lastReportedWidth, _lastReportedHeight, _lastReportedWidth >= 800);
+            }
+        }
+
+        private void UpdateActionBarRealTime(double width, double height, bool isWide)
+        {
+            if (ActionBarPanel == null || InfoColumn == null) return;
+
+            // 1. Label Morphing Factor
+            float labelOpacity = isWide ? (float)Math.Clamp((width - 950) / 250.0, 0.0, 1.0) : 0f;
+            
+            // 2. DYNAMIC SPACING: Extra gap in narrow mode to prevent hit-test collisions
+            float spacing = isWide ? 16f : 24f; 
+            
+            // 3. Layout Bounds (UNSCALED coordinate space)
+            // Use the full available width as the coordinate system for group centering.
+            double unscaledMaxWidth = width - 40;
+            if (unscaledMaxWidth < 300) unscaledMaxWidth = 400;
+
+            // 4. Wrapping Logic
+            List<List<Button>> rows = new List<List<Button>>();
+            List<Button> currentRow = new List<Button>();
+            double currentRowWidth = 0;
+
+            foreach (var child in ActionBarPanel.Children)
+            {
+                if (child is Button btn && btn.Visibility == Visibility.Visible)
+                {
+                    double btnWidth = btn.ActualWidth > 0 ? btn.ActualWidth : (btn == PlayButton ? 140 : 52);
+                    if (currentRowWidth + btnWidth > unscaledMaxWidth && currentRow.Count > 0)
+                    {
+                        rows.Add(currentRow);
+                        currentRow = new List<Button>();
+                        currentRowWidth = 0;
+                    }
+                    currentRow.Add(btn);
+                    currentRowWidth += btnWidth + spacing;
+                }
+            }
+            if (currentRow.Count > 0) rows.Add(currentRow);
+
+            double currentY = 0;
+            double rowHeight = 52;
+
+            foreach (var row in rows)
+            {
+                double rowTotalWidth = 0;
+                foreach (var btn in row)
+                {
+                    rowTotalWidth += (btn.ActualWidth > 0 ? btn.ActualWidth : (btn == PlayButton ? 140 : 52)) + spacing;
+                }
+                rowTotalWidth -= spacing;
+
+                // PERFECT CENTERING in unscaled space
+                double rowOffsetX = (unscaledMaxWidth - rowTotalWidth) / 2.0;
+                double currentX = isWide ? 0 : rowOffsetX;
+
+                foreach (var btn in row)
+                {
+                    var visual = ElementCompositionPreview.GetElementVisual(btn);
+                    
+                    // a) Label Morphing
+                    if (btn == PlayButton && PlayButtonTextStack != null)
+                    {
+                        var textVisual = ElementCompositionPreview.GetElementVisual(PlayButtonTextStack);
+                        textVisual.Opacity = labelOpacity;
+                        PlayButtonTextStack.Visibility = labelOpacity < 0.1f ? Visibility.Collapsed : Visibility.Visible;
+                    }
+
+                    // b) Visual Transform (Relative to parent)
+                    float hoverScale = _hoveredActionButtons.Contains(btn) ? 1.05f : 1.0f;
+                    
+                    float unscaledWidth = (float)(btn.ActualWidth > 0 ? btn.ActualWidth : (btn == PlayButton ? 140 : 52));
+                    visual.CenterPoint = new Vector3(unscaledWidth / 2.0f, 26f, 0); 
+                    visual.Scale = new Vector3(hoverScale, hoverScale, 1.0f);
+                    visual.Offset = new Vector3((float)currentX, (float)currentY, 0);
+
+                    currentX += unscaledWidth + spacing;
+                }
+                currentY += rowHeight + spacing;
+            }
+        }
+        private void UpdateLabelStability(Button btn, TextBlock txt, float visible, double padding)
+        {
+            // Legacy - Logic moved to UpdateActionBarRealTime
+        }
+
+        private void ApplySpringDrift(Visual visual, double width, bool isWide)
+        {
+            if (!isWide || _compositor == null) return;
+            float driftX = (width < 1400) ? (float)((1400 - width) * 0.05) : 0f;
+            driftX = Math.Min(driftX, 30f); 
+
+            if (_driftAnimation == null)
+            {
+                _driftAnimation = _compositor.CreateSpringVector3Animation();
+                _driftAnimation.Target = "Translation";
+                _driftAnimation.DampingRatio = 0.65f; 
+                _driftAnimation.Period = TimeSpan.FromMilliseconds(40); // Faster reaction
+            }
+
+            _driftAnimation.FinalValue = new Vector3(driftX, 0, 0); // Horizontal only
+            visual.StartAnimation("Translation", _driftAnimation);
+        }
+
+        private void ApplyCastScaling(double width)
+        {
+            // Cast Section Scaling (Aggressive shrink for context)
+            double castFactor = (width < 1100) ? Math.Clamp(width / 1100.0, 0.75, 1.0) : 1.0;
+            
+            if (DirectorSectionScale != null) { DirectorSectionScale.ScaleX = castFactor; DirectorSectionScale.ScaleY = castFactor; }
+            if (CastSectionScale != null) { CastSectionScale.ScaleX = castFactor; CastSectionScale.ScaleY = castFactor; }
+            if (NarrowDirectorSectionScale != null) { NarrowDirectorSectionScale.ScaleX = castFactor; NarrowDirectorSectionScale.ScaleY = castFactor; }
+            if (NarrowCastSectionScale != null) { NarrowCastSectionScale.ScaleX = castFactor; NarrowCastSectionScale.ScaleY = castFactor; }
+        }
         private void EnsureTrailerOverlayBounds()
         {
             if (TrailerOverlay == null || TrailerScrim == null)
@@ -236,8 +581,6 @@ namespace ModernIPTVPlayer
             TrailerOverlay.Height = double.NaN;
             TrailerScrim.Width = double.NaN;
             TrailerScrim.Height = double.NaN;
-            
-            System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Overlay Bounds Reset to Auto (Stretch).");
         }
 
         private void ApplyTrailerFullscreenLayout(bool enable)
@@ -279,10 +622,8 @@ namespace ModernIPTVPlayer
             TrailerContent.Width = width;
             TrailerContent.Height = height;
 
-            // Position close button at the top-right corner ABOVE the trailer content
             if (CloseTrailerButton != null)
             {
-                // Calculate offset above the trailer (overlay center - trailer top, then a small gap)
                 double topPad = Math.Max(12, (overlayHeight - height) / 2.0 - 48);
                 double rightPad = Math.Max(12, (overlayWidth - width) / 2.0 - 4);
                 CloseTrailerButton.Margin = new Thickness(0, topPad, rightPad, 0);
@@ -298,31 +639,27 @@ namespace ModernIPTVPlayer
             visual.CenterPoint = new Vector3(centerX, centerY, 0);
         }
 
-
-
         private void SyncWideHeights()
         {
             if (LayoutRoot == null || ContentGrid == null) return;
             
             double targetHeight = LayoutRoot.ActualHeight;
-            if (targetHeight <= 0) targetHeight = (App.MainWindow.Content as FrameworkElement)?.ActualHeight ?? 800;
+            if (targetHeight <= 0) targetHeight = _lastReportedHeight;
 
-            ContentGrid.Height = targetHeight;
-            ContentGrid.MaxHeight = targetHeight;
+            ApplyImmediateLayoutSync(targetHeight, true);
 
             if (EpisodesPanel != null)
             {
-                double sideMargin = 120; // 60 top, 60 bottom gap
+                double sideMargin = 120; 
                 double maxPanelHeight = targetHeight - sideMargin;
                 
                 EpisodesPanel.Height = double.NaN; 
-                EpisodesPanel.MaxHeight = maxPanelHeight;
+                EpisodesPanel.MaxHeight = Math.Max(0, maxPanelHeight);
                 EpisodesPanel.VerticalAlignment = VerticalAlignment.Center;
-                EpisodesPanel.Margin = new Thickness(40, 0, 0, 0); 
 
                 if (EpisodesListView != null)
                 {
-                    EpisodesListView.MaxHeight = maxPanelHeight - 100; 
+                    EpisodesListView.MaxHeight = Math.Max(0, maxPanelHeight - 100); 
                 }
             }
 
@@ -332,129 +669,13 @@ namespace ModernIPTVPlayer
                 double maxPanelHeight = targetHeight - sideMargin;
 
                 SourcesPanel.Height = double.NaN;
-                SourcesPanel.MaxHeight = maxPanelHeight;
+                SourcesPanel.MaxHeight = Math.Max(0, maxPanelHeight);
                 SourcesPanel.VerticalAlignment = VerticalAlignment.Center;
-                SourcesPanel.Margin = new Thickness(40, 0, 0, 0);
 
                 if (SourcesListView != null)
                 {
-                    SourcesListView.MaxHeight = maxPanelHeight - 100;
+                    SourcesListView.MaxHeight = Math.Max(0, maxPanelHeight - 100);
                 }
-            }
-            System.Diagnostics.Debug.WriteLine($"[LayoutDebug] SyncWideHeights: Grid={targetHeight}, Panel={EpisodesPanel?.Height}, ListMax={EpisodesListView?.MaxHeight}");
-        }
-
-        private void ApplyAdaptiveScaling(double width, double height)
-        {
-            try
-            {
-                bool isWide = width >= 900;
-
-                // 1. Calculate Scaling Factors
-                // Baseline: 1200w x 900h
-                double widthFactor = Math.Clamp(width / 1200.0, 0.7, 1.3);
-                double heightFactor = Math.Clamp(height / 900.0, 0.7, 1.2);
-                
-                // globalScale provides the primary "fitting" to the viewport (2D)
-                double globalScale = Math.Min(widthFactor, heightFactor);
-                globalScale = Math.Clamp(globalScale, 0.65, 1.1);
-
-                // 1. Identity & Data Scaling handled in section 6 ...
-
-                // 2. Title & Text Scaling (High performance: Use transforms, keep font properties stable)
-                if (OverviewText != null)
-                {
-                    OverviewText.FontSize = 16; 
-                    OverviewText.LineHeight = 26;
-                }
-
-                // 3. Identity & Ribbon Stability
-                if (ContentLogo != null)
-                {
-                    ContentLogo.MaxHeight = 120; 
-                    ContentLogo.MaxWidth = 350;
-                }
-
-                // 4. Cast Section Scaling (Aggressive shrink for context)
-                double castFactor = (width < 1100) ? Math.Clamp(width / 1100.0, 0.75, 1.0) : 1.0;
-                
-                if (DirectorSectionScale != null) { DirectorSectionScale.ScaleX = castFactor; DirectorSectionScale.ScaleY = castFactor; }
-                if (CastSectionScale != null) { CastSectionScale.ScaleX = castFactor; CastSectionScale.ScaleY = castFactor; }
-                if (NarrowDirectorSectionScale != null) { NarrowDirectorSectionScale.ScaleX = castFactor; NarrowDirectorSectionScale.ScaleY = castFactor; }
-                if (NarrowCastSectionScale != null) { NarrowCastSectionScale.ScaleX = castFactor; NarrowCastSectionScale.ScaleY = castFactor; }
-
-                // 5. Source Panel Scaling (Desktop)
-                if (SourcesPanel != null && isWide)
-                {
-                    // More stable width: stay closer to 450px baseline
-                    SourcesPanel.Width = 450 * Math.Clamp(width / 1600.0, 0.9, 1.0);
-                }
-
-                // 6. Margin/Padding Logic (Unified for consistency)
-                if (ContentGrid != null)
-                {
-                    double sidePadding = isWide ? 60 : 20;
-                    double topPadding = isWide ? 0 : 140; 
-                    double bottomPadding = isWide ? 0 : 40;
-
-                    // [FIX] Include all sides in the check to avoid stuck padding
-                    if (Math.Abs(ContentGrid.Padding.Left - sidePadding) > 1 || 
-                        Math.Abs(ContentGrid.Padding.Top - topPadding) > 1 ||
-                        Math.Abs(ContentGrid.Padding.Bottom - bottomPadding) > 1)
-                    {
-                        ContentGrid.Padding = new Thickness(sidePadding, topPadding, 20, bottomPadding);
-                    }
-                }
-
-                if (InfoColumnScale != null && InfoColumn != null)
-                {
-                    InfoColumnScale.ScaleX = InfoColumnScale.ScaleY = globalScale;
-                    
-                    // [LAYOUT] Align info panel bottom (actor names) with side panel bottom.
-                    double bottomMargin = isWide ? 60 : ((height < 700) ? 10 : 25);
-                    double rightMargin = isWide ? 40 : 0;
-                    
-                    // Force alignment based on mode for all scaled elements
-                    var align = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Center;
-                    var textAlign = isWide ? TextAlignment.Left : TextAlignment.Center;
-                    
-                    InfoColumn.HorizontalAlignment = align;
-                    if (IdentityContainer != null) IdentityContainer.HorizontalAlignment = align;
-                    if (MetadataRibbon != null) MetadataRibbon.HorizontalAlignment = align;
-                    if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = align;
-                    
-                    if (OverviewPanel != null) OverviewPanel.HorizontalAlignment = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
-                    if (TitleText != null) TitleText.TextAlignment = textAlign;
-                    if (OverviewText != null) OverviewText.TextAlignment = textAlign;
-                    if (GenresText != null) GenresText.TextAlignment = textAlign;
-                    if (GenresText != null) GenresText.HorizontalAlignment = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
-                    if (SuperTitleText != null) SuperTitleText.HorizontalAlignment = align;
-
-                    if (Math.Abs(InfoColumn.Margin.Bottom - bottomMargin) > 1 ||
-                        Math.Abs(InfoColumn.Margin.Right - rightMargin) > 1)
-                    {
-                        InfoColumn.Margin = new Thickness(0, 0, rightMargin, bottomMargin);
-                    }
-
-                    // [FIX] Update scaling anchor based on alignment to keep centering symmetric
-                    if (!isWide)
-                    {
-                        InfoColumnScale.CenterX = InfoColumn.ActualWidth / 2.0;
-                        InfoColumnScale.CenterY = InfoColumn.ActualHeight; 
-                    }
-                    else
-                    {
-                        InfoColumnScale.CenterX = 0;
-                        InfoColumnScale.CenterY = InfoColumn.ActualHeight;
-                    }
-                }
-
-                // 6. Shimmer stability
-                AdjustTitleShimmer();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LayoutDebug] Scaling Error: {ex.Message}");
             }
         }
 
@@ -570,12 +791,8 @@ namespace ModernIPTVPlayer
                     var targetDirVis = (DirectorList != null && DirectorList.Count > 0) ? Visibility.Visible : Visibility.Collapsed;
                     if (DirectorSection != null && DirectorSection.Visibility != targetDirVis) DirectorSection.Visibility = targetDirVis;
 
-                    // [FIX] Reset alignments to Left when switching back to Wide mode
-                    if (InfoColumn != null) InfoColumn.HorizontalAlignment = HorizontalAlignment.Left;
-                    if (IdentityContainer != null) IdentityContainer.HorizontalAlignment = HorizontalAlignment.Left;
-                    if (MetadataRibbon != null) MetadataRibbon.HorizontalAlignment = HorizontalAlignment.Left;
-                    if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = HorizontalAlignment.Left;
-                    if (OverviewPanel != null) OverviewPanel.HorizontalAlignment = HorizontalAlignment.Left;
+                    // [FIX] Reset translation is now managed by UpdateRealTimeScaling.
+                    // We remove the explicit reset here to avoid fighting the real-time loop.
                 }
                 else
                 {
@@ -617,12 +834,7 @@ namespace ModernIPTVPlayer
                          if (NarrowDirectorSection != null && NarrowDirectorSection.Visibility != Visibility.Collapsed) NarrowDirectorSection.Visibility = Visibility.Collapsed;
                     }
 
-                    // [FIX] Force explicit center alignment in C# for narrow mode as VSM can be overridden by manual scaling
-                    if (InfoColumn != null) InfoColumn.HorizontalAlignment = HorizontalAlignment.Center;
-                    if (IdentityContainer != null) IdentityContainer.HorizontalAlignment = HorizontalAlignment.Center;
-                    if (MetadataRibbon != null) MetadataRibbon.HorizontalAlignment = HorizontalAlignment.Center;
-                    if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = HorizontalAlignment.Center;
-                    if (OverviewPanel != null) OverviewPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+                    // [FIX] Reset translation is now managed by UpdateRealTimeScaling.
                     // Handle sources visibility in Narrow mode
                     if (_areSourcesVisible)
                     {
@@ -772,10 +984,13 @@ namespace ModernIPTVPlayer
                 _isWideModeIndex = -1;
                 if (ActualWidth > 0)
                 {
-                    bool isWide = ActualWidth >= 900;
-                    _isWideModeIndex = isWide ? 1 : 0;
-                    UpdateLayoutState(isWide);
-                    ApplyAdaptiveScaling(ActualWidth, ActualHeight);
+                    DispatcherQueue.TryEnqueue(() => 
+                    {
+                        bool isWide = ActualWidth >= 900;
+                        _isWideModeIndex = isWide ? 1 : 0;
+                        UpdateLayoutState(isWide);
+                        UpdateRealTimeScaling(ActualWidth, ActualHeight, isWide);
+                    });
                 }
                 
                 // SEEDING: Immediately set the image for ConnectedAnimation
@@ -1049,18 +1264,24 @@ namespace ModernIPTVPlayer
                 bool isWide = ActualWidth >= 900;
                 if (unified.IsSeries)
                 {
+                    _areSourcesVisible = false; // Ensure sources are hidden for series until selection
+                    if (SourcesPanel != null) SourcesPanel.Visibility = Visibility.Collapsed;
+                    if (NarrowSourcesSection != null) NarrowSourcesSection.Visibility = Visibility.Collapsed;
+                    
                     UpdateLayoutState(isWide);
                     await LoadSeriesDataAsync(unified);
                 }
                 else
                 {
-                    UpdateLayoutState(isWide);
                     if (item is Models.Stremio.StremioMediaStream smsMovie && smsMovie.Meta.Type == "movie")
                     {
                          _ = PlayStremioContent(smsMovie.Meta.Id, showGlobalLoading: false);
                     }
                     _areSourcesVisible = true;
                     if (SourcesPanel != null) SourcesPanel.Visibility = Visibility.Visible;
+                    
+                    // Delay technical section reveal to avoid layout jumps during navigation
+                    _ = Task.Delay(200).ContinueWith(_ => DispatcherQueue.TryEnqueue(() => UpdateLayoutState(ActualWidth >= 900)), TaskScheduler.Default);
                     if (SourcesInlineShimmerOverlay != null && !isCached) 
                     {
                         SourcesInlineShimmerOverlay.Visibility = Visibility.Visible;
@@ -1143,7 +1364,7 @@ namespace ModernIPTVPlayer
 
             AdjustTitleShimmer();
             SyncMetadataRibbonHeight();
-            this.UpdateLayout();
+            // REMOVED: this.UpdateLayout(); - Manual layout updates during init/nav trigger cycles
             AdjustOverviewShimmer(OverviewText.Text);
 
             PlayButton.Visibility = Visibility.Visible;
@@ -1574,7 +1795,7 @@ namespace ModernIPTVPlayer
 
         private void StaggeredRevealContent()
         {
-            // helper for cross-fade
+            // helper for cross-fade + slide-up
             void AnimatePair(UIElement content, UIElement shimmer, int delay)
             {
                 if (content == null || shimmer == null) return;
@@ -1588,25 +1809,35 @@ namespace ModernIPTVPlayer
                     return;
                 }
 
+                ElementCompositionPreview.SetIsTranslationEnabled(content, true);
+
                 // 1. Fade In Content
                 var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
                 fadeIn.InsertKeyFrame(0f, 0f);
                 fadeIn.InsertKeyFrame(1f, 1f, _compositor.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.1f, 0.9f), new System.Numerics.Vector2(0.2f, 1f)));
-                fadeIn.Duration = TimeSpan.FromMilliseconds(600); // 400 -> 600
+                fadeIn.Duration = TimeSpan.FromMilliseconds(800);
                 fadeIn.DelayTime = TimeSpan.FromMilliseconds(delay);
 
-                visualContent.Opacity = 0f; // Ensure start state
-                visualContent.StartAnimation("Opacity", fadeIn);
-                content.Opacity = 1; // logical sync
+                // 2. Slide Up Content
+                var slideUp = _compositor.CreateVector3KeyFrameAnimation();
+                slideUp.InsertKeyFrame(0f, new System.Numerics.Vector3(0, 30, 0));
+                slideUp.InsertKeyFrame(1f, new System.Numerics.Vector3(0, 0, 0), _compositor.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.1f, 0.9f), new System.Numerics.Vector2(0.2f, 1f)));
+                slideUp.Duration = TimeSpan.FromMilliseconds(900);
+                slideUp.DelayTime = TimeSpan.FromMilliseconds(delay);
 
-                // 2. Fade Out Shimmer
+                visualContent.Opacity = 0f;
+                visualContent.Offset = new System.Numerics.Vector3(0, 30, 0);
+                visualContent.StartAnimation("Opacity", fadeIn);
+                visualContent.StartAnimation("Offset", slideUp);
+                content.Opacity = 1;
+
+                // 3. Fade Out Shimmer
                 var fadeOut = _compositor.CreateScalarKeyFrameAnimation();
                 fadeOut.InsertKeyFrame(0f, 1f);
                 fadeOut.InsertKeyFrame(1f, 0f, _compositor.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.3f, 0f), new System.Numerics.Vector2(0f, 1f)));
-                fadeOut.Duration = TimeSpan.FromMilliseconds(500); // 300 -> 500
-                fadeOut.DelayTime = TimeSpan.FromMilliseconds(delay); // Sync start
+                fadeOut.Duration = TimeSpan.FromMilliseconds(500);
+                fadeOut.DelayTime = TimeSpan.FromMilliseconds(delay);
 
-                // Cleanup after animation
                 var batch = _compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
                 visualShimmer.StartAnimation("Opacity", fadeOut);
                 batch.Completed += (s, e) => 
@@ -2492,7 +2723,11 @@ namespace ModernIPTVPlayer
                     if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Collapsed;
                 }
                 
-                if (unified.Seasons == null || unified.Seasons.Count == 0) return;
+                if (unified.Seasons == null || unified.Seasons.Count == 0)
+                {
+                    if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Collapsed;
+                    return;
+                }
 
                 var newSeasons = new List<SeasonItem>();
                 foreach (var s in unified.Seasons)
@@ -2530,7 +2765,11 @@ namespace ModernIPTVPlayer
                 }
 
                 // [FLICKER PREVENTION] Compare with existing to avoid full clear/reset
-                bool seriesChanged = Seasons.Count != newSeasons.Count || 
+                // Check if counts changed OR if primary season's first episode title changed (e.g. generic -> real)
+                bool contentChanged = Seasons.Count > 0 && newSeasons.Count > 0 && Seasons[0].Episodes.Count > 0 && newSeasons[0].Episodes.Count > 0 && 
+                                     Seasons[0].Episodes[0].Title != newSeasons[0].Episodes[0].Title;
+
+                bool seriesChanged = Seasons.Count != newSeasons.Count || contentChanged ||
                                     (Seasons.Count > 0 && Seasons[0].Episodes.Count != newSeasons[0].Episodes.Count);
 
                 if (seriesChanged)
@@ -2613,19 +2852,10 @@ namespace ModernIPTVPlayer
             {
                 System.Diagnostics.Debug.WriteLine($"[SERIES] LoadSeriesData Error: {ex.Message}");
             }
-            finally
-            {
-                // Note: Transition is now primarily handled by StaggeredRevealContent() 
-                // for the initial load. For season switches, we still might want a quick collapse.
-                bool isInitialLoad = EpisodesListView == null || (ElementCompositionPreview.GetElementVisual(EpisodesListView).Opacity < 1 && EpisodesListView.Visibility == Visibility.Collapsed);
-                
-                if (!isInitialLoad)
-                {
-                    if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Collapsed;
-                    if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Visible;
-                }
+                if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Collapsed;
+                if (EpisodesListView != null && EpisodesListView.Visibility != Visibility.Visible) 
+                    EpisodesListView.Visibility = Visibility.Visible;
             }
-        }
 
 
 
@@ -3657,6 +3887,47 @@ namespace ModernIPTVPlayer
             {
                 System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Message Parse Error: {ex}");
             }
+        }
+
+        private void SetupRealTimeComposition()
+        {
+            if (InfoColumn != null)
+            {
+                ElementCompositionPreview.SetIsTranslationEnabled(InfoColumn, true);
+                var v = ElementCompositionPreview.GetElementVisual(InfoColumn);
+                v.CenterPoint = new Vector3(0, (float)InfoColumn.ActualHeight, 0);
+            }
+
+            if (ActionBarPanel != null)
+            {
+                // Give buttons a stable center for scaling (prevents "stretching" look)
+                foreach (var child in ActionBarPanel.Children)
+                {
+                    if (child is FrameworkElement fe)
+                    {
+                        ElementCompositionPreview.SetIsTranslationEnabled(fe, true);
+                        var v = ElementCompositionPreview.GetElementVisual(fe);
+                        v.CenterPoint = new Vector3((float)(fe.ActualWidth / 2.0), (float)(fe.ActualHeight / 2.0), 0);
+                    }
+                }
+            }
+
+            if (MetadataRibbon != null)
+            {
+                foreach (var child in MetadataRibbon.Children)
+                {
+                    if (child is FrameworkElement fe) ElementCompositionPreview.SetIsTranslationEnabled(fe, true);
+                }
+            }
+
+            if (EpisodesPanel != null) ElementCompositionPreview.SetIsTranslationEnabled(EpisodesPanel, true);
+            if (SourcesPanel != null) ElementCompositionPreview.SetIsTranslationEnabled(SourcesPanel, true);
+            if (NarrowSectionsContainer != null) ElementCompositionPreview.SetIsTranslationEnabled(NarrowSectionsContainer, true);
+        }
+
+        public double GetResValue(double wide, double narrow)
+        {
+            return _isWideModeIndex == 1 ? wide : narrow;
         }
 
         private string CreateYouTubePlayerHtml()
@@ -4857,13 +5128,21 @@ namespace ModernIPTVPlayer
                 
                 if (isWide)
                 {
-                    SourcesPanel.Visibility = Visibility.Visible;
-                    NarrowSourcesSection.Visibility = Visibility.Collapsed;
+                    if (SourcesPanel != null)
+                    {
+                        SourcesPanel.Visibility = Visibility.Visible;
+                        AnimatePanelReveal(SourcesPanel, SourcesPanelTransform, true, true);
+                    }
+                    if (NarrowSourcesSection != null) NarrowSourcesSection.Visibility = Visibility.Collapsed;
                 }
                 else
                 {
-                    SourcesPanel.Visibility = Visibility.Collapsed;
-                    NarrowSourcesSection.Visibility = Visibility.Visible;
+                    if (SourcesPanel != null) SourcesPanel.Visibility = Visibility.Collapsed;
+                    if (NarrowSourcesSection != null) 
+                    {
+                        NarrowSourcesSection.Visibility = Visibility.Visible;
+                        AnimatePanelReveal(NarrowSourcesSection, NarrowSourcesTransform, false, true);
+                    }
                 }
 
                 // Update info panel to show Episode Info
@@ -6106,6 +6385,92 @@ namespace ModernIPTVPlayer
 
             // 4. Alive System: Organic Breathing
             ApplyOrganicBreathing(PlayButtonIcon);
+
+            // 5. Modern Layout: Implicit Animations (Force smooth resizing)
+            SetupImplicitAnimations();
+        }
+
+        private void SetupImplicitAnimations()
+        {
+            try
+            {
+                // 1. Offset/Translation Animation
+                var offsetAnimation = _compositor.CreateVector3KeyFrameAnimation();
+                offsetAnimation.Target = "Offset";
+                offsetAnimation.InsertExpressionKeyFrame(1.0f, "this.FinalValue");
+                offsetAnimation.Duration = TimeSpan.FromMilliseconds(200); // Snappier glide (was 450ms)
+                var easing = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1f));
+                offsetAnimation.InsertExpressionKeyFrame(1.0f, "this.FinalValue", easing);
+
+                // 2. Scale Animation
+                var scaleAnimation = _compositor.CreateVector3KeyFrameAnimation();
+                scaleAnimation.Target = "Scale";
+                scaleAnimation.InsertExpressionKeyFrame(1.0f, "this.FinalValue", easing);
+                scaleAnimation.Duration = TimeSpan.FromMilliseconds(200); // Snappier glide (was 450ms)
+                
+                var implicitAnimationCollection = _compositor.CreateImplicitAnimationCollection();
+                implicitAnimationCollection["Offset"] = offsetAnimation;
+                implicitAnimationCollection["Scale"] = scaleAnimation;
+                implicitAnimationCollection["Translation"] = offsetAnimation; // Track manual translations too
+
+                // Elements that should "glide" during resize
+                UIElement[] glideElements = { 
+                    InfoContainer, InfoColumn, MetadataRibbon, ActionBarPanel, 
+                    CastSection, DirectorSection, 
+                    EpisodesPanel, SourcesPanel, 
+                    NarrowEpisodesSection, NarrowSourcesSection,
+                    IdentityStack, OverviewPanel, GenresText, MetadataPanel
+                };
+
+                foreach (var element in glideElements)
+                {
+                    if (element == null) continue;
+                    var visual = ElementCompositionPreview.GetElementVisual(element);
+                    visual.ImplicitAnimations = implicitAnimationCollection;
+                    // Ensure translation is enabled for compositor to track offset accurately
+                    ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LayoutDebug] SetupImplicitAnimations Error: {ex.Message}");
+            }
+        }
+
+        private void AnimatePanelReveal(FrameworkElement panel, CompositeTransform transform, bool isHorizontal, bool isShowing)
+        {
+            if (panel == null || transform == null) return;
+
+            var visual = ElementCompositionPreview.GetElementVisual(panel);
+            visual.StopAnimation("Opacity");
+            
+            if (isShowing)
+            {
+                panel.Opacity = 0;
+                visual.Opacity = 0f;
+                
+                if (isHorizontal) transform.TranslateX = 40;
+                else transform.TranslateY = 40;
+
+                var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                fadeIn.InsertKeyFrame(1f, 1f);
+                fadeIn.Duration = TimeSpan.FromMilliseconds(500);
+                visual.StartAnimation("Opacity", fadeIn);
+                panel.Opacity = 1;
+
+                var slideIn = new DoubleAnimation
+                {
+                    To = 0,
+                    Duration = TimeSpan.FromMilliseconds(600),
+                    EasingFunction = new QuarticEase { EasingMode = EasingMode.EaseOut }
+                };
+                Storyboard.SetTarget(slideIn, transform);
+                Storyboard.SetTargetProperty(slideIn, isHorizontal ? "TranslateX" : "TranslateY");
+                
+                var sb = new Storyboard();
+                sb.Children.Add(slideIn);
+                sb.Begin();
+            }
         }
 
         private void SetupAnticipationPulse(Button btn, FrameworkElement content)

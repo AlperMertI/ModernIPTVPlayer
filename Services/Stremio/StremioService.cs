@@ -158,8 +158,8 @@ namespace ModernIPTVPlayer.Services.Stremio
             {
                 // Format: /meta/{type}/{id}.json
                 string url = $"{baseUrl.TrimEnd('/')}/meta/{type}/{id}.json";
+                System.Diagnostics.Debug.WriteLine($"[StremioService] Fetching Meta: {url}");
                 string json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[StremioService] RAW META JSON ({type}:{id}) from {url}:\n{json}");
                 var response = JsonSerializer.Deserialize<StremioMetaResponse>(json, _jsonOptions);
                 return response?.Meta;
             }
@@ -186,6 +186,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                     {
                         // Format: /stream/{type}/{id}.json
                         string url = $"{baseUrl.TrimEnd('/')}/stream/{type}/{id}.json";
+                        System.Diagnostics.Debug.WriteLine($"[StremioService] Fetching Streams: {url}");
                         string json = await _client.GetStringAsync(url);
                         // System.Diagnostics.Debug.WriteLine($"[StremioService] FULL RAW JSON from {baseUrl}: {json}");
                         var response = JsonSerializer.Deserialize<StremioStreamResponse>(json, _jsonOptions);

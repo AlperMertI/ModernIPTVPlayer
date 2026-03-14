@@ -29,8 +29,9 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         public void Log(string stage, string message)
         {
-            // Metadata logları performansı etkilediği için susturuldu.
-            // Sadece hata durumlarında AppLogger.Error/Warn doğrudan çağrılmalı.
+            // Metadata logları performansı etkilediği için AppLogger'dan susturuldu,
+            // ancak hata ayıklama için Debug.WriteLine ile devam ediyoruz.
+            Debug.WriteLine($"[MetadataTrace|{OperationId}|{stage}] {message}");
         }
     }
 }

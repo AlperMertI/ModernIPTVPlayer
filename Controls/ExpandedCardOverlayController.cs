@@ -315,7 +315,7 @@ namespace ModernIPTVPlayer.Controls
                     float deltaX = (float)(oldLeft - targetX);
                     float deltaY = (float)(oldTop - targetY);
 
-                    visual.Properties.InsertVector3("Translation", new Vector3(deltaX, deltaY, 0));
+                    try { visual.Properties.InsertVector3("Translation", new Vector3(deltaX, deltaY, 0)); } catch { }
 
                     var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
                     offsetAnim.Target = "Translation";
@@ -331,7 +331,7 @@ namespace ModernIPTVPlayer.Controls
                 else
                 {
                     TryStopAnimation(visual, "Translation");
-                    visual.Properties.InsertVector3("Translation", Vector3.Zero);
+                    try { visual.Properties.InsertVector3("Translation", Vector3.Zero); } catch { }
                     visual.Scale = new Vector3(0.8f, 0.8f, 1f);
                     visual.Opacity = 0;
 

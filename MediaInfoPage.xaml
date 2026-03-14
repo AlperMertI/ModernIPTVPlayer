@@ -34,33 +34,13 @@
                         <Grid x:Name="RootGrid" Background="Transparent" RenderTransformOrigin="0.5,0.5">
                             <VisualStateManager.VisualStateGroups>
                                 <VisualStateGroup x:Name="CommonStates">
-                                    <VisualState x:Name="Normal">
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="ContentScale" Storyboard.TargetProperty="ScaleX" To="1.0" Duration="0:0:0.2"/>
-                                            <DoubleAnimation Storyboard.TargetName="ContentScale" Storyboard.TargetProperty="ScaleY" To="1.0" Duration="0:0:0.2"/>
-                                        </Storyboard>
-                                    </VisualState>
+                                    <VisualState x:Name="Normal"/>
                                     <VisualState x:Name="PointerOver">
                                         <Storyboard>
                                             <DoubleAnimation Storyboard.TargetName="HoverOverlay" Storyboard.TargetProperty="Opacity" To="0.15" Duration="0:0:0.2"/>
-                                            <DoubleAnimation Storyboard.TargetName="ContentScale" Storyboard.TargetProperty="ScaleX" To="1.05" Duration="0:0:0.25">
-                                                <DoubleAnimation.EasingFunction>
-                                                    <BackEase Amplitude="0.3" EasingMode="EaseOut"/>
-                                                </DoubleAnimation.EasingFunction>
-                                            </DoubleAnimation>
-                                            <DoubleAnimation Storyboard.TargetName="ContentScale" Storyboard.TargetProperty="ScaleY" To="1.05" Duration="0:0:0.25">
-                                                <DoubleAnimation.EasingFunction>
-                                                    <BackEase Amplitude="0.3" EasingMode="EaseOut"/>
-                                                </DoubleAnimation.EasingFunction>
-                                            </DoubleAnimation>
                                         </Storyboard>
                                     </VisualState>
-                                    <VisualState x:Name="Pressed">
-                                        <Storyboard>
-                                            <DoubleAnimation Storyboard.TargetName="ContentScale" Storyboard.TargetProperty="ScaleX" To="0.96" Duration="0:0:0.1"/>
-                                            <DoubleAnimation Storyboard.TargetName="ContentScale" Storyboard.TargetProperty="ScaleY" To="0.96" Duration="0:0:0.1"/>
-                                        </Storyboard>
-                                    </VisualState>
+                                    <VisualState x:Name="Pressed"/>
                                 </VisualStateGroup>
                             </VisualStateManager.VisualStateGroups>
 
@@ -289,18 +269,18 @@
             
             <Grid x:Name="LayoutRoot" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
             <ScrollViewer x:Name="RootScrollViewer" 
-                          VerticalScrollBarVisibility="Disabled" 
-                          VerticalScrollMode="Disabled" 
+                          VerticalScrollBarVisibility="Auto" 
+                          VerticalScrollMode="Auto" 
                           HorizontalScrollMode="Disabled" 
-                          VerticalContentAlignment="Stretch">
+                          VerticalContentAlignment="Top">
             
-        <Grid x:Name="ContentGrid" Padding="60,0,20,60" VerticalAlignment="Stretch">
+        <Grid x:Name="ContentGrid" Padding="60,0,20,60" VerticalAlignment="Top">
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup>
                 <VisualState x:Name="WideState">
                     <VisualState.StateTriggers>
-                        <!-- Sync threshold with C# logic (900px) -->
-                        <AdaptiveTrigger MinWindowWidth="900"/>
+                        <!-- Sync threshold with C# logic (800px) -->
+                        <AdaptiveTrigger MinWindowWidth="800"/>
                     </VisualState.StateTriggers>
                     <VisualState.Setters>
                         <!-- Aggressively lock the root scroller -->
@@ -309,15 +289,13 @@
                         <Setter Target="RootScrollViewer.HorizontalScrollMode" Value="Disabled"/>
                         <Setter Target="RootScrollViewer.IsVerticalScrollChainingEnabled" Value="False"/>
                         
-                        <!-- Force content to stay within viewport bounds -->
-                        <Setter Target="Row0.Height" Value="*"/>
+                        <!-- Stable Rows for Wide Mode -->
+                        <Setter Target="ContentGrid.RowDefinitions[0].Height" Value="*"/>
                         <Setter Target="ContentGrid.RowDefinitions[1].Height" Value="0"/>
                         <Setter Target="ContentGrid.RowDefinitions[2].Height" Value="0"/>
                         <Setter Target="ContentGrid.VerticalAlignment" Value="Stretch"/>
                         <Setter Target="ContentGrid.Padding" Value="60,0,20,0"/>
                         <Setter Target="TitleText.FontSize" Value="48"/>
-                        
-                        <Setter Target="InfoColumn.Margin" Value="0,0,40,80"/>
                         
                         <Setter Target="EpisodesPanel.VerticalAlignment" Value="Center"/>
                         <Setter Target="EpisodesPanel.Margin" Value="40,0,0,0"/>
@@ -328,9 +306,21 @@
                         <Setter Target="SourcesPanel.Margin" Value="40,0,0,0"/>
                         
                         <!-- Collapse Narrow Sections in Wide Mode -->
-                        <Setter Target="NarrowEpisodesSection.Visibility" Value="Collapsed"/>
-                        <Setter Target="NarrowSourcesSection.Visibility" Value="Collapsed"/>
-                        <Setter Target="NarrowCastSection.Visibility" Value="Collapsed"/>
+                        <Setter Target="NarrowSectionsContainer.Visibility" Value="Collapsed"/>
+                        
+                        <!-- Alignment Resets -->
+                        <Setter Target="InfoColumn.HorizontalAlignment" Value="Left"/>
+                        <Setter Target="IdentityContainer.HorizontalAlignment" Value="Left"/>
+                        <Setter Target="ContentLogo.HorizontalAlignment" Value="Left"/>
+                        <Setter Target="TitlePanel.HorizontalAlignment" Value="Left"/>
+                        <Setter Target="MetadataRibbon.HorizontalAlignment" Value="Left"/>
+                        <Setter Target="ActionBarPanel.HorizontalAlignment" Value="Left"/>
+
+                        <!-- Reset Narrow Mode Overrides -->
+                        <Setter Target="InfoContainer.(Grid.ColumnSpan)" Value="1"/>
+                        <Setter Target="TitleText.TextAlignment" Value="Left"/>
+                        <Setter Target="OverviewText.TextAlignment" Value="Left"/>
+                        <Setter Target="GenresText.TextAlignment" Value="Left"/>
                     </VisualState.Setters>
                 </VisualState>
                 <VisualState x:Name="NarrowState">
@@ -342,30 +332,43 @@
                         <Setter Target="RootScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
                         <Setter Target="RootScrollViewer.VerticalScrollMode" Value="Auto"/>
                         
-                        <Setter Target="Row0.Height" Value="Auto"/>
+                        <Setter Target="ContentGrid.RowDefinitions[0].Height" Value="Auto"/>
+                        <Setter Target="ContentGrid.RowDefinitions[1].Height" Value="Auto"/>
+                        <Setter Target="ContentGrid.RowDefinitions[2].Height" Value="Auto"/>
                         <Setter Target="ContentGrid.Padding" Value="20,140,20,40"/>
                         <Setter Target="TitleText.FontSize" Value="28"/>
                         
                         <Setter Target="InfoContainer.VerticalAlignment" Value="Top"/>
                         <Setter Target="InfoContainer.(Grid.ColumnSpan)" Value="2"/>
-                        <Setter Target="InfoContainer.(Grid.RowSpan)" Value="1"/>
-                        <Setter Target="InfoColumn.HorizontalAlignment" Value="Center"/>
-                        <Setter Target="InfoColumn.Margin" Value="0,0,0,10"/>
+                        <Setter Target="InfoColumn.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="InfoColumn.VerticalAlignment" Value="Top"/>
+                        <Setter Target="InfoColumn.Margin" Value="0,0,0,0"/>
+
                         <Setter Target="IdentityContainer.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="IdentityStack.HorizontalAlignment" Value="Center"/>
                         <Setter Target="ContentLogo.HorizontalAlignment" Value="Center"/>
-                        <Setter Target="TitlePanel.HorizontalAlignment" Value="Stretch"/>
-                        <Setter Target="TitleText.TextAlignment" Value="Center"/>
-                        <Setter Target="SuperTitleText.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="TitlePanel.HorizontalAlignment" Value="Center"/>
                         <Setter Target="MetadataRibbon.HorizontalAlignment" Value="Center"/>
-                        <Setter Target="ActionBarPanel.HorizontalAlignment" Value="Center"/>
-                        <Setter Target="OverviewPanel.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="ActionBarPanel.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="IdentityStack.HorizontalAlignment" Value="Center"/>
+                        
+                        <Setter Target="TitleText.TextAlignment" Value="Center"/>
+                        <Setter Target="IdentityContainer.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="IdentityStack.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="ContentLogo.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="TitlePanel.HorizontalAlignment" Value="Center"/>
                         <Setter Target="OverviewText.TextAlignment" Value="Center"/>
+                        <Setter Target="MetadataRibbon.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="ActionBarPanel.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="InfoColumn.HorizontalAlignment" Value="Center"/>
                         <Setter Target="GenresText.TextAlignment" Value="Center"/>
                         <Setter Target="GenresText.HorizontalAlignment" Value="Stretch"/>
-
+                        <Setter Target="InfoColumn.Spacing" Value="0"/>
+                        
                         <!-- Center Narrow Specific Sections -->
+                        <Setter Target="NarrowSectionsContainer.Spacing" Value="0"/>
                         <Setter Target="NarrowEpisodesSection.HorizontalAlignment" Value="Stretch"/>
-                        <Setter Target="NarrowEpisodesSection.Margin" Value="0,20,0,0"/>
+                        <Setter Target="NarrowEpisodesSection.Margin" Value="0,12,0,0"/>
                         <Setter Target="NarrowSourcesSection.HorizontalAlignment" Value="Stretch"/>
                         <Setter Target="NarrowDirectorSection.HorizontalAlignment" Value="Stretch"/>
                         <Setter Target="NarrowCastSection.HorizontalAlignment" Value="Stretch"/>
@@ -374,6 +377,9 @@
                         <Setter Target="NarrowEpisodesSection.Padding" Value="20,0"/>
                         <Setter Target="NarrowDirectorSection.Padding" Value="20,0"/>
                         <Setter Target="NarrowCastSection.Padding" Value="20,0"/>
+                        
+                        <!-- Show Narrow Sections in Narrow Mode -->
+                        <Setter Target="NarrowSectionsContainer.Visibility" Value="Visible"/>
                         
                         <!-- Collapse Wide Panels in Narrow Mode -->
                         <Setter Target="EpisodesPanel.Visibility" Value="Collapsed"/>
@@ -402,10 +408,7 @@
         <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Padding="0">
             
 
-            <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,25" MaxWidth="850"> 
-                <StackPanel.RenderTransform>
-                    <ScaleTransform x:Name="InfoColumnScale" CenterX="0" CenterY="0"/>
-                </StackPanel.RenderTransform>
+            <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,25" MaxWidth="1200"> 
                  
                   <!-- IDENTITY AREA (Logo or Title) - Unified Grid to prevent jumps -->
                   <!-- VerticalAlignment="Bottom" on children and container ensures stable baseline -->
@@ -481,39 +484,40 @@
 
                 <!-- ACTION BAR -->
                 <Grid>
-                    <StackPanel x:Name="ActionBarPanel" Orientation="Horizontal" Spacing="16" Opacity="0">
+                    <Grid x:Name="ActionBarPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,0" Opacity="1">
                          <Button x:Name="PlayButton" Click="PlayButton_Click" Height="52" CornerRadius="26" Style="{StaticResource HeroPlayButtonStyle}"
                                  Padding="32,0" ToolTipService.ToolTip="Oynat (Enter)">
                              <StackPanel Orientation="Horizontal" Spacing="12">
                                  <FontIcon x:Name="PlayButtonIcon" Glyph="&#xF5B0;" FontSize="18"/>
-                                 <StackPanel>
+                                 <StackPanel x:Name="PlayButtonTextStack">
                                      <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold" FontSize="16"/>
                                      <TextBlock x:Name="PlayButtonSubtext" Text="" FontSize="11" Opacity="0.6" Visibility="Collapsed"/>
                                  </StackPanel>
                              </StackPanel>
                          </Button>
-
+ 
                          <Button x:Name="RestartButton" Click="RestartButton_Click" Visibility="Collapsed"
                                  Style="{StaticResource GlassButtonStyle}" Height="52" CornerRadius="26" Padding="32,0">
                              <StackPanel Orientation="Horizontal" Spacing="8">
                                  <FontIcon Glyph="&#xE777;" FontSize="16"/>
-                                 <TextBlock Text="Baştan Başla" FontSize="14" FontWeight="SemiBold"/>
+                                 <TextBlock x:Name="RestartButtonText" Text="Baştan Başla" FontSize="14" FontWeight="SemiBold"/>
                              </StackPanel>
                          </Button>
     
-                         <Button x:Name="TrailerButton" Click="TrailerButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0">
-                             <FontIcon Glyph="&#xE714;" FontSize="20"/>
+                         <Button x:Name="TrailerButton" Click="TrailerButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0" ToolTipService.ToolTip="Fragman">
+                             <FontIcon x:Name="TrailerButtonIcon" Glyph="&#xE714;" FontSize="20"/>
                          </Button>
-                         <Button x:Name="DownloadButton" Click="DownloadButton_Click" Style="{StaticResource GlassButtonStyle}" Height="52" Width="52" Padding="0" ToolTipService.ToolTip="İndir">
-                             <FontIcon Glyph="&#xEBD3;" FontSize="20"/>
+                         <Button x:Name="DownloadButton" Click="DownloadButton_Click" Style="{StaticResource GlassButtonStyle}" Height="52" Width="52" CornerRadius="26" Padding="0" ToolTipService.ToolTip="İndir">
+                             <FontIcon x:Name="DownloadButtonIcon" Glyph="&#xEBD3;" FontSize="20"/>
                          </Button>
-                         <Button x:Name="CopyLinkButton" Click="CopyLinkButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0">
-                             <FontIcon Glyph="&#xE71B;" FontSize="18"/>
+                         <Button x:Name="CopyLinkButton" Click="CopyLinkButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0" ToolTipService.ToolTip="Bağlantıyı Kopyala">
+                             <FontIcon x:Name="CopyLinkButtonIcon" Glyph="&#xE71B;" FontSize="18"/>
                          </Button>
                          <Button x:Name="WatchlistButton" Click="WatchlistButton_Click" Style="{StaticResource GlassButtonStyle}" Width="52" Height="52" CornerRadius="26" Padding="0" ToolTipService.ToolTip="İzleme Listesine Ekle">
-                             <FontIcon Glyph="&#xE710;" FontSize="20"/>
+                             <FontIcon x:Name="WatchlistButtonIcon" Glyph="&#xE710;" FontSize="20"/>
                          </Button>
-                    </StackPanel>
+                    </Grid>
+
                     
                     <!-- Shimmer -->
                     <StackPanel x:Name="ActionBarShimmer" Orientation="Horizontal" Spacing="16" Visibility="Collapsed">
@@ -895,6 +899,9 @@
 
                     <!-- SOURCES PANEL (Stremio Streams) -->
                     <Grid x:Name="SourcesPanel" Grid.Column="1" Grid.Row="0" MaxWidth="600" Visibility="Collapsed" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Center">
+                        <Grid.RenderTransform>
+                            <CompositeTransform x:Name="SourcesPanelTransform"/>
+                        </Grid.RenderTransform>
                          <Border CornerRadius="20" BorderBrush="#1AFFFFFF" BorderThickness="1">
                              <Border.Background>
                                  <SolidColorBrush Color="Black" Opacity="0.5"/>
@@ -1086,8 +1093,8 @@
                         <Border CornerRadius="20" BorderBrush="#1AFFFFFF" BorderThickness="1">
                             <Border.Background>
                                 <SolidColorBrush Color="Black" Opacity="0.5"/>
-                            </Border.Background>
-                            <Grid>
+                           </Border.Background>
+                           <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="Auto"/>
@@ -1169,9 +1176,10 @@
                         </Border>
                     </Grid>
                 
-
-                
-                <StackPanel x:Name="NarrowEpisodesSection" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" 
+        <!-- NARROW SECTIONS CONTAINER (Prevents Row Overlap) -->
+        <StackPanel x:Name="NarrowSectionsContainer" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Vertical">
+            <!-- EPISODES (Narrow) -->
+            <StackPanel x:Name="NarrowEpisodesSection" 
                              Visibility="Collapsed" Spacing="16" Margin="0,4,0,0">
                     <TextBlock x:Name="NarrowEpisodesHeader" Text="Bölümler" FontSize="20" FontWeight="Bold" Foreground="White" Margin="0,0,0,8"/>
                     <ListView x:Name="NarrowEpisodesListView" Height="170"
@@ -1223,8 +1231,12 @@
                     </ListView>
                 </StackPanel>
 
-                <StackPanel x:Name="NarrowSourcesSection" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" 
+                <!-- SOURCES (Narrow) -->
+            <StackPanel x:Name="NarrowSourcesSection" 
                                Visibility="Collapsed" Spacing="8" Margin="0,4,0,0">
+                    <StackPanel.RenderTransform>
+                        <CompositeTransform x:Name="NarrowSourcesTransform"/>
+                    </StackPanel.RenderTransform>
                     <StackPanel Orientation="Horizontal" Spacing="12" Margin="20,0,20,0">
                         <Button x:Name="BtnBackToEpisodesNarrow" Click="BtnBackToEpisodes_Click" Style="{StaticResource GlassButtonStyle}" Width="36" Height="36" Padding="0" CornerRadius="18" Visibility="Collapsed">
                             <FontIcon Glyph="&#xE72B;" FontSize="14"/>
@@ -1270,41 +1282,41 @@
 
                     <ListView x:Name="NarrowSourcesListView" SelectionMode="None" 
                                IsItemClickEnabled="True" ItemClick="SourcesListView_ItemClick" 
-                               ScrollViewer.VerticalScrollBarVisibility="Auto" ScrollViewer.VerticalScrollMode="Enabled"
+                               ScrollViewer.VerticalScrollBarVisibility="Hidden" ScrollViewer.VerticalScrollMode="Disabled"
                                Padding="20,0,20,20">
                         <ListView.ItemTemplate>
                             <DataTemplate>
                                  <Grid CornerRadius="12" Background="#1AFFFFFF" Margin="0,0,0,12" Padding="16">
-                                      <Grid.ColumnDefinitions>
-                                          <ColumnDefinition Width="Auto"/>
-                                          <ColumnDefinition Width="*"/>
-                                      </Grid.ColumnDefinitions>
-                                      <Border Grid.Column="0" Background="#22000000" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1" CornerRadius="8" Padding="8,4" Margin="0,0,12,0" VerticalAlignment="Top" MinWidth="60">
-                                          <TextBlock Text="{Binding ProviderText}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" MaxLines="1"/>
-                                      </Border>
-                                      <StackPanel Grid.Column="1" Spacing="6">
-                                           <TextBlock Text="{Binding Title}" ToolTipService.ToolTip="{Binding Title}" FontWeight="Bold" FontSize="14" Foreground="White" TextWrapping="Wrap" MaxLines="3"/>
-                                           
-                                           <StackPanel Orientation="Horizontal" Spacing="6">
-                                               <!-- Quality -->
-                                               <Border Background="#26FFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasQuality, Converter={StaticResource BoolToVis}}">
-                                                   <TextBlock Text="{Binding Quality}" FontSize="9" FontWeight="Bold" Foreground="White"/>
-                                               </Border>
-                                               <!-- Size -->
-                                               <Border Background="#1AFFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasSize, Converter={StaticResource BoolToVis}}">
-                                                   <TextBlock Text="{Binding Size}" FontSize="9" FontWeight="Bold" Foreground="#AAA"/>
-                                               </Border>
-                                               <!-- Cached Badge -->
-                                               <Border Background="#1A00FF88" CornerRadius="4" Padding="4,1" Visibility="{Binding IsCached, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
-                                                   <TextBlock Text="⚡ CACHED" FontSize="8" FontWeight="Black" Foreground="#FF00FF88"/>
-                                               </Border>
-                                           </StackPanel>
-                                           
-                                            <TextBlock Text="{Binding Name}" ToolTipService.ToolTip="{Binding Name}" FontSize="11" Foreground="#888" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
+                                      <StackPanel Spacing="10">
+                                          <!-- Provider Badge (Top) -->
+                                          <Border Background="#22000000" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1" CornerRadius="8" Padding="8,4" HorizontalAlignment="Left" MinWidth="60">
+                                              <TextBlock Text="{Binding ProviderText}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" HorizontalAlignment="Center"/>
+                                          </Border>
+
+                                          <StackPanel Spacing="6">
+                                               <TextBlock Text="{Binding Title}" ToolTipService.ToolTip="{Binding Title}" FontWeight="Bold" FontSize="14" Foreground="White" TextWrapping="Wrap" MaxLines="3"/>
+                                               
+                                               <StackPanel Orientation="Horizontal" Spacing="6">
+                                                   <!-- Quality -->
+                                                   <Border Background="#26FFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasQuality, Converter={StaticResource BoolToVis}}">
+                                                       <TextBlock Text="{Binding Quality}" FontSize="9" FontWeight="Bold" Foreground="White"/>
+                                                   </Border>
+                                                   <!-- Size -->
+                                                   <Border Background="#1AFFFFFF" CornerRadius="4" Padding="4,1" Visibility="{Binding HasSize, Converter={StaticResource BoolToVis}}">
+                                                       <TextBlock Text="{Binding Size}" FontSize="9" FontWeight="Bold" Foreground="#AAA"/>
+                                                   </Border>
+                                                   <!-- Cached Badge -->
+                                                   <Border Background="#1A00FF88" CornerRadius="4" Padding="4,1" Visibility="{Binding IsCached, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
+                                                       <TextBlock Text="⚡ CACHED" FontSize="8" FontWeight="Black" Foreground="#FF00FF88"/>
+                                                   </Border>
+                                               </StackPanel>
+                                               
+                                                <TextBlock Text="{Binding Name}" ToolTipService.ToolTip="{Binding Name}" FontSize="11" Foreground="#888" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
+                                          </StackPanel>
                                       </StackPanel>
                                       
                                       <!-- Active State Overlay -->
-                                      <Border Grid.ColumnSpan="2" CornerRadius="12" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" 
+                                      <Border CornerRadius="12" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" 
                                               Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False" Margin="-16"/>
                                  </Grid>
                             </DataTemplate>
@@ -1312,7 +1324,8 @@
                     </ListView>
                 </StackPanel>
 
-                <StackPanel x:Name="NarrowDirectorSection" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" 
+                <!-- DIRECTOR (Narrow) -->
+            <StackPanel x:Name="NarrowDirectorSection" 
                              Visibility="Collapsed" Spacing="12" Margin="0,4,0,0">
                     <StackPanel.RenderTransform>
                         <ScaleTransform x:Name="NarrowDirectorSectionScale" CenterX="0" CenterY="0"/>
@@ -1354,7 +1367,8 @@
                     </ListView>
                 </StackPanel>
 
-                <StackPanel x:Name="NarrowCastSection" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" 
+                <!-- CAST (Narrow) -->
+            <StackPanel x:Name="NarrowCastSection" 
                              Visibility="Collapsed" Spacing="12" Margin="0,4,0,0">
                     <StackPanel.RenderTransform>
                         <ScaleTransform x:Name="NarrowCastSectionScale" CenterX="0" CenterY="0"/>
@@ -1396,10 +1410,10 @@
                         </ListView.ItemTemplate>
                     </ListView>
                 </StackPanel>
-                
-            </Grid>
-        </ScrollViewer>
+            </StackPanel>
         </Grid>
+    </ScrollViewer>
+    </Grid>
 
         <!-- 3. INSTANT PLAYER OVERLAY -->
         <!-- 3. INSTANT PLAYER OVERLAY -->

@@ -56,6 +56,7 @@ namespace ModernIPTVPlayer
         private const string FILENAME = "watch_history.json";
         private bool _loaded = false;
         private readonly object _lock = new();
+        private readonly System.Threading.SemaphoreSlim _fileLock = new(1, 1);
 
         private HistoryManager() { }
 
@@ -101,10 +102,18 @@ namespace ModernIPTVPlayer
 
                 var json = JsonSerializer.Serialize(list);
                 var folder = ApplicationData.Current.LocalFolder;
-                var file = await folder.CreateFileAsync(FILENAME, CreationCollisionOption.ReplaceExisting);
-                await FileIO.WriteTextAsync(file, json);
                 
-                System.Diagnostics.Debug.WriteLine($"[HistoryManager] Saved {list.Count} items to {file.Path}");
+                await _fileLock.WaitAsync();
+                try
+                {
+                    var file = await folder.CreateFileAsync(FILENAME, CreationCollisionOption.ReplaceExisting);
+                    await FileIO.WriteTextAsync(file, json);
+                    System.Diagnostics.Debug.WriteLine($"[HistoryManager] Saved {list.Count} items to {file.Path}");
+                }
+                finally
+                {
+                    _fileLock.Release();
+                }
             }
             catch (Exception ex)
             {

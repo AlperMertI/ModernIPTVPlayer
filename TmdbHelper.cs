@@ -232,8 +232,8 @@ namespace ModernIPTVPlayer
 
                 // Get all videos without language filter to find English trailers as fallback
                 var url = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Fetching Videos: {url}");
                 var json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW VIDEOS JSON for {tmdbId}:\n{json}");
                 var result = JsonSerializer.Deserialize<TmdbVideosResponse>(json);
 
                 if (result?.Results != null)
@@ -270,8 +270,8 @@ namespace ModernIPTVPlayer
                 if (TmdbCacheService.Instance.Get<TmdbCreditsResponse>(cacheKey) is TmdbCreditsResponse cached) return cached;
 
                 var url = $"{BASE_URL}/{type}/{id}/credits?api_key={API_KEY}&language=tr-TR";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Fetching Credits: {url}");
                 var json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW CREDITS JSON for {id}:\n{json}");
                 var result = JsonSerializer.Deserialize<TmdbCreditsResponse>(json);
                 if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
                 return result;
@@ -291,8 +291,6 @@ namespace ModernIPTVPlayer
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Details Request: {url}");
 
                 var json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW DETAILS JSON for {id}:\n{json}"); 
-
                 var result = JsonSerializer.Deserialize<TmdbMovieDetails>(json);
                 
                 if (result != null)
@@ -324,7 +322,6 @@ namespace ModernIPTVPlayer
                 var url = $"{BASE_URL}/tv/{tvId}/season/{seasonNumber}?api_key={API_KEY}&language=tr-TR&include_image_language=tr,en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Season Details Request: {url}");
                 var json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW SEASON DETAILS JSON for TV ID {tvId}, Season {seasonNumber}:\n{json}");
                 var result = JsonSerializer.Deserialize<TmdbSeasonDetails>(json);
                 if (result?.Episodes != null)
                 {
@@ -409,8 +406,8 @@ namespace ModernIPTVPlayer
             {
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language=tr-TR";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Find ID: {url}");
                 var json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW EXTERNAL FIND JSON for {externalId}:\n{json}");
                 
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
@@ -438,8 +435,8 @@ namespace ModernIPTVPlayer
             {
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language=tr-TR";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Find ID: {url}");
                 var json = await _client.GetStringAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[TMDB] RAW EXTERNAL FIND JSON for {externalId}:\n{json}");
                 
                 // We need a specific response model for Find, or use dynamic/JsonElement
                 using var doc = JsonDocument.Parse(json);
