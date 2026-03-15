@@ -96,29 +96,52 @@ namespace ModernIPTVPlayer
 
         private void HandleFatalException(Exception? ex, string source)
         {
-            // Tüm exception bilgilerini topla
-            string fullDetails = $"Source: {source}\n";
-            fullDetails += $"Type: {ex?.GetType().FullName}\n";
-            fullDetails += $"Message: {ex?.Message}\n";
-            fullDetails += $"StackTrace: {ex?.StackTrace ?? "NULL"}\n";
+            // XAML parse error kontrolü
+            string errorType = ex?.GetType().Name ?? "Unknown";
+            bool isXamlError = errorType.Contains("Xaml") || 
+                               (ex?.Message?.Contains("attribute value") == true) ||
+                               (ex?.Message?.Contains("Unknown") == true);
             
-            // InnerException varsa onu da ekle
-            if (ex?.InnerException != null)
+            // Detaylı log mesajı oluştur
+            string detailedLog = $"=== FATAL EXCEPTION ===\n";
+            detailedLog += $"Source: {source}\n";
+            detailedLog += $"Error Type: {errorType}\n";
+            detailedLog += $"Is XAML Error: {isXamlError}\n";
+            detailedLog += $"Message: {ex?.Message}\n";
+            detailedLog += $"StackTrace:\n{ex?.StackTrace ?? "NO STACK TRACE"}\n";
+            
+            // InnerException zincirini tamamen çözümle
+            Exception? currentInner = ex?.InnerException;
+            int innerLevel = 1;
+            while (currentInner != null)
             {
-                fullDetails += $"\n--- INNER EXCEPTION ---\n";
-                fullDetails += $"Type: {ex.InnerException.GetType().FullName}\n";
-                fullDetails += $"Message: {ex.InnerException.Message}\n";
-                fullDetails += $"StackTrace: {ex.InnerException.StackTrace ?? "NULL"}\n";
+                detailedLog += $"\n--- INNER EXCEPTION (Level {innerLevel}) ---\n";
+                detailedLog += $"Type: {currentInner.GetType().FullName}\n";
+                detailedLog += $"Message: {currentInner.Message}\n";
+                detailedLog += $"StackTrace:\n{currentInner.StackTrace ?? "NO STACK TRACE"}\n";
+                currentInner = currentInner.InnerException;
+                innerLevel++;
             }
             
-            AppLogger.Critical($"FATAL EXCEPTION from {source}", ex);
-            Trace.Flush(); // Force write to file
+            // Sistem bilgileri
+            detailedLog += $"\n--- SYSTEM INFO ---\n";
+            detailedLog += $"OS: {Environment.OSVersion}\n";
+            detailedLog += $".NET Runtime: {Environment.Version}\n";
+            detailedLog += $"Processors: {Environment.ProcessorCount}\n";
+            detailedLog += $"64-bit OS: {Environment.Is64BitOperatingSystem}\n";
             
-            // Kullanıcıya gösterilecek mesajı iyileştir
+            AppLogger.Critical(detailedLog, ex);
+            Trace.Flush();
+            
+            // Kullanıcıya gösterilecek mesaj
             string errorMessage = $"Hata: {ex?.Message}\nTür: {ex?.GetType().Name}";
             if (ex?.InnerException != null)
             {
                 errorMessage += $"\nİç Hata: {ex.InnerException.Message}";
+            }
+            if (isXamlError)
+            {
+                errorMessage += "\n\n[NOT: XAML parse hatası tespit edildi]";
             }
             
             // Show alert even if window is not ready

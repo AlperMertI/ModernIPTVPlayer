@@ -63,7 +63,7 @@ namespace ModernIPTVPlayer.Models.Stremio
             }
         }
 
-        public string Rating => Meta.ImdbRating;
+        public string Rating => string.IsNullOrEmpty(Meta.ImdbRating) || Meta.ImdbRating == "N/A" || Meta.ImdbRating == "Unknown" ? "" : Meta.ImdbRating;
         public string Type => Meta.Type?.ToUpper();
         public string StreamUrl { get; set; } = "";
         public string? BackdropUrl => Banner;

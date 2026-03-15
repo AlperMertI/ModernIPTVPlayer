@@ -2802,20 +2802,45 @@ namespace ModernIPTVPlayer
                 UpdateTextColor(NarrowCastHeader, headerColor);
 
                 // 6. Animate Specific UI Elements
-                if (EpisodesPanel.Background is SolidColorBrush epBrush) AnimateBrushColor(epBrush, mixedPanelTint);
+                // WinUI 3 frozen brush issue: Her zaman yeni mutable fırça oluştur
+                if (EpisodesPanel != null)
+                {
+                    EpisodesPanel.Background = new SolidColorBrush(mixedPanelTint);
+                }
 
-                // Action Buttons
-                if (TrailerButton.Background is SolidColorBrush b1) AnimateBrushColor(b1, btnTint);
-                if (DownloadButton.Background is SolidColorBrush b2) AnimateBrushColor(b2, btnTint);
-                if (CopyLinkButton.Background is SolidColorBrush b3) AnimateBrushColor(b3, btnTint);
-                if (RestartButton.Background is SolidColorBrush b4) AnimateBrushColor(b4, btnTint);
-                if (WatchlistButton.Background is SolidColorBrush b5) AnimateBrushColor(b5, btnTint);
+                // Action Buttons - frozen brush hatasını önlemek için yeni fırça oluştur
+                if (TrailerButton != null)
+                {
+                    TrailerButton.Background = new SolidColorBrush(btnTint);
+                }
+                if (DownloadButton != null)
+                {
+                    DownloadButton.Background = new SolidColorBrush(btnTint);
+                }
+                if (CopyLinkButton != null)
+                {
+                    CopyLinkButton.Background = new SolidColorBrush(btnTint);
+                }
+                if (RestartButton != null && RestartButton.Visibility == Visibility.Visible)
+                {
+                    RestartButton.Background = new SolidColorBrush(btnTint);
+                }
+                if (WatchlistButton != null)
+                {
+                    WatchlistButton.Background = new SolidColorBrush(btnTint);
+                }
 
-                // Play Buttons (Premium Vivid)
-                if (PlayButton.Background is SolidColorBrush bPlay) AnimateBrushColor(bPlay, playButtonTint);
-                if (PlayButton.BorderBrush is SolidColorBrush brPlay) AnimateBrushColor(brPlay, playBorderTint);
-                if (StickyPlayButton.Background is SolidColorBrush bSPlay) AnimateBrushColor(bSPlay, playButtonTint);
-                if (StickyPlayButton.BorderBrush is SolidColorBrush brSPlay) AnimateBrushColor(brSPlay, playBorderTint);
+                // Play Buttons (Premium Vivid) - frozen brush hatasını önlemek için yeni fırça oluştur
+                if (PlayButton != null)
+                {
+                    PlayButton.Background = new SolidColorBrush(playButtonTint);
+                    PlayButton.BorderBrush = new SolidColorBrush(playBorderTint);
+                }
+                if (StickyPlayButton != null)
+                {
+                    StickyPlayButton.Background = new SolidColorBrush(playButtonTint);
+                    StickyPlayButton.BorderBrush = new SolidColorBrush(playBorderTint);
+                }
 
                 // Adaptive Play Button Foreground:
                 // If headerColor is White (meaning backdrop is dark), ensure Play button text is readable.
@@ -2840,27 +2865,27 @@ namespace ModernIPTVPlayer
         private void UpdateIconColor(IconElement icon, Color color)
         {
             if (icon == null) return;
-            if (icon.Foreground is not SolidColorBrush brush)
-            {
-                icon.Foreground = new SolidColorBrush(color);
-                brush = (SolidColorBrush)icon.Foreground;
-            }
-            AnimateBrushColor(brush, color);
+            
+            // WinUI 3'te XAML'den gelen fırçalar frozen (değiştirilemez) olabilir
+            // Bu fırçaları animasyona sokmaya çalışmak "Unknown" color hatasına neden olur
+            // Her zaman yeni mutable bir fırça oluşturuyoruz
+            var newBrush = new SolidColorBrush(color);
+            icon.Foreground = newBrush;
+            
+            AnimateBrushColor(newBrush, color);
         }
 
         private void UpdateTextColor(TextBlock textBlock, Color color)
         {
             if (textBlock == null) return;
             
-            // Ensure we have a local SolidColorBrush to animate 
-            // (fixes issues with shared immutable brushes from StaticResources)
-            if (textBlock.Foreground is not SolidColorBrush brush)
-            {
-                textBlock.Foreground = new SolidColorBrush(color);
-                brush = (SolidColorBrush)textBlock.Foreground;
-            }
+            // WinUI 3'te XAML'den gelen fırçalar frozen (değiştirilemez) olabilir
+            // Bu fırçaları animasyona sokmaya çalışmak "Unknown" color hatasına neden olur
+            // Her zaman yeni mutable bir fırça oluşturuyoruz
+            var newBrush = new SolidColorBrush(color);
+            textBlock.Foreground = newBrush;
             
-            AnimateBrushColor(brush, color, 1.0);
+            AnimateBrushColor(newBrush, color, 1.0);
         }
 
         private void AnimateOpacity(UIElement element, double opacity, double durationSeconds = 1.0)
@@ -2886,19 +2911,27 @@ namespace ModernIPTVPlayer
         {
             if (brush == null || brush.Color == targetColor) return;
 
-            var animation = new ColorAnimation
+            // WinUI 3'te frozen brush kontrolü - try-catch ile güvenli yaklaşım
+            try {
+                var animation = new ColorAnimation
+                {
+                    To = targetColor,
+                    Duration = TimeSpan.FromSeconds(durationSeconds),
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
+                };
+
+                Storyboard.SetTarget(animation, brush);
+                Storyboard.SetTargetProperty(animation, "Color");
+
+                var sb = new Storyboard();
+                sb.Children.Add(animation);
+                sb.Begin();
+            }
+            catch
             {
-                To = targetColor,
-                Duration = TimeSpan.FromSeconds(durationSeconds),
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseInOut }
-            };
-
-            Storyboard.SetTarget(animation, brush);
-            Storyboard.SetTargetProperty(animation, "Color");
-
-            var sb = new Storyboard();
-            sb.Children.Add(animation);
-            sb.Begin();
+                // Animasyon başarısız olursa (frozen brush vb.), rengi doğrudan set et
+                brush.Color = targetColor;
+            }
         }
 
         private async Task LoadSeriesDataAsync(UnifiedMetadata unified)

@@ -24,7 +24,7 @@ namespace ModernIPTVPlayer.Models
         public double Rating { get; set; }
 
         [JsonIgnore]
-        string IMediaStream.Rating => Rating.ToString("0.0");
+        string IMediaStream.Rating => Rating > 0 ? Rating.ToString("0.0") : "";
 
         public string Type { get; set; }
         public DateTime DateAdded { get; set; } = DateTime.Now;
