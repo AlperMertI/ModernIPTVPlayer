@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.ComponentModel;
@@ -133,7 +134,7 @@ namespace ModernIPTVPlayer
             {
                 _isOnline = value;
                 OnPropertyChanged(nameof(IsOnline));
-                OnPropertyChanged(nameof(StatusColor));
+                OnPropertyChanged(nameof(StatusBrush));
                 OnPropertyChanged(nameof(IsOffline));
                 OnPropertyChanged(nameof(StatusToolTip));
                 OnPropertyChanged(nameof(ShowTechnicalBadges));
@@ -149,25 +150,30 @@ namespace ModernIPTVPlayer
             {
                 _bitrate = value;
                 OnPropertyChanged(nameof(Bitrate));
-                OnPropertyChanged(nameof(StatusColor));
+                OnPropertyChanged(nameof(StatusBrush));
                 OnPropertyChanged(nameof(IsUnstable));
                 OnPropertyChanged(nameof(StatusToolTip));
             }
         }
 
-        public string StatusColor 
+        private static readonly Brush StatusRedBrush = new SolidColorBrush(Microsoft.UI.Colors.Red);
+        private static readonly Brush StatusAmberBrush = new SolidColorBrush(Microsoft.UI.Colors.Orange);
+        private static readonly Brush StatusGreenBrush = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
+        private static readonly Brush StatusGrayBrush = new SolidColorBrush(Microsoft.UI.Colors.Gray);
+
+        public Brush StatusBrush
         {
             get
             {
-                if (IsOnline == false) return "#FF0000"; // Red
+                if (IsOnline == false) return StatusRedBrush; // Red
                 if (IsOnline == true)
                 {
                     // Bitrate < 200kbps is extremely likely to be a black screen or static image (FAKE/STALE)
                     // If Bitrate is 0, we assume it's a Live Stream where bitrate couldn't be calculated yet (GREEN)
-                    if (Bitrate > 0 && Bitrate < 200000) return "#FFCC00"; // Orange/Yellow
-                    return "#00FF00"; // Green
+                    if (Bitrate > 0 && Bitrate < 200000) return StatusAmberBrush; // Orange/Yellow
+                    return StatusGreenBrush; // Green
                 }
-                return "#888888"; // Gray
+                return StatusGrayBrush; // Gray
             }
         }
 
@@ -179,7 +185,7 @@ namespace ModernIPTVPlayer
                                    Resolution != "Error" && 
                                    Resolution != "No Data" && 
                                    Resolution != "Unknown" && 
-                                   Resolution != "No ffprobe";
+                                   Resolution != "No Probe";
 
         public bool ShowTechnicalBadges => IsOnline == true && HasMetadata;
         public bool ShowStatusDot => IsOnline != null;

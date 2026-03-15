@@ -181,12 +181,27 @@ namespace ModernIPTVPlayer
 
         public HistoryItem GetProgress(string id)
         {
+            if (string.IsNullOrEmpty(id)) return null;
             lock (_lock)
             {
-                return _history.ContainsKey(id) ? _history[id] : null;
+                if (_history.TryGetValue(id, out var item)) return item;
             }
+            return null;
         }
 
+        public HistoryItem GetHistoryByTitle(string title, string type = null)
+        {
+            if (string.IsNullOrEmpty(title)) return null;
+            lock (_lock)
+            {
+                return _history.Values
+                    .Where(x => (type == null || x.Type == type))
+                    .OrderByDescending(x => x.Timestamp)
+                    .FirstOrDefault(x => 
+                        string.Equals(x.Title, title, StringComparison.OrdinalIgnoreCase) ||
+                        (type == "series" && string.Equals(x.SeriesName, title, StringComparison.OrdinalIgnoreCase)));
+            }
+        }
         // Find the last watched episode for a series
         public HistoryItem GetLastWatchedEpisode(string seriesId)
         {

@@ -349,7 +349,7 @@
                                     
                                     <!-- Health Status Dot -->
                                     <Ellipse Width="10" Height="10" 
-                                             Fill="{x:Bind StatusColor, Mode=OneWay}" 
+                                             Fill="{x:Bind StatusBrush, Mode=OneWay}" 
                                              Stroke="#222222" StrokeThickness="1"
                                              HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                              Margin="0,0,4,4"
@@ -456,6 +456,10 @@
                         HorizontalAlignment="Center" Padding="24,8"
                         Style="{ThemeResource AccentButtonStyle}" CornerRadius="20"/>
             </StackPanel>
+        </Grid>
+        <!-- Hidden Probe Host -->
+        <Grid Width="0" Height="0" Opacity="0" IsHitTestVisible="False">
+            <ContentControl x:Name="ProbeHost"/>
         </Grid>
                 </Grid>
             </SplitView.Content>

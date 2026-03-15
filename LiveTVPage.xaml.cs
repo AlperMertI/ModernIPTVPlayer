@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Windows.System;
 using Microsoft.UI.Xaml.Media.Imaging;
+using MpvWinUI;
 
 namespace ModernIPTVPlayer
 {
@@ -35,7 +36,8 @@ namespace ModernIPTVPlayer
         private DispatcherTimer _clockTimer;
         private List<LiveStream> _recentChannels = new();
 
-        private FFmpegProber? _prober;
+        private StreamProber? _prober;
+        private MpvPlayer? _proberPlayer;
         
         // Auto-Probe Queue
         private ConcurrentQueue<LiveStream> _probingQueue = new();
@@ -820,7 +822,12 @@ namespace ModernIPTVPlayer
                 _workerCts = new CancellationTokenSource();
             }
 
-            if (_prober == null) _prober = new FFmpegProber();
+            if (_prober == null)
+            {
+                _proberPlayer = new MpvPlayer();
+                ProbeHost.Content = _proberPlayer;
+                _prober = new StreamProber(_proberPlayer);
+            }
 
             // Launch 3 parallel workers
             int workerCount = 3;
@@ -964,10 +971,11 @@ namespace ModernIPTVPlayer
             {
                 if (stream.IsProbing) return;
 
-                // Init Prober if needed
                 if (_prober == null)
                 {
-                     _prober = new FFmpegProber();
+                    _proberPlayer = new MpvPlayer();
+                    ProbeHost.Content = _proberPlayer;
+                    _prober = new StreamProber(_proberPlayer);
                 }
 
                 try

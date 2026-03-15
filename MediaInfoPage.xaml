@@ -443,45 +443,52 @@
                       </Grid>
                   </Grid>
 
-                  <!-- METADATA RIBBON (Unified for space efficiency) -->
-                  <StackPanel x:Name="MetadataRibbon" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center" Margin="2,0,0,12">
-                      <!-- 1. Technical Section -->
-                      <StackPanel x:Name="TechBadgesContent" Orientation="Horizontal" Spacing="8" Opacity="0" Visibility="Collapsed">
-                          <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
-                              <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
-                          </Border>
-                          <Border x:Name="BadgeRes" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
-                              <TextBlock x:Name="BadgeResText" Text="1080P" FontSize="11" Foreground="#CCC"/>
-                          </Border>
-                          <Border x:Name="BadgeHDR" Visibility="Collapsed" BorderBrush="{StaticResource SilverGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
-                              <TextBlock Text="HDR" FontSize="11" FontWeight="Bold" Foreground="{StaticResource SilverGradient}"/>
-                          </Border>
-                          <Border x:Name="BadgeSDR" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
-                              <TextBlock Text="SDR" FontSize="11" Foreground="#CCC"/>
-                          </Border>
-                          <Border x:Name="BadgeCodecContainer" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
-                              <TextBlock x:Name="BadgeCodec" Text="HEVC" FontSize="11" Foreground="#CCC"/>
-                          </Border>
-                      </StackPanel>
+                   <!-- METADATA RIBBON (Unified for space efficiency) -->
+                   <StackPanel x:Name="MetadataRibbon" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center" Margin="2,0,0,12">
+                       <!-- 1. Technical Section Group (Content + Shimmer in one slot) -->
+                       <Grid x:Name="TechBadgesGroup" VerticalAlignment="Center">
+                           <StackPanel x:Name="TechBadgesContent" Orientation="Horizontal" Spacing="8" Opacity="0" Visibility="Collapsed">
+                               <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
+                                   <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
+                               </Border>
+                               <Border x:Name="BadgeRes" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                   <TextBlock x:Name="BadgeResText" Text="1080P" FontSize="11" Foreground="#CCC"/>
+                               </Border>
+                               <Border x:Name="BadgeHDR" Visibility="Collapsed" BorderBrush="{StaticResource SilverGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
+                                   <TextBlock Text="HDR" FontSize="11" FontWeight="Bold" Foreground="{StaticResource SilverGradient}"/>
+                               </Border>
+                               <Border x:Name="BadgeSDR" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                   <TextBlock Text="SDR" FontSize="11" Foreground="#CCC"/>
+                               </Border>
+                               <Border x:Name="BadgeCodecContainer" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                   <TextBlock x:Name="BadgeCodec" Text="HEVC" FontSize="11" Foreground="#CCC"/>
+                               </Border>
+                           </StackPanel>
 
-                      <!-- Separator Dot (Visible if both sections exist) -->
-                      <TextBlock x:Name="MetadataSeparator" Text="•" Foreground="#44FFFFFF" VerticalAlignment="Center" 
-                                 Visibility="Collapsed" FontSize="16"/>
+                           <StackPanel x:Name="TechBadgesShimmer" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                               <ctl:ShimmerControl Width="50" Height="22" CornerRadius="4"/>
+                               <ctl:ShimmerControl Width="40" Height="22" CornerRadius="4"/>
+                           </StackPanel>
+                       </Grid>
 
-                      <!-- 2. Basic Info Section -->
-                      <StackPanel x:Name="MetadataPanel" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Opacity="0">
-                          <TextBlock x:Name="YearText" Text="" Foreground="#BBB" FontSize="14" FontWeight="SemiBold"/>
-                          <TextBlock Text="|" Foreground="#33FFFFFF" FontSize="12" VerticalAlignment="Center"/>
-                          <TextBlock x:Name="RuntimeText" Text="" Foreground="#BBB" FontSize="14"/>
-                      </StackPanel>
+                       <!-- Separator Dot (Visible if both sections exist) -->
+                       <TextBlock x:Name="MetadataSeparator" Text="•" Foreground="#44FFFFFF" VerticalAlignment="Center" 
+                                  Visibility="Collapsed" Opacity="0" FontSize="16"/>
 
-                      <!-- Shimmer for the ribbon -->
-                      <StackPanel x:Name="MetadataShimmer" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
-                          <ctl:ShimmerControl Width="60" Height="22" CornerRadius="4"/>
-                          <ctl:ShimmerControl Width="40" Height="22" CornerRadius="4"/>
-                      </StackPanel>
-                  </StackPanel>
+                       <!-- 2. Basic Info Section Group (Content + Shimmer in one slot) -->
+                       <Grid x:Name="MetadataPanelGroup" VerticalAlignment="Center">
+                           <StackPanel x:Name="MetadataPanel" Orientation="Horizontal" Spacing="10" VerticalAlignment="Center" Opacity="0">
+                               <TextBlock x:Name="YearText" Text="" Foreground="#BBB" FontSize="14" FontWeight="SemiBold"/>
+                               <TextBlock Text="|" Foreground="#33FFFFFF" FontSize="12" VerticalAlignment="Center"/>
+                               <TextBlock x:Name="RuntimeText" Text="" Foreground="#BBB" FontSize="14"/>
+                           </StackPanel>
 
+                           <StackPanel x:Name="MetadataShimmer" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                               <ctl:ShimmerControl Width="60" Height="22" CornerRadius="4"/>
+                               <ctl:ShimmerControl Width="40" Height="22" CornerRadius="4"/>
+                           </StackPanel>
+                       </Grid>
+                   </StackPanel>
                 <!-- ACTION BAR -->
                 <Grid>
                     <Grid x:Name="ActionBarPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,0" Opacity="1">
@@ -1501,7 +1508,12 @@
                 <!-- Loading State -->
                 <ProgressRing x:Name="TrailerLoadingRing" IsActive="True" Width="48" Height="48" Foreground="White" 
                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Grid>
         </Grid>
     </Grid>
+
+    <!-- Hidden Probe Host -->
+    <Grid Width="0" Height="0" Opacity="0" IsHitTestVisible="False">
+        <ContentControl x:Name="ProbeHost"/>
+    </Grid>
+</Grid>
 </Page>

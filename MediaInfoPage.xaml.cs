@@ -17,6 +17,7 @@ using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Models; // Ensure Models namespace is included
 using ModernIPTVPlayer.Services;
 using System;
+using MpvWinUI;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using Microsoft.UI.Xaml.Input;
@@ -68,7 +69,9 @@ namespace ModernIPTVPlayer
         private string? _sourceAddonUrl; // New: tracking the source addon URL for the current stream
         
         private Models.Metadata.UnifiedMetadata _unifiedMetadata;
-        private FFmpegProber _ffprober = new();
+        private string _prebufferUrl;
+        private StreamProber _prober;
+        private MpvPlayer _proberPlayer;
         private CancellationTokenSource _probeCts;
         private CancellationTokenSource _prebufferCts;
 
@@ -140,6 +143,7 @@ namespace ModernIPTVPlayer
         }
 
         private bool _isSelectionSyncing = false;
+        private static bool _isDialogShowing = false;
         private bool _isHandoffInProgress = false;
         private DispatcherTimer _slideshowTimer;
         private string _slideshowId;
@@ -182,6 +186,9 @@ namespace ModernIPTVPlayer
 
             // [PERFORMANCE] Apply visual scaling/translation instantly for real-time feedback
             UpdateRealTimeScaling(_lastReportedWidth, _lastReportedHeight, isWide);
+
+            // [ROOT FIX] Sync Action Bar layout during resize to prevent overlaps/gaps
+            UpdateActionBarRealTime(_lastReportedWidth, _lastReportedHeight, isWide);
 
             // [SYNC] Force immediate height synchronization to avoid gaps during fast vertical resize
             ApplyImmediateLayoutSync(_lastReportedHeight, isWide);
@@ -427,7 +434,7 @@ namespace ModernIPTVPlayer
                         btn.PointerExited -= OnActionButtonPointerExited;
                         btn.PointerExited += OnActionButtonPointerExited;
 
-                        // NEW: Robust Cleanup for stuck states
+                    // NEW: Robust Cleanup for stuck states
                         btn.PointerCanceled -= OnActionButtonPointerExited;
                         btn.PointerCanceled += OnActionButtonPointerExited;
                         btn.PointerCaptureLost -= OnActionButtonPointerExited;
@@ -435,6 +442,12 @@ namespace ModernIPTVPlayer
                     }
                 }
             }
+
+            // [ROOT FIX] Final layout pass once the container is fully loaded 
+            // Ensures correct dimensions in fullscreen/initial entry.
+            ActionBarPanel.Loaded += (s, e) => {
+                DispatcherQueue.TryEnqueue(() => UpdateActionBarRealTime(ActualWidth, ActualHeight, ActualWidth >= 800));
+            };
         }
 
         private HashSet<Button> _hoveredActionButtons = new HashSet<Button>();
@@ -469,9 +482,25 @@ namespace ModernIPTVPlayer
             float spacing = isWide ? 16f : 24f; 
             
             // 3. Layout Bounds (UNSCALED coordinate space)
-            // Use the full available width as the coordinate system for group centering.
             double unscaledMaxWidth = width - 40;
             if (unscaledMaxWidth < 300) unscaledMaxWidth = 400;
+
+            // [ROOT FIX] Ensure all buttons have a consistent alignment and initial measurement
+            foreach (var child in ActionBarPanel.Children)
+            {
+                if (child is Button btn)
+                {
+                    btn.HorizontalAlignment = HorizontalAlignment.Left;
+                    btn.VerticalAlignment = VerticalAlignment.Top;
+                    
+                    if (btn.Visibility == Visibility.Visible)
+                    {
+                        // FORCE a measurement pass to get the absolute latest desired width
+                        // This fixes the issue where text changes haven't settled yet
+                        btn.Measure(new Size(double.PositiveInfinity, 52));
+                    }
+                }
+            }
 
             // 4. Wrapping Logic
             List<List<Button>> rows = new List<List<Button>>();
@@ -482,7 +511,22 @@ namespace ModernIPTVPlayer
             {
                 if (child is Button btn && btn.Visibility == Visibility.Visible)
                 {
-                    double btnWidth = btn.ActualWidth > 0 ? btn.ActualWidth : (btn == PlayButton ? 140 : 52);
+                    // [ROOT FIX] Use DesiredSize strictly for manual layout calculation
+                    // ActualWidth can be stale during initial entry/fullscreen toggle
+                    double btnWidth = btn.DesiredSize.Width;
+                    
+                    if (btnWidth <= 0)
+                    {
+                        // Fallback estimation (emergency only)
+                        if (btn == PlayButton)
+                        {
+                            bool hasSubtext = PlayButtonSubtext != null && !string.IsNullOrEmpty(PlayButtonSubtext.Text) && PlayButtonSubtext.Visibility == Visibility.Visible;
+                            btnWidth = (labelOpacity > 0.5f || isWide) ? (hasSubtext ? 200 : 160) : 52;
+                        }
+                        else if (btn == RestartButton) btnWidth = 140;
+                        else btnWidth = 52;
+                    }
+                    
                     if (currentRowWidth + btnWidth > unscaledMaxWidth && currentRow.Count > 0)
                     {
                         rows.Add(currentRow);
@@ -503,7 +547,19 @@ namespace ModernIPTVPlayer
                 double rowTotalWidth = 0;
                 foreach (var btn in row)
                 {
-                    rowTotalWidth += (btn.ActualWidth > 0 ? btn.ActualWidth : (btn == PlayButton ? 140 : 52)) + spacing;
+                    double btnWidth = btn.DesiredSize.Width;
+                    if (btnWidth <= 0)
+                    {
+                        // Fallback estimation
+                        if (btn == PlayButton)
+                        {
+                            bool hasSubtext = PlayButtonSubtext != null && !string.IsNullOrEmpty(PlayButtonSubtext.Text) && PlayButtonSubtext.Visibility == Visibility.Visible;
+                            btnWidth = (labelOpacity > 0.5f || isWide) ? (hasSubtext ? 200 : 160) : 52;
+                        }
+                        else if (btn == RestartButton) btnWidth = 140;
+                        else btnWidth = 52;
+                    }
+                    rowTotalWidth += btnWidth + spacing;
                 }
                 rowTotalWidth -= spacing;
 
@@ -526,14 +582,39 @@ namespace ModernIPTVPlayer
                     // b) Visual Transform (Relative to parent)
                     float hoverScale = _hoveredActionButtons.Contains(btn) ? 1.05f : 1.0f;
                     
-                    float unscaledWidth = (float)(btn.ActualWidth > 0 ? btn.ActualWidth : (btn == PlayButton ? 140 : 52));
+                    double btnWidth = btn.DesiredSize.Width;
+                    if (btnWidth <= 0)
+                    {
+                        if (btn == PlayButton)
+                        {
+                            bool hasSubtext = PlayButtonSubtext != null && !string.IsNullOrEmpty(PlayButtonSubtext.Text) && PlayButtonSubtext.Visibility == Visibility.Visible;
+                            btnWidth = (labelOpacity > 0.5f || isWide) ? (hasSubtext ? 200 : 160) : 52;
+                        }
+                        else if (btn == RestartButton) btnWidth = 140;
+                        else btnWidth = 52;
+                    }
+
+                    float unscaledWidth = (float)btnWidth;
                     visual.CenterPoint = new Vector3(unscaledWidth / 2.0f, 26f, 0); 
                     visual.Scale = new Vector3(hoverScale, hoverScale, 1.0f);
                     visual.Offset = new Vector3((float)currentX, (float)currentY, 0);
+                    visual.Opacity = 1.0f; // Ensure visible if in a row
 
                     currentX += unscaledWidth + spacing;
                 }
                 currentY += rowHeight + spacing;
+            }
+
+            // [FIX] Reset visuals for buttons NOT in any row to prevent stale offsets from previous pages
+            var buttonsInLayout = rows.SelectMany(r => r).ToHashSet();
+            foreach (var child in ActionBarPanel.Children)
+            {
+                if (child is Button btn && !buttonsInLayout.Contains(btn))
+                {
+                    var visual = ElementCompositionPreview.GetElementVisual(btn);
+                    visual.Offset = new Vector3(0, 0, 0);
+                    visual.Opacity = 0.0f;
+                }
             }
         }
         private void UpdateLabelStability(Button btn, TextBlock txt, float visible, double padding)
@@ -896,33 +977,37 @@ namespace ModernIPTVPlayer
                 System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Error closing trailer on navigate: {ex.Message}");
             }
 
-            // Detach player - but only cleanup if NOT handing off to PlayerPage
             if (MediaInfoPlayer != null && PlayerHost != null)
             {
-                 // If we're handing off to PlayerPage, don't cleanup - let PlayerPage use it
-                 if (App.HandoffPlayer != null || _isHandoffInProgress)
+                 // [FIX] Handover Check:
+                 // We keep the player ONLY if we are navigating to PlayerPage OR if it's a Back navigation (which might be handled by the parent)
+                 // BUT the user specifically said: "detay ekranına geri dönerse arka planda hala hazırda bekleyecek kullanıcı detay ekranından player harici bir ekrana geçene kadar."
+                 // This implies that on NavigatedFrom, if NOT PlayerPage, we should cleanup.
+                 
+                 if (e.SourcePageType == typeof(PlayerPage) || _isHandoffInProgress)
                  {
                      // Just detach from visual tree, don't destroy
                      PlayerHost.Content = null;
-                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Detached player for handoff (not cleaning up).");
+                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Detached player for handover (preserving instance).");
                  }
                  else
                  {
-                     // No handoff - safe to cleanup
+                     // Navigating to Discovery, Home, etc. -> STRICT CLEANUP
                      try
                      {
-                         System.Diagnostics.Debug.WriteLine("[MediaInfoPage] CLEANUP: Destroying MpvPlayer instance on exit.");
+                         System.Diagnostics.Debug.WriteLine("[MediaInfoPage] STRICT CLEANUP: Destroying MpvPlayer instance on exit (non-player destination).");
+                         var pToCleanup = MediaInfoPlayer;
                          PlayerHost.Content = null;
-                         await MediaInfoPlayer.CleanupAsync(); 
+                         MediaInfoPlayer = null; // NULL IMMEDIATELY to prevent re-entry race
+                         _prebufferUrl = null;
+                         
+                         _ = Task.Run(async () => {
+                             try { await pToCleanup.CleanupAsync(); } catch { }
+                         });
                      }
                      catch (Exception ex)
                      {
                          System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] CleanupAsync Error: {ex.Message}");
-                     }
-                     finally
-                     {
-                         MediaInfoPlayer = null;
-                         System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Cleaned up MpvPlayer on exit.");
                      }
                  }
             }
@@ -986,10 +1071,11 @@ namespace ModernIPTVPlayer
                 {
                     DispatcherQueue.TryEnqueue(() => 
                     {
-                        bool isWide = ActualWidth >= 900;
+                        bool isWide = ActualWidth >= 800; // Use 800 consistent with UpdateActionBarRealTime
                         _isWideModeIndex = isWide ? 1 : 0;
                         UpdateLayoutState(isWide);
                         UpdateRealTimeScaling(ActualWidth, ActualHeight, isWide);
+                        UpdateActionBarRealTime(ActualWidth, ActualHeight, isWide);
                     });
                 }
                 
@@ -1101,6 +1187,14 @@ namespace ModernIPTVPlayer
                         PlayerHost.Content = MediaInfoPlayer;
                         MediaInfoPlayer.Visibility = Visibility.Visible;
                         MediaInfoPlayer.Opacity = 1;
+                        
+                        // SYNC: Ensure we track that this player is already prebuffered with this URL
+                        // This allows Smart Probe to work even when returning from PlayerPage
+                        if (incomingItem != null && !string.IsNullOrEmpty(incomingItem.StreamUrl))
+                        {
+                            _prebufferUrl = incomingItem.StreamUrl;
+                        }
+                        
                         System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Re-attached returned HandoffPlayer.");
                     }
                 }
@@ -1209,11 +1303,7 @@ namespace ModernIPTVPlayer
             // 4. Fetch Metadata if not cached
             if (!isCached && (isSwitchingItem || _unifiedMetadata == null))
             {
-                // Parallelize Source Fetching for Stremio Movies
-                if (item is Models.Stremio.StremioMediaStream sMovie && sMovie.Meta.Type == "movie")
-                {
-                    _ = PlayStremioContent(sMovie.Meta.Id, showGlobalLoading: false);
-                }
+                // Parallelize Source Fetching for Stremio Movies (Removed redundant call - handled in branching reveal below)
 
                 _unifiedMetadata = await MetadataProvider.Instance.GetMetadataAsync(item, onBackdropFound: (url) => 
                 {
@@ -1375,18 +1465,109 @@ namespace ModernIPTVPlayer
             if (_streamUrl != null) UpdateTechnicalSectionVisibility(true);
             UpdateWatchlistState();
 
-            // Technical Probe for IPTV/VoD
-            if (item is LiveStream live) { _streamUrl = live.StreamUrl; _ = UpdateTechnicalBadgesAsync(_streamUrl); }
-            else if (item is VodStream vod && !string.IsNullOrEmpty(vod.StreamUrl)) { _streamUrl = vod.StreamUrl; _ = UpdateTechnicalBadgesAsync(_streamUrl); }
 
-            // History Update
-            if (metadataType == "movie")
+            // 11. Consolidated History & Resume logic
+            string imdbId = unified.ImdbId ?? (item as Models.Stremio.StremioMediaStream)?.Meta?.ImdbId;
+            HistoryItem history = null;
+
+            if (unified.IsSeries)
             {
-                var history = HistoryManager.Instance.GetProgress(metadataId ?? item.Title);
-                UpdateMovieHistoryUi(history);
+                // Series check
+                history = HistoryManager.Instance.GetLastWatchedEpisode(metadataId ?? item.Id.ToString());
+                if (history == null && !string.IsNullOrEmpty(imdbId)) 
+                    history = HistoryManager.Instance.GetLastWatchedEpisode(imdbId);
+                
+                // Last ditch: check by title if series
+                if (history == null)
+                    history = HistoryManager.Instance.GetHistoryByTitle(unified.Title, "series");
+
+                if (history != null && !history.IsFinished)
+                {
+                    string resumeText = "Devam Et";
+                    int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
+                    string subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
+                    
+                    PlayButtonText.Text = resumeText;
+                    PlayButtonSubtext.Text = subtext;
+                    PlayButtonSubtext.Visibility = Visibility.Visible;
+                    
+                    StickyPlayButtonText.Text = resumeText;
+                    StickyPlayButtonSubtext.Text = subtext;
+                    StickyPlayButtonSubtext.Visibility = Visibility.Visible;
+                    
+                    RestartButton.Visibility = Visibility.Visible;
+                    
+                    if (!string.IsNullOrEmpty(history.StreamUrl))
+                    {
+                        _streamUrl = history.StreamUrl;
+                        StartPrebuffering(_streamUrl, history.Position);
+                    }
+                }
+                else
+                {
+                    PlayButtonText.Text = "Oynat";
+                    PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                    RestartButton.Visibility = Visibility.Collapsed;
+                    
+                    if (StickyPlayButtonText != null) StickyPlayButtonText.Text = "Oynat";
+                    if (StickyPlayButtonSubtext != null) StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
+                }
+            }
+            else
+            {
+                // Movie/Live/Vod
+                history = HistoryManager.Instance.GetProgress(metadataId ?? item.Id.ToString());
+                if (history == null && !string.IsNullOrEmpty(imdbId)) 
+                    history = HistoryManager.Instance.GetProgress(imdbId);
+
+                // Last ditch: check by title
+                if (history == null)
+                {
+                    history = HistoryManager.Instance.GetHistoryByTitle(unified.Title, "movie");
+                    
+                    // Zootopia Special case - sometimes IDs differ between TMDB/Cinemeta
+                    if (history == null && unified.Title != null && unified.Title.Contains("Zoot"))
+                    {
+                         // Try general match if specific title lookup failed
+                         var allMovieHistory = HistoryManager.Instance.GetContinueWatching("movie");
+                         history = allMovieHistory.FirstOrDefault(x => x.Title.Contains("Zoot"));
+                    }
+                }
+                
+                if (history != null && history.Position > 0 && !history.IsFinished)
+                {
+                    PlayButtonText.Text = "Devam Et";
+                    StickyPlayButtonText.Text = "Devam Et";
+                    
+                    // Add subtext for movies too if duration is known
+                    if (history.Duration > 0)
+                    {
+                        var remaining = TimeSpan.FromSeconds(history.Duration - history.Position);
+                        PlayButtonSubtext.Text = remaining.TotalHours >= 1 
+                            ? $"{(int)remaining.TotalHours}sa {(int)remaining.Minutes}dk Kaldı"
+                            : $"{(int)remaining.TotalMinutes}dk Kaldı";
+                        PlayButtonSubtext.Visibility = Visibility.Visible;
+                    }
+
+                    RestartButton.Visibility = Visibility.Visible;
+                    _streamUrl = history.StreamUrl;
+                    StartPrebuffering(_streamUrl, history.Position);
+                }
+                else
+                {
+                    PlayButtonText.Text = (metadataType == "movie" && item is Models.Stremio.StremioMediaStream) ? "Kaynak Bul" : "Oynat";
+                    PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                    RestartButton.Visibility = Visibility.Collapsed;
+                    
+                    if (item is LiveStream liveS && !string.IsNullOrEmpty(liveS.StreamUrl)) 
+                    { 
+                        _streamUrl = liveS.StreamUrl; 
+                        StartPrebuffering(_streamUrl); 
+                    }
+                }
             }
 
-            // Cast & Directors
+            // 12. Cast, Slideshow & Attribution
             await PopulateCastAndDirectors(unified);
 
             if (unified.BackdropUrls != null && unified.BackdropUrls.Count > 0)
@@ -1396,25 +1577,12 @@ namespace ModernIPTVPlayer
 
             if (SourceAttributionText != null) SourceAttributionText.Text = unified.MetadataSourceInfo;
 
-            // Resume/Play Button Text logic
-            if (!unified.IsSeries)
+            // 13. Synchronize Layout & Final Probe Trigger
+            UpdateActionBarRealTime(ActualWidth, ActualHeight, ActualWidth >= 800);
+            
+            if (!string.IsNullOrEmpty(_streamUrl))
             {
-                var history = HistoryManager.Instance.GetProgress(metadataId ?? item.Title);
-                if (history != null && history.Position > 0 && !history.IsFinished)
-                {
-                    PlayButtonText.Text = "Devam Et";
-                    StickyPlayButtonText.Text = "Devam Et";
-                    RestartButton.Visibility = Visibility.Visible;
-                    _streamUrl = history.StreamUrl;
-                    if (item is LiveStream || item is VodStream) StartPrebuffering(_streamUrl, history.Position);
-                }
-                else
-                {
-                    PlayButtonText.Text = (metadataType == "movie" && item is Models.Stremio.StremioMediaStream) ? "Kaynak Bul" : "Oynat";
-                    RestartButton.Visibility = Visibility.Collapsed;
-                    if (item is LiveStream liveS && !string.IsNullOrEmpty(liveS.StreamUrl)) { _streamUrl = liveS.StreamUrl; StartPrebuffering(_streamUrl); }
-                    else if (item is VodStream vodS && !string.IsNullOrEmpty(vodS.StreamUrl)) { _streamUrl = vodS.StreamUrl; StartPrebuffering(_streamUrl); }
-                }
+                _ = UpdateTechnicalBadgesAsync(_streamUrl);
             }
         }
 
@@ -1614,6 +1782,7 @@ namespace ModernIPTVPlayer
             _currentStremioVideoId = null;
             _unifiedMetadata = null;
             _slideshowId = null; // Important: Force slideshow reset
+            _prebufferUrl = null; // Clear prebuffer URL to prevent logic loops
             _isHeroImage1Active = true; 
 
             if (CastListView != null) CastListView.ItemsSource = null;
@@ -1864,15 +2033,32 @@ namespace ModernIPTVPlayer
                 AnimatePair(idContent, TitleShimmer, 50);
             }
             
-            AnimatePair(MetadataPanel, MetadataShimmer, 100);
+            // Sync badge section alignment with current badge state
+            bool showExtra = HasVisibleBadges();
+            UpdateTechnicalSectionVisibility(showExtra);
+
+            // 1. Identity reveal started above
+            
+            // 2. Metadata Section (Badges -> Separator -> Basic Info)
+            if (showExtra)
+            {
+                AnimatePair(TechBadgesContent, TechBadgesShimmer, 75);
+                
+                // Fade in separator dot
+                var fadeDot = _compositor.CreateScalarKeyFrameAnimation();
+                fadeDot.InsertKeyFrame(0f, 0f);
+                fadeDot.InsertKeyFrame(1f, 1f);
+                fadeDot.Duration = TimeSpan.FromMilliseconds(500);
+                fadeDot.DelayTime = TimeSpan.FromMilliseconds(100);
+                ElementCompositionPreview.GetElementVisual(MetadataSeparator).StartAnimation("Opacity", fadeDot);
+                MetadataSeparator.Opacity = 1;
+            }
+
+            AnimatePair(MetadataPanel, MetadataShimmer, 125); // Slightly delayed from badges
             MetadataRibbon.Opacity = 1;
 
-            AnimatePair(ActionBarPanel, ActionBarShimmer, 150);
-            AnimatePair(OverviewPanel, OverviewShimmer, 200);
-
-
-            // Sync badge section alignment with current badge state
-            UpdateTechnicalSectionVisibility(HasVisibleBadges());
+            AnimatePair(ActionBarPanel, ActionBarShimmer, 175);
+            AnimatePair(OverviewPanel, OverviewShimmer, 225);
 
             if (DirectorSection.Visibility == Visibility.Visible)
             {
@@ -2138,14 +2324,15 @@ namespace ModernIPTVPlayer
 
         private void UpdateTechnicalSectionVisibility(bool hasExtra)
         {
-            if (MetadataRibbon == null || MetadataSeparator == null) return;
+            if (MetadataRibbon == null || MetadataSeparator == null || TechBadgesContent == null) return;
 
             TechBadgesContent.Visibility = hasExtra ? Visibility.Visible : Visibility.Collapsed;
             MetadataSeparator.Visibility = hasExtra ? Visibility.Visible : Visibility.Collapsed;
             
             if (hasExtra)
             {
-                ElementCompositionPreview.GetElementVisual(TechBadgesContent).Opacity = 1f;
+                var visual = ElementCompositionPreview.GetElementVisual(TechBadgesContent);
+                if (visual != null) visual.Opacity = 1f;
             }
         }
 
@@ -2476,6 +2663,12 @@ namespace ModernIPTVPlayer
             
             _lastAreaColor = areaBackground;
             _primaryColorHex = $"#{primary.A:X2}{primary.R:X2}{primary.G:X2}{primary.B:X2}";
+            
+            // Final safety check to ensure _primaryColorHex is a valid hex color string
+            if (string.IsNullOrEmpty(_primaryColorHex) || _primaryColorHex == "#00000000" || _primaryColorHex.Contains("Unknown"))
+            {
+                _primaryColorHex = "#FFFFFFFF"; // Fallback to safe white (with full opacity)
+            }
 
             try
             {
@@ -2596,8 +2789,8 @@ namespace ModernIPTVPlayer
                 UpdateTextColor(GenresText, headerColor);
                 UpdateTextColor(OverviewText, descriptionColor);
                 UpdateTextColor(SuperTitleText, headerColor);
-                UpdateTextColor(BadgeResText, headerColor);
-                UpdateTextColor(BadgeCodec, headerColor);
+                if (BadgeResText != null) UpdateTextColor(BadgeResText, headerColor);
+                if (BadgeCodec != null) UpdateTextColor(BadgeCodec, headerColor);
                 UpdateTextColor(DirectorHeader, headerColor);
                 UpdateTextColor(CastHeader, headerColor);
                 UpdateTextColor(StickyTitle, headerColor);
@@ -3131,6 +3324,9 @@ namespace ModernIPTVPlayer
                             if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
                         }
                     }
+                    
+                    // Sync layout
+                    UpdateActionBarRealTime(ActualWidth, ActualHeight, ActualWidth >= 800);
                 }
                 finally
                 {
@@ -3295,169 +3491,6 @@ namespace ModernIPTVPlayer
 
 
         
-        private async Task ExtractTechInfoAsync(string overrideUrl = null)
-        {
-             // 0. Resolve URL
-             string streamUrl = overrideUrl;
-             if (string.IsNullOrEmpty(streamUrl)) streamUrl = _streamUrl;
-             // Rename 'ls' to 'lsCheck' to avoid conflict with downstream 'ls'
-             if (string.IsNullOrEmpty(streamUrl) && _item is LiveStream lsCheck) streamUrl = lsCheck.StreamUrl;
-             
-             if (string.IsNullOrEmpty(streamUrl))
-             {
-                 // No URL available to probe (yet) -> Stop Shimmer
-                 DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
-                 return;
-             }
-
-             if (!string.IsNullOrEmpty(streamUrl))
-             {
-                 // Fix Method Name: GetProbeData -> Get
-                 var cachedProbe = Services.ProbeCacheService.Instance.Get(streamUrl);
-                 if (cachedProbe != null)
-                 {
-                     System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Badge Cache HIT for {streamUrl}");
-                     ApplyMetadataToUi(cachedProbe);
-                     // Success - Ensure shimmer off
-                     DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
-                     return;
-                 }
-             }
-
-
-            // 1. Check if we already have metadata from ExpandedPage (or previous probe)
-             if (_item is LiveStream live && live.HasMetadata)
-             {
-                 // ... (Keep existing logic for LiveStream metadata)
-                 // Resolution
-                 if (!string.IsNullOrEmpty(live.Resolution) && live.Resolution.Contains("x"))
-                 {
-                     var parts = live.Resolution.Split('x');
-                     if (parts.Length == 2 && int.TryParse(parts[0], out int w))
-                     {
-                          if (w >= 3800) Badge4K.Visibility = Visibility.Visible;
-                          else Badge4K.Visibility = Visibility.Collapsed;
-                     }
-                 }
-                 // ...
-                 return;
-             }
-             
-              // 2. Check Cache before Probing (Prevent Duplicate Probes)
-               // 2. Check Cache before Probing (Prevent Duplicate Probes)
-               await Services.ProbeCacheService.Instance.EnsureLoadedAsync(); // Fix Race Condition
-               if (Services.ProbeCacheService.Instance.Get(_streamUrl) is Services.ProbeData cached)
-               {
-                   Services.CacheLogger.Success(Services.CacheLogger.Category.MediaInfo, "Pre-buffer Probe Cache Hit", _streamUrl);
-                   // Apply Cached Result
-                   ApplyMetadataToUi(cached); 
-                   return;
-               }
-             
-             // 3. Perform Probe if Cache Miss
-            // Use FFmpegProber for faster metadata extraction
-            try
-            {
-                var prober = new FFmpegProber();
-                var result = await prober.ProbeAsync(_streamUrl);
-
-                if (result.Success)
-                {
-                    // Cache the result for UI usage
-
-                    Services.ProbeCacheService.Instance.Update(_streamUrl, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
-
-                    // Update the model so we don't probe again next time
-                    if (_item is LiveStream ls)
-                    {
-                         ls.Resolution = result.Res;
-                         ls.Codec = result.Codec;
-                         ls.Bitrate = result.Bitrate;
-                         ls.IsHdr = result.IsHdr;
-                         ls.IsOnline = result.Success;
-                    }
-                    
-                    // Resolution
-                    if (result.Res.Contains("x"))
-                    {
-                        var parts = result.Res.Split('x');
-                        if (parts.Length == 2 && int.TryParse(parts[0], out int w))
-                        {
-                             if (w >= 3800) Badge4K.Visibility = Visibility.Visible;
-                             else Badge4K.Visibility = Visibility.Collapsed;
-                        }
-                    }
-
-
-                    // Codec
-                    if (!string.IsNullOrEmpty(result.Codec) && result.Codec != "-") 
-                    {
-                        BadgeCodec.Text = result.Codec.ToUpper();
-                    }
-
-                    // HDR
-                    if (result.IsHdr) 
-                    {
-                        BadgeHDR.Visibility = Visibility.Visible;
-                        BadgeSDR.Visibility = Visibility.Collapsed;
-                    }
-                    else
-                    {
-                        BadgeSDR.Visibility = Visibility.Visible;
-                        BadgeHDR.Visibility = Visibility.Collapsed;
-                    }
-                }
-            }
-            catch { } // Fail silently, fallback to name below
-            
-            try
-            {
-                // Fallback: Parse from Title (always run as safety net or if probe missed specific tags)
-                if (_item != null || _selectedEpisode != null)
-                {
-                    string name = (_selectedEpisode?.Title ?? _item?.Title ?? "").ToUpperInvariant();
-                    
-                    // 4K
-                    if (Badge4K.Visibility == Visibility.Collapsed && (name.Contains("4K") || name.Contains("UHD"))) 
-                        Badge4K.Visibility = Visibility.Visible;
-                    
-                    // HDR
-                    if (name.Contains("HDR") || name.Contains("DOLBY") || name.Contains("DV")) 
-                    {
-                        BadgeHDR.Visibility = Visibility.Visible;
-                        BadgeSDR.Visibility = Visibility.Collapsed;
-                    }
-                    else if (BadgeHDR.Visibility == Visibility.Collapsed && BadgeSDR.Visibility == Visibility.Collapsed)
-                    {
-                        // If no HDR detected (Name or Prober), and we have ANY quality/codec info, assume SDR.
-                         bool hasVideoInfo = Badge4K.Visibility == Visibility.Visible || 
-                                           !string.IsNullOrEmpty(BadgeCodec.Text) ||
-                                           name.Contains("1080") || name.Contains("720") || name.Contains("FHD") || name.Contains("HD");
-
-                         if (hasVideoInfo)
-                         {
-                             BadgeSDR.Visibility = Visibility.Visible;
-                         }
-                    }
-                        
-                    // Codec Fallback
-                    if (BadgeCodec.Text == "HEVC" || BadgeCodec.Text == "AVC") { /* already set */ }
-                    else
-                    {
-                        if (name.Contains("HEVC") || name.Contains("H.265") || name.Contains("X265")) 
-                            BadgeCodec.Text = "HEVC";
-                        else if (name.Contains("AVC") || name.Contains("H.264")) 
-                            BadgeCodec.Text = "AVC";
-                    }
-                }
-            }
-            catch { }
-            
-            // Critical: Ensure Shimmer stops in all cases (Probe success, fail, or fallback)
-            DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
-        }
-
-
 
         #region Actions
 
@@ -4255,13 +4288,15 @@ namespace ModernIPTVPlayer
         {
             if (string.IsNullOrEmpty(url)) return;
             if (!AppSettings.IsPrebufferEnabled) return;
+            if (_prebufferUrl == url && MediaInfoPlayer != null) return; // Already prebuffering this url
 
             // Cancel any previous prebuffering
             try { _prebufferCts?.Cancel(); _prebufferCts?.Dispose(); } catch {}
             _prebufferCts = new CancellationTokenSource();
             var ct = _prebufferCts.Token;
+            _prebufferUrl = url;
 
-            Debug.WriteLine($"[FastStart] PrebufferingV2: {url} | Resume: {startTime}s | Buffer: {AppSettings.PrebufferSeconds}s");
+            Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "START Prebuffering", $"{url} | Resume: {startTime}s");
 
             // 1. Ensure Player Instance Exists & is Attached
             bool isNew = false;
@@ -4294,21 +4329,19 @@ namespace ModernIPTVPlayer
             }
             else
             {
-                // If we have one but it's not appropriately attached yet
+                 // [FIX] If we have a player but it's not appropriately attached yet
                 if (PlayerHost != null && PlayerHost.Content != MediaInfoPlayer)
                 {
-                    // [WINUI FIX] An element can only have one parent.
-                    // If it was temporarily detached or returned from handoff, we must 
-                    // ensure it has no parent before setting it as Content.
+                    // Ensure it's detached from any previous parent (like PlayerPage)
                     var parent = VisualTreeHelper.GetParent(MediaInfoPlayer) as ContentControl;
                     if (parent != null)
                     {
                         parent.Content = null;
-                        Debug.WriteLine("[FastStart] Detached MediaInfoPlayer from previous parent.");
+                        Debug.WriteLine("[FastStart] Detached MediaInfoPlayer from previous host.");
                     }
                     
                     PlayerHost.Content = MediaInfoPlayer;
-                    Debug.WriteLine("[FastStart] Re-attached MediaInfoPlayer to PlayerHost.");
+                    Debug.WriteLine("[FastStart] Re-attached MediaInfoPlayer to Detail Page.");
                 }
             }
 
@@ -4376,8 +4409,8 @@ namespace ModernIPTVPlayer
                 await MediaInfoPlayer.SetPropertyAsync("cache", "yes"); // Enable cache explicitly
                 await MediaInfoPlayer.SetPropertyAsync("cache-pause", "yes"); // Buffer while paused
                 await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", preSeconds.ToString());
-                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB"); 
-                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "5MiB");
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "1000MiB"); 
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "1MiB"); // Minimize back buffer during pre-buffering
 
                 // [RESTORE AUDIO/SUBTITLE PREFERENCES]
                 // Attempt to retrieve history item to restore track preferences.
@@ -4807,7 +4840,7 @@ namespace ModernIPTVPlayer
                             string parentIdStr = (_item is Models.Stremio.StremioMediaStream sMediaStream && (sMediaStream.Meta.Type == "series" || sMediaStream.Meta.Type == "tv")) ? sMediaStream.Meta.Id : null;
                             string autoStreamType = (_item is Models.Stremio.StremioMediaStream sMediaStream2 && (sMediaStream2.Meta.Type == "series" || sMediaStream2.Meta.Type == "tv")) ? "series" : "movie";
                             _sourceAddonUrl = firstStream.AddonUrl;
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, resolvedVideoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType, GetCurrentBackdrop(), GetLogoUrl()));
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(firstStream.Url, _item.Title, resolvedVideoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, startSeconds, _item.PosterUrl, autoStreamType, GetCurrentBackdrop(), GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
                             return;
                         }
                     }
@@ -5049,10 +5082,18 @@ namespace ModernIPTVPlayer
                         if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
                         _isSourcesFetchInProgress = false; _isCurrentSourcesComplete = true;
 
-                        if (_addonResults.Count == 0)
+                        if (_addonResults.Count == 0 && !_isDialogShowing)
                         {
-                            var err = new ContentDialog { Title = "Kaynak Bulunamadı", Content = "Eklentilerinizde bu içerik için uygun bir kaynak bulunamadı.", CloseButtonText = "Tamam", XamlRoot = this.XamlRoot };
-                            await err.ShowAsync();
+                            _isDialogShowing = true;
+                            try
+                            {
+                                var err = new ContentDialog { Title = "Kaynak Bulunamadı", Content = "Eklentilerinizde bu içerik için uygun bir kaynak bulunamadı.", CloseButtonText = "Tamam", XamlRoot = this.XamlRoot };
+                                await err.ShowAsync();
+                            }
+                            finally
+                            {
+                                _isDialogShowing = false;
+                            }
                         }
                     }
                     finally { tcsFinal.TrySetResult(true); }
@@ -5651,12 +5692,24 @@ namespace ModernIPTVPlayer
                      CloseButtonText = "Kapat",
                      XamlRoot = this.XamlRoot
                  };
-                 var result = await dialog.ShowAsync();
-                 if (result == ContentDialogResult.Primary)
+
+                 if (!_isDialogShowing)
                  {
-                     var pkg = new DataPackage();
-                     pkg.SetText(_streamUrl);
-                     Clipboard.SetContent(pkg);
+                     _isDialogShowing = true;
+                     try
+                     {
+                         var result = await dialog.ShowAsync();
+                         if (result == ContentDialogResult.Primary)
+                         {
+                             var pkg = new DataPackage();
+                             pkg.SetText(_streamUrl);
+                             Clipboard.SetContent(pkg);
+                         }
+                     }
+                     finally
+                     {
+                         _isDialogShowing = false;
+                     }
                  }
              }
              else
@@ -5766,19 +5819,22 @@ namespace ModernIPTVPlayer
 
         #endregion
 
-        private void SetBadgeLoadingState(bool isLoading)
+              private void SetBadgeLoadingState(bool isLoading)
         {
-            if (MetadataShimmer == null || TechBadgesContent == null) return;
+            if (MetadataShimmer == null || TechBadgesContent == null || _compositor == null) return;
 
             if (isLoading)
             {
                 if (MetadataRibbon != null) MetadataRibbon.Visibility = Visibility.Visible;
                 MetadataShimmer.Width = double.NaN;
                 MetadataShimmer.Visibility = Visibility.Visible;
-                ElementCompositionPreview.GetElementVisual(MetadataShimmer).Opacity = 1f;
+                
+                var visShim = ElementCompositionPreview.GetElementVisual(MetadataShimmer);
+                if (visShim != null) visShim.Opacity = 1f;
 
                 TechBadgesContent.Visibility = Visibility.Collapsed;
-                ElementCompositionPreview.GetElementVisual(TechBadgesContent).Opacity = 0f;
+                var visContent = ElementCompositionPreview.GetElementVisual(TechBadgesContent);
+                if (visContent != null) visContent.Opacity = 0f;
             }
             else
             {
@@ -5790,34 +5846,49 @@ namespace ModernIPTVPlayer
                     // Fade In Badges
                     TechBadgesContent.Visibility = Visibility.Visible;
                     var visContent = ElementCompositionPreview.GetElementVisual(TechBadgesContent);
-                    visContent.Opacity = 0f;
+                    if (visContent != null)
+                    {
+                        visContent.Opacity = 0f;
 
-                    var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
-                    fadeIn.InsertKeyFrame(0f, 0f);
-                    fadeIn.InsertKeyFrame(1f, 1f);
-                    fadeIn.Duration = TimeSpan.FromMilliseconds(400);
-                    visContent.StartAnimation("Opacity", fadeIn);
-                    TechBadgesContent.Opacity = 1;
+                        var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                        fadeIn.InsertKeyFrame(0f, 0f);
+                        fadeIn.InsertKeyFrame(1f, 1f);
+                        fadeIn.InsertKeyFrame(1f, 1f);
+                        fadeIn.Duration = TimeSpan.FromMilliseconds(400);
+                        visContent.StartAnimation("Opacity", fadeIn);
+                        TechBadgesContent.Opacity = 1;
+                    }
 
                     if (MetadataRibbon != null) MetadataRibbon.Visibility = Visibility.Visible;
                 }
 
                 // Fade Out Shimmer
                 var visShimmer = ElementCompositionPreview.GetElementVisual(MetadataShimmer);
-                var fadeOut = _compositor.CreateScalarKeyFrameAnimation();
-                fadeOut.InsertKeyFrame(0f, 1f);
-                fadeOut.InsertKeyFrame(1f, 0f);
-                fadeOut.Duration = TimeSpan.FromMilliseconds(300);
+                if (visShimmer != null)
+                {
+                    var fadeOut = _compositor.CreateScalarKeyFrameAnimation();
+                    fadeOut.InsertKeyFrame(0f, 1f);
+                    fadeOut.InsertKeyFrame(1f, 0f);
+                    fadeOut.Duration = TimeSpan.FromMilliseconds(300);
 
-                var batch = _compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
-                visShimmer.StartAnimation("Opacity", fadeOut);
-                batch.Completed += (s, e) =>
+                    var batch = _compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+                    visShimmer.StartAnimation("Opacity", fadeOut);
+                    batch.Completed += (s, e) =>
+                    {
+                        if (MetadataShimmer != null)
+                        {
+                            MetadataShimmer.Visibility = Visibility.Collapsed;
+                            MetadataShimmer.Width = double.NaN;
+                        }
+                        UpdateTechnicalSectionVisibility(spansSpace);
+                    };
+                    batch.End();
+                }
+                else
                 {
                     MetadataShimmer.Visibility = Visibility.Collapsed;
-                    MetadataShimmer.Width = double.NaN;
                     UpdateTechnicalSectionVisibility(spansSpace);
-                };
-                batch.End();
+                }
             }
         }
 
@@ -5861,17 +5932,20 @@ namespace ModernIPTVPlayer
         {
             if (string.IsNullOrEmpty(url))
             {
+                Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "UpdateTechnicalBadges CANCELLED", "Null URL");
                 UpdateTechnicalSectionVisibility(false);
                 return;
             }
+
+            Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "UpdateTechnicalBadges START", url);
 
             // Cancel previous probe
             try
             {
                 _probeCts?.Cancel();
-                _probeCts?.Dispose(); // Dispose old CTS
+                _probeCts?.Dispose(); 
             }
-            catch { } // Ignore cancellation/dispose errors
+            catch { } 
 
             _probeCts = new CancellationTokenSource();
             var token = _probeCts.Token;
@@ -5889,12 +5963,10 @@ namespace ModernIPTVPlayer
                 await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
                 if (Services.ProbeCacheService.Instance.Get(url) is Services.ProbeData cached)
                 {
-                    // SMART SHIMMER: Fast Fade-In if cached
-                    Services.CacheLogger.Success(Services.CacheLogger.Category.MediaInfo, "TechBadges Cache Hit", url);
+                    Services.CacheLogger.Success(Services.CacheLogger.Category.MediaInfo, "Badges Cache Hit", url);
 
                     DispatcherQueue.TryEnqueue(async () =>
                     {
-                        // Even if cached, we do a very quick fade for smoothness (50ms), not 500ms
                         TechBadgesContent.Opacity = 0;
                         TechBadgesContent.Visibility = Visibility.Visible;
                         ApplyMetadataToUi(cached);
@@ -5904,103 +5976,102 @@ namespace ModernIPTVPlayer
                         var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
                         fadeIn.InsertKeyFrame(0f, 0f);
                         fadeIn.InsertKeyFrame(1f, 1f);
-                        fadeIn.Duration = TimeSpan.FromMilliseconds(50); // Fast!
+                        fadeIn.Duration = TimeSpan.FromMilliseconds(50);
                         visContent.StartAnimation("Opacity", fadeIn);
                         TechBadgesContent.Opacity = 1;
 
-                        // Ensure shimmer is hidden
                         SetBadgeLoadingState(false);
                     });
                     return;
                 }
 
-                // 2. Show Shimmer (Reset state to Shimmer)
-                Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "TechBadges Cache Miss - Probing...", url);
+                // 2. Show Shimmer
                 SetBadgeLoadingState(true);
 
-                // 3. Perform Probe
-                var result = await _ffprober.ProbeAsync(url);
-                
-                if (token.IsCancellationRequested) 
+                // 3. SMART PROBE: Check if existing player is already opening this URL
+                (string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr) result;
+
+                if (MediaInfoPlayer != null && _prebufferUrl == url)
                 {
-                    Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "Probe Cancelled");
-                    return;
+                    Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "SMART PROBE: Reusing prebuffer player", url);
+                    // Wait for the active player to get metadata
+                    result = await StreamProber.ExtractProbeDataAsync(MediaInfoPlayer, token);
+                }
+                else
+                {
+                    Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "DEDICATED PROBE: Starting prober player", url);
+                    if (_prober == null)
+                    {
+                        _proberPlayer = new MpvPlayer();
+                        ProbeHost.Content = _proberPlayer;
+                        _prober = new StreamProber(_proberPlayer);
+                    }
+                    result = await _prober.ProbeAsync(url, token);
                 }
 
-                Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "Probe Result", $"Success: {result.Success} | {result.Res}");
+                if (token.IsCancellationRequested) return;
 
                 if (result.Success)
                 {
-                     Services.ProbeCacheService.Instance.Update(url, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
-                }
+                    Services.ProbeCacheService.Instance.Update(url, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
+                    
+                    var probeData = new Services.ProbeData
+                    {
+                        Resolution = result.Res,
+                        Fps = result.Fps,
+                        Codec = result.Codec,
+                        Bitrate = result.Bitrate,
+                        IsHdr = result.IsHdr
+                    };
 
-                var probeData = new Services.ProbeData
-                {
-                    Resolution = result.Res,
-                    Fps = result.Fps,
-                    Codec = result.Codec,
-                    Bitrate = result.Bitrate,
-                    IsHdr = result.IsHdr
-                };
-
-                // 4. Update UI
-                if (!token.IsCancellationRequested)
-                {
                     DispatcherQueue.TryEnqueue(() =>
                     {
-                        // 1. Capture Shimmer Width for Stability (Prevent Left Shift)
                         double shimmerWidth = MetadataShimmer.ActualWidth;
-
-                        // 2. Prepare Content
                         TechBadgesContent.Visibility = Visibility.Visible;
                         ApplyMetadataToUi(probeData);
                         
-                        // 4. PREVENT LAYOUT SHIFT: 
                         bool hasVisibleBadges = HasVisibleBadges();
-
                         if (hasVisibleBadges && shimmerWidth > 0 && TechBadgesContent.ActualWidth < shimmerWidth)
                         {
                             TechBadgesContent.MinWidth = shimmerWidth;
-                            if (MetadataRibbon != null) MetadataRibbon.Visibility = Visibility.Visible;
                         }
                         else
                         {
-                            TechBadgesContent.MinWidth = 0; // Reset
-                            if (MetadataRibbon != null) MetadataRibbon.Visibility = hasVisibleBadges ? Visibility.Visible : Visibility.Collapsed;
+                            TechBadgesContent.MinWidth = 0;
                         }
                         
-                        // Sync Shimmer to Content only if Content is WIDER (to cover it)
-                        if (TechBadgesContent.ActualWidth > shimmerWidth)
+                        if (TechBadgesContent.ActualWidth > shimmerWidth && MetadataShimmer != null)
                         {
                             MetadataShimmer.Width = TechBadgesContent.ActualWidth;
                         }
-
-                        // 5. Trigger Cross-Fade Animation
                         SetBadgeLoadingState(false);
                     });
+                }
+                else
+                {
+                    Services.CacheLogger.Warning(Services.CacheLogger.Category.MediaInfo, "Probe Failed", url);
+                    DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
                 }
             }
             catch (Exception ex)
             {
-                Services.CacheLogger.Error(Services.CacheLogger.Category.MediaInfo, "Technical Probe Failed", ex.Message);
-                // Ensure we exit loading state so text/layout doesn't stay hidden/ghosted
-                DispatcherQueue.TryEnqueue(() => 
-                {
-                    UpdateTechnicalSectionVisibility(false);
-                    SetBadgeLoadingState(false);
-                });
+                Services.CacheLogger.Error(Services.CacheLogger.Category.MediaInfo, "Probe Error", ex.Message);
+                DispatcherQueue.TryEnqueue(() => SetBadgeLoadingState(false));
             }
         }
+
 
         private void ApplyMetadataToUi(Services.ProbeData result)
         {
             if (result == null) return;
 
             // Resolution / 4K
-            bool is4K = result.Resolution.Contains("3840") || result.Resolution.Contains("4096") || result.Resolution.ToUpperInvariant().Contains("4K");
-            Badge4K.Visibility = is4K ? Visibility.Visible : Visibility.Collapsed;
+            bool is4K = !string.IsNullOrEmpty(result.Resolution) && (result.Resolution.Contains("3840") || result.Resolution.Contains("4096") || result.Resolution.ToUpperInvariant().Contains("4K"));
+            if (Badge4K != null) Badge4K.Visibility = is4K ? Visibility.Visible : Visibility.Collapsed;
 
-            if (!is4K && !string.IsNullOrWhiteSpace(result.Resolution) && result.Resolution != "Unknown" && result.Resolution != "Error" && result.Resolution.Trim().Length > 0)
+            if (!is4K && !string.IsNullOrWhiteSpace(result.Resolution) && 
+                result.Resolution != "Unknown" && result.Resolution != "Error" && 
+                result.Resolution != "N/A" && result.Resolution.Trim().Length > 0)
             {
                 // Show resolution badge (e.g. 1080P)
                 string displayRes = result.Resolution;
@@ -6012,30 +6083,32 @@ namespace ModernIPTVPlayer
                 
                 if (!string.IsNullOrWhiteSpace(displayRes))
                 {
-                    BadgeResText.Text = displayRes.ToUpperInvariant();
-                    BadgeRes.Visibility = Visibility.Visible;
+                    if (BadgeResText != null) BadgeResText.Text = displayRes.ToUpperInvariant();
+                    if (BadgeRes != null) BadgeRes.Visibility = Visibility.Visible;
                 }
-                else
+                else if (BadgeRes != null)
                 {
                     BadgeRes.Visibility = Visibility.Collapsed;
                 }
             }
-            else
+            else if (BadgeRes != null)
             {
                 BadgeRes.Visibility = Visibility.Collapsed;
             }
 
             // HDR / SDR
-            BadgeHDR.Visibility = result.IsHdr ? Visibility.Visible : Visibility.Collapsed;
-            BadgeSDR.Visibility = !result.IsHdr ? Visibility.Visible : Visibility.Collapsed;
+            if (BadgeHDR != null) BadgeHDR.Visibility = result.IsHdr ? Visibility.Visible : Visibility.Collapsed;
+            if (BadgeSDR != null) BadgeSDR.Visibility = !result.IsHdr ? Visibility.Visible : Visibility.Collapsed;
 
             // Codec
-            if (!string.IsNullOrWhiteSpace(result.Codec) && result.Codec != "-" && result.Codec.Trim().Length > 0)
+            if (!string.IsNullOrWhiteSpace(result.Codec) && 
+                result.Codec != "-" && result.Codec != "Unknown" && result.Codec != "Error" && result.Codec != "N/A" &&
+                result.Codec.Trim().Length > 0)
             {
-                BadgeCodec.Text = result.Codec;
-                BadgeCodecContainer.Visibility = Visibility.Visible;
+                if (BadgeCodec != null) BadgeCodec.Text = result.Codec;
+                if (BadgeCodecContainer != null) BadgeCodecContainer.Visibility = Visibility.Visible;
             }
-            else
+            else if (BadgeCodecContainer != null)
             {
                 BadgeCodecContainer.Visibility = Visibility.Collapsed;
             }

@@ -29,6 +29,7 @@ _pkginfo.txt
 *.msix
 *.msixbundle
 *.msixupload
+*.pfx
 Generated\ Files/
 Generated_Code/
 

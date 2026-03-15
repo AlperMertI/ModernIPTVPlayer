@@ -96,14 +96,34 @@ namespace ModernIPTVPlayer
 
         private void HandleFatalException(Exception? ex, string source)
         {
+            // Tüm exception bilgilerini topla
+            string fullDetails = $"Source: {source}\n";
+            fullDetails += $"Type: {ex?.GetType().FullName}\n";
+            fullDetails += $"Message: {ex?.Message}\n";
+            fullDetails += $"StackTrace: {ex?.StackTrace ?? "NULL"}\n";
+            
+            // InnerException varsa onu da ekle
+            if (ex?.InnerException != null)
+            {
+                fullDetails += $"\n--- INNER EXCEPTION ---\n";
+                fullDetails += $"Type: {ex.InnerException.GetType().FullName}\n";
+                fullDetails += $"Message: {ex.InnerException.Message}\n";
+                fullDetails += $"StackTrace: {ex.InnerException.StackTrace ?? "NULL"}\n";
+            }
+            
             AppLogger.Critical($"FATAL EXCEPTION from {source}", ex);
             Trace.Flush(); // Force write to file
-
-            string errorMessage = ex?.ToString() ?? "Bilinmeyen kritik hata.";
+            
+            // Kullanıcıya gösterilecek mesajı iyileştir
+            string errorMessage = $"Hata: {ex?.Message}\nTür: {ex?.GetType().Name}";
+            if (ex?.InnerException != null)
+            {
+                errorMessage += $"\nİç Hata: {ex.InnerException.Message}";
+            }
             
             // Show alert even if window is not ready
             MessageBox(IntPtr.Zero, 
-                $"Uygulama beklenmedik bir hata nedeniyle çökebilir.\n\nKaynak: {source}\n\nHata: {ex?.Message}\n\nDetaylar log dosyasına kaydedildi.", 
+                $"Uygulama beklenmedik bir hata nedeniyle çökebilir.\n\n{errorMessage}\n\nDetaylar log dosyasına kaydedildi.", 
                 "Kritik Hata (Modern IPTV Player)", 
                 0x10);
 

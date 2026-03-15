@@ -9,7 +9,7 @@
 
   <Identity
     Name="41536851-dd21-4f05-ac74-4dd16b3d3872"
-    Publisher="CN=mertg"
+    Publisher="CN=AlperMert"
     Version="1.0.0.0" />
 
   <mp:PhoneIdentity PhoneProductId="41536851-dd21-4f05-ac74-4dd16b3d3872" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>

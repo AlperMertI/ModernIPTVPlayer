@@ -11,6 +11,9 @@ using ModernIPTVPlayer;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services;
+using MpvWinUI;
+using System.Globalization;
+using System.Diagnostics; // Added for Debug.WriteLine
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -407,8 +410,9 @@ namespace ModernIPTVPlayer.Controls
 </html>";
         }
 
-        // FFmpeg Prober
-        private FFmpegProber _prober = new FFmpegProber();
+        // libmpv Prober
+        private StreamProber _prober;
+        private MpvPlayer _proberPlayer;
         private long _loadNonce = 0;
 
         private async void FavButton_Click(object sender, RoutedEventArgs e)
@@ -1013,9 +1017,17 @@ namespace ModernIPTVPlayer.Controls
 
                 // 3. Probe Network
                 SetProbing(stream, true);
-                Services.CacheLogger.Info(Services.CacheLogger.Category.Probe, "Probing Network (ExpandedCard)", url);
+                Services.CacheLogger.Info(Services.CacheLogger.Category.Probe, "Probing Network (ExpandedCard - libmpv)", url);
                 
+                if (_prober == null)
+                {
+                    _proberPlayer = new MpvPlayer();
+                    ProbeHost.Content = _proberPlayer; // Must be in tree
+                    _prober = new StreamProber(_proberPlayer);
+                }
+
                 var result = await _prober.ProbeAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Probe COMPLETED for {url}. Success: {result.Success}, Res: {result.Res}");
                 
                 if (result.Success)
                 {
@@ -1034,6 +1046,7 @@ namespace ModernIPTVPlayer.Controls
                 }
                 else
                 {
+                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Probe FAILED (Success=false) for {url}");
                     Services.CacheLogger.Warning(Services.CacheLogger.Category.Probe, "Probing Failed (Results empty)", url);
                 }
             }
