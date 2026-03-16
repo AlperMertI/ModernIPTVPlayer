@@ -140,10 +140,18 @@ namespace ModernIPTVPlayer
         }
 
         private const string IsAutoProbeEnabledKey = "IsAutoProbeEnabled";
+        private const string ProbingWorkerCountKey = "ProbingWorkerCount";
+
         public static bool IsAutoProbeEnabled
         {
             get => (Settings.Values[IsAutoProbeEnabledKey] as bool?) ?? true;
             set => Settings.Values[IsAutoProbeEnabledKey] = value;
+        }
+
+        public static int ProbingWorkerCount
+        {
+            get => (Settings.Values[ProbingWorkerCountKey] as int?) ?? 3;
+            set => Settings.Values[ProbingWorkerCountKey] = value;
         }
 
         // Buffer Settings

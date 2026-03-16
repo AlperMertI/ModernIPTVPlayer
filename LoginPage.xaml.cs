@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using ModernIPTVPlayer.Models;
 using System.Text.Json;
+using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer
 {
@@ -24,48 +25,41 @@ namespace ModernIPTVPlayer
         {
             LoadPlaylists();
             
-            // Check for auto-login only on startup (when App.CurrentLogin is null)
+            // Auto-login is now handled globally at startup, 
+            // but we can still trigger it here if coming from another page
             if (App.CurrentLogin == null)
             {
                 CheckAutoLogin();
             }
         }
 
-        private void CheckAutoLogin()
+        private async void CheckAutoLogin()
         {
-            var lastId = AppSettings.LastPlaylistId;
-            if (lastId.HasValue)
+            if (_isLoading) return;
+            _isLoading = true;
+            SetLoadingState(true);
+
+            bool success = await AuthService.Instance.CheckAutoLoginAsync();
+            
+            if (success)
             {
-                foreach (var p in _playlists)
-                {
-                    if (p.Id == lastId.Value)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Auto-login found for: {p.Name}");
-                        _ = LoginWithPlaylist(p);
-                        break;
-                    }
-                }
+                Frame.Navigate(typeof(LiveTVPage), App.CurrentLogin);
+            }
+            else
+            {
+                _isLoading = false;
+                SetLoadingState(false);
             }
         }
 
         private void LoadPlaylists()
         {
-            try
-            {
-                var json = AppSettings.PlaylistsJson;
-                var list = System.Text.Json.JsonSerializer.Deserialize<System.Collections.Generic.List<Playlist>>(json) 
-                           ?? new System.Collections.Generic.List<Playlist>();
-                
-                _playlists.Clear();
-                foreach (var p in list) _playlists.Add(p);
-                
-                PlaylistListView.ItemsSource = _playlists;
-                UpdateEmptyState();
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"Error loading playlists: {ex.Message}");
-            }
+            _playlists.Clear();
+            var list = AuthService.Instance.GetSavedPlaylists();
+            foreach (var p in list) _playlists.Add(p);
+            
+            PlaylistListView.ItemsSource = _playlists;
+            UpdateEmptyState();
         }
 
         private void UpdateEmptyState()
@@ -76,15 +70,14 @@ namespace ModernIPTVPlayer
 
         private void SaveAllPlaylists()
         {
-            var list = new System.Collections.Generic.List<Playlist>(_playlists);
-            AppSettings.PlaylistsJson = System.Text.Json.JsonSerializer.Serialize(list);
+            AuthService.Instance.SavePlaylists(new System.Collections.Generic.List<Playlist>(_playlists));
             UpdateEmptyState();
         }
 
         private async void AddPlaylistButton_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new PlaylistDialog { XamlRoot = this.XamlRoot };
-            var result = await dialog.ShowAsync();
+            var result = await Services.DialogService.ShowAsync(dialog);
 
             if (result == ContentDialogResult.Primary)
             {
@@ -101,12 +94,11 @@ namespace ModernIPTVPlayer
             if (playlist == null) return;
 
             var dialog = new PlaylistDialog(playlist) { XamlRoot = this.XamlRoot };
-            var result = await dialog.ShowAsync();
+            var result = await Services.DialogService.ShowAsync(dialog);
 
             if (result == ContentDialogResult.Primary)
             {
                 dialog.PrepareResult();
-                // Find and update in collection
                 var index = _playlists.IndexOf(playlist);
                 if (index != -1)
                 {
@@ -132,7 +124,7 @@ namespace ModernIPTVPlayer
                 XamlRoot = this.XamlRoot
             };
 
-            if (await deleteDialog.ShowAsync() == ContentDialogResult.Primary)
+            if (await Services.DialogService.ShowAsync(deleteDialog) == ContentDialogResult.Primary)
             {
                 _playlists.Remove(playlist);
                 SaveAllPlaylists();
@@ -149,77 +141,20 @@ namespace ModernIPTVPlayer
 
         private async Task LoginWithPlaylist(Playlist p)
         {
-            if (p.Type == PlaylistType.M3u)
-            {
-                await AttemptLogin(p.Url, 0, p);
-            }
-            else
-            {
-                string cleanHost = CleanHost(p.Host);
-                string authUrl = $"{cleanHost}/player_api.php?username={p.Username}&password={p.Password}";
-                string playlistUrl = $"{cleanHost}/get.php?username={p.Username}&password={p.Password}&type=m3u_plus&output=ts";
-                await AttemptLogin(authUrl, 1, p, playlistUrl, cleanHost);
-            }
-        }
-
-        private string CleanHost(string rawHost)
-        {
-            if (string.IsNullOrEmpty(rawHost)) return "";
-            string host = rawHost.Trim();
-            if (!host.StartsWith("http")) host = "http://" + host;
-            host = host.TrimEnd('/');
-            if (host.EndsWith("/get.php")) host = host.Substring(0, host.Length - "/get.php".Length);
-            if (host.EndsWith("/player_api.php")) host = host.Substring(0, host.Length - "/player_api.php".Length);
-            return host.TrimEnd('/');
-        }
-
-        private async Task AttemptLogin(string checkUrl, int loginType, Playlist p, string? finalPlaylistUrl = null, string? manualHost = null)
-        {
             if (_isLoading) return;
             _isLoading = true;
             SetLoadingState(true);
 
-            string targetUrl = finalPlaylistUrl ?? checkUrl;
-
             try
             {
-                HttpResponseMessage response = await HttpHelper.Client.GetAsync(checkUrl, HttpCompletionOption.ResponseHeadersRead);
-                
-                if (response.IsSuccessStatusCode)
+                bool success = await AuthService.Instance.LoginWithPlaylistAsync(p);
+                if (success)
                 {
-                    AppSettings.LastLoginType = loginType;
-                    AppSettings.LastPlaylistId = p.Id; // Persist the successful ID
-
-                    string authJson = await response.Content.ReadAsStringAsync();
-                    int maxCons = 1;
-                    try
-                    {
-                        var authData = JsonSerializer.Deserialize<XtreamAuthResponse>(authJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                        if (authData?.UserInfo != null)
-                        {
-                            maxCons = authData.UserInfo.MaxConnections;
-                            p.ExpiryDate = authData.UserInfo.FormattedExpiryDate;
-                            SaveAllPlaylists();
-                            System.Diagnostics.Debug.WriteLine($"[Login] Max Connections: {maxCons}, Expiry: {p.ExpiryDate}");
-                        }
-                    }
-                    catch { /* Fallback to 1 */ }
-
-                    App.CurrentLogin = new LoginParams 
-                    { 
-                        PlaylistUrl = targetUrl,
-                        Host = (loginType == 1) ? manualHost : null,
-                        Username = (loginType == 1) ? p.Username : null,
-                        Password = (loginType == 1) ? p.Password : null,
-                        MaxConnections = maxCons
-                    };
-
                     Frame.Navigate(typeof(LiveTVPage), App.CurrentLogin);
                 }
                 else
                 {
-                    string msg = $"Server Error: {response.StatusCode} ({(int)response.StatusCode})";
-                    await ShowHelpDialog("Giriş Başarısız", msg);
+                    await ShowHelpDialog("Giriş Başarısız", "Sunucuya bağlanılamadı veya hatalı giriş.");
                 }
             }
             catch (Exception ex)
@@ -250,7 +185,7 @@ namespace ModernIPTVPlayer
                 CloseButtonText = "Tamam",
                 XamlRoot = this.XamlRoot
             };
-            await dialog.ShowAsync();
+            await Services.DialogService.ShowAsync(dialog);
         }
     }
 }

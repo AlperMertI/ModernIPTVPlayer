@@ -1010,7 +1010,7 @@ namespace ModernIPTVPlayer
                 dialog.PrimaryButtonText = "Kopyalandı!";
             };
 
-            await dialog.ShowAsync();
+            await Services.DialogService.ShowAsync(dialog);
         }
 
         private void ApplyPrimaryColorToUi()

@@ -8,6 +8,8 @@ using System.Numerics;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Windowing;
+using System.Threading.Tasks;
+using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer
 {
@@ -33,8 +35,19 @@ namespace ModernIPTVPlayer
             string startupPageTag = AppSettings.DefaultStartupPage;
             UpdateTitleBar();
 
-            // Default navigation based on settings
             Type startupPageType = GetPageTypeFromTag(startupPageTag);
+
+            // Perform auto-login then navigate
+            _ = InitializeStartupAsync(startupPageType);
+        }
+
+        private async Task InitializeStartupAsync(Type startupPageType)
+        {
+            // Attempt auto-login if not already logged in
+            if (App.CurrentLogin == null)
+            {
+                await AuthService.Instance.CheckAutoLoginAsync();
+            }
 
             // Navigate initial
             ContentFrame.Navigate(startupPageType, App.CurrentLogin);

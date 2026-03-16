@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Mpv.Core;
 using Mpv.Core.Enums.Client;
@@ -236,10 +236,7 @@ public sealed partial class MpvPlayer : Control
         {
             Player?.Client.SetProperty("display-fps", fps);
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[MPV_ERR] Failed to set display-fps to {fps}: {ex.Message}");
-        }
+        catch { /* Not critical, handle gracefully */ }
     }
 
     public TimeSpan Duration

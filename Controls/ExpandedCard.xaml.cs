@@ -410,9 +410,6 @@ namespace ModernIPTVPlayer.Controls
 </html>";
         }
 
-        // libmpv Prober
-        private StreamProber _prober;
-        private MpvPlayer _proberPlayer;
         private long _loadNonce = 0;
 
         private async void FavButton_Click(object sender, RoutedEventArgs e)
@@ -1018,25 +1015,15 @@ namespace ModernIPTVPlayer.Controls
                 // 3. Probe Network
                 SetProbing(stream, true);
                 Services.CacheLogger.Info(Services.CacheLogger.Category.Probe, "Probing Network (ExpandedCard - libmpv)", url);
-                
-                if (_prober == null)
-                {
-                    _proberPlayer = new MpvPlayer();
-                    ProbeHost.Content = _proberPlayer; // Must be in tree
-                    _prober = new StreamProber(_proberPlayer);
-                }
-
-                var result = await _prober.ProbeAsync(url);
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Probe COMPLETED for {url}. Success: {result.Success}, Res: {result.Res}");
+                var result = await Services.StreamProberService.Instance.ProbeAsync(url);
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Probe COMPLETED for {url}. Success: {result.Success}, Res: {result.Resolution}");
                 
                 if (result.Success)
                 {
-                    Services.ProbeCacheService.Instance.Update(url, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
-                    
-                    // Direct apply (no need to fetch back from cache immediately)
+                    // Direct apply (already saved to cache by service)
                     var data = new Services.ProbeData 
                     { 
-                        Resolution = result.Res, 
+                        Resolution = result.Resolution, 
                         Fps = result.Fps, 
                         Codec = result.Codec, 
                         Bitrate = result.Bitrate, 
@@ -1165,9 +1152,9 @@ namespace ModernIPTVPlayer.Controls
             }
 
             // Codec
-            if (!string.IsNullOrEmpty(codecLabel))
+            if (!string.IsNullOrEmpty(stream.Codec))
             {
-                 AddBadge(codecLabel.ToUpper(), Colors.Orange);
+                AddBadge(stream.Codec, Colors.Orange);
             }
             else
             {
@@ -1179,6 +1166,19 @@ namespace ModernIPTVPlayer.Controls
                     else if (name.Contains("H.264") || name.Contains("X264") || name.Contains("AVC")) 
                         AddBadge("AVC", Colors.Gray);
                  }
+            }
+
+            // Bitrate Badge
+            if (stream is LiveStream liveItem && liveItem.Bitrate > 0)
+            {
+                AddBadge(liveItem.FormattedBitrate, Colors.Orange);
+            }
+            else if (stream.Bitrate > 0)
+            {
+                // General fallback if Bitrate is available on IMediaStream or detected
+                double mbpsValue = stream.Bitrate / 1000000.0;
+                string formattedStr = mbpsValue >= 1.0 ? $"{mbpsValue:F1} Mbps" : $"{stream.Bitrate / 1000} kbps";
+                AddBadge(formattedStr, Colors.Orange);
             }
 
             // 3. HDR / SDR

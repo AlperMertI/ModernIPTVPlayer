@@ -1,15 +1,19 @@
-using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
-
 using ModernIPTVPlayer.Models;
 
 namespace ModernIPTVPlayer
 {
+    public enum LiveStreamStatus
+    {
+        Unknown,
+        Online,
+        Offline,
+        Unstable
+    }
+
     public class LiveStream : INotifyPropertyChanged, IMediaStream
     {
         // IMediaStream Implementation
@@ -70,23 +74,6 @@ namespace ModernIPTVPlayer
         public string SourceBadgeText => "IPTV";
         public bool ShowSourceBadge => true;
         
-        // Helper for XAML Binding
-        public BitmapImage? StreamIcon
-        {
-            get
-            {
-                if (string.IsNullOrEmpty(IconUrl)) return null;
-                try
-                {
-                    return new BitmapImage(new Uri(IconUrl));
-                }
-                catch
-                {
-                    return null;
-                }
-            }
-        }
-
         // ==========================================
         // PROBING METADATA (Dynamic)
         // ==========================================
@@ -116,8 +103,10 @@ namespace ModernIPTVPlayer
         public bool IsHdr
         {
             get => _isHdr;
-            set { _isHdr = value; OnPropertyChanged(); }
+            set { _isHdr = value; OnPropertyChanged(); OnPropertyChanged(nameof(ShowHdrBadge)); OnPropertyChanged(nameof(StatusToolTip)); }
         }
+
+        public bool ShowHdrBadge => IsHdr && ShowTechnicalBadges;
 
         private bool _isProbing = false;
         public bool IsProbing
@@ -134,7 +123,7 @@ namespace ModernIPTVPlayer
             {
                 _isOnline = value;
                 OnPropertyChanged(nameof(IsOnline));
-                OnPropertyChanged(nameof(StatusBrush));
+                OnPropertyChanged(nameof(Status));
                 OnPropertyChanged(nameof(IsOffline));
                 OnPropertyChanged(nameof(StatusToolTip));
                 OnPropertyChanged(nameof(ShowTechnicalBadges));
@@ -150,30 +139,41 @@ namespace ModernIPTVPlayer
             {
                 _bitrate = value;
                 OnPropertyChanged(nameof(Bitrate));
-                OnPropertyChanged(nameof(StatusBrush));
+                OnPropertyChanged(nameof(FormattedBitrate));
+                OnPropertyChanged(nameof(HasBitrate));
+                OnPropertyChanged(nameof(Status));
                 OnPropertyChanged(nameof(IsUnstable));
                 OnPropertyChanged(nameof(StatusToolTip));
             }
         }
 
-        private static readonly Brush StatusRedBrush = new SolidColorBrush(Microsoft.UI.Colors.Red);
-        private static readonly Brush StatusAmberBrush = new SolidColorBrush(Microsoft.UI.Colors.Orange);
-        private static readonly Brush StatusGreenBrush = new SolidColorBrush(Microsoft.UI.Colors.LimeGreen);
-        private static readonly Brush StatusGrayBrush = new SolidColorBrush(Microsoft.UI.Colors.Gray);
+        public bool HasBitrate => !string.IsNullOrEmpty(FormattedBitrate);
 
-        public Brush StatusBrush
+        public string FormattedBitrate
         {
             get
             {
-                if (IsOnline == false) return StatusRedBrush; // Red
+                if (Bitrate <= 0) return "";
+                double mbps = Bitrate / 1000000.0;
+                if (mbps >= 1.0)
+                    return $"{mbps:F1} Mbps";
+                else
+                    return $"{Bitrate / 1000} kbps";
+            }
+        }
+
+        [JsonIgnore]
+        public LiveStreamStatus Status
+        {
+            get
+            {
+                if (IsOnline == false) return LiveStreamStatus.Offline;
                 if (IsOnline == true)
                 {
-                    // Bitrate < 200kbps is extremely likely to be a black screen or static image (FAKE/STALE)
-                    // If Bitrate is 0, we assume it's a Live Stream where bitrate couldn't be calculated yet (GREEN)
-                    if (Bitrate > 0 && Bitrate < 200000) return StatusAmberBrush; // Orange/Yellow
-                    return StatusGreenBrush; // Green
+                    if (Bitrate > 0 && Bitrate < 200000) return LiveStreamStatus.Unstable;
+                    return LiveStreamStatus.Online;
                 }
-                return StatusGrayBrush; // Gray
+                return LiveStreamStatus.Unknown;
             }
         }
 
@@ -198,12 +198,11 @@ namespace ModernIPTVPlayer
                 if (IsOnline == true)
                 {
                     if (IsUnstable) return $"Düşük Akış / Siyah Ekran Şüphesi ({Bitrate / 1000} kbps)";
-                    return $"Yayın Aktif (Çözünürlük: {Resolution}, Bitrate: {Bitrate / 1000} kbps)";
+                    string hdrStr = IsHdr ? " [HDR]" : "";
+                    return $"Yayın Aktif (Çözünürlük: {Resolution}, Bitrate: {Bitrate / 1000} kbps{hdrStr})";
                 }
                 return "Durum Bilinmiyor (Analiz Bekleniyor)";
             }
         }
-
-        public Visibility BoolToVis(bool val) => val ? Visibility.Visible : Visibility.Collapsed;
     }
 }

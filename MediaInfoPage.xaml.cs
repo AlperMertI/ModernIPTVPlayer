@@ -70,8 +70,6 @@ namespace ModernIPTVPlayer
         
         private Models.Metadata.UnifiedMetadata _unifiedMetadata;
         private string _prebufferUrl;
-        private StreamProber _prober;
-        private MpvPlayer _proberPlayer;
         private CancellationTokenSource _probeCts;
         private CancellationTokenSource _prebufferCts;
 
@@ -143,7 +141,6 @@ namespace ModernIPTVPlayer
         }
 
         private bool _isSelectionSyncing = false;
-        private static bool _isDialogShowing = false;
         private bool _isHandoffInProgress = false;
         private DispatcherTimer _slideshowTimer;
         private string _slideshowId;
@@ -5115,17 +5112,16 @@ namespace ModernIPTVPlayer
                         if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
                         _isSourcesFetchInProgress = false; _isCurrentSourcesComplete = true;
 
-                        if (_addonResults.Count == 0 && !_isDialogShowing)
+                        if (_addonResults.Count == 0)
                         {
-                            _isDialogShowing = true;
                             try
                             {
                                 var err = new ContentDialog { Title = "Kaynak Bulunamadı", Content = "Eklentilerinizde bu içerik için uygun bir kaynak bulunamadı.", CloseButtonText = "Tamam", XamlRoot = this.XamlRoot };
-                                await err.ShowAsync();
+                                await Services.DialogService.ShowAsync(err);
                             }
-                            finally
+                            catch (Exception ex)
                             {
-                                _isDialogShowing = false;
+                                System.Diagnostics.Debug.WriteLine($"[Stremio] Dialog Error: {ex.Message}");
                             }
                         }
                     }
@@ -5726,24 +5722,20 @@ namespace ModernIPTVPlayer
                      XamlRoot = this.XamlRoot
                  };
 
-                 if (!_isDialogShowing)
-                 {
-                     _isDialogShowing = true;
-                     try
-                     {
-                         var result = await dialog.ShowAsync();
-                         if (result == ContentDialogResult.Primary)
-                         {
-                             var pkg = new DataPackage();
-                             pkg.SetText(_streamUrl);
-                             Clipboard.SetContent(pkg);
-                         }
-                     }
-                     finally
-                     {
-                         _isDialogShowing = false;
-                     }
-                 }
+                 try
+                  {
+                      var result = await Services.DialogService.ShowAsync(dialog);
+                      if (result == ContentDialogResult.Primary)
+                      {
+                          var pkg = new DataPackage();
+                          pkg.SetText(_streamUrl);
+                          Clipboard.SetContent(pkg);
+                      }
+                  }
+                  catch (Exception ex)
+                  {
+                      System.Diagnostics.Debug.WriteLine($"[Download] Dialog Error: {ex.Message}");
+                  }
              }
              else
              {
@@ -6022,39 +6014,46 @@ namespace ModernIPTVPlayer
                 SetBadgeLoadingState(true);
 
                 // 3. SMART PROBE: Check if existing player is already opening this URL
-                (string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr) result;
+                Services.ProbeResult probeResult;
 
                 if (MediaInfoPlayer != null && _prebufferUrl == url)
                 {
                     Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "SMART PROBE: Reusing prebuffer player", url);
                     // Wait for the active player to get metadata
-                    result = await StreamProber.ExtractProbeDataAsync(MediaInfoPlayer, token);
+                    var extracted = await Services.StreamProberService.ExtractProbeDataAsync(MediaInfoPlayer, token);
+                    probeResult = new Services.ProbeResult
+                    {
+                        Resolution = extracted.Res,
+                        Fps = extracted.Fps,
+                        Codec = extracted.Codec,
+                        Bitrate = extracted.Bitrate,
+                        IsHdr = extracted.IsHdr,
+                        Success = extracted.Success
+                    };
                 }
                 else
                 {
-                    Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "DEDICATED PROBE: Starting prober player", url);
-                    if (_prober == null)
-                    {
-                        _proberPlayer = new MpvPlayer();
-                        ProbeHost.Content = _proberPlayer;
-                        _prober = new StreamProber(_proberPlayer);
-                    }
-                    result = await _prober.ProbeAsync(url, token);
+                    Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "DEDICATED PROBE: Starting prober service", url);
+                    probeResult = await Services.StreamProberService.Instance.ProbeAsync(url, token);
                 }
 
                 if (token.IsCancellationRequested) return;
 
-                if (result.Success)
+                if (probeResult.Success)
                 {
-                    Services.ProbeCacheService.Instance.Update(url, result.Res, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
-                    
+                    // Manual cache update for SMART PROBE if needed
+                    if (MediaInfoPlayer != null && _prebufferUrl == url)
+                    {
+                        Services.ProbeCacheService.Instance.Update(url, probeResult.Resolution, probeResult.Fps, probeResult.Codec, probeResult.Bitrate, probeResult.IsHdr);
+                    }
+
                     var probeData = new Services.ProbeData
                     {
-                        Resolution = result.Res,
-                        Fps = result.Fps,
-                        Codec = result.Codec,
-                        Bitrate = result.Bitrate,
-                        IsHdr = result.IsHdr
+                        Resolution = probeResult.Resolution,
+                        Fps = probeResult.Fps,
+                        Codec = probeResult.Codec,
+                        Bitrate = probeResult.Bitrate,
+                        IsHdr = probeResult.IsHdr
                     };
 
                     DispatcherQueue.TryEnqueue(() =>
@@ -6146,6 +6145,19 @@ namespace ModernIPTVPlayer
                 BadgeCodecContainer.Visibility = Visibility.Collapsed;
             }
 
+            // Bitrate
+            if (result.Bitrate > 0)
+            {
+                double mbps = result.Bitrate / 1000000.0;
+                string formatted = mbps >= 1.0 ? $"{mbps:F1} Mbps" : $"{result.Bitrate / 1000} kbps";
+                if (BadgeBitrateText != null) BadgeBitrateText.Text = formatted;
+                if (BadgeBitrate != null) BadgeBitrate.Visibility = Visibility.Visible;
+            }
+            else if (BadgeBitrate != null)
+            {
+                BadgeBitrate.Visibility = Visibility.Collapsed;
+            }
+
             UpdateTechnicalSectionVisibility(HasVisibleBadges());
 
             // Disable dynamic shimmer adjustment: We are cross-fading, not morphing.
@@ -6160,7 +6172,8 @@ namespace ModernIPTVPlayer
             BadgeRes.Visibility == Visibility.Visible ||
             BadgeHDR.Visibility == Visibility.Visible ||
             BadgeSDR.Visibility == Visibility.Visible ||
-            BadgeCodecContainer.Visibility == Visibility.Visible;
+            BadgeCodecContainer.Visibility == Visibility.Visible ||
+            BadgeBitrate.Visibility == Visibility.Visible;
 
 
         private void AnimateOpacity(UIElement element, double toOpacity, TimeSpan duration)
@@ -7464,4 +7477,5 @@ namespace ModernIPTVPlayer
         }
     }
 }
+
 

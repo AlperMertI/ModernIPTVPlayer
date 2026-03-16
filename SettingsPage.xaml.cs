@@ -56,6 +56,10 @@ namespace ModernIPTVPlayer
             
             UpdateSliderHeaders();
 
+            // Set Worker Count
+            WorkerCountSlider.Value = AppSettings.ProbingWorkerCount;
+            WorkerCountValueText.Text = AppSettings.ProbingWorkerCount.ToString();
+
             // Set Startup Page Selection
             var currentPage = AppSettings.DefaultStartupPage;
             foreach (ComboBoxItem item in StartupPageCombo.Items)
@@ -428,6 +432,17 @@ namespace ModernIPTVPlayer
                 case Models.PlayerProfile.Custom:
                     ProfileDescriptionText.Text = "Özelleştirilmiş ayarlar.";
                     break;
+            }
+        }
+        private void WorkerCountSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+        {
+            if (WorkerCountValueText != null)
+            {
+                WorkerCountValueText.Text = ((int)e.NewValue).ToString();
+            }
+            if (AppSettings.ProbingWorkerCount != (int)e.NewValue)
+            {
+                AppSettings.ProbingWorkerCount = (int)e.NewValue;
             }
         }
     }

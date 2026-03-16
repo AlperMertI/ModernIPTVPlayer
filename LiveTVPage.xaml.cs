@@ -36,9 +36,6 @@ namespace ModernIPTVPlayer
         private DispatcherTimer _clockTimer;
         private List<LiveStream> _recentChannels = new();
 
-        private StreamProber? _prober;
-        private MpvPlayer? _proberPlayer;
-        
         // Auto-Probe Queue
         private ConcurrentQueue<LiveStream> _probingQueue = new();
         private HashSet<string> _queuedUrls = new();
@@ -178,7 +175,7 @@ namespace ModernIPTVPlayer
         {
             base.OnNavigatedTo(e);
 
-            if (App.CurrentLogin == null || string.IsNullOrEmpty(App.CurrentLogin.Host))
+            if (App.CurrentLogin == null || (string.IsNullOrEmpty(App.CurrentLogin.Host) && string.IsNullOrEmpty(App.CurrentLogin.PlaylistUrl)))
             {
                 // NO IPTV LOGIN
                 LoginRequiredPanel.Visibility = Visibility.Visible;
@@ -658,11 +655,13 @@ namespace ModernIPTVPlayer
             // Auto-Probe is now always enabled (Viewport based)
             _canAutoProbe = AppSettings.IsAutoProbeEnabled;
 
-            // Empty State
             EmptyStatePanel.Visibility = resultList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            
-            // Empty State
-            EmptyStatePanel.Visibility = resultList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            // Trigger initial probe for visible items once data is loaded
+            if (resultList.Count > 0)
+            {
+                DispatcherQueue.TryEnqueue(() => QueueVisibleItems());
+            }
         }
 
         private void SelectCategory(LiveCategory category)
@@ -822,15 +821,9 @@ namespace ModernIPTVPlayer
                 _workerCts = new CancellationTokenSource();
             }
 
-            if (_prober == null)
-            {
-                _proberPlayer = new MpvPlayer();
-                ProbeHost.Content = _proberPlayer;
-                _prober = new StreamProber(_proberPlayer);
-            }
-
             // Launch 3 parallel workers
-            int workerCount = 3;
+            // Launch parallel workers based on user setting
+            int workerCount = AppSettings.ProbingWorkerCount;
             var workers = new List<Task>();
             for (int i = 0; i < workerCount; i++)
             {
@@ -902,11 +895,11 @@ namespace ModernIPTVPlayer
                         }
 
                         // Process (This takes ~0.5s - 1.5s)
-                        var result = await _prober.ProbeAsync(item.StreamUrl, ct);
+                        var result = await Services.StreamProberService.Instance.ProbeAsync(item.StreamUrl, ct);
 
                         DispatcherQueue.TryEnqueue(() => 
                         {
-                            item.Resolution = result.Res;
+                            item.Resolution = result.Resolution;
                             item.Fps = result.Fps;
                             item.Codec = result.Codec;
                             item.Bitrate = result.Bitrate;
@@ -941,7 +934,7 @@ namespace ModernIPTVPlayer
                 CloseButtonText = "Tamam", 
                 XamlRoot = this.XamlRoot 
             };
-            await dialog.ShowAsync();
+            await Services.DialogService.ShowAsync(dialog);
         }
 
         private async void RefreshButton_Click(object sender, RoutedEventArgs e)
@@ -971,19 +964,12 @@ namespace ModernIPTVPlayer
             {
                 if (stream.IsProbing) return;
 
-                if (_prober == null)
-                {
-                    _proberPlayer = new MpvPlayer();
-                    ProbeHost.Content = _proberPlayer;
-                    _prober = new StreamProber(_proberPlayer);
-                }
-
                 try
                 {
                     stream.IsProbing = true;
-                    var result = await _prober.ProbeAsync(stream.StreamUrl, force: true);
+                    var result = await Services.StreamProberService.Instance.ProbeAsync(stream.StreamUrl, ct: default);
                     
-                    stream.Resolution = result.Res;
+                    stream.Resolution = result.Resolution;
                     stream.Fps = result.Fps;
                     stream.Codec = result.Codec;
                     stream.Bitrate = result.Bitrate;

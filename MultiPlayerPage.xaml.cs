@@ -91,7 +91,7 @@ namespace ModernIPTVPlayer
         {
             var dialog = new ChannelSelectionDialog();
             dialog.XamlRoot = this.XamlRoot;
-            var result = await dialog.ShowAsync();
+            var result = await Services.DialogService.ShowAsync(dialog);
 
             if (result == ContentDialogResult.Primary && dialog.SelectedStream != null)
             {

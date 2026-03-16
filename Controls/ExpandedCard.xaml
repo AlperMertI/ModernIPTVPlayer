@@ -289,9 +289,5 @@
              </Grid.Background>
         </Grid>
 
-        <!-- Hidden Probe Host -->
-        <Grid Width="0" Height="0" Opacity="0" IsHitTestVisible="False">
-            <ContentControl x:Name="ProbeHost"/>
-        </Grid>
     </Grid>
 </UserControl>

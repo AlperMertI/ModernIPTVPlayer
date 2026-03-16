@@ -461,7 +461,10 @@
                                    <TextBlock Text="SDR" FontSize="11" Foreground="#CCC"/>
                                </Border>
                                <Border x:Name="BadgeCodecContainer" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
-                                   <TextBlock x:Name="BadgeCodec" Text="HEVC" FontSize="11" Foreground="#CCC"/>
+                                   <TextBlock x:Name="BadgeCodec" Text="HEVC" FontSize="11" Foreground="#CCC" VerticalAlignment="Center"/>
+                               </Border>
+                               <Border x:Name="BadgeBitrate" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                   <TextBlock x:Name="BadgeBitrateText" FontSize="11" Foreground="#CCC" VerticalAlignment="Center"/>
                                </Border>
                            </StackPanel>
 
@@ -1509,11 +1512,6 @@
                 <ProgressRing x:Name="TrailerLoadingRing" IsActive="True" Width="48" Height="48" Foreground="White" 
                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Grid>
-    </Grid>
-
-    <!-- Hidden Probe Host -->
-    <Grid Width="0" Height="0" Opacity="0" IsHitTestVisible="False">
-        <ContentControl x:Name="ProbeHost"/>
     </Grid>
 </Grid>
 </Page>
