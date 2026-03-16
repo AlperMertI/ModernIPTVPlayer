@@ -439,16 +439,22 @@ namespace ModernIPTVPlayer
                 bool isLikelyLive = (!isSeekable) 
                                     || (isMpegTs && duration > 0 && duration < 600); 
 
-        // Track Progress (VOD only)
-        if (!isLikelyLive && _navArgs != null && position > 1 && duration > 0)
-        {
-             string id = !string.IsNullOrEmpty(_navArgs.Id) ? _navArgs.Id : _navArgs.Url;
-             
-             // [REFINED] Do NOT capture aid/sid here. 
-             // We only save these on EXPLICIT user selection to allow global settings (slang/alang) 
-             // to take precedence unless a manual override exists.
-             HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, null, null, null, _navArgs.PosterUrl, _navArgs.Type, _navArgs.BackdropUrl);
-        }
+                // Track Progress (VOD & Live)
+                if (_navArgs != null && position > 1)
+                {
+                    string id = !string.IsNullOrEmpty(_navArgs.Id) ? _navArgs.Id : _navArgs.Url;
+                    
+                    if (!isLikelyLive && duration > 0)
+                    {
+                        // VOD Progress
+                        HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, position, duration, _navArgs.ParentId, _navArgs.SeriesName, _navArgs.Season, _navArgs.Episode, null, null, null, _navArgs.PosterUrl, _navArgs.Type, _navArgs.BackdropUrl);
+                    }
+                    else if (isLikelyLive)
+                    {
+                        // Live Progress (just timestamp and metadata)
+                        HistoryManager.Instance.UpdateProgress(id, _navArgs.Title, _navArgs.Url, 0, 0, null, null, 0, 0, null, null, null, _navArgs.LogoUrl, "live");
+                    }
+                }
 
                 if (!isLikelyLive)
                 {

@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using Windows.System;
 using Microsoft.UI.Xaml.Media.Imaging;
 using MpvWinUI;
+using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer
 {
@@ -34,7 +35,7 @@ namespace ModernIPTVPlayer
         
         // Clock & Recents
         private DispatcherTimer _clockTimer;
-        private List<LiveStream> _recentChannels = new();
+        private System.Collections.ObjectModel.ObservableCollection<LiveStream> _recentChannels = new();
 
         // Auto-Probe Queue
         private ConcurrentQueue<LiveStream> _probingQueue = new();
@@ -174,67 +175,57 @@ namespace ModernIPTVPlayer
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
             base.OnNavigatedTo(e);
+            
+            // 1. Initialize History FIRST
+            await HistoryManager.Instance.InitializeAsync();
+            LoadRecentChannels();
 
-            if (App.CurrentLogin == null || (string.IsNullOrEmpty(App.CurrentLogin.Host) && string.IsNullOrEmpty(App.CurrentLogin.PlaylistUrl)))
-            {
-                // NO IPTV LOGIN
-                LoginRequiredPanel.Visibility = Visibility.Visible;
-                HeroSection.Visibility = Visibility.Collapsed;
-                MainLoadingRing.Visibility = Visibility.Collapsed;
-                SidebarLoadingRing.Visibility = Visibility.Collapsed;
-                EmptyStatePanel.Visibility = Visibility.Collapsed; // Hide search empty state too
-                return;
-            }
-            else
-            {
-                LoginRequiredPanel.Visibility = Visibility.Collapsed;
-                HeroSection.Visibility = Visibility.Visible;
-            }
-
+            // 2. Handle Login Parameters
             if (e.Parameter is LoginParams loginParams)
             {
-                // Detect if the playlist has changed
                 if (_loginInfo != null && _loginInfo.PlaylistUrl != loginParams.PlaylistUrl)
                 {
-                    System.Diagnostics.Debug.WriteLine("New playlist detected, clearing cache...");
                     _allCategories.Clear();
                     _allChannels.Clear();
                     CategoryListView.ItemsSource = null;
                     ChannelGridView.ItemsSource = null;
                 }
-                
                 _loginInfo = loginParams;
             }
-
-            if (_loginInfo != null)
+            else
             {
-                // Reset CTS if it was cancelled by previous navigation
-                if (_workerCts.IsCancellationRequested)
-                {
-                    _workerCts.Dispose();
-                    _workerCts = new CancellationTokenSource();
-                }
+                _loginInfo = App.CurrentLogin;
+            }
 
-                // Ensure worker is running
-                _ = StartProbingWorker();
+            if (_loginInfo == null)
+            {
+                LoginRequiredPanel.Visibility = Visibility.Visible;
+                HeroSection.Visibility = Visibility.Collapsed;
+                return;
+            }
+            else
+            {
+                LoginRequiredPanel.Visibility = Visibility.Collapsed;
+            }
 
-                if (_allCategories.Count > 0) 
-                {
-                    // Re-trigger probing for visible items when coming back
-                    // TriggerVisibleProbe(); // REMOVED: Managed by view updates
-                    return; 
-                }
+            // 3. Worker Lifecycle
+            if (_workerCts.IsCancellationRequested)
+            {
+                _workerCts.Dispose();
+                _workerCts = new CancellationTokenSource();
+            }
+            _ = StartProbingWorker();
 
-                if (!string.IsNullOrEmpty(_loginInfo.Host) && 
-                    !string.IsNullOrEmpty(_loginInfo.Username) && 
-                    !string.IsNullOrEmpty(_loginInfo.Password))
-                {
-                    await LoadXtreamCategoriesAsync();
-                }
-                else
-                {
-                    await LoadM3uAsync(_loginInfo.PlaylistUrl);
-                }
+            // 4. Data Loading
+            if (_allCategories.Count > 0) return;
+
+            if (!string.IsNullOrEmpty(_loginInfo.Host) && !string.IsNullOrEmpty(_loginInfo.Username))
+            {
+                await LoadXtreamCategoriesAsync();
+            }
+            else if (!string.IsNullOrEmpty(_loginInfo.PlaylistUrl))
+            {
+                await LoadM3uAsync(_loginInfo.PlaylistUrl);
             }
         }
 
@@ -315,7 +306,7 @@ namespace ModernIPTVPlayer
                     CategoryListView.ScrollIntoView(targetCat);
                     SelectCategory(targetCat);
                     
-                    LoadDummyRecents();
+                    LoadRecentChannels();
 
                     SidebarLoadingRing.IsActive = false;
                     MainLoadingRing.IsActive = false;
@@ -388,7 +379,7 @@ namespace ModernIPTVPlayer
                         CategoryListView.ScrollIntoView(targetCat);
                         SelectCategory(targetCat);
 
-                        LoadDummyRecents();
+                        LoadRecentChannels();
                     }
                 }
             }
@@ -556,6 +547,13 @@ namespace ModernIPTVPlayer
 
         private void UpdateChannelList()
         {
+            // Update HeroSection visibility based on search
+            if (HeroSection != null)
+            {
+                bool isSearching = !string.IsNullOrWhiteSpace(_searchQuery);
+                HeroSection.Visibility = (_recentChannels.Count > 0 && !isSearching) ? Visibility.Visible : Visibility.Collapsed;
+            }
+
             if (_selectedCategory == null) return;
             
             // Clear Queue on View Change to prioritize new items
@@ -701,7 +699,7 @@ namespace ModernIPTVPlayer
         {
             if (e.ClickedItem is LiveStream stream)
             {
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name, LogoUrl: stream.IconUrl, Type: "live"));
             }
         }
 
@@ -746,24 +744,36 @@ namespace ModernIPTVPlayer
             QueueVisibleItems();
         }
 
-        private void LoadDummyRecents()
+        private void LoadRecentChannels()
         {
-            // In a real app, this would load from AppSettings
-            // For now, we take random 5 channels from _allChannels to populate the "Hero"
-            if (_allChannels.Count > 0)
+            var historyItems = HistoryManager.Instance.GetRecentLiveChannels(10);
+            
+            _recentChannels.Clear();
+            foreach (var item in historyItems)
             {
-                _recentChannels = _allChannels.Take(5).ToList();
-                RecentListView.ItemsSource = _recentChannels;
-                
-                // Background is now handled via static XAML Gradient
+                _recentChannels.Add(new LiveStream
+                {
+                    Name = item.Title,
+                    StreamUrl = item.StreamUrl,
+                    IconUrl = item.PosterUrl
+                });
             }
+
+            RecentListView.ItemsSource = _recentChannels;
+            
+            bool hasSearchResults = !string.IsNullOrWhiteSpace(_searchQuery);
+            HeroSection.Visibility = (_recentChannels.Count > 0 && !hasSearchResults) ? Visibility.Visible : Visibility.Collapsed;
+            
+            System.Diagnostics.Debug.WriteLine($"[LiveTV] Loaded {_recentChannels.Count} recent channels. Search active: {hasSearchResults}");
         }
+
+        private void LoadDummyRecents() => LoadRecentChannels(); // Keeping the name for compatibility if needed elsewhere
 
         private void RecentListView_ItemClick(object sender, ItemClickEventArgs e)
         {
             if (e.ClickedItem is LiveStream stream)
             {
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name, LogoUrl: stream.IconUrl, Type: "live"));
             }
         }
 

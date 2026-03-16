@@ -167,6 +167,12 @@ namespace ModernIPTVPlayer
             ShowStatus("Analiz (Probe) verileri temizlendi.");
         }
 
+        private async void BtnClearHistory_Click(object sender, RoutedEventArgs e)
+        {
+            await HistoryManager.Instance.ClearAsync();
+            ShowStatus("İzleme geçmişi temizlendi.");
+        }
+
         private void ShowStatus(string msg)
         {
             TxtStatus.Text = msg;

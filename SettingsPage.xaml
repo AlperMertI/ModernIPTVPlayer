@@ -80,6 +80,15 @@
                                     </StackPanel>
                                 </Button.Content>
                             </Button>
+
+                            <Button x:Name="BtnClearHistory" Click="BtnClearHistory_Click">
+                                <Button.Content>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon Glyph="&#xE81C;"/>
+                                        <TextBlock Text="İzleme Geçmişini Temizle"/>
+                                    </StackPanel>
+                                </Button.Content>
+                            </Button>
                             
                             <Button x:Name="BtnRefreshNow" Style="{StaticResource AccentButtonStyle}" Click="BtnRefreshNow_Click">
                                  <Button.Content>

@@ -127,8 +127,10 @@ namespace ModernIPTVPlayer
             
             // If it's a progress update, duration must be valid.
             // If it's a metadata-only update (poster/backdrop/type), we allow dur < 1.
+            // If it's a "live" type, we allow dur < 1.
             bool isMetadataUpdate = !string.IsNullOrEmpty(posterUrl) || !string.IsNullOrEmpty(backdropUrl) || !string.IsNullOrEmpty(type);
-            if (!isMetadataUpdate && dur < 1) return;
+            bool isLive = type == "live";
+            if (!isMetadataUpdate && !isLive && dur < 1) return;
 
             // Mark finished if > 95%
             bool finished = (pos / dur) > 0.95;
@@ -295,6 +297,26 @@ namespace ModernIPTVPlayer
 
                 return results.Take(15).ToList();
             }
+        }
+
+        public List<HistoryItem> GetRecentLiveChannels(int count = 10)
+        {
+            lock (_lock)
+            {
+                return _history.Values
+                    .Where(x => x.Type == "live")
+                    .OrderByDescending(x => x.Timestamp)
+                    .Take(count)
+                    .ToList();
+            }
+        }
+        public async Task ClearAsync()
+        {
+            lock (_lock)
+            {
+                _history.Clear();
+            }
+            await SaveAsync();
         }
     }
 }

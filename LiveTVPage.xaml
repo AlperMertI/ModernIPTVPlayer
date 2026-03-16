@@ -245,7 +245,7 @@
             </Grid>
 
             <!-- 2. HERO AREA (Recently Watched) -->
-            <Grid Grid.Row="1" x:Name="HeroSection" Height="170" Margin="0,0,0,12" Visibility="Visible">
+            <Grid Grid.Row="1" x:Name="HeroSection" Height="190" Margin="0,0,0,12" Visibility="Collapsed">
                 <!-- Cleaner, Consistent Background (Transparent) -->
                 <Grid.Background>
                     <SolidColorBrush Color="Transparent"/>
@@ -271,19 +271,25 @@
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="local:LiveStream">
-                                <Grid Width="160" Height="140" CornerRadius="8" 
-                                      Background="Transparent" 
-                                      BorderBrush="#33FFFFFF" BorderThickness="1"
-                                      Padding="8">
+                                <Grid Width="170" Height="120" CornerRadius="12" 
+                                      Background="#1AFFFFFF" 
+                                      BorderBrush="#1FFFFFFF" BorderThickness="1"
+                                      Padding="12">
                                     <Grid.RowDefinitions>
                                         <RowDefinition Height="*"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                                    <Image Source="{x:Bind IconUrl}" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    
+                                    <Viewbox VerticalAlignment="Center" HorizontalAlignment="Center">
+                                        <Image Source="{x:Bind IconUrl}" 
+                                               Stretch="Uniform" 
+                                               MaxHeight="60"/>
+                                    </Viewbox>
+                                           
                                     <TextBlock Grid.Row="1" Text="{x:Bind Name}" 
-                                               FontSize="13" Foreground="White" 
-                                               MaxLines="2" TextTrimming="CharacterEllipsis" 
-                                               HorizontalAlignment="Center" TextAlignment="Center" Margin="0,8,0,0"/>
+                                               FontSize="13" Foreground="White" FontWeight="Medium"
+                                               MaxLines="1" TextTrimming="CharacterEllipsis" 
+                                               HorizontalAlignment="Center" Margin="0,8,0,0"/>
                                 </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>
