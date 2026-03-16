@@ -132,8 +132,9 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Margin="12,20,12,12">
-                        <TextBox x:Name="SearchBox" PlaceholderText="Ara..." TextChanged="SearchBox_TextChanged" CornerRadius="6" BorderThickness="0" Background="#1AFFFFFF" Foreground="White" Padding="10,8" PlaceholderForeground="#99FFFFFF"/>
+                    <Grid Grid.Row="0" Margin="12,10,12,12">
+                        <TextBlock Text="Kategoriler" FontSize="18" FontWeight="SemiBold" Foreground="White" VerticalAlignment="Top" Margin="4,0,0,0"/>
+                        <TextBox x:Name="SearchBox" PlaceholderText="Ara..." TextChanged="SearchBox_TextChanged" CornerRadius="6" BorderThickness="0" Background="#1AFFFFFF" Foreground="White" Padding="10,8" PlaceholderForeground="#99FFFFFF" Margin="0,38,0,0"/>
                     </Grid>
 
                     <ListView x:Name="CategoryListView" Grid.Row="1" SelectionMode="Single" ItemClick="CategoryListView_ItemClick" IsItemClickEnabled="True" Padding="8,0" ItemContainerStyle="{StaticResource CategoryItemStyle}">
@@ -181,10 +182,15 @@
                                        FontSize="16" FontWeight="Normal" Foreground="#99FFFFFF" 
                                        VerticalAlignment="Center" Margin="0,0,12,0"/>
                             
-                            <AppBarButton Icon="Refresh" Width="40" Height="40" ToolTipService.ToolTip="Yenile" Click="RefreshButton_Click"/>
+                            <Button Style="{StaticResource DefaultButtonStyle}" Background="Transparent" BorderThickness="0" Width="40" Height="40" CornerRadius="20" ToolTipService.ToolTip="Yenile" Click="RefreshButton_Click">
+                                <FontIcon Glyph="&#xE72C;" FontSize="16" Foreground="White"/>
+                            </Button>
                             
-                            <AppBarButton Icon="Filter" Width="40" Height="40" ToolTipService.ToolTip="Filtrele">
-                                <AppBarButton.Flyout>
+                            <Button Style="{StaticResource DefaultButtonStyle}" Background="Transparent" BorderThickness="0" Width="40" Height="40" CornerRadius="20" ToolTipService.ToolTip="Filtrele">
+                                <Button.Content>
+                                    <FontIcon Glyph="&#xE71C;" FontSize="16" Foreground="White"/>
+                                </Button.Content>
+                                <Button.Flyout>
                                     <Flyout>
                                         <StackPanel Width="280" Spacing="20" Padding="8">
                                             <TextBlock Text="Gelişmiş Filtreleme" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4"/>
@@ -236,10 +242,72 @@
                                             </Button>
                                         </StackPanel>
                                     </Flyout>
-                                </AppBarButton.Flyout>
-                            </AppBarButton>
+                                </Button.Flyout>
+                            </Button>
 
-                            <AppBarButton Icon="Sort" Width="40" Height="40" ToolTipService.ToolTip="Sırala" Click="SortButton_Click"/>
+                            <Button Style="{StaticResource DefaultButtonStyle}" Background="Transparent" BorderThickness="0" Width="40" Height="40" CornerRadius="20" ToolTipService.ToolTip="Sırala">
+                                <Button.Content>
+                                    <FontIcon Glyph="&#xE8CB;" FontSize="16" Foreground="White"/>
+                                </Button.Content>
+                                <Button.Flyout>
+                                    <Flyout>
+                                        <StackPanel Width="260" Spacing="15" Padding="4">
+                                            <TextBlock Text="Sıralama Seçenekleri" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,4"/>
+                                            
+                                            <StackPanel Spacing="4">
+                                                <Button Click="SortOption_Click" Tag="Name" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="12,8" Background="Transparent" BorderThickness="0" CornerRadius="4">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" HorizontalAlignment="Stretch">
+                                                        <StackPanel Orientation="Horizontal" Spacing="12">
+                                                            <FontIcon Glyph="&#xE8CB;" FontSize="16"/>
+                                                            <TextBlock Text="İsim" FontSize="14"/>
+                                                        </StackPanel>
+                                                        <FontIcon x:Name="SortIcon_Name" Glyph="&#xE70E;" FontSize="12" Grid.Column="2" Foreground="#99FFFFFF" Visibility="Collapsed"/>
+                                                    </Grid>
+                                                </Button>
+
+                                                <Button Click="SortOption_Click" Tag="Quality" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="12,8" Background="Transparent" BorderThickness="0" CornerRadius="4">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" HorizontalAlignment="Stretch">
+                                                        <StackPanel Orientation="Horizontal" Spacing="12">
+                                                            <FontIcon Glyph="&#xE9D9;" FontSize="16"/>
+                                                            <TextBlock Text="Kalite" FontSize="14"/>
+                                                        </StackPanel>
+                                                        <FontIcon x:Name="SortIcon_Quality" Glyph="&#xE70E;" FontSize="12" Grid.Column="2" Foreground="#99FFFFFF" Visibility="Collapsed"/>
+                                                    </Grid>
+                                                </Button>
+
+                                                <Button Click="SortOption_Click" Tag="OnlineFirst" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="12,8" Background="Transparent" BorderThickness="0" CornerRadius="4">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" HorizontalAlignment="Stretch">
+                                                        <StackPanel Orientation="Horizontal" Spacing="12">
+                                                            <FontIcon Glyph="&#xE9F5;" FontSize="16"/>
+                                                            <TextBlock Text="Yayın Durumu" FontSize="14"/>
+                                                        </StackPanel>
+                                                        <FontIcon x:Name="SortIcon_OnlineFirst" Glyph="&#xE70E;" FontSize="12" Grid.Column="2" Foreground="#99FFFFFF" Visibility="Collapsed"/>
+                                                    </Grid>
+                                                </Button>
+
+                                                <Button Click="SortOption_Click" Tag="Recent" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="12,8" Background="Transparent" BorderThickness="0" CornerRadius="4">
+                                                    <Grid ColumnDefinitions="Auto,*,Auto" HorizontalAlignment="Stretch">
+                                                        <StackPanel Orientation="Horizontal" Spacing="12">
+                                                            <FontIcon Glyph="&#xE81C;" FontSize="16"/>
+                                                            <TextBlock Text="Son İzlenenler" FontSize="14"/>
+                                                        </StackPanel>
+                                                        <FontIcon x:Name="SortIcon_Recent" Glyph="&#xE70E;" FontSize="12" Grid.Column="2" Foreground="#99FFFFFF" Visibility="Collapsed"/>
+                                                    </Grid>
+                                                </Button>
+
+                                                <Border Height="1" Background="#1FFFFFFF" Margin="0,4"/>
+
+                                                <Button Click="SortOption_Click" Tag="Default" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch" Padding="12,8" Background="Transparent" BorderThickness="0" CornerRadius="4">
+                                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                                        <FontIcon Glyph="&#xE8D3;" FontSize="16"/>
+                                                        <TextBlock Text="Varsayılana Dön" FontSize="14"/>
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Flyout>
+                                </Button.Flyout>
+                            </Button>
                             <controls:DownloadStatusButton />
                         </StackPanel>
             </Grid>

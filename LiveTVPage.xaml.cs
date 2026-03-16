@@ -16,12 +16,23 @@ using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer
 {
+    public enum LiveSortMode
+    {
+        Default,
+        Name,
+        Quality,
+        OnlineFirst,
+        Recent
+    }
+
     public sealed partial class LiveTVPage : Page
     {
         private LoginParams? _loginInfo;
         private HttpClient _httpClient;
 
         // Data Storage
+        private LiveSortMode _currentSortMode = LiveSortMode.Default;
+        private bool _isSortDescending = false;
         private List<LiveCategory> _allCategories = new();
         private List<LiveStream> _allChannels = new();
         
@@ -625,7 +636,6 @@ namespace ModernIPTVPlayer
             {
                 source = source.Where(c => {
                     if (string.IsNullOrEmpty(c.Fps)) return false;
-                    // Remove " fps" suffix and parse safely
                     string cleanFps = c.Fps.Replace(" fps", "", StringComparison.OrdinalIgnoreCase).Trim();
                     if (double.TryParse(cleanFps, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fpsValue)) 
                         return fpsValue >= 49.0;
@@ -633,32 +643,214 @@ namespace ModernIPTVPlayer
                 });
             }
 
-            var resultList = source.ToList();
-
-            // Apply Sorting
-            if (_isSortedAscending)
-            {
-                resultList = resultList.OrderBy(c => c.Name).ToList();
-            }
+            // ==========================================
+            // APPLY SORTING
+            // ==========================================
+            var finalResult = ApplySorting(source).ToList();
 
             // Setup Header
             HeaderTitle.Text = !string.IsNullOrWhiteSpace(_searchQuery) 
                 ? (isGlobal ? $"'{SearchBox.Text}' için Sonuçlar" : $"{_selectedCategory.CategoryName} içinde '{SearchBox.Text}'")
                 : _selectedCategory.CategoryName;
                 
-            HeaderCount.Text = $"({resultList.Count})";
+            HeaderCount.Text = $"({finalResult.Count})";
 
-            ChannelGridView.ItemsSource = resultList;
+            ChannelGridView.ItemsSource = finalResult;
             
             // Auto-Probe is now always enabled (Viewport based)
             _canAutoProbe = AppSettings.IsAutoProbeEnabled;
 
-            EmptyStatePanel.Visibility = resultList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            EmptyStatePanel.Visibility = finalResult.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
             // Trigger initial probe for visible items once data is loaded
-            if (resultList.Count > 0)
+            if (finalResult.Count > 0)
             {
                 DispatcherQueue.TryEnqueue(() => QueueVisibleItems());
+            }
+        }
+
+        private IEnumerable<LiveStream> ApplySorting(IEnumerable<LiveStream> source)
+        {
+            if (_currentSortMode == LiveSortMode.Default) return source;
+
+            switch (_currentSortMode)
+            {
+                case LiveSortMode.Name:
+                    return _isSortDescending ? source.OrderByDescending(c => c.Name) : source.OrderBy(c => c.Name);
+                
+                case LiveSortMode.Quality:
+                    // Ascending (Up Arrow) = Lowest First | Descending (Down Arrow) = Highest First
+                    if (_isSortDescending) // Highest to Lowest
+                    {
+                        return source.OrderByDescending(GetResolutionValue)
+                                     .ThenByDescending(GetBitrateValue) // Added bitrate as secondary
+                                     .ThenByDescending(GetFpsValue)
+                                     .ThenByDescending(GetCodecWeight)
+                                     .ThenByDescending(c => c.IsHdr)
+                                     .ThenBy(c => c.Name);
+                    }
+                    else // Lowest to Highest (BUT we still want unprobed/0 at the bottom for better UX)
+                    {
+                        return source.OrderBy(c => GetResolutionValue(c) == 0 ? int.MaxValue : GetResolutionValue(c))
+                                     .ThenBy(GetResolutionValue)
+                                     .ThenBy(GetBitrateValue)
+                                     .ThenBy(GetFpsValue)
+                                     .ThenBy(GetCodecWeight)
+                                     .ThenBy(c => c.IsHdr)
+                                     .ThenBy(c => c.Name);
+                    }
+
+                case LiveSortMode.OnlineFirst:
+                    // Descending = Healthy Online First | Ascending = Offline First
+                    if (_isSortDescending)
+                    {
+                        return source.OrderByDescending(GetStatusWeight)
+                                     .ThenBy(c => c.Name);
+                    }
+                    else
+                    {
+                        return source.OrderBy(GetStatusWeight)
+                                     .ThenBy(c => c.Name);
+                    }
+
+                case LiveSortMode.Recent:
+                    var recentUrls = _recentChannels.Select(r => r.StreamUrl).ToList();
+                    // Descending = Most Recent First
+                    if (_isSortDescending)
+                    {
+                        return source.OrderByDescending(c => recentUrls.Contains(c.StreamUrl))
+                                     .ThenBy(c => {
+                                         int idx = recentUrls.IndexOf(c.StreamUrl);
+                                         return idx == -1 ? int.MaxValue : idx;
+                                     })
+                                     .ThenBy(c => c.Name);
+                    }
+                    else
+                    {
+                        return source.OrderBy(c => recentUrls.Contains(c.StreamUrl))
+                                     .ThenByDescending(c => {
+                                         int idx = recentUrls.IndexOf(c.StreamUrl);
+                                         return idx == -1 ? int.MinValue : idx;
+                                     })
+                                     .ThenBy(c => c.Name);
+                    }
+
+                default:
+                    return source;
+            }
+        }
+
+        private int GetResolutionValue(LiveStream c)
+        {
+            if (string.IsNullOrEmpty(c.Resolution)) return 0;
+            
+            // Priority: Probe results (contains 'x') or explicit keywords
+            string res = c.Resolution.ToUpperInvariant();
+            
+            // If it's a raw resolution string like "3840x2160", try to get the height
+            if (res.Contains("X"))
+            {
+                var parts = res.Split('X');
+                if (parts.Length >= 2 && int.TryParse(parts[1].Trim(), out int h))
+                {
+                    // Return height as the value for precise sorting (e.g. 1080, 720)
+                    return h;
+                }
+            }
+
+            // Fallback to keyword matching
+            if (res.Contains("2160") || res.Contains("4K") || res.Contains("UHD")) return 2160;
+            if (res.Contains("1440") || res.Contains("QHD") || res.Contains("2K")) return 1440;
+            if (res.Contains("1080") || res.Contains("FHD")) return 1080;
+            if (res.Contains("720") || res.Contains("HD")) return 720;
+            if (res.Contains("576")) return 576;
+            if (res.Contains("480") || res.Contains("SD")) return 480;
+            
+            return 1;
+        }
+
+        private long GetBitrateValue(LiveStream c) => c.Bitrate;
+
+        private double GetFpsValue(LiveStream c)
+        {
+            if (string.IsNullOrEmpty(c.Fps)) return 0.0;
+            string cleanFps = c.Fps.Replace(" fps", "", StringComparison.OrdinalIgnoreCase).Trim();
+            if (double.TryParse(cleanFps, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double val)) return val;
+            return 0.0;
+        }
+
+        private int GetCodecWeight(LiveStream c)
+        {
+            if (string.IsNullOrEmpty(c.Codec)) return 0;
+            string lower = c.Codec.ToLowerInvariant();
+            if (lower.Contains("hevc") || lower.Contains("h265") || lower.Contains("av1") || lower.Contains("vp9")) return 2;
+            if (lower.Contains("h264") || lower.Contains("avc")) return 1;
+            return 0;
+        }
+
+        private int GetStatusWeight(LiveStream c)
+        {
+            if (c.IsOnline == true)
+            {
+                return c.IsUnstable ? 2 : 3; // Healthy = 3, Unstable (Slo/Fake) = 2
+            }
+            if (c.IsProbing) return 1;
+            return 0; // Offline
+        }
+
+        private void SortOption_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.Tag != null)
+            {
+                if (Enum.TryParse<LiveSortMode>(btn.Tag.ToString(), out var mode))
+                {
+                    if (mode == LiveSortMode.Default)
+                    {
+                        _currentSortMode = LiveSortMode.Default;
+                        _isSortDescending = false;
+                    }
+                    else if (_currentSortMode == mode)
+                    {
+                        // Toggle direction
+                        _isSortDescending = !_isSortDescending;
+                    }
+                    else
+                    {
+                        // Change mode, default to Descending (Highest First/Most Recent)
+                        _currentSortMode = mode;
+                        _isSortDescending = true;
+                    }
+
+                    UpdateSortIcons();
+                    UpdateChannelList();
+                }
+            }
+        }
+
+        private void UpdateSortIcons()
+        {
+            // Reset all
+            SortIcon_Name.Visibility = Visibility.Collapsed;
+            SortIcon_Quality.Visibility = Visibility.Collapsed;
+            SortIcon_OnlineFirst.Visibility = Visibility.Collapsed;
+            SortIcon_Recent.Visibility = Visibility.Collapsed;
+
+            if (_currentSortMode == LiveSortMode.Default) return;
+
+            // Pick icon to show
+            FontIcon target = _currentSortMode switch
+            {
+                LiveSortMode.Name => SortIcon_Name,
+                LiveSortMode.Quality => SortIcon_Quality,
+                LiveSortMode.OnlineFirst => SortIcon_OnlineFirst,
+                LiveSortMode.Recent => SortIcon_Recent,
+                _ => null
+            };
+
+            if (target != null)
+            {
+                target.Visibility = Visibility.Visible;
+                target.Glyph = _isSortDescending ? "\uE70D" : "\uE70E"; // Down / Up arrow
             }
         }
 
@@ -993,11 +1185,6 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void SortButton_Click(object sender, RoutedEventArgs e)
-        {
-            _isSortedAscending = !_isSortedAscending;
-            UpdateChannelList();
-        }
 
         private void ToggleSidebar_Click(object sender, RoutedEventArgs e)
         {

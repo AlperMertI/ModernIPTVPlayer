@@ -141,7 +141,7 @@ namespace ModernIPTVPlayer
             if (!_isSidebarVisible) return;
             _isSidebarVisible = false;
             
-            _sidebarHideTimer.Stop();
+            _sidebarHideTimer?.Stop();
 
             var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
             var anim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
@@ -161,7 +161,7 @@ namespace ModernIPTVPlayer
             if (_isSidebarVisible) return;
             _isSidebarVisible = true;
             
-            _sidebarHideTimer.Stop(); // Wait for interaction before restarting text
+            _sidebarHideTimer?.Stop(); // Wait for interaction before restarting text
             
             var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
             var anim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
@@ -183,7 +183,7 @@ namespace ModernIPTVPlayer
             if (_isTitleBarVisible) return;
             _isTitleBarVisible = true;
             AppTitleBar.IsHitTestVisible = true;
-            _titleBarHideTimer.Stop();
+            _titleBarHideTimer?.Stop();
 
             // Show System Buttons
             if (AppWindowTitleBar.IsCustomizationSupported())
@@ -220,7 +220,7 @@ namespace ModernIPTVPlayer
             if (!_isTitleBarVisible) return;
             _isTitleBarVisible = false;
             AppTitleBar.IsHitTestVisible = false;
-            _titleBarHideTimer.Stop();
+            _titleBarHideTimer?.Stop();
 
             // Hide System Buttons
             if (AppWindowTitleBar.IsCustomizationSupported())
