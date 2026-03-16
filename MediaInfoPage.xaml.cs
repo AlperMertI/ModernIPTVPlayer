@@ -84,6 +84,18 @@ namespace ModernIPTVPlayer
         private const double TrailerDefaultHeight = 562;
         private CancellationTokenSource _trailerCts;
 
+        // Page State Machine for Layout-Aware Loading
+        private enum PageLoadState
+        {
+            Initial,      // Page created, no layout yet
+            LayoutReady,  // First SizeChanged triggered
+            Loading,     // Data loading (shimmer shown)
+            Revealing,   // Data arrived, animation starting
+            Ready        // Everything complete
+        }
+        private PageLoadState _pageLoadState = PageLoadState.Initial;
+        private IMediaStream _pendingLoadItem;  // Item waiting for layout
+
         // Mouse Drag-to-Scroll State
         private bool _isMainDragging = false;
         private Windows.Foundation.Point _lastMainPointerPos;
@@ -96,6 +108,13 @@ namespace ModernIPTVPlayer
         private double _lastReportedHeight;
         private double _lastAppliedWidth;
         private double _lastAppliedHeight;
+        // Layout Perfection Constants
+        private const double LayoutAdaptiveThreshold = 800.0;
+        private const double ContentGridPaddingBottom = 30.0;
+        private const double InfoInnerMarginBottom = 25.0;
+        private const double LayoutBufferBottom = 5.0;
+        private const double TotalBottomGap = ContentGridPaddingBottom + InfoInnerMarginBottom + LayoutBufferBottom;
+
         private SpringVector3NaturalMotionAnimation _driftAnimation;
 
         public MediaInfoPage()
@@ -111,14 +130,7 @@ namespace ModernIPTVPlayer
             // Manual Layout Management
             this.SizeChanged += MediaInfoPage_SizeChanged;
             
-            // Critical: Also listen to the ScrollViewer's size to sync height
-            RootScrollViewer.SizeChanged += (s, e) => 
-            {
-                if (_isWideModeIndex == 1) // Wide mode
-                {
-                    ContentGrid.Height = e.NewSize.Height > 0 ? e.NewSize.Height : double.NaN;
-                }
-            };
+            // Root height is now handled by XAML Stretch alignments
 
             System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Constructor completed.");
             this.NavigationCacheMode = NavigationCacheMode.Required;
@@ -167,72 +179,77 @@ namespace ModernIPTVPlayer
             _lastReportedWidth = e.NewSize.Width;
             _lastReportedHeight = e.NewSize.Height;
 
-            // Immediate fast-path for critical layout boundaries
             bool isWide = _lastReportedWidth >= 800;
             int newState = isWide ? 1 : 0;
-            
+
+            // State Machine: Initial → LayoutReady (first SizeChanged)
+            if (_pageLoadState == PageLoadState.Initial)
+            {
+                _pageLoadState = PageLoadState.LayoutReady;
+                System.Diagnostics.Debug.WriteLine($"[MediaInfo-Layout] Initial layout captured. Size: {e.NewSize.Width:F0}x{e.NewSize.Height:F0}");
+                
+                // Check if there's a pending item waiting for layout
+                if (_pendingLoadItem != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfo-Layout] Resuming pending load for: {_pendingLoadItem.Title}");
+                    var pendingItem = _pendingLoadItem;
+                    _pendingLoadItem = null;
+                    // Call LoadDetailsAsync to continue the flow
+                    _ = LoadDetailsAsync(pendingItem);
+                    return;
+                }
+            }
+
             if (_isWideModeIndex != newState)
             {
-                // Breakpoint hit: Update states immediately for visual correctness
                 _isWideModeIndex = newState;
                 UpdateLayoutState(isWide);
-                
-                // FORCE layout pass to ensure ActualWidth/ActualHeight are updated for the split
                 this.UpdateLayout();
             }
 
-            // [PERFORMANCE] Apply visual scaling/translation instantly for real-time feedback
-            UpdateRealTimeScaling(_lastReportedWidth, _lastReportedHeight, isWide);
-
-            // [ROOT FIX] Sync Action Bar layout during resize to prevent overlaps/gaps
-            UpdateActionBarRealTime(_lastReportedWidth, _lastReportedHeight, isWide);
-
-            // [SYNC] Force immediate height synchronization to avoid gaps during fast vertical resize
-            ApplyImmediateLayoutSync(_lastReportedHeight, isWide);
-
-            // NEW: Real-time Trailer & Component updates (No more debounce)
-            EnsureTrailerOverlayBounds();
-            if (TrailerOverlay?.Visibility == Visibility.Visible)
+            // 1. Kısıtlamaları anında uygula ki XAML metinleri kaydırmaya (wrap) başlasın
+            if (InfoColumn != null)
             {
-                ApplyTrailerFullscreenLayout(_isTrailerFullscreen);
+                double targetMaxWidth = isWide ? (_lastReportedWidth > 1600 ? 1200 : 1000) : (_lastReportedWidth - 40);
+                InfoColumn.MaxWidth = Math.Max(300, targetMaxWidth);
             }
-            
+
+            // Minimal Fix: InfoContainerInner log
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-SizeChanged] InfoContainerInner: VA={InfoContainerInner?.VerticalAlignment}, AH={InfoContainerInner?.ActualHeight}, Margin={InfoContainerInner?.Margin}");
+
+            ApplyImmediateLayoutSync(_lastReportedHeight, isWide);
+            EnsureTrailerOverlayBounds();
+            if (TrailerOverlay?.Visibility == Visibility.Visible) ApplyTrailerFullscreenLayout(_isTrailerFullscreen);
             if (isWide)
             {
-                SyncWideHeights();
+                // [MODERN FIX] Row heights are now managed by VisualStateManager (WideState).
+                // ContentGrid.RowDefinitions[0].Height = new GridLength(1, GridUnitType.Star) is already set.
             }
+
+            // 2. KESİN ÇÖZÜM: Ölçekleme işlemlerini render kuyruğunun sonuna it.
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
+            {
+                if (this == null || InfoColumn == null) return;
+                UpdateRealTimeScaling(_lastReportedWidth, _lastReportedHeight, isWide);
+                UpdateActionBarRealTime(_lastReportedWidth, _lastReportedHeight, isWide);
+            });
 
             _lastAppliedWidth = _lastReportedWidth;
             _lastAppliedHeight = _lastReportedHeight;
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-SizeChanged] END: ContentGrid.H={ContentGrid?.Height}, InfoContainer AH={InfoContainer?.ActualHeight}");
         }
 
         private void ApplyImmediateLayoutSync(double height, bool isWide)
         {
+            // [ROOT FIX] Remove manual height assignments. 
+            // XAML Stretch and Bottom alignments now handle this naturally.
             if (ContentGrid != null)
             {
-                if (isWide)
+                if (!isWide)
                 {
-                    // Wide Mode: Force "fit-to-screen" layout
-                    ContentGrid.Height = Math.Max(0, height);
-                    ContentGrid.MaxHeight = Math.Max(0, height);
-
-                    // Instant constraint update for wide panels
-                    if (EpisodesPanel != null) EpisodesPanel.MaxHeight = Math.Max(0, height - 120);
-                    if (SourcesPanel != null) SourcesPanel.MaxHeight = Math.Max(0, height - 120);
-                }
-                else
-                {
-                    // Narrow Mode: Allow natural height for scrolling
+                    // Narrow Mode: Ensure natural height for scrolling
                     ContentGrid.Height = double.NaN;
                     ContentGrid.MaxHeight = double.PositiveInfinity;
-
-                    // [SCROLL FIX] Remove height constraints to allow RootScrollViewer to handle everything
-                    if (NarrowSectionsContainer != null)
-                    {
-                        NarrowSectionsContainer.Visibility = Visibility.Visible;
-                        NarrowSectionsContainer.Height = double.NaN;
-                        NarrowSectionsContainer.MaxHeight = double.PositiveInfinity;
-                    }
                 }
             }
         }
@@ -245,7 +262,7 @@ namespace ModernIPTVPlayer
                 
                 // 1. Unified Scaling Factor
                 double baseWidth = isWide ? 1400 : 800;
-                double baseHeight = isWide ? 900 : 700;
+                double baseHeight = isWide ? 950 : 700;
                 
                 double widthFactor = width / baseWidth;
                 double heightFactor = height / baseHeight;
@@ -258,144 +275,81 @@ namespace ModernIPTVPlayer
                 }
 
                 double globalScale = isWide 
-                    ? Math.Clamp(rawScale, 0.7, 1.4) 
-                    : Math.Clamp(rawScale, 0.6, 1.0); 
+                    ? Math.Clamp(rawScale, 0.75, 1.25) 
+                    : Math.Clamp(rawScale, 0.65, 1.0); 
 
                 var visual = ElementCompositionPreview.GetElementVisual(InfoColumn);
                 ElementCompositionPreview.SetIsTranslationEnabled(InfoColumn, true);
 
-                // [DYNAMIC PIVOT & OVERFLOW LOGIC]
-                double currentActualHeight = InfoColumn.ActualHeight > 0 ? InfoColumn.ActualHeight : 600;
-                double scaledHeight = currentActualHeight * globalScale;
-                double verticalMargin = isWide ? 60 : 40; 
-                
-                // Wide Mode: Bottom Pivot for tracking the floor. Narrow Mode: Top/Center for vertical stack stability.
-                float pivotX = isWide ? 0f : (float)(InfoColumn.ActualWidth / 2.0);
-                float pivotY = isWide ? (float)currentActualHeight : 0f; 
+                // [BOTTOM-PIVOT SCALING]
+                // We use DesiredSize for stability. ActualHeight can jump during transitions.
+                double currentHeight = InfoColumn.DesiredSize.Height > 0 
+                    ? InfoColumn.DesiredSize.Height 
+                    : (InfoColumn.ActualHeight > 0 ? InfoColumn.ActualHeight : 600);
 
-                visual.CenterPoint = new Vector3(pivotX, pivotY, 0);
-                visual.Scale = new Vector3((float)globalScale, (float)globalScale, 1.0f);
+                double scaledHeight = currentHeight * globalScale;
+                double verticalMargin = isWide ? TotalBottomGap : 25; 
+                
+                // CRITICAL: Always use bottom pivot in Wide mode to keep content on the floor
+                float pivotX = isWide ? 0f : (float)(InfoColumn.ActualWidth / 2.0);
+                float pivotY = (float)currentHeight; 
+
+                visual.CenterPoint = new System.Numerics.Vector3(pivotX, pivotY, 0);
+                visual.Scale = new System.Numerics.Vector3((float)globalScale, (float)globalScale, 1.0f);
+
+                // 3. Margin refinement - [PURE COMPOSITION]
+                // We NO LONGER set InfoColumn.Margin here to avoid layout re-entrancy.
+                // Static margins are set in XAML (TotalGap = Padding 30 + InnerMargin 25).
+
+                // [MODERN UNIFIED SYSTEM] - Single calculation for all offsets and opacities
+                float targetX = 0f;
+                float targetY = 0f;
 
                 if (isWide)
                 {
-                    // [OVERFLOW OFFSET] - Only for Wide mode to prevent button cropping
-                    double availableHeight = height - verticalMargin;
-                    float overflowShift = (scaledHeight > availableHeight) ? (float)(availableHeight - scaledHeight) : 0f;
-                    visual.Offset = new Vector3(visual.Offset.X, overflowShift, 0);
+                    // Wide Mode: Stable horizontal position + Vertical overflow handling
+                    targetX = 40.0f; // Fixed slight horizontal nudge for premium look (no dynamic slide)
                     
-                    // 1.5 [STABLE PANEL WIDTH] Predefined width for sources/episodes to avoid "runaway" expansion
+                    double availableHeight = height - verticalMargin;
+                    targetY = (scaledHeight > availableHeight) ? (float)(availableHeight - scaledHeight) : 0f;
+
+                    // Side Panels stabilization
                     if (SourcesPanel != null) SourcesPanel.Width = 450 * Math.Clamp(width / 1600.0, 0.9, 1.1);
                     if (EpisodesPanel != null) EpisodesPanel.Width = 450 * Math.Clamp(width / 1600.0, 0.9, 1.1);
-
-                    // Prevent Info vs Source overlap
-                    double sidePanelWidth = Math.Max(EpisodesPanel?.Width ?? 0, SourcesPanel?.Width ?? 0);
-                    if (sidePanelWidth < 100) sidePanelWidth = 450;
-                    
-                    double buffer = 220; 
-                    double availableInfoWidth = (width - sidePanelWidth - buffer) / globalScale; 
-                    InfoColumn.MaxWidth = Math.Clamp(availableInfoWidth, 350, 1200);
                 }
                 else
                 {
-                    // Narrow Mode: Reset offset (allow native scrolling) and set responsive width
-                    visual.Offset = Vector3.Zero;
-                    InfoColumn.MaxWidth = Math.Max(0, width - 40);
-                    if (SourcesPanel != null) SourcesPanel.Width = double.NaN;
-                    if (EpisodesPanel != null) EpisodesPanel.Width = double.NaN;
-
-                    // [GAP COMPENSATION]
-                    // Instead of Margin, use Composition Translation on the FOLLOWING container for smoothness.
-                    double deltaHeight = currentActualHeight * (1.0 - globalScale);
-                    InfoColumn.Margin = new Thickness(0, 20, 0, 20); // Steady fixed gap
-
+                    // Narrow Mode: Natural scrolling + Scaled content compensation
+                    double deltaHeight = currentHeight * (1.0 - globalScale);
                     if (NarrowSectionsContainer != null)
                     {
                         var narrowVisual = ElementCompositionPreview.GetElementVisual(NarrowSectionsContainer);
                         ElementCompositionPreview.SetIsTranslationEnabled(NarrowSectionsContainer, true);
-                        
-                        // Pull the next section up to meet the scaled bottom of the info panel
                         float pullUp = (float)(-deltaHeight);
-                        narrowVisual.Properties.InsertVector3("Translation", new Vector3(0, pullUp, 0));
+                        narrowVisual.Properties.InsertVector3("Translation", new System.Numerics.Vector3(0, pullUp, 0));
                     }
                 }
-                
-                // 2. [DYNAMICS] Synchronized Micro-Layouts
-                SyncMicroLayouts(width, height, globalScale, isWide);
 
-                // 3. Spring Physics
-                ApplySpringDrift(visual, width, isWide);
+                // [FINAL TRANSLATION SYNC] - Use Translation instead of Offset to avoid layout conflict
+                // Offset is for WinUI layout, Translation is for our custom visual modifiers
+                visual.Properties.InsertVector3("Translation", new System.Numerics.Vector3(targetX, targetY, 0));
 
-                // 4. Real-time Cast Scaling
-                ApplyCastScaling(width);
-
-                // 5. [SYNC] Structural Updates (Moved from debounced path)
-                double targetBottomMargin = isWide ? 60 : ((height < 700) ? 10 : 25);
-                double targetRightMargin = isWide ? 40 : 0;
-                
-                if (Math.Abs(InfoColumn.Margin.Bottom - targetBottomMargin) > 1 || 
-                    Math.Abs(InfoColumn.Margin.Right - targetRightMargin) > 1)
+                // 4. Panel Opacities & Micro-Layouts
+                if (_compositor != null)
                 {
-                    InfoColumn.Margin = new Thickness(0, 0, targetRightMargin, Math.Max(0, targetBottomMargin));
+                    float widePanelOpacity = isWide ? (float)Math.Clamp((width - 800) / 100.0, 0, 1.0) : 0f;
+                    float narrowPanelOpacity = 1f - widePanelOpacity;
+
+                    if (EpisodesPanel != null) ElementCompositionPreview.GetElementVisual(EpisodesPanel).Opacity = widePanelOpacity;
+                    if (SourcesPanel != null) ElementCompositionPreview.GetElementVisual(SourcesPanel).Opacity = widePanelOpacity;
+                    if (NarrowSectionsContainer != null) ElementCompositionPreview.GetElementVisual(NarrowSectionsContainer).Opacity = narrowPanelOpacity;
+                    
+                    UpdateActionBarRealTime(width, height, isWide);
                 }
-
-                if (ContentGrid != null)
-                {
-                    double sidePadding = isWide ? 60 : 20;
-                    double topPadding = isWide ? 0 : 140; 
-                    double bottomPadding = isWide ? 0 : 40;
-
-                    if (Math.Abs(ContentGrid.Padding.Left - sidePadding) > 1 || 
-                        Math.Abs(ContentGrid.Padding.Top - topPadding) > 1)
-                    {
-                        ContentGrid.Padding = new Thickness(sidePadding, topPadding, 20, bottomPadding);
-                        ContentGrid.VerticalAlignment = isWide ? VerticalAlignment.Stretch : VerticalAlignment.Top;
-                    }
-                }
-                
-                // Align text and components
-                var align = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Center;
-                var textAlign = isWide ? TextAlignment.Left : TextAlignment.Center;
-
-                if (IdentityContainer != null) IdentityContainer.HorizontalAlignment = align;
-                if (MetadataRibbon != null) MetadataRibbon.HorizontalAlignment = align;
-                if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
-                if (TitleText != null) TitleText.TextAlignment = textAlign;
-                if (OverviewText != null) OverviewText.TextAlignment = textAlign;
-                if (GenresText != null) GenresText.TextAlignment = textAlign;
             }
             catch { /* Silent fail for performance */ }
         }
 
-        private void SyncMicroLayouts(double width, double height, double scale, bool isWide)
-        {
-            if (_compositor == null) return;
-
-            // 1. Unified Squeeze Factor (Continuous)
-            float squeeze = (float)Math.Clamp((1300 - width) / 600.0, 0, 1.0); 
-            
-            // 2. InfoColumn Nudge (Organic padding interpolate)
-            var infoVisual = ElementCompositionPreview.GetElementVisual(InfoColumn);
-            if (isWide)
-            {
-                float targetOffset = (width < 1200) ? (float)((width - 800) / 400.0 * 40.0) : 40.0f;
-                infoVisual.Offset = new Vector3(targetOffset, 0, 0);
-            }
-            else
-            {
-                infoVisual.Offset = Vector3.Zero;
-            }
-
-            // 5. [CROSS-FADE] Panels
-            float widePanelOpacity = isWide ? (float)Math.Clamp((width - 800) / 100.0, 0, 1.0) : 0f;
-            float narrowPanelOpacity = 1f - widePanelOpacity;
-
-            if (EpisodesPanel != null) ElementCompositionPreview.GetElementVisual(EpisodesPanel).Opacity = widePanelOpacity;
-            if (SourcesPanel != null) ElementCompositionPreview.GetElementVisual(SourcesPanel).Opacity = widePanelOpacity;
-            if (NarrowSectionsContainer != null) ElementCompositionPreview.GetElementVisual(NarrowSectionsContainer).Opacity = narrowPanelOpacity;
-
-            // 6. [REAL-TIME] Unified Squeeze & Scale
-            UpdateActionBarRealTime(width, height, isWide);
-        }
 
         private void SetupActionBarDynamics()
         {
@@ -443,7 +397,7 @@ namespace ModernIPTVPlayer
             // [ROOT FIX] Final layout pass once the container is fully loaded 
             // Ensures correct dimensions in fullscreen/initial entry.
             ActionBarPanel.Loaded += (s, e) => {
-                DispatcherQueue.TryEnqueue(() => UpdateActionBarRealTime(ActualWidth, ActualHeight, ActualWidth >= 800));
+                DispatcherQueue.TryEnqueue(() => UpdateActionBarRealTime(ActualWidth, ActualHeight, ActualWidth >= LayoutAdaptiveThreshold));
             };
         }
 
@@ -717,45 +671,6 @@ namespace ModernIPTVPlayer
             visual.CenterPoint = new Vector3(centerX, centerY, 0);
         }
 
-        private void SyncWideHeights()
-        {
-            if (LayoutRoot == null || ContentGrid == null) return;
-            
-            double targetHeight = LayoutRoot.ActualHeight;
-            if (targetHeight <= 0) targetHeight = _lastReportedHeight;
-
-            ApplyImmediateLayoutSync(targetHeight, true);
-
-            if (EpisodesPanel != null)
-            {
-                double sideMargin = 120; 
-                double maxPanelHeight = targetHeight - sideMargin;
-                
-                EpisodesPanel.Height = double.NaN; 
-                EpisodesPanel.MaxHeight = Math.Max(0, maxPanelHeight);
-                EpisodesPanel.VerticalAlignment = VerticalAlignment.Center;
-
-                if (EpisodesListView != null)
-                {
-                    EpisodesListView.MaxHeight = Math.Max(0, maxPanelHeight - 100); 
-                }
-            }
-
-            if (SourcesPanel != null)
-            {
-                double sideMargin = 120;
-                double maxPanelHeight = targetHeight - sideMargin;
-
-                SourcesPanel.Height = double.NaN;
-                SourcesPanel.MaxHeight = Math.Max(0, maxPanelHeight);
-                SourcesPanel.VerticalAlignment = VerticalAlignment.Center;
-
-                if (SourcesListView != null)
-                {
-                    SourcesListView.MaxHeight = Math.Max(0, maxPanelHeight - 100);
-                }
-            }
-        }
 
         private void RestoreUIVisibility()
         {
@@ -828,6 +743,11 @@ namespace ModernIPTVPlayer
                     isSeries = true;
                 }
 
+                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-UpdateLayout] START: isWide={isWide}, _item={_item?.GetType().Name}");
+                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-UpdateLayout] ScrollViewer: AH={RootScrollViewer?.ActualHeight}, VHeight={RootScrollViewer?.ViewportHeight}, ScrollMode={RootScrollViewer?.VerticalScrollMode}");
+                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-UpdateLayout] ContentGrid: H={ContentGrid?.Height}, MaxH={ContentGrid?.MaxHeight}, AH={ContentGrid?.ActualHeight}, VA={ContentGrid?.VerticalAlignment}");
+                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-UpdateLayout] InfoContainer: VA={InfoContainer?.VerticalAlignment}, AH={InfoContainer?.ActualHeight}");
+
                 System.Diagnostics.Debug.WriteLine($"[LayoutDebug] UpdateLayoutState START. Wide: {isWide}, Series: {isSeries}, ItemType: {_item?.GetType().Name}, MetaType: {(_item as StremioMediaStream)?.Meta?.Type ?? "N/A"}");
 
                 if (isWide)
@@ -840,7 +760,6 @@ namespace ModernIPTVPlayer
                         if (RootScrollViewer.IsVerticalScrollChainingEnabled != false) RootScrollViewer.IsVerticalScrollChainingEnabled = false;
                     }
 
-                    SyncWideHeights();
 
                     if (isSeries)
                     {
@@ -925,13 +844,9 @@ namespace ModernIPTVPlayer
                      if (DirectorSection != null && DirectorSection.Visibility != Visibility.Collapsed) DirectorSection.Visibility = Visibility.Collapsed;
                 }
                 
-                // Final Check after a short delay to allow layout to settle
-                _ = Task.Delay(500).ContinueWith(_ => {
-                    DispatcherQueue.TryEnqueue(() => {
-                        if (RootScrollViewer != null)
-                            System.Diagnostics.Debug.WriteLine($"[LayoutDebug] FINAL CHECK: Viewport={RootScrollViewer.ViewportHeight}, Extent={RootScrollViewer.ExtentHeight}, Scrollable={RootScrollViewer.ScrollableHeight}");
-                    });
-                });
+                // [ROOT FIX] Removed artificial delay. 
+                // XAML engine and Composition real-time loop handle settling now.
+                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-UpdateLayout] END: ContentGrid.H={ContentGrid?.Height}, InfoContainer AH={InfoContainer?.ActualHeight}");
             }
             catch (Exception ex)
             {
@@ -1019,6 +934,10 @@ namespace ModernIPTVPlayer
             try
             {
                 base.OnNavigatedTo(e);
+
+                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-NavTo] START: NavMode={e.NavigationMode}, ParamType={e.Parameter?.GetType().Name}");
+                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-NavTo] InitialState: PageAW={ActualWidth}, AH={ActualHeight}, ScrollViewerAH={RootScrollViewer?.ActualHeight}, ContentGridAH={ContentGrid?.ActualHeight}");
+                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-NavTo] InfoContainer Initial: VA={InfoContainer?.VerticalAlignment}, AH={InfoContainer?.ActualHeight}");
     
                 // Determine New Item coming in
                 IMediaStream incomingItem = null;
@@ -1068,7 +987,7 @@ namespace ModernIPTVPlayer
                 {
                     DispatcherQueue.TryEnqueue(() => 
                     {
-                        bool isWide = ActualWidth >= 800; // Use 800 consistent with UpdateActionBarRealTime
+                        bool isWide = ActualWidth >= LayoutAdaptiveThreshold; // Use constant consistent with UpdateActionBarRealTime
                         _isWideModeIndex = isWide ? 1 : 0;
                         UpdateLayoutState(isWide);
                         UpdateRealTimeScaling(ActualWidth, ActualHeight, isWide);
@@ -1280,12 +1199,29 @@ namespace ModernIPTVPlayer
             {
                 System.Diagnostics.Debug.WriteLine("[MediaInfoPage] [Optimization] Cache HASH HIT - Seamless loading.");
                 _unifiedMetadata = cachedMetadata;
+                _pageLoadState = PageLoadState.Loading;
                 await PopulateMetadataUI(cachedMetadata, item);
+                _pageLoadState = PageLoadState.Revealing;
                 ImmediateRevealContent();
+                _pageLoadState = PageLoadState.Ready;
             }
             else
             {
-                SetLoadingState(true, item); 
+                // State Machine: Check if layout is ready before showing shimmer
+                if (_pageLoadState == PageLoadState.Initial)
+                {
+                    // Layout not ready yet, save item for later
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfo-Load] Deferring shimmer until LayoutReady.");
+                    _pendingLoadItem = item;
+                    _pageLoadState = PageLoadState.Loading; 
+                }
+                else
+                {
+                    // Layout is ready, proceed normally
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfo-Load] Layout available. Showing shimmers.");
+                    _pageLoadState = PageLoadState.Loading;
+                    SetLoadingState(true, item); 
+                }
             }
             
             // 3. Setup Interactions
@@ -1343,12 +1279,14 @@ namespace ModernIPTVPlayer
             // 7. Reveal & Branching
             if (!isCached)
             {
+                _pageLoadState = PageLoadState.Revealing;
                 StaggeredRevealContent();
+                _pageLoadState = PageLoadState.Ready;
             }
 
             try
             {
-                bool isWide = ActualWidth >= 900;
+                bool isWide = ActualWidth >= LayoutAdaptiveThreshold;
                 if (unified.IsSeries)
                 {
                     _areSourcesVisible = false; // Ensure sources are hidden for series until selection
@@ -1368,7 +1306,7 @@ namespace ModernIPTVPlayer
                     if (SourcesPanel != null) SourcesPanel.Visibility = Visibility.Visible;
                     
                     // Delay technical section reveal to avoid layout jumps during navigation
-                    _ = Task.Delay(200).ContinueWith(_ => DispatcherQueue.TryEnqueue(() => UpdateLayoutState(ActualWidth >= 900)), TaskScheduler.Default);
+                    _ = Task.Delay(200).ContinueWith(_ => DispatcherQueue.TryEnqueue(() => UpdateLayoutState(ActualWidth >= LayoutAdaptiveThreshold)), TaskScheduler.Default);
                     if (SourcesInlineShimmerOverlay != null && !isCached) 
                     {
                         SourcesInlineShimmerOverlay.Visibility = Visibility.Visible;
@@ -1430,8 +1368,13 @@ namespace ModernIPTVPlayer
                     SuperTitleText.Visibility = Visibility.Visible;
                     SuperTitleText.Margin = new Thickness(2, 0, 0, -4);
                 }
+                if (IdentityContainer != null) IdentityContainer.Visibility = Visibility.Visible;
             }
-            else if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
+            else
+            {
+                if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
+                if (IdentityContainer != null) IdentityContainer.Visibility = Visibility.Collapsed;
+            }
 
             OverviewText.Text = !string.IsNullOrEmpty(unified.Overview) ? unified.Overview : "Açıklama mevcut değil.";
             YearText.Text = unified.Year?.Split(new char[] { '-', '–' })[0] ?? "";
@@ -1449,10 +1392,7 @@ namespace ModernIPTVPlayer
                 ApplyHeroSeedImage(unified.PosterUrl, "poster-fallback");
             }
 
-            AdjustTitleShimmer();
-            SyncMetadataRibbonHeight();
-            // REMOVED: this.UpdateLayout(); - Manual layout updates during init/nav trigger cycles
-            AdjustOverviewShimmer(OverviewText.Text);
+            // [MODERN] Legacy shimmer adjustments removed.
 
             PlayButton.Visibility = Visibility.Visible;
             if (!string.IsNullOrEmpty(unified.TrailerUrl)) TrailerButton.Visibility = Visibility.Visible;
@@ -1574,9 +1514,24 @@ namespace ModernIPTVPlayer
 
             if (SourceAttributionText != null) SourceAttributionText.Text = unified.MetadataSourceInfo;
 
-            // 13. Synchronize Layout & Final Probe Trigger
-            UpdateActionBarRealTime(ActualWidth, ActualHeight, ActualWidth >= 800);
-            
+// 13. Synchronize Layout & Final Probe Trigger
+            bool isWide = ActualWidth >= LayoutAdaptiveThreshold;
+            if (InfoColumn != null)
+            {
+                 double initialMeasureWidth = isWide ? (_lastReportedWidth > 1600 ? 1200 : 1000) : (ActualWidth - 40);
+                 InfoColumn.MaxWidth = initialMeasureWidth;
+                 
+                 // Veriler panele yüklendiği için ŞİMDİ ölçümleri yapıp Shimmer'ları kilitliyoruz
+                 // [MODERN] Legacy shimmer adjustments removed.
+                 
+                 // Yeni text-wrap ve ölçümlerin XAML motoruna anında işlenmesi
+                 this.UpdateLayout();
+                 
+                 // Composition animasyonlarını tamamen güncel, taze boyutlarla başlat
+                 UpdateRealTimeScaling(ActualWidth, ActualHeight, isWide);
+                 UpdateActionBarRealTime(ActualWidth, ActualHeight, isWide);
+            }
+
             if (!string.IsNullOrEmpty(_streamUrl))
             {
                 _ = UpdateTechnicalBadgesAsync(_streamUrl);
@@ -1677,8 +1632,8 @@ namespace ModernIPTVPlayer
 
                 if (DirectorList.Count > 0)
                 {
-                    DirectorSection.Visibility = (ActualWidth >= 900) ? Visibility.Visible : Visibility.Collapsed;
-                    if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = (ActualWidth < 900) ? Visibility.Visible : Visibility.Collapsed;
+                    DirectorSection.Visibility = (ActualWidth >= LayoutAdaptiveThreshold) ? Visibility.Visible : Visibility.Collapsed;
+                    if (NarrowDirectorSection != null) NarrowDirectorSection.Visibility = (ActualWidth < LayoutAdaptiveThreshold) ? Visibility.Visible : Visibility.Collapsed;
                     DirectorListView.ItemsSource = DirectorList;
                     if (NarrowDirectorListView != null) NarrowDirectorListView.ItemsSource = DirectorList;
                     AdjustDirectorShimmer(DirectorList.Count);
@@ -1733,6 +1688,10 @@ namespace ModernIPTVPlayer
 
         private void ResetPageState()
         {
+            // State Machine Reset
+            _pageLoadState = PageLoadState.Initial;
+            _pendingLoadItem = null;
+            
             DeselectEpisode();
             _streamUrl = null;
             _areSourcesVisible = false;
@@ -1768,7 +1727,15 @@ namespace ModernIPTVPlayer
             if (SuperTitleText != null) { SuperTitleText.Text = ""; SuperTitleText.Visibility = Visibility.Collapsed; SuperTitleText.Margin = new Thickness(0); }
             if (TitleShimmer != null) TitleShimmer.Height = 56; // Reset shimmer to default height
 
-            
+            if (InfoColumn != null)
+            {
+                InfoColumn.MaxWidth = 1000; // Reset to default stable MaxWidth
+                var visual = ElementCompositionPreview.GetElementVisual(InfoColumn);
+                visual.Scale = new System.Numerics.Vector3(1, 1, 1);
+                visual.Offset = System.Numerics.Vector3.Zero;
+                visual.CenterPoint = System.Numerics.Vector3.Zero;
+            }
+
             // Clear Collections
             Seasons?.Clear();
             CurrentEpisodes?.Clear();
@@ -1840,6 +1807,9 @@ namespace ModernIPTVPlayer
 
         private void SetLoadingState(bool isLoading, IMediaStream? item = null)
         {
+            if (isLoading) System.Diagnostics.Debug.WriteLine($"[MediaInfo-Content] State: LOADING (Item: {item?.Title ?? "Unknown"})");
+            else System.Diagnostics.Debug.WriteLine($"[MediaInfo-Content] State: LOAD_COMPLETE");
+            
             if (isLoading)
             {
                 // Reset Opacities for Loading (Don't hide parents that hold shimmers)
@@ -1863,7 +1833,6 @@ namespace ModernIPTVPlayer
                 bool isSeries = item != null && (item is SeriesStream || (item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv")));
 
                 ShowShimmer(TitleShimmer);
-                if (TitleShimmer != null && TitleShimmer.Height < 56) TitleShimmer.Height = 56;
                 ShowShimmer(MetadataShimmer);
                 ShowShimmer(ActionBarShimmer);
                 ShowShimmer(OverviewShimmer);
@@ -1874,10 +1843,13 @@ namespace ModernIPTVPlayer
 
                 ShowShimmer(CastShimmer);
 
+                // Force layout pass to ensure shimmers are measured before rendering
+                this.UpdateLayout();
+
                 // Early Panel Visibility for Shimmers (Fixes blank space while Metadata fetches)
                 if (item != null)
                 {
-                    bool isWide = ActualWidth >= 900;
+                    bool isWide = ActualWidth >= LayoutAdaptiveThreshold;
                     
                     if (isSeries)
                     {
@@ -1898,6 +1870,8 @@ namespace ModernIPTVPlayer
 
         private void ImmediateRevealContent()
         {
+            System.Diagnostics.Debug.WriteLine($"[MediaInfo-Content] Reveal: IMMEDIATE");
+            
             void ShowImmediate(UIElement content, UIElement shimmer, bool forceHide = false)
             {
                 if (content == null) return;
@@ -1940,7 +1914,7 @@ namespace ModernIPTVPlayer
             UpdateTechnicalSectionVisibility(HasVisibleBadges());
 
             // Side panels reveal (Wide Mode only)
-            if (ActualWidth >= 900 && _unifiedMetadata != null)
+            if (ActualWidth >= LayoutAdaptiveThreshold && _unifiedMetadata != null)
             {
                 if (_unifiedMetadata.IsSeries)
                 {
@@ -1957,10 +1931,19 @@ namespace ModernIPTVPlayer
                     if (SourcesInlineShimmerOverlay != null) { SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed; ElementCompositionPreview.GetElementVisual(SourcesInlineShimmerOverlay).Opacity = 0f; }
                 }
             }
+
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-ImmediateReveal] END - CastSection: Visibility={CastSection?.Visibility}, AH={CastSection?.ActualHeight}");
         }
 
         private void StaggeredRevealContent()
         {
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-Reveal] START: ScrollViewerAH={RootScrollViewer?.ActualHeight}, ContentGridAH={ContentGrid?.ActualHeight}, ContentGridH={ContentGrid?.Height}, ContentGridVA={ContentGrid?.VerticalAlignment}");
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-Reveal] InfoContainer: VA={InfoContainer?.VerticalAlignment}, AH={InfoContainer?.ActualHeight}");
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-Reveal] InfoContainerInner: VA={InfoContainerInner?.VerticalAlignment}, AH={InfoContainerInner?.ActualHeight}");
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-Reveal] InfoColumn: VA={InfoColumn?.VerticalAlignment}, AH={InfoColumn?.ActualHeight}, MaxH={InfoColumn?.MaxHeight}, Margin={InfoColumn?.Margin}");
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-Reveal] TitleShimmer: Visibility={TitleShimmer?.Visibility}, AH={TitleShimmer?.ActualHeight}");
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-Reveal] CastSection: Visibility={CastSection?.Visibility}, AH={CastSection?.ActualHeight}, MaxH={CastSection?.MaxHeight}, VA={CastSection?.VerticalAlignment}");
+            
             // helper for cross-fade + slide-up
             void AnimatePair(UIElement content, UIElement shimmer, int delay)
             {
@@ -2076,7 +2059,7 @@ namespace ModernIPTVPlayer
             }
 
             // [NEW] Premium Cross-Fade for Side Panels
-            if (ActualWidth >= 900)
+            if (ActualWidth >= LayoutAdaptiveThreshold)
             {
                 if (EpisodesPanel != null && EpisodesPanel.Visibility == Visibility.Visible && EpisodesShimmerPanel != null && EpisodesShimmerPanel.Visibility == Visibility.Visible)
                 {
@@ -2111,6 +2094,8 @@ namespace ModernIPTVPlayer
                 ElementCompositionPreview.GetElementVisual(ExtraReadabilityGradient).StartAnimation("Opacity", fadeGrad2);
                 ExtraReadabilityGradient.Opacity = 1;
             }
+
+            System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-Reveal] END - CastSection: Visibility={CastSection?.Visibility}, AH={CastSection?.ActualHeight}");
         }
 
         private void ContentLogo_ImageOpened(object sender, RoutedEventArgs e)
@@ -2121,7 +2106,7 @@ namespace ModernIPTVPlayer
             // Re-measure now that we have real dimensions
             DispatcherQueue.TryEnqueue(() => 
             {
-                AdjustTitleShimmer();
+                // legacy AdjustTitleShimmer call removed
             });
         }
 
@@ -2131,70 +2116,7 @@ namespace ModernIPTVPlayer
             System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Logo load failed: {e.ErrorMessage}");
         }
         
-        private void AdjustTitleShimmer()
-        {
-            if (TitleShimmer == null || IdentityContainer == null) return;
-            
-            // Pro-actively measure the target content (Logo, Title or Stack) to avoid "drops"
-            UIElement target = null;
-            if (IdentityStack != null) target = IdentityStack;
-            else target = (ContentLogo.Visibility == Visibility.Visible) ? (UIElement)ContentLogo : (UIElement)TitlePanel;
-            
-            // Force measurement ignore parent constraints
-            target.Measure(new Size(850, 400)); 
-            double h = target.DesiredSize.Height;
 
-            if (h > 0)
-            {
-                // [STABILITY] Only update if height change is significant (> 1px) to prevent flicker/jumps
-                if (Math.Abs(TitleShimmer.Height - h) > 1.0)
-                {
-                    TitleShimmer.Height = h;
-                }
-                
-                if (Math.Abs(IdentityContainer.MinHeight - h) > 1.0)
-                {
-                    IdentityContainer.MinHeight = h;
-                }
-            }
-            else
-            {
-                // Fallback to logic-based estimates if measurement fails
-                if (ContentLogo.Visibility == Visibility.Visible) TitleShimmer.Height = 120;
-                else TitleShimmer.Height = (SuperTitleText.Visibility == Visibility.Visible) ? 72 : 56;
-                IdentityContainer.MinHeight = TitleShimmer.Height;
-            }
-            
-            TitleShimmer.VerticalAlignment = VerticalAlignment.Bottom;
-        }
-
-        private void SyncMetadataRibbonHeight()
-        {
-            if (MetadataShimmer == null || MetadataPanel == null) return;
-            
-            MetadataPanel.Measure(new Size(850, 40));
-            double h = MetadataPanel.DesiredSize.Height;
-            if (h > 0)
-            {
-                // Sync all shimmer children in the ribbon to match exactly
-                foreach (var child in MetadataShimmer.Children)
-                {
-                    if (child is ShimmerControl sc)
-                    {
-                        // [STABILITY] Only update if change is significant
-                        if (Math.Abs(sc.Height - h) > 1.0) sc.Height = (float)h;
-                    }
-                }
-            }
-            else
-            {
-                // Default 22 matches the individual shimmers in XAML
-                foreach (var child in MetadataShimmer.Children)
-                {
-                    if (child is ShimmerControl sc) sc.Height = 22;
-                }
-            }
-        }
 
         private void ApplyTextShadow(TextBlock textBlock)
         {
@@ -2203,75 +2125,6 @@ namespace ModernIPTVPlayer
             // handled by the LocalInfoGradient scrim rectangle in XAML.
         }
 
-        private void AdjustOverviewShimmer(string text)
-        {
-            if (OverviewShimmer == null || OverviewText == null) return;
-            
-            // Critical: Match XAML OverviewPanel structure perfectly
-            OverviewShimmer.Spacing = 0; 
-            OverviewShimmer.Children.Clear();
-            
-            // 1. Genres Shim (Matches GenresText height 22px + 4px Bottom Margin)
-            double genresH = GenresText?.ActualHeight ?? 22;
-            if (genresH <= 0) genresH = 22;
-
-            OverviewShimmer.Children.Add(new ShimmerControl 
-            { 
-                Width = 220, Height = (float)genresH, CornerRadius = new CornerRadius(4), 
-                HorizontalAlignment = HorizontalAlignment.Left,
-                // Margin 0 because the next item (first line) will have Top Margin of 4.
-                // Total Gap = 0 + 4 = 4px. Matches GenresText (Margin-Bottom: 4) + OverviewText (Margin-Top: 0).
-                Margin = new Thickness(0, 0, 0, 0)
-            });
-
-            if (string.IsNullOrWhiteSpace(text))
-            {
-                OverviewShimmer.Visibility = Visibility.Collapsed;
-                return;
-            }
-
-            // 2. Determine Overview Line Count
-            double h = OverviewText.ActualHeight;
-            int lines;
-
-            if (h > 0)
-            {
-                // LineHeight forced to 24px in LoadDetailsAsync
-                // We use Ceiling here to ensure we cover the full height, 
-                // but since we forced 24px, it should be an integer multiple or very close.
-                // h might be slightly larger due to font rendering variance, so Round is safer if we trust the sync.
-                lines = (int)Math.Round(h / 24.0);
-            }
-            else
-            {
-                // Heuristic fallback: Use more conservative pixels-per-char for Segoe UI 16pt (~11.5px)
-                double availableWidth = this.ActualWidth > 0 ? this.ActualWidth : 1200;
-                double infoWidth = (availableWidth > 900) ? (availableWidth - 570) : (availableWidth - 40);
-                infoWidth = Math.Max(300, infoWidth);
-                
-                // average chars per line = infoWidth / 11.5
-                lines = (int)Math.Ceiling(text.Length / (infoWidth / 11.5));
-            }
-            
-            lines = Math.Clamp(lines, 1, 6);
-
-            // 3. Rebuild Shimmer Lines
-            for (int i = 0; i < lines; i++)
-            {
-                double width = 650; 
-                if (i == lines - 1 && lines > 1) width = 450; 
-
-                // Each line is Height 16 + Margins 4,4 = 24px (Matches LineHeight 24)
-                OverviewShimmer.Children.Add(new ShimmerControl 
-                { 
-                    Height = 16, 
-                    Width = width, 
-                    CornerRadius = new CornerRadius(4), 
-                    HorizontalAlignment = HorizontalAlignment.Left,
-                    Margin = new Thickness(0, 4, 0, 4) 
-                });
-            }
-        }
 
         private void AdjustCastShimmer(int count)
         {
@@ -3356,7 +3209,7 @@ namespace ModernIPTVPlayer
                     }
                     
                     // Sync layout
-                    UpdateActionBarRealTime(ActualWidth, ActualHeight, ActualWidth >= 800);
+                    UpdateActionBarRealTime(ActualWidth, ActualHeight, ActualWidth >= LayoutAdaptiveThreshold);
                 }
                 finally
                 {
@@ -5057,7 +4910,7 @@ namespace ModernIPTVPlayer
                                             if (existing != null) { existing.Name = addonVM.Name; existing.Streams = addonVM.Streams; existing.IsLoading = false; }
                                             else _addonResults.Insert(insertAt, addonVM);
 
-                                            if (SourcesPanel != null && _addonResults.Any(a => !a.IsLoading)) { SourcesPanel.Visibility = Visibility.Visible; UpdateLayoutState(ActualWidth >= 900); }
+                                            if (SourcesPanel != null && _addonResults.Any(a => !a.IsLoading)) { SourcesPanel.Visibility = Visibility.Visible; UpdateLayoutState(ActualWidth >= LayoutAdaptiveThreshold); }
                                             if (SourcesInlineShimmerOverlay != null) SourcesInlineShimmerOverlay.Visibility = Visibility.Collapsed;
 
                                             var partialSnapshot = _addonResults.Where(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0).Select(CloneAddonViewModel).ToList();
@@ -5181,7 +5034,7 @@ namespace ModernIPTVPlayer
         {
             _areSourcesVisible = show; // <--- Set Flag
             // Determine which panel to show based on width
-            bool isWide = ActualWidth >= 900;
+            bool isWide = ActualWidth >= LayoutAdaptiveThreshold;
             System.Diagnostics.Debug.WriteLine($"[LayoutDebug] ShowSourcesPanel({show}) - IsWide: {isWide}, Item: {_item?.Title}");
 
             bool canGoBackToEpisodes =
@@ -6530,7 +6383,8 @@ namespace ModernIPTVPlayer
                 var implicitAnimationCollection = _compositor.CreateImplicitAnimationCollection();
                 implicitAnimationCollection["Offset"] = offsetAnimation;
                 implicitAnimationCollection["Scale"] = scaleAnimation;
-                implicitAnimationCollection["Translation"] = offsetAnimation; // Track manual translations too
+                // [FIX] REMOVED "Translation" from implicit collection as it causes WinRT ArgumentException
+                // on elements where SetIsTranslationEnabled hasn't been explicitly called.
 
                 // Elements that should "glide" during resize
                 UIElement[] glideElements = { 
@@ -6545,8 +6399,22 @@ namespace ModernIPTVPlayer
                 {
                     if (element == null) continue;
                     var visual = ElementCompositionPreview.GetElementVisual(element);
-                    visual.ImplicitAnimations = implicitAnimationCollection;
-                    // Ensure translation is enabled for compositor to track offset accurately
+                    
+                    // [STABILITY FIX] InfoColumn and InfoContainer should NOT have implicit Offset animations
+                    // because they are managed in real-time at 60fps in UpdateRealTimeScaling.
+                    // Gliding them creates a lag ("drop") during resize.
+                    if (element == InfoColumn || element == InfoContainer)
+                    {
+                        var anchorCollection = _compositor.CreateImplicitAnimationCollection();
+                        anchorCollection["Scale"] = scaleAnimation; // Only scale can glide
+                        visual.ImplicitAnimations = anchorCollection;
+                    }
+                    else
+                    {
+                        visual.ImplicitAnimations = implicitAnimationCollection;
+                    }
+
+                    // Enable translation facade
                     ElementCompositionPreview.SetIsTranslationEnabled(element, true);
                 }
             }
@@ -7417,7 +7285,6 @@ namespace ModernIPTVPlayer
                         TitlePanel.Visibility = Visibility.Visible;
                         TitlePanel.Opacity = 1;
                     }
-                    AdjustTitleShimmer();
                 }
 
                 if (OverviewText != null)
@@ -7456,7 +7323,6 @@ namespace ModernIPTVPlayer
                             TitlePanel.Opacity = 1;
                         }
                     }
-                    AdjustTitleShimmer();
                 }
 
                 if (OverviewText != null)

@@ -269,12 +269,12 @@
             
             <Grid x:Name="LayoutRoot" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
             <ScrollViewer x:Name="RootScrollViewer" 
-                          VerticalScrollBarVisibility="Auto" 
-                          VerticalScrollMode="Auto" 
+                          VerticalScrollBarVisibility="Hidden" 
+                          VerticalScrollMode="Disabled" 
                           HorizontalScrollMode="Disabled" 
-                          VerticalContentAlignment="Top">
+                          VerticalContentAlignment="Stretch">
             
-        <Grid x:Name="ContentGrid" Padding="60,0,20,60" VerticalAlignment="Top">
+        <Grid x:Name="ContentGrid" Padding="60,0,20,30" VerticalAlignment="Stretch">
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup>
                 <VisualState x:Name="WideState">
@@ -294,6 +294,8 @@
                         <Setter Target="ContentGrid.RowDefinitions[1].Height" Value="0"/>
                         <Setter Target="ContentGrid.RowDefinitions[2].Height" Value="0"/>
                         <Setter Target="ContentGrid.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="InfoContainer.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="InfoContainerInner.VerticalAlignment" Value="Bottom"/>
                         <Setter Target="ContentGrid.Padding" Value="60,0,20,0"/>
                         <Setter Target="TitleText.FontSize" Value="48"/>
                         
@@ -397,51 +399,40 @@
         
         <Grid.RowDefinitions>
             <RowDefinition x:Name="Row0" Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="0"/>
+            <RowDefinition Height="0"/>
         </Grid.RowDefinitions>
         
         <!-- LEFT: INFO PANEL -->
         <!-- SKELETON LOADER -->
         <!-- LEFT: INFO PANEL -->
         <!-- LEFT: INFO PANEL -->
-        <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Bottom" HorizontalAlignment="Stretch" Padding="0">
+        <!-- FIX: Stretch for container, Bottom for inner - proper bottom anchoring -->
+        <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Padding="0">
             
 
-            <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,25" MaxWidth="1200"> 
-                 
-                  <!-- IDENTITY AREA (Logo or Title) - Unified Grid to prevent jumps -->
-                  <!-- VerticalAlignment="Bottom" on children and container ensures stable baseline -->
-                  <Grid x:Name="IdentityContainer" HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="0,0,0,16" Background="Transparent">
-                      <StackPanel x:Name="IdentityStack" VerticalAlignment="Bottom">
-                          <!-- LOGO -->
-                          <Image x:Name="ContentLogo" Stretch="Uniform" MaxHeight="120" MaxWidth="350" 
-                                 HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                                 Visibility="Collapsed" Opacity="0" 
-                                 ImageOpened="ContentLogo_ImageOpened"
-                                 ImageFailed="ContentLogo_ImageFailed" />
+            <!-- Inner Grid: Content anchored to bottom with margin -->
+            <Grid x:Name="InfoContainerInner" VerticalAlignment="Bottom" Margin="0,0,0,25">
+                <StackPanel x:Name="InfoColumn" Spacing="4" Visibility="Visible" VerticalAlignment="Bottom" HorizontalAlignment="Left" MaxWidth="1200" Margin="0">
+                    <!-- CONTENT LOGO (Optional Branding) -->
+                    <Image x:Name="ContentLogo" Height="120" HorizontalAlignment="Left" Visibility="Collapsed" Margin="0,0,0,12" Stretch="Uniform"/>
+                    
+                    <!-- IDENTITY CONTAINER (SuperTitle / Category Branding) -->
+                    <StackPanel x:Name="IdentityContainer" Spacing="0" Margin="0,0,0,4" Visibility="Collapsed">
+                         <StackPanel x:Name="IdentityStack" Spacing="0">
+                            <TextBlock x:Name="SuperTitleText" Text="" Foreground="#88FFFFFF" FontSize="14" FontWeight="SemiBold" CharacterSpacing="100"/>
+                         </StackPanel>
+                    </StackPanel>
 
-                          <!-- TITLE PANEL -->
-                          <StackPanel x:Name="TitlePanel" Opacity="0" VerticalAlignment="Bottom">
-                              <Grid>
-                                  <TextBlock x:Name="SuperTitleText" Text="" FontSize="16" FontWeight="SemiBold" Visibility="Collapsed"
-                                             Foreground="{StaticResource GoldGradient}" Opacity="0.8" Margin="2,0,0,-4"
-                                             CharacterSpacing="100"/>
-                              </Grid>
-                              <Grid>
-                                  <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Bold" 
-                                             TextWrapping="Wrap" Foreground="White" LineHeight="56">
-                                  </TextBlock>
-                              </Grid>
-                          </StackPanel>
-                      </StackPanel>
-                     
-                      <!-- SHARED SHIMMER (Wrapped in a Grid to reserve bottom-aligned space) -->
-                      <Grid x:Name="TitleShimmerContainer" VerticalAlignment="Bottom" HorizontalAlignment="Left">
+                    <!-- TITLE SECTION (Unified for layout stability) -->
+                    <Grid x:Name="TitlePanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,6">
+                          <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Black" Foreground="White" 
+                                     TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"
+                                     VerticalAlignment="Bottom"/>
+                          
                           <ctl:ShimmerControl x:Name="TitleShimmer" Width="400" Height="56" CornerRadius="8" Visibility="Collapsed"
                                               HorizontalAlignment="Left" VerticalAlignment="Bottom"/>
                       </Grid>
-                  </Grid>
 
                    <!-- METADATA RIBBON (Unified for space efficiency) -->
                    <StackPanel x:Name="MetadataRibbon" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center" Margin="2,0,0,12">
@@ -695,7 +686,8 @@
                     </StackPanel>
                 </Grid>
 
-            </StackPanel>
+            </StackPanel> <!-- InfoColumn -->
+            </Grid> <!-- InfoContainerInner -->
         </Grid>
     
                     <!-- RIGHT: SERIES EPISODES -->
@@ -1187,7 +1179,7 @@
                     </Grid>
                 
         <!-- NARROW SECTIONS CONTAINER (Prevents Row Overlap) -->
-        <StackPanel x:Name="NarrowSectionsContainer" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Vertical">
+        <StackPanel x:Name="NarrowSectionsContainer" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Orientation="Vertical" Visibility="Collapsed">
             <!-- EPISODES (Narrow) -->
             <StackPanel x:Name="NarrowEpisodesSection" 
                              Visibility="Collapsed" Spacing="16" Margin="0,4,0,0">
