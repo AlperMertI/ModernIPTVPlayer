@@ -50,6 +50,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         public int SeasonNumber { get; set; }
         public string Name { get; set; }
         public List<UnifiedEpisode> Episodes { get; set; } = new List<UnifiedEpisode>();
+        public bool IsEnrichedByTmdb { get; set; }
     }
 
     public class UnifiedEpisode

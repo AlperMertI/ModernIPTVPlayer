@@ -732,7 +732,7 @@ namespace ModernIPTVPlayer
     public class TmdbMovieDetails
     {
         [JsonPropertyName("runtime")]
-        public int Runtime { get; set; } 
+        public int? Runtime { get; set; } 
 
         [JsonPropertyName("overview")]
         public string Overview { get; set; }
@@ -789,7 +789,7 @@ namespace ModernIPTVPlayer
         public string StillPath { get; set; }
 
         [JsonPropertyName("runtime")]
-        public int Runtime { get; set; }
+        public int? Runtime { get; set; }
 
         [JsonPropertyName("air_date")]
         public string AirDate { get; set; }

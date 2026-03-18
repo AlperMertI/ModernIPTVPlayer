@@ -178,25 +178,39 @@ namespace ModernIPTVPlayer.Services.Metadata
                 return cached.Data;
             }
 
-            // [NEW] If asking for Detail, but have a "Satisfied" Discovery result in cache, use it!
+            // [NEW] If asking for Detail, but have an ExpandedCard result in cache, we need to re-fetch!
+            // ExpandedCard doesn't merge episodes (for performance), so we need Detail context for full data.
             if (context == MetadataContext.Detail)
             {
-                string discoveryKey = cacheKey + "_discovery";
-                if (_resultCache.TryGetValue(discoveryKey, out var disc) && DateTime.Now < disc.Expiry)
+                // Check if there's an ExpandedCard cached version - if so, we need to re-fetch
+                // The cached version won't have episodes merged
+                var cachedData = _resultCache.FirstOrDefault(kvp => 
+                    kvp.Key.Contains(id ?? stream?.Title) && 
+                    !kvp.Key.EndsWith("_discovery") &&
+                    kvp.Value.Expiry > DateTime.Now).Value;
+                
+                if (cachedData.Data != null && (cachedData.Data.Seasons == null || cachedData.Data.Seasons.All(s => s.Episodes == null || s.Episodes.Count == 0)))
                 {
-                    if (IsSatisfied(disc.Data, MetadataContext.Detail))
+                    // We have cached data but no episodes - likely from ExpandedCard context
+                    // Force re-fetch by NOT using cache
+                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] ExpandedCard cache detected without episodes, re-fetching for Detail context");
+                }
+                else
+                {
+                    // Also check for Discovery cache promotion (existing logic)
+                    string discoveryKey = cacheKey + "_discovery";
+                    if (_resultCache.TryGetValue(discoveryKey, out var disc) && DateTime.Now < disc.Expiry)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] PROMOTED Discovery cache to Detail: {cacheKey}");
-                        return disc.Data;
+                        if (IsSatisfied(disc.Data, MetadataContext.Detail))
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] PROMOTED Discovery cache to Detail: {cacheKey}");
+                            return disc.Data;
+                        }
+                        var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail));
+                        string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
+                        AppLogger.Info($"[MetadataProvider] SEEDING Detail fetch ({id ?? stream?.Title}) | Reason: {seedReason}");
+                        return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, type, stream, cacheKey, context, onBackdropFound, disc.Data))).Value;
                     }
-                    // [SEED] If not fully satisfied, seed the Detail fetch with Discovery data!
-                    // This allows skipping addons that were already probed.
-                    // [SEED] If not fully satisfied, seed the Detail fetch with Discovery data!
-                    // This allows skipping addons that were already probed.
-                    var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail));
-                    string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
-                    AppLogger.Info($"[MetadataProvider] SEEDING Detail fetch ({id ?? stream.Title}) | Reason: {seedReason}");
-                    return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, type, stream, cacheKey, context, onBackdropFound, disc.Data))).Value;
                 }
             }
 
@@ -1204,7 +1218,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
         }
 
-        public async Task EnrichSeasonAsync(UnifiedMetadata metadata, int seasonNumber)
+        public async Task EnrichSeasonAsync(UnifiedMetadata metadata, int seasonNumber, MetadataTrace? trace = null)
         {
             if (metadata?.TmdbInfo == null) return;
             
@@ -1212,10 +1226,19 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (season == null) return;
 
             // Fetch detailed season info
+            if (trace != null) trace.Log("TMDB", $"Enriching Season {seasonNumber}...");
             var tmdbSeason = await TmdbHelper.GetSeasonDetailsAsync(metadata.TmdbInfo.Id, seasonNumber);
-            if (tmdbSeason?.Episodes == null) return;
+            if (tmdbSeason?.Episodes == null) 
+            {
+                if (trace != null) trace.Log("TMDB", $"Season {seasonNumber} NOT found or empty on TMDB.");
+                return;
+            }
 
             // Merge TMDB data into existing episodes, or create new ones
+            int initialCount = season.Episodes.Count;
+            int updated = 0;
+            int added = 0;
+
             foreach (var tmdbEp in tmdbSeason.Episodes)
             {
                 var existing = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
@@ -1236,6 +1259,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     if (!string.IsNullOrEmpty(tmdbEp.Overview)) existing.Overview = tmdbEp.Overview;
                     if (!string.IsNullOrEmpty(tmdbEp.StillUrl)) existing.ThumbnailUrl = tmdbEp.StillUrl;
                     if (!existing.AirDate.HasValue && tmdbEp.AirDateDateTime.HasValue) existing.AirDate = tmdbEp.AirDateDateTime;
+                    updated++;
                 }
                 else
                 {
@@ -1251,11 +1275,16 @@ namespace ModernIPTVPlayer.Services.Metadata
                         AirDate = tmdbEp.AirDateDateTime,
                         StreamUrl = null // No stream yet
                     });
+                    added++;
                 }
             }
 
+            if (trace != null) 
+                trace.Log("TMDB", $"Season {seasonNumber} Enrichment Completed: {initialCount} -> {season.Episodes.Count} (Updated {updated}, Added {added})");
+
             // Ensure correct order
             season.Episodes = season.Episodes.OrderBy(e => e.EpisodeNumber).ToList();
+            season.IsEnrichedByTmdb = true;
         }
 
         private void MapStremioToUnified(StremioMeta stremio, UnifiedMetadata unified, bool overwritePrimary, bool quiet = false)
@@ -1576,46 +1605,85 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             TmdbMovieResult? tmdb = null;
             
+            // [DEBUG] Log the lookup details for series
+            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] {(metadata.IsSeries ? "SERIES" : "MOVIE")}: Title=\"{metadata.Title}\", ImdbId=\"{metadata.ImdbId}\", Year=\"{metadata.Year}\", Context={metadata.DataSource}");
+            
             // Search TMDB
             if (metadata.IsSeries)
             {
+                // Step 1: Try tmdb: prefix ID
                 if (metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
                 {
                     int.TryParse(metadata.ImdbId.Replace("tmdb:", ""), out int tvId);
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying tmdb: ID = {tvId}");
                     if (tvId > 0) tmdb = await TmdbHelper.GetTvByIdAsync(tvId);
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: tmdb: ID result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
                 }
                 
-                if (tmdb == null)
+                // Step 2: Try external ID (IMDb)
+                if (tmdb == null && !string.IsNullOrEmpty(metadata.ImdbId) && metadata.ImdbId.StartsWith("tt"))
                 {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying IMDb ID = {metadata.ImdbId}");
                     var searchResult = await TmdbHelper.GetTvByExternalIdAsync(metadata.ImdbId);
                     if (searchResult != null)
                     {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: IMDb lookup found ID = {searchResult.Id}, fetching full details...");
                         // [FIX] External lookup returns search-level result. Must fetch FULL details for seasons.
                         tmdb = await TmdbHelper.GetTvByIdAsync(searchResult.Id);
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: IMDb ID lookup returned NULL");
+                    }
+                }
+                
+                // Step 3: Try title search (like movies do)
+                if (tmdb == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying title search = \"{metadata.Title}\", year = \"{metadata.Year}\"");
+                    var titleSearch = await TmdbHelper.SearchTvAsync(metadata.Title, metadata.Year?.Split('–')[0]);
+                    if (titleSearch != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Title search found ID = {titleSearch.Id}, fetching full details...");
+                        tmdb = await TmdbHelper.GetTvByIdAsync(titleSearch.Id);
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Title search returned NULL");
                     }
                 }
             }
             else
             {
+                // [DEBUG] Log movie lookup details
+                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Title=\"{metadata.Title}\", ImdbId=\"{metadata.ImdbId}\", Year=\"{metadata.Year}\"");
+                
                 if (metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
                 {
                     int.TryParse(metadata.ImdbId.Replace("tmdb:", ""), out int movieId);
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Trying tmdb: ID = {movieId}");
                     if (movieId > 0) tmdb = await TmdbHelper.GetMovieByIdAsync(movieId);
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: tmdb: ID result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
                 }
 
                 if (tmdb == null)
                 {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Trying title search = \"{metadata.Title}\", year = \"{metadata.Year?.Split('–')[0]}\"");
                     tmdb = await TmdbHelper.SearchMovieAsync(metadata.Title, metadata.Year?.Split('–')[0]);
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Title search result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
                     
                     if (tmdb == null && metadata.ImdbId != null && metadata.ImdbId.StartsWith("tt"))
                     {
+                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Trying IMDb ID fallback = {metadata.ImdbId}");
                          tmdb = await TmdbHelper.GetMovieByExternalIdAsync(metadata.ImdbId);
+                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: IMDb fallback result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
                     }
                 }
             }
 
             if (tmdb != null)
             {
+                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SUCCESS: Found TMDB ID = {tmdb.Id}, Title = {tmdb.DisplayTitle}");
                 metadata.DataSource = "Stremio + TMDB";
                 
                 // Prioritize localized TMDB data
@@ -1635,12 +1703,106 @@ namespace ModernIPTVPlayer.Services.Metadata
                 
                 metadata.TmdbInfo = tmdb;
 
+                // [NEW] For series, fetch season details from TMDB to get episodes
+                if (metadata.IsSeries && tmdb.Seasons != null && tmdb.Seasons.Count > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Fetching season details for {tmdb.Seasons.Count} TMDB seasons...");
+                    
+                    foreach (var tmdbSeason in tmdb.Seasons)
+                    {
+                        // Skip special seasons (season 0) which are typically specials
+                        if (tmdbSeason.SeasonNumber <= 0) continue;
+                        
+                        // Check if this season already exists
+                        var existingSeason = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == tmdbSeason.SeasonNumber);
+                        bool hasExistingEpisodes = existingSeason?.Episodes != null && existingSeason.Episodes.Count > 0;
+                        
+                        var seasonDetails = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, tmdbSeason.SeasonNumber);
+                        if (seasonDetails?.Episodes != null && seasonDetails.Episodes.Count > 0)
+                        {
+                            // Create the season if it doesn't exist
+                            if (existingSeason == null)
+                            {
+                                existingSeason = new UnifiedSeason { SeasonNumber = tmdbSeason.SeasonNumber };
+                                metadata.Seasons.Add(existingSeason);
+                            }
+                            
+                            // If addon already has episodes, merge: use TMDB titles/descriptions but keep addon stream URLs
+                            if (hasExistingEpisodes)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Merging {seasonDetails.Episodes.Count} TMDB episodes with {existingSeason.Episodes.Count} addon episodes");
+                                
+                                // For each TMDB episode, update title/overview but keep addon stream URL if available
+                                foreach (var tmdbEp in seasonDetails.Episodes)
+                                {
+                                    var existingEp = existingSeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
+                                    if (existingEp != null)
+                                    {
+                                        // Always use TMDB title/overview when available (they are more complete)
+                                        if (!string.IsNullOrEmpty(tmdbEp.Name))
+                                            existingEp.Title = tmdbEp.Name;
+                                        if (!string.IsNullOrEmpty(tmdbEp.Overview))
+                                            existingEp.Overview = tmdbEp.Overview;
+                                        if (!string.IsNullOrEmpty(tmdbEp.StillPath))
+                                            existingEp.ThumbnailUrl = $"https://image.tmdb.org/t/p/w300{tmdbEp.StillPath}";
+                                    }
+                                    else
+                                    {
+                                        // New episode from TMDB - add it
+                                        string episodeId = !string.IsNullOrEmpty(tmdb.ImdbId) 
+                                            ? $"{tmdb.ImdbId}:{tmdbSeason.SeasonNumber}:{tmdbEp.EpisodeNumber}" 
+                                            : $"tmdb:{tmdb.Id}:{tmdbSeason.SeasonNumber}:{tmdbEp.EpisodeNumber}";
+                                        
+                                        existingSeason.Episodes.Add(new UnifiedEpisode
+                                        {
+                                            Id = episodeId,
+                                            SeasonNumber = tmdbSeason.SeasonNumber,
+                                            EpisodeNumber = tmdbEp.EpisodeNumber,
+                                            Title = tmdbEp.Name ?? $"Episode {tmdbEp.EpisodeNumber}",
+                                            Overview = tmdbEp.Overview,
+                                            ThumbnailUrl = !string.IsNullOrEmpty(tmdbEp.StillPath) ? $"https://image.tmdb.org/t/p/w300{tmdbEp.StillPath}" : null
+                                        });
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                // No existing episodes - add all from TMDB
+                                existingSeason.Episodes.Clear();
+                                foreach (var ep in seasonDetails.Episodes)
+                                {
+                                    string episodeId = !string.IsNullOrEmpty(tmdb.ImdbId) 
+                                        ? $"{tmdb.ImdbId}:{tmdbSeason.SeasonNumber}:{ep.EpisodeNumber}" 
+                                        : $"tmdb:{tmdb.Id}:{tmdbSeason.SeasonNumber}:{ep.EpisodeNumber}";
+                                    
+                                    existingSeason.Episodes.Add(new UnifiedEpisode
+                                    {
+                                        Id = episodeId,
+                                        SeasonNumber = tmdbSeason.SeasonNumber,
+                                        EpisodeNumber = ep.EpisodeNumber,
+                                        Title = ep.Name ?? $"Episode {ep.EpisodeNumber}",
+                                        Overview = ep.Overview,
+                                        ThumbnailUrl = !string.IsNullOrEmpty(ep.StillPath) ? $"https://image.tmdb.org/t/p/w300{ep.StillPath}" : null
+                                    });
+                                }
+                                
+                                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Added {seasonDetails.Episodes.Count} episodes from TMDB");
+                            }
+                        }
+                    }
+                }
+
                 // Propagate IMDb ID if found to help addon lookup
                 if (!string.IsNullOrEmpty(tmdb.ImdbId) && (string.IsNullOrEmpty(metadata.ImdbId) || metadata.ImdbId.StartsWith("tmdb:")))
                 {
                     System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Resolved IMDb ID from TMDB: {tmdb.ImdbId}");
                     metadata.ImdbId = tmdb.ImdbId;
                 }
+            }
+            
+            if (tmdb == null)
+            {
+                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] FAILED: No TMDB match found for Title=\"{metadata.Title}\", ImdbId=\"{metadata.ImdbId}\"");
             }
             
             return tmdb;
@@ -1858,7 +2020,9 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 foreach (var tmdbSeason in tmdb.Seasons)
                 {
-                    // We typically prioritize TMDB season structure
+                    // Filter out placeholder seasons with 0 episodes (common for future seasons not yet populated)
+                    if (tmdbSeason.EpisodeCount == 0 && tmdbSeason.SeasonNumber > 1) continue;
+
                     var existingSeason = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == tmdbSeason.SeasonNumber);
                     if (existingSeason == null)
                     {

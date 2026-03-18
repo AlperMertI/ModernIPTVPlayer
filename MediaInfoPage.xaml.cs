@@ -1637,6 +1637,23 @@ namespace ModernIPTVPlayer
 
             var cachedMetadata = MetadataProvider.Instance.TryPeekMetadata(item);
             bool isCached = cachedMetadata != null;
+            
+            System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Cache check: isCached={isCached}, Type={item.Type}, SeasonsCount={cachedMetadata?.Seasons?.Count ?? -1}");
+            
+            // [FIX] For series, if cached metadata doesn't have episodes (e.g., from ExpandedCard context), 
+            // we need to re-fetch to get the full episode list for Detail page
+            // Note: Type can be "SERIES" or "series" depending on source, use case-insensitive check
+            if (isCached && !string.IsNullOrEmpty(item.Type) && item.Type.Equals("series", StringComparison.OrdinalIgnoreCase))
+            {
+                bool hasEpisodes = cachedMetadata.Seasons?.Any(s => s.Episodes?.Any() == true) == true;
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Series check: hasEpisodes={hasEpisodes}");
+                if (!hasEpisodes)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Cache doesn't have episodes (from ExpandedCard), re-fetching for Detail.");
+                    cachedMetadata = null;
+                    isCached = false;
+                }
+            }
 
             if (isCached)
             {
@@ -1728,6 +1745,13 @@ namespace ModernIPTVPlayer
                     DataSource = "Fallback"
                 };
                 _unifiedMetadata = unified;
+            }
+
+            // [FIX] Update _cachedTmdb with newly fetched info to enable episode enrichment
+            if (_cachedTmdb == null && _unifiedMetadata?.TmdbInfo != null)
+            {
+                _cachedTmdb = _unifiedMetadata.TmdbInfo;
+                System.Diagnostics.Debug.WriteLine("[MediaInfoPage] _cachedTmdb synchronized after metadata fetch.");
             }
 
             // 6. UI Population
@@ -3719,15 +3743,19 @@ namespace ModernIPTVPlayer
 
                     if (epList.Count > 0)
                     {
-                        newSeasons.Add(new SeasonItem
+                        var seasonItem = new SeasonItem
                         {
-                            Name = s.SeasonNumber == 0 ? "Özel Bölümler" : $"{s.SeasonNumber}. Sezon",
-                            SeasonName = s.SeasonNumber == 0 ? "Özel Bölümler" : $"{s.SeasonNumber}. Sezon",
                             SeasonNumber = s.SeasonNumber,
-                            Episodes = epList
-                        });
+                            Name = s.Name ?? (s.SeasonNumber == 0 ? "Özel Bölümler" : $"{s.SeasonNumber}. Sezon"),
+                            SeasonName = s.Name ?? (s.SeasonNumber == 0 ? "Özel Bölümler" : $"{s.SeasonNumber}. Sezon"),
+                            Episodes = epList,
+                            IsEnrichedByTmdb = s.IsEnrichedByTmdb
+                        };
+                        newSeasons.Add(seasonItem);
                     }
                 }
+                
+                System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 1.2: Population finished. Seasons.Count={newSeasons.Count}");
 
                 // [FLICKER PREVENTION] Compare with existing to avoid full clear/reset
                 // Check if counts changed OR if primary season's first episode title changed (e.g. generic -> real)
@@ -3840,13 +3868,16 @@ namespace ModernIPTVPlayer
                     // 2. Identify if enrichment is needed
                     bool hasGenericTitles = season.Episodes.Any(ep => Services.Metadata.MetadataProvider.IsGenericEpisodeTitle(ep.Title, _unifiedMetadata?.Title));
 
+                    var tmdbInfo = _unifiedMetadata?.TmdbInfo;
+                    bool tmdbEnabled = AppSettings.IsTmdbEnabled && !string.IsNullOrWhiteSpace(AppSettings.TmdbApiKey);
+
                     bool needsEnrichment = season.Episodes.Count == 0 || 
                                            hasGenericTitles ||
-                                           (_cachedTmdb != null && season.Episodes.Any(ep => string.IsNullOrEmpty(ep.Overview) || string.IsNullOrEmpty(ep.DurationFormatted)));
+                                           (tmdbInfo != null && !season.IsEnrichedByTmdb && (season.Episodes.Any(ep => string.IsNullOrEmpty(ep.Overview) || string.IsNullOrEmpty(ep.DurationFormatted)) || tmdbEnabled));
 
-                    if (needsEnrichment)
+                    if (needsEnrichment && tmdbInfo != null)
                     {
-                         System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Season {season.SeasonNumber} needs enrichment.");
+                         System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Season {season.SeasonNumber} needs enrichment. (EnrichedByTmdb={season.IsEnrichedByTmdb}, TmdbEnabled={tmdbEnabled})");
                          _ = LoadTmdbSeasonDataAsync(season.SeasonNumber);
                     }
                 }
@@ -3947,8 +3978,10 @@ namespace ModernIPTVPlayer
                          }
 
                          uiSeason.Episodes = newEpList;
-                         
-                          // If this is the currently selected season, update the View
+                         uiSeason.IsEnrichedByTmdb = true;
+                         System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 7.1: LoadTmdbSeasonDataAsync UI Update: Season {seasonNumber}, Count {newEpList.Count}");
+                          
+                           // If this is the currently selected season, update the View
                           if (SeasonComboBox.SelectedItem == uiSeason)
                           {
                                // Save selection
@@ -3987,6 +4020,8 @@ namespace ModernIPTVPlayer
                  {
                      _selectedEpisode = ep;
                      _streamUrl = ep.StreamUrl;
+ 
+                     System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Episode selected: S{ep.SeasonNumber}E{ep.EpisodeNumber}, Title='{ep.Title}', Overview='{ep.Overview?.Substring(0, Math.Min(50, ep.Overview?.Length ?? 0))}...'");
 
                      // [Fix] Restore StreamUrl from history if missing (Stremio Series Resume)
                      var history = HistoryManager.Instance.GetProgress(ep.Id);
@@ -7639,6 +7674,7 @@ namespace ModernIPTVPlayer
         public string SeasonName { get; set; } // Alias for binding
         public int SeasonNumber { get; set; }
         public List<EpisodeItem> Episodes { get; set; }
+        public bool IsEnrichedByTmdb { get; set; }
     }
 
     public class EpisodeItem : System.ComponentModel.INotifyPropertyChanged
@@ -8033,13 +8069,20 @@ namespace ModernIPTVPlayer
 
         private void UpdateInfoPanelVisibility(bool showEpisode)
         {
+            System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] UpdateInfoPanelVisibility called: showEpisode={showEpisode}, _selectedEpisode={_selectedEpisode?.Title ?? "null"}, TitleText.Opacity={TitleText?.Opacity}, TitleText.Visibility={TitleText?.Visibility}");
+            
             if (showEpisode && _selectedEpisode != null)
             {
                 // EPISODE VIEW
                 if (TitleText != null)
                 {
-                    TitleText.Text = _selectedEpisode.Title;
-                    if (StickyTitle != null) StickyTitle.Text = _selectedEpisode.Title;
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Setting episode title: '{_selectedEpisode.Title}'");
+                    // Fallback to episode number if title is null/empty
+                    var episodeTitle = !string.IsNullOrEmpty(_selectedEpisode.Title) 
+                        ? _selectedEpisode.Title 
+                        : $"Bölüm {_selectedEpisode.EpisodeNumber}";
+                    TitleText.Text = episodeTitle;
+                    if (StickyTitle != null) StickyTitle.Text = episodeTitle;
                     
                     // [RULE] Show Logo AND Episode Title
                     if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.LogoUrl))
@@ -8052,6 +8095,7 @@ namespace ModernIPTVPlayer
                     }
 
                     TitleText.Visibility = Visibility.Visible;
+                    TitleText.Opacity = 1; // Ensure text is fully visible
                     
                     // [RULE] Hide SuperTitle in Episode View
                     if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
@@ -8061,6 +8105,8 @@ namespace ModernIPTVPlayer
                         TitlePanel.Visibility = Visibility.Visible;
                         TitlePanel.Opacity = 1;
                     }
+                    
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Episode view set: TitleText='{TitleText?.Text}', Opacity={TitleText?.Opacity}, Visibility={TitleText?.Visibility}");
                 }
 
                 if (OverviewText != null)

@@ -4,7 +4,7 @@ using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer.Services.Metadata
 {
-    internal sealed class MetadataTrace
+    public sealed class MetadataTrace
     {
         public string OperationId { get; }
         public string ContextName { get; }

@@ -798,19 +798,16 @@ namespace ModernIPTVPlayer.Controls
                             }
                         }
 
-                        // 3. Fallback: If no history, try S1E1
-                        if (nextEp == null && (history == null || history.IsFinished) && unified.Seasons != null)
+                        // 3. Fallback: If no history, try S1E1 ONLY if user has already started watching (not for unwatched series)
+                        // For unwatched series, show series-level info instead of episode info
+                        if (nextEp == null && history != null && history.IsFinished && unified.Seasons != null)
                         {
-                             // If history is null, or we finished last ep but couldn't find next (failed above),
-                             // But if history is null, we definitely want S1E1.
-                             if (history == null)
-                             {
-                                 var s1 = unified.Seasons.FirstOrDefault(s => s.SeasonNumber == 1) ?? unified.Seasons.FirstOrDefault();
-                                 if (s1 != null)
-                                 {
-                                     nextEp = s1.Episodes.FirstOrDefault(e => e.EpisodeNumber == 1) ?? s1.Episodes.FirstOrDefault();
-                                 }
-                             }
+                            // User has started watching and finished - find next episode
+                            var s1 = unified.Seasons.FirstOrDefault(s => s.SeasonNumber == 1) ?? unified.Seasons.FirstOrDefault();
+                            if (s1 != null)
+                            {
+                                nextEp = s1.Episodes.FirstOrDefault(e => e.EpisodeNumber == 1) ?? s1.Episodes.FirstOrDefault();
+                            }
                         }
 
                         // 4. Update Display
