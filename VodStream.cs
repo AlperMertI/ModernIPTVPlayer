@@ -18,6 +18,7 @@ namespace ModernIPTVPlayer
         public string? Description => null;
         public string PosterUrl => IconUrl;
         public string? BackdropUrl => null;
+        public string? Type => "movie";
         public string StreamUrl { get; set; } = "";
 
         // UI Binding Implementation

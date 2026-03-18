@@ -11,6 +11,7 @@ namespace ModernIPTVPlayer.Models
         string PosterUrl { get; }
         string? BackdropUrl { get; }
         string Rating { get; }
+        string? Type { get; }
         string StreamUrl { get; set; }
         TmdbMovieResult TmdbInfo { get; set; }
 

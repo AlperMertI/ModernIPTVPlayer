@@ -293,33 +293,47 @@
                         <Setter Target="ContentGrid.RowDefinitions[0].Height" Value="*"/>
                         <Setter Target="ContentGrid.RowDefinitions[1].Height" Value="0"/>
                         <Setter Target="ContentGrid.RowDefinitions[2].Height" Value="0"/>
+                        <Setter Target="ContentGrid.RowDefinitions[3].Height" Value="0"/>
+                        <Setter Target="ContentGrid.ColumnDefinitions[1].Width" Value="400"/>
                         <Setter Target="ContentGrid.VerticalAlignment" Value="Stretch"/>
                         <Setter Target="ContentGrid.Height" Value="NaN"/>
                         <Setter Target="ContentGrid.MaxHeight" Value="Infinity"/>
+                        <Setter Target="ContentGrid.Padding" Value="60,40,20,40"/>
                         <Setter Target="InfoContainer.VerticalAlignment" Value="Stretch"/>
                         <Setter Target="InfoContainerInner.VerticalAlignment" Value="Bottom"/>
-                        <Setter Target="ContentGrid.Padding" Value="60,0,20,0"/>
                         <Setter Target="TitleText.FontSize" Value="48"/>
+                        <Setter Target="InfoColumn.MaxWidth" Value="800"/>
+                        <Setter Target="InfoColumn.HorizontalAlignment" Value="Left"/>
                         
-                        <Setter Target="EpisodesPanel.VerticalAlignment" Value="Center"/>
+                        <Setter Target="EpisodesPanel.VerticalAlignment" Value="Stretch"/>
                         <Setter Target="EpisodesPanel.Margin" Value="40,40,0,40"/>
+                        <Setter Target="EpisodesPanel.Width" Value="400"/>
                         <Setter Target="EpisodesPanel.(Grid.Row)" Value="0"/>
                         <Setter Target="EpisodesPanel.(Grid.Column)" Value="1"/>
                         <Setter Target="EpisodesPanel.(Grid.ColumnSpan)" Value="1"/>
                         <Setter Target="EpisodesPanel.HorizontalAlignment" Value="Right"/>
                         
-                        <Setter Target="SourcesPanel.VerticalAlignment" Value="Center"/>
+                        <Setter Target="SourcesPanel.VerticalAlignment" Value="Stretch"/>
                         <Setter Target="SourcesPanel.Margin" Value="40,40,0,40"/>
+                        <Setter Target="SourcesPanel.Width" Value="400"/>
                         <Setter Target="SourcesPanel.(Grid.Row)" Value="0"/>
                         <Setter Target="SourcesPanel.(Grid.Column)" Value="1"/>
                         <Setter Target="SourcesPanel.(Grid.ColumnSpan)" Value="1"/>
                         <Setter Target="SourcesPanel.HorizontalAlignment" Value="Right"/>
                         
+                        <Setter Target="SourcesShimmerPanel.Width" Value="400"/>
                         <Setter Target="SourcesShimmerPanel.(Grid.Row)" Value="0"/>
                         <Setter Target="SourcesShimmerPanel.(Grid.Column)" Value="1"/>
-                        <Setter Target="SourcesShimmerPanel.(Grid.ColumnSpan)" Value="1"/>
                         <Setter Target="SourcesShimmerPanel.HorizontalAlignment" Value="Right"/>
-                        <Setter Target="SourcesShimmerPanel.VerticalAlignment" Value="Bottom"/>
+                        <Setter Target="SourcesShimmerPanel.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="SourcesShimmerPanel.Margin" Value="40,40,0,40"/>
+                        
+                        <Setter Target="EpisodesShimmerPanel.Width" Value="400"/>
+                        <Setter Target="EpisodesShimmerPanel.(Grid.Row)" Value="0"/>
+                        <Setter Target="EpisodesShimmerPanel.(Grid.Column)" Value="1"/>
+                        <Setter Target="EpisodesShimmerPanel.HorizontalAlignment" Value="Right"/>
+                        <Setter Target="EpisodesShimmerPanel.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="EpisodesShimmerPanel.Margin" Value="40,40,0,40"/>
                         
                         <!-- Collapse Narrow Sections in Wide Mode -->
                         <Setter Target="NarrowSectionsContainer.Visibility" Value="Collapsed"/>
@@ -350,34 +364,41 @@
                         <Setter Target="RootScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
                         <Setter Target="RootScrollViewer.VerticalScrollMode" Value="Auto"/>
                         
-                        <Setter Target="ContentGrid.RowDefinitions[0].Height" Value="Auto"/>
-                        <Setter Target="ContentGrid.RowDefinitions[1].Height" Value="Auto"/>
-                        <Setter Target="ContentGrid.RowDefinitions[2].Height" Value="Auto"/>
-                        <Setter Target="ContentGrid.Padding" Value="20,140,20,40"/>
+                         <!-- Stable Rows for Narrow Mode (Dynamic targeting) -->
+                         <Setter Target="Row0.Height" Value="Auto"/> <!-- Info -->
+                         <Setter Target="Row1.Height" Value="Auto"/> <!-- Sources -->
+                         <Setter Target="Row2.Height" Value="Auto"/> <!-- Episodes -->
+                         <Setter Target="Row3.Height" Value="Auto"/> <!-- Extra Content -->
+                         <Setter Target="ContentGrid.ColumnDefinitions[0].Width" Value="*"/>
+                         <Setter Target="ContentGrid.ColumnDefinitions[1].Width" Value="0"/>
+                        <Setter Target="ContentGrid.Padding" Value="20,60,20,40"/> <!-- [FIX] Matches C# override -->
+                        <Setter Target="ContentGrid.VerticalAlignment" Value="Top"/>
                         <Setter Target="TitleText.FontSize" Value="28"/>
                         
                         <Setter Target="InfoContainer.VerticalAlignment" Value="Top"/>
+                        <Setter Target="InfoContainer.(Grid.Row)" Value="0"/>
                         <Setter Target="InfoContainer.(Grid.ColumnSpan)" Value="2"/>
-                        <Setter Target="InfoContainerInner.VerticalAlignment" Value="Top"/>
-                        <Setter Target="InfoContainerInner.Margin" Value="0,40,0,0"/>
-                        <Setter Target="InfoColumn.HorizontalAlignment" Value="Stretch"/>
-                        <Setter Target="InfoColumn.MaxWidth" Value="800"/>
-                        <Setter Target="InfoColumn.VerticalAlignment" Value="Top"/>
-                        <Setter Target="InfoColumn.Margin" Value="0,0,0,0"/>
+                         <Setter Target="InfoContainerInner.VerticalAlignment" Value="Top"/>
+                         <Setter Target="InfoContainerInner.Margin" Value="0,0,0,0"/>
+                         <Setter Target="InfoColumn.HorizontalAlignment" Value="Center"/> <!-- [FIX] Center in available space -->
+                         <Setter Target="InfoColumn.MaxWidth" Value="800"/>
+                         <Setter Target="InfoColumn.VerticalAlignment" Value="Top"/>
+                         <Setter Target="InfoColumn.Margin" Value="0,0,0,0"/>
 
                         <Setter Target="IdentityContainer.HorizontalAlignment" Value="Center"/>
                         <Setter Target="IdentityStack.HorizontalAlignment" Value="Center"/>
                         <Setter Target="ContentLogo.HorizontalAlignment" Value="Center"/>
-                        <Setter Target="TitlePanel.HorizontalAlignment" Value="Center"/>
-                        <Setter Target="MetadataRibbon.HorizontalAlignment" Value="Center"/>
-                        <Setter Target="ActionBarPanel.HorizontalAlignment" Value="Stretch"/>
-                        <Setter Target="IdentityStack.HorizontalAlignment" Value="Center"/>
-                        
-                        <Setter Target="TitleText.TextAlignment" Value="Center"/>
-                         <Setter Target="GenresText.TextAlignment" Value="Center"/>
-                        <Setter Target="OverviewText.TextAlignment" Value="Center"/>
-                        <Setter Target="InfoColumn.Spacing" Value="0"/>
-                        <Setter Target="MetadataRibbon.Margin" Value="0,0,0,12"/>
+                         <Setter Target="TitlePanel.HorizontalAlignment" Value="Center"/>
+                         <Setter Target="TitleGroup.HorizontalAlignment" Value="Center"/> <!-- [FIX] Explicit group alignment -->
+                         <Setter Target="MetadataRibbon.HorizontalAlignment" Value="Center"/>
+                         <Setter Target="ActionBarPanel.HorizontalAlignment" Value="Stretch"/>
+                         <Setter Target="IdentityStack.HorizontalAlignment" Value="Center"/>
+                         
+                         <Setter Target="TitleText.TextAlignment" Value="Center"/>
+                          <Setter Target="GenresText.TextAlignment" Value="Center"/>
+                         <Setter Target="OverviewText.TextAlignment" Value="Center"/>
+                         <Setter Target="InfoColumn.Spacing" Value="0"/>
+                         <Setter Target="MetadataRibbon.Margin" Value="0,0,0,12"/>
                         
                         <!-- Center Narrow Specific Sections -->
                         <Setter Target="NarrowSectionsContainer.Spacing" Value="0"/>
@@ -400,35 +421,48 @@
                         <Setter Target="NarrowSourcesSection.HorizontalAlignment" Value="Stretch"/>
                         <Setter Target="NarrowAddonSelector.HorizontalAlignment" Value="Center"/>
                         
-                        <!-- Reposition Wide Panels to act as Mobile Panels (Row 1) -->
-                        <Setter Target="EpisodesPanel.(Grid.Row)" Value="1"/>
+                        <!-- Reposition Wide Panels to act as Mobile Panels -->
+                        <!-- Episodes Panel in Row 2 -->
+                        <Setter Target="EpisodesPanel.(Grid.Row)" Value="2"/>
                         <Setter Target="EpisodesPanel.(Grid.Column)" Value="0"/>
                         <Setter Target="EpisodesPanel.(Grid.ColumnSpan)" Value="2"/>
                         <Setter Target="EpisodesPanel.HorizontalAlignment" Value="Stretch"/>
-                        <Setter Target="EpisodesPanel.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="EpisodesPanel.VerticalAlignment" Value="Top"/>
                         <Setter Target="EpisodesPanel.Width" Value="NaN"/>
-                        <Setter Target="EpisodesPanel.Margin" Value="0,0,0,0"/>
+                        <Setter Target="EpisodesPanel.Margin" Value="0,20,0,0"/>
 
+                        <!-- Sources Panel in Row 1 -->
                         <Setter Target="SourcesPanel.(Grid.Row)" Value="1"/>
                         <Setter Target="SourcesPanel.(Grid.Column)" Value="0"/>
                         <Setter Target="SourcesPanel.(Grid.ColumnSpan)" Value="2"/>
                         <Setter Target="SourcesPanel.HorizontalAlignment" Value="Stretch"/>
-                        <Setter Target="SourcesPanel.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="SourcesPanel.VerticalAlignment" Value="Top"/>
                         <Setter Target="SourcesPanel.Width" Value="NaN"/>
-                        <Setter Target="SourcesPanel.Margin" Value="0,0,0,0"/>
+                        <Setter Target="SourcesPanel.Margin" Value="0,20,0,0"/>
 
                         <Setter Target="SourcesShimmerPanel.(Grid.Row)" Value="1"/>
                         <Setter Target="SourcesShimmerPanel.(Grid.Column)" Value="0"/>
                         <Setter Target="SourcesShimmerPanel.(Grid.ColumnSpan)" Value="2"/>
                         <Setter Target="SourcesShimmerPanel.HorizontalAlignment" Value="Stretch"/>
-                        <Setter Target="SourcesShimmerPanel.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="SourcesShimmerPanel.VerticalAlignment" Value="Top"/>
                         <Setter Target="SourcesShimmerPanel.Width" Value="NaN"/>
-                        <Setter Target="SourcesShimmerPanel.Margin" Value="0,0,0,0"/>
+                        <Setter Target="SourcesShimmerPanel.Margin" Value="0,20,0,0"/>
 
-                        <!-- Push Narrow Container (Cast/Director) to Row 2 -->
-                        <Setter Target="NarrowSectionsContainer.(Grid.Row)" Value="2"/>
-                        <Setter Target="NarrowSectionsContainer.Visibility" Value="Visible"/>
-                    </VisualState.Setters>
+                        <!-- Episodes Shimmer Repo in Row 2 -->
+                        <Setter Target="EpisodesShimmerPanel.(Grid.Row)" Value="2"/>
+                        <Setter Target="EpisodesShimmerPanel.(Grid.Column)" Value="0"/>
+                        <Setter Target="EpisodesShimmerPanel.(Grid.ColumnSpan)" Value="2"/>
+                        <Setter Target="EpisodesShimmerPanel.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="EpisodesShimmerPanel.VerticalAlignment" Value="Top"/>
+                        <Setter Target="EpisodesShimmerPanel.Width" Value="NaN"/>
+                        <Setter Target="EpisodesShimmerPanel.Margin" Value="0,20,0,0"/>
+
+                        <!-- Push Narrow Container (Cast/Director) to Row 3 -->
+                         <Setter Target="NarrowSectionsContainer.(Grid.Row)" Value="3"/>
+                         <Setter Target="NarrowSectionsContainer.Visibility" Value="Collapsed"/> <!-- User Request: No Cast/Director -->
+                         <Setter Target="CastSection.Visibility" Value="Collapsed"/>
+                         <Setter Target="DirectorSection.Visibility" Value="Collapsed"/>
+                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
@@ -439,9 +473,11 @@
         </Grid.ColumnDefinitions>
         
         <Grid.RowDefinitions>
-            <RowDefinition x:Name="Row0" Height="*"/>
-            <RowDefinition Height="0"/>
-            <RowDefinition Height="0"/>
+            <RowDefinition x:Name="Row0" Height="*"/> <!-- Info -->
+            <RowDefinition x:Name="Row1" Height="0"/> <!-- Sources / Episodes -->
+            <RowDefinition x:Name="Row2" Height="0"/> <!-- Episodes (Narrow Only) -->
+            <RowDefinition x:Name="Row3" Height="0"/> <!-- Narrow Sections (Cast/Director) -->
+            <RowDefinition Height="Auto"/>           <!-- Content Buffer -->
         </Grid.RowDefinitions>
         
         <!-- LEFT: INFO PANEL -->
@@ -734,6 +770,7 @@
             </Grid> <!-- InfoContainerInner -->
         </Grid>
     
+                    <!-- RIGHT: SERIES EPISODES -->
                     <!-- RIGHT: SERIES EPISODES -->
                     <Grid x:Name="EpisodesPanel" Grid.Column="1" Grid.Row="0" Width="450" MaxWidth="600" Visibility="Collapsed" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Center">
                          <!-- Premium Glass Background -->
@@ -1084,143 +1121,66 @@
                                       </ListView.ItemTemplate>
                                   </ListView>
 
-                                 <Grid x:Name="SourcesInlineShimmerOverlay" Grid.RowSpan="3" Visibility="Collapsed" IsHitTestVisible="False" Canvas.ZIndex="20">
-                                     <Border Background="#FF0D0D0D" CornerRadius="20"/>
-                                     <Grid>
-                                         <Grid.RowDefinitions>
-                                             <RowDefinition Height="Auto"/>
-                                             <RowDefinition Height="Auto"/>
-                                             <RowDefinition Height="*"/>
-                                         </Grid.RowDefinitions>
-
-                                         <Grid Padding="24,20,24,10">
-                                             <Grid.ColumnDefinitions>
-                                                 <ColumnDefinition Width="Auto"/>
-                                                 <ColumnDefinition Width="*"/>
-                                                 <ColumnDefinition Width="Auto"/>
-                                             </Grid.ColumnDefinitions>
-                                             <ctl:ShimmerControl Width="36" Height="36" CornerRadius="18"/>
-                                             <ctl:ShimmerControl Grid.Column="1" Width="120" Height="24" CornerRadius="4" HorizontalAlignment="Left" Margin="12,0,0,0"/>
-                                             <ctl:ShimmerControl Grid.Column="2" Width="36" Height="36" CornerRadius="18"/>
-                                         </Grid>
-
-                                         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="20" Margin="24,0,24,10">
-                                             <ctl:ShimmerControl Width="80" Height="20" CornerRadius="4"/>
-                                             <ctl:ShimmerControl Width="60" Height="20" CornerRadius="4"/>
-                                             <ctl:ShimmerControl Width="70" Height="20" CornerRadius="4"/>
-                                         </StackPanel>
-
-                                         <StackPanel Grid.Row="2" Spacing="8" Padding="16,0,16,20">
-                                             <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
-                                                 <ctl:ShimmerControl Width="220" Height="18" CornerRadius="4"/>
-                                                 <ctl:ShimmerControl Width="300" Height="14" CornerRadius="4"/>
-                                                 <StackPanel Orientation="Horizontal" Spacing="8">
-                                                     <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
-                                                     <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                  <!-- Sources List Shimmer (Nested) -->
+                                 <Grid x:Name="SourcesShimmerPanel" Grid.Row="2" Visibility="Collapsed" Padding="16,0,16,20" VerticalAlignment="Center">
+                                     <StackPanel Spacing="8">
+                                         <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
+                                             <Grid>
+                                                 <Grid.ColumnDefinitions>
+                                                     <ColumnDefinition Width="70"/>
+                                                     <ColumnDefinition Width="*"/>
+                                                 </Grid.ColumnDefinitions>
+                                                 <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
+                                                 <StackPanel Grid.Column="1" Spacing="6">
+                                                     <ctl:ShimmerControl Width="200" Height="18" CornerRadius="4"/>
+                                                     <StackPanel Orientation="Horizontal" Spacing="8">
+                                                         <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
+                                                         <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                                     </StackPanel>
+                                                     <ctl:ShimmerControl Width="280" Height="14" CornerRadius="4"/>
                                                  </StackPanel>
-                                             </StackPanel>
-                                             <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
-                                                 <ctl:ShimmerControl Width="190" Height="18" CornerRadius="4"/>
-                                                 <ctl:ShimmerControl Width="260" Height="14" CornerRadius="4"/>
-                                                 <StackPanel Orientation="Horizontal" Spacing="8">
-                                                     <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
-                                                     <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
-                                                 </StackPanel>
-                                             </StackPanel>
+                                             </Grid>
                                          </StackPanel>
-                                     </Grid>
+                                         <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
+                                             <Grid>
+                                                 <Grid.ColumnDefinitions>
+                                                     <ColumnDefinition Width="70"/>
+                                                     <ColumnDefinition Width="*"/>
+                                                 </Grid.ColumnDefinitions>
+                                                 <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
+                                                 <StackPanel Grid.Column="1" Spacing="6">
+                                                     <ctl:ShimmerControl Width="180" Height="18" CornerRadius="4"/>
+                                                     <StackPanel Orientation="Horizontal" Spacing="8">
+                                                         <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
+                                                         <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                                     </StackPanel>
+                                                     <ctl:ShimmerControl Width="250" Height="14" CornerRadius="4"/>
+                                                 </StackPanel>
+                                             </Grid>
+                                         </StackPanel>
+                                         <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
+                                             <Grid>
+                                                 <Grid.ColumnDefinitions>
+                                                     <ColumnDefinition Width="70"/>
+                                                     <ColumnDefinition Width="*"/>
+                                                 </Grid.ColumnDefinitions>
+                                                 <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
+                                                 <StackPanel Grid.Column="1" Spacing="6">
+                                                     <ctl:ShimmerControl Width="220" Height="18" CornerRadius="4"/>
+                                                     <StackPanel Orientation="Horizontal" Spacing="8">
+                                                         <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
+                                                         <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
+                                                     </StackPanel>
+                                                     <ctl:ShimmerControl Width="260" Height="14" CornerRadius="4"/>
+                                                 </StackPanel>
+                                             </Grid>
+                                         </StackPanel>
+                                     </StackPanel>
                                  </Grid>
                              </Grid>
                          </Border>
                     </Grid>
 
-                    <!-- SOURCES SHIMMER (Loading State) -->
-                    <Grid x:Name="SourcesShimmerPanel" Grid.Column="1" Grid.Row="0" Width="450" MaxWidth="600" Visibility="Collapsed" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Center">
-                        <Border CornerRadius="20" BorderBrush="#1AFFFFFF" BorderThickness="1">
-                            <Border.Background>
-                                <SolidColorBrush Color="Black" Opacity="0.5"/>
-                           </Border.Background>
-                           <Grid>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="Auto"/>
-                                    <RowDefinition Height="*"/>
-                                </Grid.RowDefinitions>
-
-                                <!-- Header -->
-                                <Grid Padding="24,20,24,10">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <ctl:ShimmerControl Width="100" Height="24" CornerRadius="4" HorizontalAlignment="Left"/>
-                                    <ctl:ShimmerControl Grid.Column="1" Width="36" Height="36" CornerRadius="18"/>
-                                </Grid>
-
-                                <!-- Addon Selector Shimmer -->
-                                <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="20" Margin="24,0,24,10">
-                                    <ctl:ShimmerControl Width="80" Height="20" CornerRadius="4"/>
-                                    <ctl:ShimmerControl Width="60" Height="20" CornerRadius="4"/>
-                                    <ctl:ShimmerControl Width="70" Height="20" CornerRadius="4"/>
-                                </StackPanel>
-
-                                <!-- Sources List Shimmer -->
-                                <StackPanel Grid.Row="2" Spacing="8" Padding="16,0,16,20">
-                                    <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="70"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
-                                            <StackPanel Grid.Column="1" Spacing="6">
-                                                <ctl:ShimmerControl Width="200" Height="18" CornerRadius="4"/>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
-                                                    <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
-                                                </StackPanel>
-                                                <ctl:ShimmerControl Width="280" Height="14" CornerRadius="4"/>
-                                            </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-                                    <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="70"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
-                                            <StackPanel Grid.Column="1" Spacing="6">
-                                                <ctl:ShimmerControl Width="180" Height="18" CornerRadius="4"/>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
-                                                    <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
-                                                </StackPanel>
-                                                <ctl:ShimmerControl Width="250" Height="14" CornerRadius="4"/>
-                                            </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-                                    <StackPanel Spacing="10" Padding="8,10" Background="#1AFFFFFF" CornerRadius="10">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="70"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-                                            <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
-                                            <StackPanel Grid.Column="1" Spacing="6">
-                                                <ctl:ShimmerControl Width="220" Height="18" CornerRadius="4"/>
-                                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                                    <ctl:ShimmerControl Width="40" Height="14" CornerRadius="4"/>
-                                                    <ctl:ShimmerControl Width="50" Height="14" CornerRadius="4"/>
-                                                </StackPanel>
-                                                <ctl:ShimmerControl Width="260" Height="14" CornerRadius="4"/>
-                                            </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-                                </StackPanel>
-                            </Grid>
-                        </Border>
-                    </Grid>
                 
                 <!-- NARROW SPECIFIC SECTIONS (Cast, Director, etc) -->
                 <StackPanel x:Name="NarrowSectionsContainer" Grid.Row="2" Grid.ColumnSpan="2" Spacing="24" Visibility="Collapsed" Margin="0,20,0,0">

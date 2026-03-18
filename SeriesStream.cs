@@ -43,6 +43,7 @@ namespace ModernIPTVPlayer
         public string? Description => Plot;
         public string PosterUrl => Cover;
         public string? BackdropUrl => null; // IPTV Series usually don't have backdrops in catalog
+        public string? Type => "series";
         public string StreamUrl { get; set; } = "";
         
         // IMediaStream.Rating implementation - return empty string instead of null to avoid XAML issues
