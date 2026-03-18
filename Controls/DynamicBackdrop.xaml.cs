@@ -25,10 +25,23 @@ namespace ModernIPTVPlayer.Controls
 
         private void InitializeBrushes()
         {
-            // Create brushes initial state
-            AmbientLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.5, 1.0, 2.0, 1.5);
-            PrimaryGlowLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.5, 1.0, 1.5, 1.0);
-            BloomLayer.Background = CreateRadialBrush(0, 0, 0, 0, 0, 0.5, 0.9, 1.0, 0.8);
+            // Keep the control transparent on first paint. The first real backdrop
+            // state is applied only after color extraction provides a target.
+        }
+
+        private void ApplyBackdropState(Color left, Color right)
+        {
+            _currentLeftColor = left;
+            _currentRightColor = right;
+
+            byte avgR = (byte)((left.R + right.R) / 2);
+            byte avgG = (byte)((left.G + right.G) / 2);
+            byte avgB = (byte)((left.B + right.B) / 2);
+
+            AmbientLayer.Background = CreateRadialBrush(left.R, left.G, left.B, 200, 0, 0.5, 1.0, 2.0, 1.5);
+            PrimaryGlowLayer.Background = CreateRadialBrush(right.R, right.G, right.B, 220, 0, 0.5, 1.0, 1.5, 1.0);
+            BloomLayer.Background = CreateRadialBrush(avgR, avgG, avgB, 150, 0, 0.5, 0.9, 1.0, 0.8);
+            FloatingStop.Color = Windows.UI.Color.FromArgb(120, avgR, avgG, avgB);
         }
 
         private void StartBreathingAnimation()
@@ -93,20 +106,9 @@ namespace ModernIPTVPlayer.Controls
                 byte gR = (byte)(startR.G + (targetRight.G - startR.G) * t);
                 byte bR = (byte)(startR.B + (targetRight.B - startR.B) * t);
 
-                _currentLeftColor = Windows.UI.Color.FromArgb(255, rL, gL, bL);
-                _currentRightColor = Windows.UI.Color.FromArgb(255, rR, gR, bR);
-
-                byte avgR = (byte)((rL + rR) / 2);
-                byte avgG = (byte)((gL + gR) / 2);
-                byte avgB = (byte)((bL + bR) / 2);
-
-                // FORCE UPDATE: Create NEW brushes to bypass PropertyChanged optimization
-                AmbientLayer.Background = CreateRadialBrush(rL, gL, bL, 200, 0, 0.5, 1.0, 2.0, 1.5);
-                PrimaryGlowLayer.Background = CreateRadialBrush(rR, gR, bR, 220, 0, 0.5, 1.0, 1.5, 1.0);
-                BloomLayer.Background = CreateRadialBrush(avgR, avgG, avgB, 150, 0, 0.5, 0.9, 1.0, 0.8);
-
-                // Floating accent
-                FloatingStop.Color = Windows.UI.Color.FromArgb(120, avgR, avgG, avgB);
+                ApplyBackdropState(
+                    Windows.UI.Color.FromArgb(255, rL, gL, bL),
+                    Windows.UI.Color.FromArgb(255, rR, gR, bR));
 
                 if (currentStep >= steps)
                 {

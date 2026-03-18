@@ -61,7 +61,12 @@ namespace ModernIPTVPlayer
             // Wire up StremioControl events
             StremioControl.PlayAction += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
             StremioControl.DetailsAction += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
-            StremioControl.ItemClicked += (s, e) => NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream), e.SourceElement);
+            StremioControl.ItemClicked += (s, e) => 
+            {
+                _lastClickedItem = e.Stream;
+                var preloaded = (e.SourceElement is Controls.PosterCard pc) ? pc.ImageElement.Source : null;
+                NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream, preloadedImage: preloaded), e.SourceElement);
+            };
             StremioControl.BackdropColorChanged += (s, colors) => 
             {
                  _heroColors = colors;
@@ -435,17 +440,20 @@ namespace ModernIPTVPlayer
         private void MediaGrid_ItemClicked(object sender, MediaNavigationArgs e)
         {
             _lastClickedItem = e.Stream;
-            NavigationService.NavigateToDetails(Frame, e);
+            var preloaded = (e.SourceElement is Controls.PosterCard pc) ? pc.ImageElement.Source : null;
+            NavigationService.NavigateToDetails(Frame, e, e.SourceElement, preloaded);
         }
 
         private void MediaGrid_PlayAction(object sender, MediaNavigationArgs e)
         {
-             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
+             var preloaded = (e.SourceElement is Controls.PosterCard pc) ? pc.ImageElement.Source : null;
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement, preloaded);
         }
 
         private void MediaGrid_DetailsAction(object sender, MediaNavigationArgs e)
         {
-             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
+             var preloaded = (e.SourceElement is Controls.PosterCard pc) ? pc.ImageElement.Source : null;
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement, preloaded);
         }
 
         private void StremioControl_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
@@ -482,10 +490,6 @@ namespace ModernIPTVPlayer
             {
                 BackdropControl.TransitionTo(_heroColors.Value.Primary, _heroColors.Value.Secondary);
             }
-            else
-            {
-                BackdropControl.TransitionTo(Windows.UI.Color.FromArgb(255, 13, 13, 13), Windows.UI.Color.FromArgb(255, 13, 13, 13));
-            }
         }
 
         // ==========================================
@@ -493,14 +497,16 @@ namespace ModernIPTVPlayer
         // ==========================================
         private async void StremioExpandedCardOverlay_PlayRequested(object sender, IMediaStream e)
         {
-             NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e, autoResume: true, sourceElement: _stremioExpandedCardOverlay.ActiveExpandedCard.BannerImage));
+             var preloaded = _stremioExpandedCardOverlay.ActiveExpandedCard?.BannerImage?.Source;
+             NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e, autoResume: true, sourceElement: _stremioExpandedCardOverlay.ActiveExpandedCard.BannerImage, preloadedImage: preloaded));
         }
 
         private async void StremioExpandedCardOverlay_DetailsRequested(object sender, (IMediaStream Stream, TmdbMovieResult Tmdb) e)
         {
             if (e.Stream is IMediaStream stream)
             {
-                NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(stream, e.Tmdb, false, _stremioExpandedCardOverlay.ActiveExpandedCard.BannerImage));
+                var preloaded = _stremioExpandedCardOverlay.ActiveExpandedCard?.BannerImage?.Source;
+                NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(stream, e.Tmdb, false, _stremioExpandedCardOverlay.ActiveExpandedCard.BannerImage, preloadedImage: preloaded));
             }
         }
 private void StremioExpandedCardOverlay_AddListRequested(object sender, IMediaStream e)

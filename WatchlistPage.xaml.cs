@@ -283,17 +283,24 @@ namespace ModernIPTVPlayer
 
         private void WatchlistGrid_ItemClicked(object sender, MediaNavigationArgs e)
         {
-             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
+             // [PRELOAD IMAGE] Get from source element (ExpandedCard or PosterCard)
+             var preloaded = (e.SourceElement is Controls.ExpandedCard ec) ? ec.BannerImage.Source : 
+                             (e.SourceElement is Controls.PosterCard pc) ? pc.ImageElement.Source : null;
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement, preloaded);
         }
         
         private void WatchlistGrid_DetailsAction(object sender, MediaNavigationArgs e)
         {
-             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
+             var preloaded = (e.SourceElement is Controls.ExpandedCard ec) ? ec.BannerImage.Source : 
+                             (e.SourceElement is Controls.PosterCard pc) ? pc.ImageElement.Source : null;
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement, preloaded);
         }
 
         private void WatchlistGrid_PlayAction(object sender, MediaNavigationArgs e)
         {
-             NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
+             var preloaded = (e.SourceElement is Controls.ExpandedCard ec) ? ec.BannerImage.Source : 
+                             (e.SourceElement is Controls.PosterCard pc) ? pc.ImageElement.Source : null;
+             NavigationService.NavigateToDetails(Frame, e, e.SourceElement, preloaded);
         }
 
         private async void WatchlistGrid_AddListAction(object sender, IMediaStream e)

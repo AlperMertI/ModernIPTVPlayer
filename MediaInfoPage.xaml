@@ -231,7 +231,7 @@
             </Rectangle>
 
             <!-- Bottom Blend (Smoother transition to page content) -->
-            <Rectangle x:Name="BottomReadabilityGradient" Height="400" VerticalAlignment="Bottom" IsHitTestVisible="False">
+            <Rectangle x:Name="BottomReadabilityGradient" Height="400" VerticalAlignment="Bottom" Opacity="0" IsHitTestVisible="False">
                 <Rectangle.Fill>
                     <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                         <GradientStop Color="Transparent" Offset="0"/>
