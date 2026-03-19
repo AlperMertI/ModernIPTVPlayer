@@ -647,7 +647,8 @@ private void StremioExpandedCardOverlay_AddListRequested(object sender, IMediaSt
                 PreferredSource = "Stremio",
                 Genre = args.GenreValue,
                 Type = "series",
-                GenreArgs = args
+                GenreArgs = args,
+                ParentContext = args.DisplayName
             };
             Frame.Navigate(typeof(Pages.SearchResultsPage), searchArgs, new DrillInNavigationTransitionInfo());
         }

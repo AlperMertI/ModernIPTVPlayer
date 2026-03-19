@@ -65,7 +65,7 @@
                 <Grid VerticalAlignment="Bottom" 
                       Height="70" 
                       IsHitTestVisible="False"
-                      Visibility="{x:Bind IsTitleVisible, Mode=OneWay}">
+                      Visibility="Collapsed">
                     <Grid.Background>
                         <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
                             <GradientStop Color="Transparent" Offset="0"/>

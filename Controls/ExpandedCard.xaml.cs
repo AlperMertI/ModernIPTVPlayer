@@ -68,6 +68,9 @@ namespace ModernIPTVPlayer.Controls
             CastListView.AddHandler(PointerReleasedEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(CastListView_PointerReleased), true);
             CastListView.AddHandler(PointerCanceledEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(CastListView_PointerReleased), true);
             CastListView.AddHandler(PointerCaptureLostEvent, new Microsoft.UI.Xaml.Input.PointerEventHandler(CastListView_PointerReleased), true);
+            
+            // Mouse Wheel Fix: Prevent bubbling to main page
+            ContentScrollViewer.PointerWheelChanged += ContentScrollViewer_PointerWheelChanged;
         }
 
         #region Drag-to-Scroll Logic (Vertical)
@@ -124,6 +127,27 @@ namespace ModernIPTVPlayer.Controls
             {
                 _isDataDragging = false;
                 ContentScrollViewer.ReleasePointerCapture(e.Pointer);
+                e.Handled = true;
+            }
+        }
+        public void OnRootPointerWheelChanged(Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            ContentScrollViewer_PointerWheelChanged(ContentScrollViewer, e);
+        }
+
+        private void RootGrid_PointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            OnRootPointerWheelChanged(e);
+        }
+
+        private void ContentScrollViewer_PointerWheelChanged(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            var prop = e.GetCurrentPoint(ContentScrollViewer).Properties;
+            double delta = prop.MouseWheelDelta;
+            if (delta != 0)
+            {
+                // Manual scroll to ensure focus doesn't matter, and mark as handled
+                ContentScrollViewer.ChangeView(null, ContentScrollViewer.VerticalOffset - (delta), null, true);
                 e.Handled = true;
             }
         }

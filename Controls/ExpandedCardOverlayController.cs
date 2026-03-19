@@ -58,6 +58,8 @@ namespace ModernIPTVPlayer.Controls
         {
             _hostElement = hostElement;
             _overlayCanvas = overlayCanvas;
+            _overlayCanvas.Visibility = Visibility.Collapsed;
+            _overlayCanvas.IsHitTestVisible = false;
             _expandedCard = expandedCard;
             _cinemaScrim = cinemaScrim;
             _scrollLockTarget = scrollLockTarget;
@@ -166,7 +168,6 @@ namespace ModernIPTVPlayer.Controls
                 _closeCts = new CancellationTokenSource();
                 var token = _closeCts.Token;
 
-                System.Diagnostics.Debug.WriteLine("[ExpandedCardOverlayController] CloseExpandedCardAsync: Stopping trailer.");
                 if (_expandedCard.Visibility == Visibility.Visible)
                 {
                     _expandedCard.StopTrailer(); 
@@ -273,9 +274,11 @@ namespace ModernIPTVPlayer.Controls
                 _activeSourceCard = sourceCard;
                 _pointerExitNeedsRearm = false;
                 ResetCardFrame();
+                _expandedCard.Focus(FocusState.Programmatic);
 
                 // First-hover transform can be wrong while canvas is collapsed.
                 _overlayCanvas.Visibility = Visibility.Visible;
+                _overlayCanvas.IsHitTestVisible = true;
                 _overlayCanvas.UpdateLayout();
 
                 var transform = sourceCard.TransformToVisual(_overlayCanvas);
@@ -359,6 +362,7 @@ namespace ModernIPTVPlayer.Controls
                     await _expandedCard.LoadDataAsync(stream, isMorphing: isMorph);
                 }
             }
+            catch (OperationCanceledException) { /* Expected on hover changes */ }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlayController] Show error: {ex.Message}");
@@ -723,6 +727,7 @@ namespace ModernIPTVPlayer.Controls
             
             _expandedCard.Visibility = Visibility.Collapsed;
             _overlayCanvas.Visibility = Visibility.Collapsed;
+            _overlayCanvas.IsHitTestVisible = false;
             _activeSourceCard = null;
             _pendingHoverCard = null;
             _isPointerOverCard = false;

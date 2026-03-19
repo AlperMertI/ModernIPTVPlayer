@@ -670,7 +670,8 @@ namespace ModernIPTVPlayer
                 PreferredSource = "Stremio",
                 Genre = args.GenreValue,
                 Type = "movie",
-                GenreArgs = args
+                GenreArgs = args,
+                ParentContext = args.DisplayName
             };
             Frame.Navigate(typeof(Pages.SearchResultsPage), searchArgs, new DrillInNavigationTransitionInfo());
         }

@@ -6,7 +6,8 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Width="320" Height="420">
+    Width="320" Height="420"
+    IsTabStop="True">
 
     <UserControl.Resources>
         <!-- Modern Shimmer Brush Style -->
@@ -31,7 +32,7 @@
         </Storyboard>
     </UserControl.Resources>
 
-    <Grid x:Name="RootGrid" CornerRadius="12" Background="#161616" BorderBrush="#2AFFFFFF" BorderThickness="1">
+    <Grid x:Name="RootGrid" CornerRadius="12" Background="#161616" BorderBrush="#2AFFFFFF" BorderThickness="1" PointerWheelChanged="RootGrid_PointerWheelChanged">
         <Grid.RowDefinitions>
             <RowDefinition Height="160"/> <!-- Reduced further to 160 to maximize text area -->
             <RowDefinition Height="*"/>   <!-- Info Area -->

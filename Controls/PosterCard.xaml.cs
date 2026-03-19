@@ -17,6 +17,7 @@ namespace ModernIPTVPlayer.Controls
     {
         public bool IsHovered { get; private set; }
         public Image ImageElement => PosterImage;
+        public (Color Primary, Color Secondary)? HeroColors { get; private set; }
 
         public event EventHandler<(Color Primary, Color Secondary)> ColorsExtracted;
         public event EventHandler HoverStarted;
@@ -177,6 +178,7 @@ namespace ModernIPTVPlayer.Controls
                     var pixels = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(pixelBuffer);
 
                     var colors = ImageHelper.ExtractColorsFromPixels(pixels, rtb.PixelWidth, rtb.PixelHeight, ImageUrl);
+                    HeroColors = colors;
                     ColorsExtracted?.Invoke(this, colors);
                 }
             }

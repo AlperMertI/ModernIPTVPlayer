@@ -130,6 +130,7 @@ namespace ModernIPTVPlayer
         // Auto-Hide Logic
         private DispatcherTimer? _cursorTimer;
         private bool _controlsHidden = false;
+        private bool _isCursorHidden = false;
         private bool _isPiPMode = false;
 
         
@@ -473,7 +474,8 @@ namespace ModernIPTVPlayer
                     
                     TimeSpan tPos = TimeSpan.FromSeconds(position);
                     TimeSpan tDur = TimeSpan.FromSeconds(duration);
-                    TimeTextBlock.Text = $"{tPos:mm\\:ss} / {tDur:mm\\:ss}";
+                    string format = tDur.TotalHours >= 1 ? @"h\:mm\:ss" : @"mm\:ss";
+                    TimeTextBlock.Text = $"{tPos.ToString(format)} / {tDur.ToString(format)}";
 
                     // Check for Next Episode (Series) or Recommendations (Movie) nearing end
                     CheckEndContentFlow(position, duration);
@@ -931,6 +933,8 @@ namespace ModernIPTVPlayer
             _statsTimer?.Stop();
             _logoLoadingTimer?.Stop();
             StopCursorTimer();
+            if (_isCursorHidden) { SetCursorVisible(true); }
+            RemoveCursorHook();
             _seekDebounceTimer?.Stop();
             _isPageLoaded = false;
             
@@ -1795,6 +1799,115 @@ namespace ModernIPTVPlayer
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern IntPtr GetForegroundWindow();
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr CreateCursor(IntPtr hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight, byte[] pvANDPlane, byte[] pvXORPlane);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetSystemCursor(IntPtr hcur, uint id);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr CopyIcon(IntPtr hcur);
+
+        private const uint OCR_WAIT = 32514;
+        private const uint OCR_APPSTARTING = 32516; // Arrow + Wait
+        private static IntPtr _originalWaitCursor = IntPtr.Zero;
+        private static IntPtr _originalAppStarting = IntPtr.Zero;
+        private static IntPtr _blankHandle = IntPtr.Zero;
+
+        private void SetCursorVisible(bool visible)
+        {
+            System.Diagnostics.Debug.WriteLine($"[CURSOR] SetCursorVisible({visible})");
+            _isCursorHidden = !visible;
+
+            if (!visible)
+            {
+                try {
+                    // 1. Create and CACHE a blank cursor so it stays in memory
+                    if (_blankHandle == IntPtr.Zero) {
+                        byte[] andMask = new byte[128]; for(int i=0; i<128; i++) andMask[i] = 0xFF;
+                        byte[] xorMask = new byte[128];
+                        _blankHandle = CreateCursor(IntPtr.Zero, 0, 0, 32, 32, andMask, xorMask);
+                    }
+
+                    // 2. Backup and Replace OCR_WAIT and OCR_APPSTARTING
+                    if (_originalWaitCursor == IntPtr.Zero) {
+                        _originalWaitCursor = CopyIcon(LoadCursor(IntPtr.Zero, (IntPtr)OCR_WAIT));
+                    }
+                    if (_originalAppStarting == IntPtr.Zero) {
+                        _originalAppStarting = CopyIcon(LoadCursor(IntPtr.Zero, (IntPtr)OCR_APPSTARTING));
+                    }
+
+                    // Force blanking
+                    SetSystemCursor(CopyIcon(_blankHandle), OCR_WAIT);
+                    SetSystemCursor(CopyIcon(_blankHandle), OCR_APPSTARTING);
+
+                    // 3. Tell WinUI to use WAIT (which is now invisible)
+                    var invisibleCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.Wait);
+                    ProtectedCursor = invisibleCursor;
+                    if (MainGrid != null) {
+                        _protectedCursorProp?.SetValue(MainGrid, invisibleCursor);
+                        int count = 0;
+                        HibernateChildHitTest(MainGrid, true, ref count);
+                    }
+                } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[CURSOR] Trojan fail: {ex.Message}"); }
+            }
+            else
+            {
+                // 1. Restore WAIT and APPSTARTING cursors to system
+                if (_originalWaitCursor != IntPtr.Zero) SetSystemCursor(_originalWaitCursor, OCR_WAIT);
+                if (_originalAppStarting != IntPtr.Zero) SetSystemCursor(_originalAppStarting, OCR_APPSTARTING);
+                
+                // Keep the original pointers for the next session if needed, 
+                // OR set to Zero if you want to re-backup next time.
+                // Keep them Zero to ensure we always grab the latest system state.
+                _originalWaitCursor = IntPtr.Zero;
+                _originalAppStarting = IntPtr.Zero;
+
+                // 2. Restore WinUI: Setting to null clears the override
+                ProtectedCursor = null; 
+                if (MainGrid != null) {
+                    _protectedCursorProp?.SetValue(MainGrid, null);
+                    int count = 0;
+                    HibernateChildHitTest(MainGrid, false, ref count);
+                }
+            }
+        }
+
+        private static readonly System.Reflection.PropertyInfo? _protectedCursorProp =
+            typeof(UIElement).GetProperty("ProtectedCursor",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+
+        private static void HibernateChildHitTest(UIElement element, bool hibernate, ref int count)
+        {
+            int childCount = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(element);
+            for (int i = 0; i < childCount; i++)
+            {
+                if (Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(element, i) is UIElement child)
+                {
+                    bool shouldHibernate = hibernate;
+
+                    // If we're hiding, don't disable hit-test for the base video layers
+                    // so we can still catch PointerMoved events on MainGrid.
+                    if (hibernate && child is FrameworkElement fe)
+                    {
+                        if (fe.Name == "PlayerContainer" || fe.Name == "BrightnessOverlay" || fe.Name == "MediaFoundationPlayer")
+                        {
+                            shouldHibernate = false;
+                        }
+                    }
+
+                    child.IsHitTestVisible = !shouldHibernate;
+                    if (shouldHibernate) count++;
+                    HibernateChildHitTest(child, hibernate, ref count);
+                }
+            }
+        }
+
+        private void RemoveCursorHook()
+        {
+            if (_isCursorHidden) SetCursorVisible(true);
+        }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
@@ -2786,6 +2899,16 @@ namespace ModernIPTVPlayer
                 }
 
                 _controlsHidden = (visibility == Visibility.Collapsed);
+
+                // Mouse Cursor Auto-Hide Logic
+                if (_controlsHidden && !_isCursorHidden)
+                {
+                    SetCursorVisible(false);
+                }
+                else if (!_controlsHidden && _isCursorHidden)
+                {
+                    SetCursorVisible(true);
+                }
             }
         }
 

@@ -477,6 +477,8 @@ namespace ModernIPTVPlayer
             {
                 if (isFullScreen)
                 {
+                    // Disable title bar extension in fullscreen to avoid "thin line" artifact
+                    ExtendsContentIntoTitleBar = false;
                     this.AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.FullScreen);
                     CustomNavContainer.Visibility = Visibility.Collapsed;
                     AppTitleBar.Visibility = Visibility.Collapsed;
@@ -484,6 +486,8 @@ namespace ModernIPTVPlayer
                 else
                 {
                     this.AppWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Default);
+                    // Re-enable for custom title bar usage in windowed mode
+                    ExtendsContentIntoTitleBar = true;
                     if (ContentFrame.SourcePageType != typeof(PlayerPage))
                     {
                         CustomNavContainer.Visibility = Visibility.Visible;

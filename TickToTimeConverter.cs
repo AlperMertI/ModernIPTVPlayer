@@ -11,7 +11,7 @@ namespace ModernIPTVPlayer
             {
                 var ts = TimeSpan.FromSeconds(seconds);
                 return ts.TotalHours >= 1 
-                    ? ts.ToString(@"hh\:mm\:ss") 
+                    ? ts.ToString(@"h\:mm\:ss") 
                     : ts.ToString(@"mm\:ss");
             }
             return "00:00";
