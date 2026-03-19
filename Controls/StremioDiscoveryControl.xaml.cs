@@ -12,6 +12,7 @@ using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Services.Metadata;
+using ModernIPTVPlayer.Models.Metadata;
 using Microsoft.UI.Xaml.Data;
 
 namespace ModernIPTVPlayer.Controls
@@ -62,7 +63,7 @@ namespace ModernIPTVPlayer.Controls
     public sealed partial class StremioDiscoveryControl : UserControl
     {
         // Public Events
-        public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> ItemClicked;
+        public event EventHandler<(IMediaStream Stream, UIElement SourceElement, Microsoft.UI.Xaml.Media.ImageSource PreloadedLogo)> ItemClicked;
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> TrailerExpandRequested;
         public event EventHandler<IMediaStream> PlayAction;
         public event EventHandler<IMediaStream> DetailsAction;
@@ -77,6 +78,7 @@ namespace ModernIPTVPlayer.Controls
 
         // Exposed properties for Controller linkage
         public ScrollViewer MainScrollViewer => VisualTreeHelper.GetChild(DiscoveryRows, 0) as ScrollViewer;
+        public HeroSectionControl HeroSection => HeroControl;
 
         private ObservableCollection<CatalogRowViewModel> _discoveryRows = new();
         private int _rowCount = 0;
@@ -219,124 +221,91 @@ namespace ModernIPTVPlayer.Controls
             }
 
             // Asynchronously enrich items that have no poster
-            _ = EnrichContinueWatchingMetadataAsync(cwItems);
+            _ = EnrichItemsBatchAsync(cwItems);
         }
 
-        private async Task EnrichRowMetadataAsync(CatalogRowViewModel row)
+        private void ApplyMetadataToStream(StremioMediaStream stream, UnifiedMetadata meta)
+        {
+            if (stream == null || meta == null) return;
+
+            // Only update if the new metadata is actually richer 
+            if (!string.IsNullOrEmpty(meta.PosterUrl)) stream.PosterUrl = meta.PosterUrl;
+            if (!string.IsNullOrEmpty(meta.BackdropUrl)) stream.UpdateBackground(meta.BackdropUrl);
+            if (!string.IsNullOrEmpty(meta.LogoUrl)) stream.LogoUrl = meta.LogoUrl;
+
+            // Update StremioMeta fields directly for UI bindings to pick up
+            if (stream.Meta != null)
+            {
+                if (!string.IsNullOrEmpty(meta.Title)) stream.Meta.Name = meta.Title;
+                if (!string.IsNullOrEmpty(meta.Year)) stream.Meta.ReleaseInfo = meta.Year;
+                if (!string.IsNullOrEmpty(meta.Genres))
+                {
+                    stream.Meta.Genres = meta.Genres.Split(", ").ToList();
+                }
+                if (!string.IsNullOrEmpty(meta.Overview)) stream.Meta.Description = meta.Overview;
+                if (meta.Rating > 0) stream.Meta.ImdbRating = meta.Rating.ToString("F1");
+            }
+
+            // Trigger property changes for the stream wrapper
+            stream.OnPropertyChanged(nameof(stream.Year));
+            stream.OnPropertyChanged(nameof(stream.Genres));
+            stream.OnPropertyChanged(nameof(stream.Title));
+            stream.OnPropertyChanged(nameof(stream.Description));
+            stream.OnPropertyChanged(nameof(stream.Rating));
+            stream.OnPropertyChanged(nameof(stream.LogoUrl));
+        }
+
+        private async Task EnrichItemsBatchAsync(IEnumerable<StremioMediaStream> items, MetadataContext context = MetadataContext.Discovery)
+        {
+            if (items == null || !items.Any()) return;
+            
+            var results = await MetadataProvider.Instance.EnrichItemsAsync(items, context);
+            if (results.Count > 0)
+            {
+                var tcs = new TaskCompletionSource<bool>();
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        foreach (var pair in results)
+                        {
+                            ApplyMetadataToStream(pair.Key, pair.Value);
+                        }
+                        tcs.SetResult(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.SetException(ex);
+                    }
+                });
+                await tcs.Task;
+            }
+        }
+
+        private async Task EnrichRowMetadataAsync(CatalogRowViewModel row, MetadataContext context = MetadataContext.Discovery)
         {
             if (row.RowStyle != "Landscape" && row.RowStyle != "Spotlight") return;
             if (row.Items == null || row.Items.Count == 0) return;
 
-            var provider = MetadataProvider.Instance;
-            var tasks = new List<Task>();
+            // [OPTIMIZATION] Only enrich first 5 items for Spotlight (Carousel items)
+            var streams = (row.RowStyle == "Spotlight") ? row.Items.Take(5) : row.Items;
 
-            foreach (var stream in row.Items)
+            // Only enrich items that need it
+            var toEnrich = streams.Where(stream => 
+                context == MetadataContext.Spotlight || // ALWAYS enrich if it's Spotlight row to get Logos/Localizations
+                string.IsNullOrEmpty(stream.Banner) || 
+                string.IsNullOrEmpty(stream.Year) || 
+                string.IsNullOrEmpty(stream.Genres) ||
+                string.IsNullOrEmpty(stream.Description) ||
+                string.IsNullOrEmpty(stream.Rating) ||
+                stream.Rating == "0.0" || stream.Rating == "0").ToList();
+
+            if (toEnrich.Count > 0)
             {
-                // Only enrich if we are missing mandatory fields for horizontal display
-                bool needsEnrichment = string.IsNullOrEmpty(stream.Banner) || 
-                                       string.IsNullOrEmpty(stream.Year) || 
-                                       string.IsNullOrEmpty(stream.Genres) ||
-                                       string.IsNullOrEmpty(stream.Description) ||
-                                       string.IsNullOrEmpty(stream.Rating) ||
-                                       stream.Rating == "0.0" || stream.Rating == "0";
-
-                if (!needsEnrichment) continue;
-
-                tasks.Add(Task.Run(async () => 
-                {
-                    try
-                    {
-                        var meta = await provider.GetMetadataAsync(stream, MetadataContext.Discovery);
-                        if (meta != null)
-                        {
-                            DispatcherQueue.TryEnqueue(() => 
-                            {
-                                // Priority: Only update if the new metadata is actually richer 
-                                // (MetadataProvider already handles merging/priority, so we just apply)
-                                if (!string.IsNullOrEmpty(meta.PosterUrl)) stream.PosterUrl = meta.PosterUrl;
-                                if (!string.IsNullOrEmpty(meta.BackdropUrl)) stream.UpdateBackground(meta.BackdropUrl);
-                                
-                                // Update StremioMeta fields directly for UI bindings to pick up
-                                if (stream.Meta != null)
-                                {
-                                    if (!string.IsNullOrEmpty(meta.Title)) stream.Meta.Name = meta.Title;
-                                    if (!string.IsNullOrEmpty(meta.Year)) stream.Meta.ReleaseInfo = meta.Year;
-                                    if (!string.IsNullOrEmpty(meta.Genres)) 
-                                    {
-                                        stream.Meta.Genres = meta.Genres.Split(", ").ToList();
-                                    }
-                                    if (!string.IsNullOrEmpty(meta.Overview)) stream.Meta.Description = meta.Overview;
-                                    if (meta.Rating > 0) stream.Meta.ImdbRating = meta.Rating.ToString("F1");
-                                }
-
-                                // Trigger property changes for the stream wrapper
-                                stream.OnPropertyChanged(nameof(stream.Year));
-                                stream.OnPropertyChanged(nameof(stream.Genres));
-                                stream.OnPropertyChanged(nameof(stream.Title));
-                                stream.OnPropertyChanged(nameof(stream.Description));
-                                stream.OnPropertyChanged(nameof(stream.Rating));
-                            });
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[StremioControl] Enrichment error for {stream.Title}: {ex.Message}");
-                    }
-                }));
-            }
-
-            if (tasks.Count > 0)
-                await Task.WhenAll(tasks);
-        }
-
-        private async Task EnrichContinueWatchingMetadataAsync(ObservableCollection<StremioMediaStream> items)
-        {
-            var provider = MetadataProvider.Instance;
-            foreach (var stream in items)
-            {
-                // Only enrich if missing backdrop (for landscape) or missing critical fields
-                bool missingBackdrop = string.IsNullOrEmpty(stream.Banner);
-                bool missingMeta = string.IsNullOrEmpty(stream.Year) || string.IsNullOrEmpty(stream.Genres);
-
-                if (missingBackdrop || missingMeta)
-                {
-                    try
-                    {
-                        var meta = await provider.GetMetadataAsync(stream, MetadataContext.Discovery);
-                        if (meta != null)
-                        {
-                            DispatcherQueue.TryEnqueue(() => 
-                            {
-                                if (!string.IsNullOrEmpty(meta.PosterUrl)) stream.PosterUrl = meta.PosterUrl;
-                                if (!string.IsNullOrEmpty(meta.BackdropUrl)) stream.UpdateBackground(meta.BackdropUrl);
-
-                                // Fully populate metadata for landscape display if missing
-                                if (stream.Meta != null)
-                                {
-                                    if (!string.IsNullOrEmpty(meta.Year)) stream.Meta.ReleaseInfo = meta.Year;
-                                    if (!string.IsNullOrEmpty(meta.Genres)) stream.Meta.Genres = meta.Genres.Split(", ").ToList();
-                                    if (!string.IsNullOrEmpty(meta.Overview)) stream.Meta.Description = meta.Overview;
-                                    if (meta.Rating > 0) stream.Meta.ImdbRating = meta.Rating.ToString("F1");
-                                }
-
-                                stream.OnPropertyChanged(nameof(stream.Year));
-                                stream.OnPropertyChanged(nameof(stream.Genres));
-                                stream.OnPropertyChanged(nameof(stream.Description));
-                                stream.OnPropertyChanged(nameof(stream.Rating));
-                            });
-
-                            var histId = stream.IMDbId;
-                            if (!string.IsNullOrEmpty(histId) && !string.IsNullOrEmpty(meta.PosterUrl))
-                            {
-                                HistoryManager.Instance.UpdateProgress(histId, stream.Title, "", 0, 0, posterUrl: meta.PosterUrl, backdropUrl: meta.BackdropUrl); 
-                                await HistoryManager.Instance.SaveAsync();
-                            }
-                        }
-                    }
-                    catch { /* Best effort */ }
-                }
+                await EnrichItemsBatchAsync(toEnrich, context);
             }
         }
+
 
         public async Task LoadDiscoveryAsync(string contentType)
         {
@@ -434,7 +403,7 @@ namespace ModernIPTVPlayer.Controls
                         }
 
                         // Asynchronously enrich items that have no poster
-                        _ = EnrichContinueWatchingMetadataAsync(cwItems);
+                        _ = EnrichItemsBatchAsync(cwItems);
                     }
                 }
 
@@ -566,8 +535,18 @@ namespace ModernIPTVPlayer.Controls
                                     }
                                 }
                                 
-                                HeroControl.SetLoading(false);
-                                HeroControl.SetItems(aggregatedHeroItems.Take(5));
+                                var heroItemsFinal = aggregatedHeroItems.Take(5).ToList();
+                                _ = Task.Run(async () => 
+                                {
+                                     // Await enrichment for Hero items before display to prevent flicker
+                                     await EnrichItemsBatchAsync(heroItemsFinal, MetadataContext.Spotlight);
+                                    
+                                    DispatcherQueue.TryEnqueue(() => 
+                                    {
+                                        HeroControl.SetLoading(false);
+                                        HeroControl.SetItems(heroItemsFinal);
+                                    });
+                                });
                                 return;
                             }
                         }
@@ -587,6 +566,22 @@ namespace ModernIPTVPlayer.Controls
                             var rowResult = await LoadCatalogRowAsync(url, contentType, cat, sortIndex);
                             
                             if (token.IsCancellationRequested) return;
+
+                            // [NEW] Better enrichment flow for Landscape/Spotlight rows
+                            // Enrich BEFORE Enqueue to UI thread
+                            if (rowResult != null && rowResult.Items.Count > 0)
+                            {
+                                if (rowResult.RowStyle == "Spotlight")
+                                {
+                                    // AWAIT enrichment for Spotlight rows so they appear fully populated
+                                    await EnrichRowMetadataAsync(rowResult, MetadataContext.Spotlight);
+                                }
+                                else if (rowResult.RowStyle == "Landscape")
+                                {
+                                    // Background enrichment for Landscape to maintain scroll performance
+                                    _ = EnrichRowMetadataAsync(rowResult, MetadataContext.Discovery);
+                                }
+                            }
 
                             DispatcherQueue.TryEnqueue(() =>
                             {
@@ -616,12 +611,6 @@ namespace ModernIPTVPlayer.Controls
                                     }
                                     _discoveryRows.Insert(insertAt, rowResult);
                                     
-                                    // [NEW] Trigger background enrichment for Landscape/Spotlight rows
-                                    if (rowResult.RowStyle == "Landscape" || rowResult.RowStyle == "Spotlight")
-                                    {
-                                        _ = EnrichRowMetadataAsync(rowResult);
-                                    }
-
                                     UpdateHeroState();
                                 }
                                 else
@@ -683,16 +672,28 @@ namespace ModernIPTVPlayer.Controls
 
                     if (isSpotlightCandidate) 
                     {
-                        var spotlightItems = items.Where(i => !_usedSpotlightIds.Contains(i.IMDbId)).Take(5).ToList();
+                        var spotlightItems = items
+                            .Where(i => !_usedSpotlightIds.Contains(i.IMDbId))
+                            .OrderByDescending(i => !string.IsNullOrEmpty(i.Banner))
+                            .Take(5)
+                            .ToList();
+                        
                         if (spotlightItems.Count < 5)
                         {
-                            spotlightItems = items.Take(5).ToList();
+                            var fillItems = items
+                                .Where(i => !spotlightItems.Contains(i))
+                                .OrderByDescending(i => !string.IsNullOrEmpty(i.Banner))
+                                .Take(5 - spotlightItems.Count);
+                            spotlightItems.AddRange(fillItems);
                         }
 
                         if (spotlightItems.Count > 0)
                         {
                             style = "Spotlight";
-                            foreach(var item in spotlightItems) _usedSpotlightIds.Add(item.IMDbId);
+                            foreach(var item in spotlightItems) 
+                            {
+                                if (!string.IsNullOrEmpty(item.IMDbId)) _usedSpotlightIds.Add(item.IMDbId);
+                            }
                             _lastUsedStyle = "Spotlight";
 
                             for (int i = 0; i < spotlightItems.Count; i++)
@@ -773,7 +774,7 @@ namespace ModernIPTVPlayer.Controls
                     }
                 }
             }
-            ItemClicked?.Invoke(this, e);
+            ItemClicked?.Invoke(this, (e.Stream, e.SourceElement, null));
         }
 
         private void CatalogRow_HoverStarted(object sender, FrameworkElement e) => CardHoverStarted?.Invoke(this, e);
@@ -820,7 +821,7 @@ namespace ModernIPTVPlayer.Controls
             if (sender is LandscapeCard card) CardHoverEnded?.Invoke(this, card);
         }
 
-        private void SpotlightInjectRow_ItemClicked(object sender, (IMediaStream Stream, UIElement SourceElement) e)
+        private void SpotlightInjectRow_ItemClicked(object sender, (IMediaStream Stream, UIElement SourceElement, Microsoft.UI.Xaml.Media.ImageSource PreloadedLogo) e)
         {
             ItemClicked?.Invoke(this, e);
         }
@@ -835,12 +836,13 @@ namespace ModernIPTVPlayer.Controls
             if (sender is PosterCard card && card.DataContext is IMediaStream stream)
             {
                 Microsoft.UI.Xaml.ElementSoundPlayer.Play(Microsoft.UI.Xaml.ElementSoundKind.Invoke);
-                ItemClicked?.Invoke(this, (stream, card.ImageElement));
+                // For PosterCard, we handle PreloadedLogo as null here (it will be handled via preloadedImage in the receiver if it's a poster)
+                ItemClicked?.Invoke(this, (stream, card.ImageElement, null));
             }
             else if (sender is LandscapeCard lCard && lCard.DataContext is IMediaStream lStream)
             {
                 Microsoft.UI.Xaml.ElementSoundPlayer.Play(Microsoft.UI.Xaml.ElementSoundKind.Invoke);
-                ItemClicked?.Invoke(this, (lStream, lCard.ImageElement));
+                ItemClicked?.Invoke(this, (lStream, lCard.ImageElement, null));
             }
         }
 

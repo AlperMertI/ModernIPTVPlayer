@@ -739,7 +739,7 @@ namespace ModernIPTVPlayer.Controls
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Fetching Metadata for: {stream.Title}");
                 
-                var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream, Services.Metadata.MetadataContext.ExpandedCard);
+                var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream, Models.Metadata.MetadataContext.ExpandedCard);
                 if (loadNonce != _loadNonce) return;
 
                 if (unified != null)

@@ -28,6 +28,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         public string MetadataId { get; set; } // e.g. "tt1234567" or Stremio internal ID
         public bool IsSeries { get; set; }
         public TmdbMovieResult TmdbInfo { get; set; } // Optional enrichment
+        public MetadataContext MaxEnrichmentContext { get; set; } // [NEW] Track highest successful enrichment level
 
         // Tracking source
         public string DataSource { get; set; } // e.g. "Stremio", "Stremio + TMDB"

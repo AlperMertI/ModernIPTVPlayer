@@ -60,13 +60,17 @@ namespace ModernIPTVPlayer
 
             // Wire up StremioControl events
             StremioControl.PlayAction += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
-            StremioControl.DetailsAction += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
+            StremioControl.DetailsAction += (s, item) => 
+            {
+                // Pass the Hero logo if we are navigating from Hero
+                NavigationService.NavigateToDetails(Frame, item, preloadedLogo: StremioControl.HeroSection?.LogoSource);
+            };
             StremioControl.ItemClicked += (s, e) => 
             {
                 _lastClickedItem = e.Stream;
                 // [PRELOAD IMAGE] Pass the source element's image if possible
                 var preloaded = (e.SourceElement is Controls.PosterCard pc) ? pc.ImageElement.Source : null;
-                NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream, preloadedImage: preloaded), e.SourceElement);
+                NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream, preloadedImage: preloaded, preloadedLogo: e.PreloadedLogo), e.SourceElement);
             };
             StremioControl.BackdropColorChanged += (s, colors) => 
             {

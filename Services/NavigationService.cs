@@ -11,19 +11,20 @@ namespace ModernIPTVPlayer.Services
         /// Navigate to MediaInfoPage with slide transition from right.
         /// Use when you have a source element (for potential future animation support).
         /// </summary>
-        public static void NavigateToDetails(Frame frame, MediaNavigationArgs args, UIElement sourceElement = null, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null)
+        public static void NavigateToDetails(Frame frame, MediaNavigationArgs args, UIElement sourceElement = null, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null, Microsoft.UI.Xaml.Media.ImageSource preloadedLogo = null)
         {
             if (frame == null || args == null) return;
             if (preloadedImage != null) args.PreloadedImage = preloadedImage;
+            if (preloadedLogo != null) args.PreloadedLogo = preloadedLogo;
             NavigateWithSlideAnimation(frame, args);
         }
 
         /// <summary>
         /// Overload for direct IMediaStream navigation.
         /// </summary>
-        public static void NavigateToDetails(Frame frame, IMediaStream stream, UIElement sourceElement = null, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null)
+        public static void NavigateToDetails(Frame frame, IMediaStream stream, UIElement sourceElement = null, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null, Microsoft.UI.Xaml.Media.ImageSource preloadedLogo = null)
         {
-            var args = new MediaNavigationArgs(stream, preloadedImage: preloadedImage);
+            var args = new MediaNavigationArgs(stream, preloadedImage: preloadedImage, preloadedLogo: preloadedLogo);
             NavigateToDetails(frame, args, sourceElement);
         }
 
@@ -31,20 +32,21 @@ namespace ModernIPTVPlayer.Services
         /// Navigate to MediaInfoPage with slide transition.
         /// Use for Spotlight search results or when no source element is available.
         /// </summary>
-        public static void NavigateToDetailsDirect(Frame frame, IMediaStream stream, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null)
+        public static void NavigateToDetailsDirect(Frame frame, IMediaStream stream, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null, Microsoft.UI.Xaml.Media.ImageSource preloadedLogo = null)
         {
             if (frame == null || stream == null) return;
-            var args = new MediaNavigationArgs(stream, preloadedImage: preloadedImage);
+            var args = new MediaNavigationArgs(stream, preloadedImage: preloadedImage, preloadedLogo: preloadedLogo);
             NavigateWithSlideAnimation(frame, args);
         }
 
         /// <summary>
         /// Navigate to MediaInfoPage with MediaNavigationArgs without slide transition.
         /// </summary>
-        public static void NavigateToDetailsDirect(Frame frame, MediaNavigationArgs args, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null)
+        public static void NavigateToDetailsDirect(Frame frame, MediaNavigationArgs args, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null, Microsoft.UI.Xaml.Media.ImageSource preloadedLogo = null)
         {
             if (frame == null || args == null) return;
             if (preloadedImage != null) args.PreloadedImage = preloadedImage;
+            if (preloadedLogo != null) args.PreloadedLogo = preloadedLogo;
             NavigateWithSlideAnimation(frame, args);
         }
 

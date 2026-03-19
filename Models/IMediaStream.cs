@@ -44,14 +44,16 @@ namespace ModernIPTVPlayer.Models
         public bool AutoResume { get; set; }
         public Microsoft.UI.Xaml.UIElement SourceElement { get; set; }
         public Microsoft.UI.Xaml.Media.ImageSource PreloadedImage { get; set; }
+        public Microsoft.UI.Xaml.Media.ImageSource PreloadedLogo { get; set; }
 
-        public MediaNavigationArgs(IMediaStream stream, TmdbMovieResult tmdbInfo = null, bool autoResume = false, Microsoft.UI.Xaml.UIElement sourceElement = null, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null)
+        public MediaNavigationArgs(IMediaStream stream, TmdbMovieResult tmdbInfo = null, bool autoResume = false, Microsoft.UI.Xaml.UIElement sourceElement = null, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null, Microsoft.UI.Xaml.Media.ImageSource preloadedLogo = null)
         {
             Stream = stream;
             TmdbInfo = tmdbInfo ?? stream.TmdbInfo;
             AutoResume = autoResume;
             SourceElement = sourceElement;
             PreloadedImage = preloadedImage;
+            PreloadedLogo = preloadedLogo;
         }
     }
 }

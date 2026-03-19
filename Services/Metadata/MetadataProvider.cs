@@ -13,8 +13,6 @@ using ModernIPTVPlayer;
 
 namespace ModernIPTVPlayer.Services.Metadata
 {
-    public enum MetadataContext { Discovery, Detail, ExpandedCard, Spotlight }
-
     [Flags]
     internal enum MetadataField
     {
@@ -129,6 +127,41 @@ namespace ModernIPTVPlayer.Services.Metadata
             return null;
         }
 
+        public async Task<Dictionary<StremioMediaStream, UnifiedMetadata>> EnrichItemsAsync(IEnumerable<StremioMediaStream> items, MetadataContext context = MetadataContext.Discovery, int maxConcurrency = 8)
+        {
+            var results = new Dictionary<StremioMediaStream, UnifiedMetadata>();
+            if (items == null) return results;
+            var itemList = items.ToList();
+            if (itemList.Count == 0) return results;
+
+            using (var semaphore = new System.Threading.SemaphoreSlim(maxConcurrency))
+            {
+                var tasks = itemList.Select(async item =>
+                {
+                    await semaphore.WaitAsync();
+                    try
+                    {
+                        var meta = await GetMetadataAsync(item, context);
+                        if (meta != null)
+                        {
+                            lock (results) results[item] = meta;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Batch enrichment error for {item.Title}: {ex.Message}");
+                    }
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                });
+
+                await Task.WhenAll(tasks);
+            }
+            return results;
+        }
+
         public async Task<UnifiedMetadata> GetMetadataAsync(Models.IMediaStream stream, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null)
         {
             if (stream == null) return null;
@@ -157,36 +190,58 @@ namespace ModernIPTVPlayer.Services.Metadata
                 id = null;
             }
 
-            string type = (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms_entry && (sms_entry.Meta.Type == "series" || sms_entry.Meta.Type == "tv"))) ? "series" : "movie";
+            string streamType = (stream as Models.Stremio.StremioMediaStream)?.Meta?.Type;
+            string normalizedType = (stream is ModernIPTVPlayer.SeriesStream || string.Equals(streamType, "series", StringComparison.OrdinalIgnoreCase) || string.Equals(streamType, "tv", StringComparison.OrdinalIgnoreCase)) ? "series" : "movie";
+            
+            string fetchType = normalizedType;
             string normalizedId = NormalizeId(id) ?? id;
             
             string fetchId = id ?? rawId ?? stream.Title;
             
             string addonHash = GetAddonOrderHash();
             string tmdbLang = AppSettings.TmdbLanguage;
-            string cacheKey = $"{id ?? stream.Title}_{type}_{addonHash}_{tmdbLang}";
+            string cacheKey = $"{id ?? stream.Title}_{normalizedType}_{addonHash}_{tmdbLang}";
             if (context == MetadataContext.Discovery) cacheKey += "_discovery";
 
             // 1. Check Result Cache
             if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
             {
-                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CACHE HIT: {cacheKey}");
-
-                // [FIX] CROSS-CATALOG TITLE SEEDING:
-                // Even on cache hit, if we entered from a different catalog, we should seed its title!
-                if (stream is StremioMediaStream stremioStream)
+                // [FIX] Context-Aware Cache Validation
+                // Even if we have a cache hit, we must ensure it satisfies the current context's requirements.
+                // For example, a result cached by 'Spotlight' context might not have 'Seasons' data needed by 'Detail' context.
+                if (IsSatisfied(cached.Data, context))
                 {
-                    lock (cached.Data.SyncRoot)
+                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CACHE HIT (Satisfied): {cacheKey}");
+
+                    // [FIX] CROSS-CATALOG TITLE SEEDING:
+                    // Even on cache hit, if we entered from a different catalog, we should seed its title!
+                    if (stream is StremioMediaStream stremioStream)
                     {
-                        SeedFromCatalogMetadata(cached.Data, stremioStream, trace, context: MetadataContext.Detail);
+                        lock (cached.Data.SyncRoot)
+                        {
+                            SeedFromCatalogMetadata(cached.Data, stremioStream, trace, context: MetadataContext.Detail);
+                        }
                     }
-                }
 
-                if (onBackdropFound != null && cached.Data.BackdropUrls != null)
-                {
-                    foreach (var bg in cached.Data.BackdropUrls) onBackdropFound(bg);
+                    if (onBackdropFound != null && cached.Data.BackdropUrls != null)
+                    {
+                        foreach (var bg in cached.Data.BackdropUrls) onBackdropFound(bg);
+                    }
+                    return cached.Data;
                 }
-                return cached.Data;
+                else
+                {
+                    var missingFromCache = GetMissingFields(cached.Data, GetRequiredFields(context));
+                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CACHE HIT but NOT SATISFIED for {context}: {cacheKey}. Missing: {missingFromCache}. Passing as seed.");
+                    
+                    // We have cached data but it's not enough for the current context.
+                    // We continue to GetMetadataInternalAsync, passing the cached data as 'seed' to avoid redundant addon probes.
+                    return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
+                    {
+                        AppLogger.Info($"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
+                        return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data);
+                    })).Value;
+                }
             }
 
             // [NEW] If asking for Detail, but have an ExpandedCard result in cache, we need to re-fetch!
@@ -220,7 +275,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail));
                         string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
                         AppLogger.Info($"[MetadataProvider] SEEDING Detail fetch ({id ?? stream?.Title}) | Reason: {seedReason}");
-                        return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, type, stream, cacheKey, context, onBackdropFound, disc.Data))).Value;
+                        return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data))).Value;
                     }
                 }
             }
@@ -234,7 +289,8 @@ namespace ModernIPTVPlayer.Services.Metadata
             var missing = GetMissingFields(tempMetadata, GetRequiredFields(context));
             
             // [NEW] Early exit if catalog/discovery data already satisfies current context requirements
-            if (missing == MetadataField.None)
+            // [FIX] NEVER early exit for Spotlight or Detail if we want TMDB enrichment, as catalog-seed is only a starting point.
+            if (missing == MetadataField.None && context != MetadataContext.Spotlight && context != MetadataContext.Detail)
             {
                 // Result found and satisfied without background task
                 var expiry = DateTime.Now.Add(_cacheDuration);
@@ -245,8 +301,8 @@ namespace ModernIPTVPlayer.Services.Metadata
             var fetchReason = missing.ToString();
             return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
             {
-                AppLogger.Info($"START Fetching ({context}): {id ?? stream.Title} | Type: {type} | Reason: {fetchReason}");
-                return GetMetadataInternalAsync(fetchId, type, stream, cacheKey, context, onBackdropFound);
+                AppLogger.Info($"START Fetching ({context}): {id ?? stream.Title} | Type: {fetchType} | Reason: {fetchReason}");
+                return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound);
             })).Value;
         }
 
@@ -324,13 +380,18 @@ namespace ModernIPTVPlayer.Services.Metadata
         private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null, UnifiedMetadata seed = null)
         {
             var trace = new MetadataTrace(context.ToString(), id, sourceStream?.Title);
+            bool isSeriesType = type == "series" || type == "tv";
             var metadata = seed ?? new UnifiedMetadata
             {
                 ImdbId = id,
-                IsSeries = type == "series" || type == "tv",
+                IsSeries = isSeriesType,
                 MetadataId = id,
                 Title = sourceStream?.Title ?? id
             };
+
+            // [FIX] Ensure IsSeries is correctly synced if we are using a seed (cached result)
+            // This handles cases where a previous fetch misidentified a series as a movie due to case-sensitivity.
+            if (seed != null) metadata.IsSeries = isSeriesType;
 
             try
             {
@@ -372,7 +433,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (tmdbEnabled)
                 {
                     trace.Log("TMDB", "TMDB is enabled. Trying direct enrichment and skipping addon detail chain on success.");
-                    var tmdb = await EnrichWithTmdbAsync(metadata);
+                    var tmdb = await EnrichWithTmdbAsync(metadata, context);
                     if (tmdb != null)
                     {
                         metadata.TmdbInfo = tmdb;
@@ -406,16 +467,25 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 if (tmdbEnabled)
                 {
-                    if (metadata.TmdbInfo != null)
+                    bool satisfiesRequirements = GetMissingFields(metadata, required) == MetadataField.None;
+                    if (metadata.TmdbInfo != null && satisfiesRequirements)
                     {
-                        trace.Log("Decision", "TMDB present. Skipping addon detail probes.");
+                        trace.Log("Decision", "TMDB present and satisfies requirements. Skipping addon detail probes.");
+                    }
+                    else if (metadata.TmdbInfo != null)
+                    {
+                        trace.Log("Decision", "TMDB present but requirements not met (e.g. Logo/Rating missing). Probing addons for gaps.");
+                        // Proceed to addon probes (line 482 onwards)
                     }
                     else
                     {
-                        trace.Log("Decision", "TMDB enabled but result unavailable. Addon detail probes are disabled by policy.");
+                        trace.Log("Decision", "TMDB enabled but result unavailable. Addon detail probes are disabled by policy for High-Vis scenes.");
+                        // [FIX] Actually, if TMDB failed, we SHOULD allow addon probes as fallback
+                        // BUT only if we don't have enough data yet.
                     }
                 }
-                else
+
+                if (!tmdbEnabled || (metadata.TmdbInfo == null && GetMissingFields(metadata, required) != MetadataField.None) || (metadata.TmdbInfo != null && GetMissingFields(metadata, required) != MetadataField.None))
                 {
                     var addonUrls = StremioAddonManager.Instance.GetAddons();
                     if (addonUrls.Count > 0)
@@ -676,6 +746,14 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             var finalMissing = GetMissingFields(metadata, GetRequiredFields(context));
             trace.Log("Finish", $"DataSource={metadata.DataSource} Source={metadata.MetadataSourceInfo} RemainingMissing={finalMissing}");
+            
+            // [FIX] Update the highest enrichment level attained.
+            // This prevents re-fetching items that are "unresolvably missing" certain fields (e.g. 2026 movies missing Rating).
+            if (metadata.MaxEnrichmentContext < context)
+            {
+                metadata.MaxEnrichmentContext = context;
+            }
+            
             return metadata;
         }
 
@@ -684,6 +762,12 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (context == MetadataContext.Discovery)
             {
                 return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop;
+            }
+
+            if (context == MetadataContext.Spotlight)
+            {
+                // Spotlight/Hero needs a bit more than Discovery but less than full Detail
+                return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop | MetadataField.Logo | MetadataField.Trailer | MetadataField.Genres;
             }
 
             // Detail context requirements
@@ -1012,6 +1096,13 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private bool IsSatisfied(UnifiedMetadata metadata, MetadataContext context)
         {
+            // [FIX] Loading Loop Protection
+            // If we've already done the full enrichment for this context or a higher one,
+            // we consider it satisfied even if some fields (like Rating or Logo) are still missing.
+            // This prevents continuous re-fetching for items where certain data simply doesn't exist.
+            if (metadata.MaxEnrichmentContext >= context)
+                return true;
+
             return GetMissingFields(metadata, GetRequiredFields(context)) == MetadataField.None;
         }
 
@@ -1639,7 +1730,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Mapped data [Primary={overwritePrimary}] for: '{unified.Title}' (Source: {stremio.Name} [{stremio.Id}])");
         }
 
-        private async Task<TmdbMovieResult?> EnrichWithTmdbAsync(UnifiedMetadata metadata)
+        private async Task<TmdbMovieResult?> EnrichWithTmdbAsync(UnifiedMetadata metadata, MetadataContext context)
         {
             TmdbMovieResult? tmdb = null;
             
@@ -1766,9 +1857,10 @@ namespace ModernIPTVPlayer.Services.Metadata
                 metadata.TmdbInfo = tmdb;
 
                 // [NEW] For series, fetch season details from TMDB to get episodes
-                if (metadata.IsSeries && tmdb.Seasons != null && tmdb.Seasons.Count > 0)
+                // [OPTIMIZATION] Only fetch season details for high-detail views (MediaInfo page)
+                if (metadata.IsSeries && context == MetadataContext.Detail && tmdb.Seasons != null && tmdb.Seasons.Count > 0)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Fetching season details for {tmdb.Seasons.Count} TMDB seasons...");
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Fetching season details for {tmdb.Seasons.Count} TMDB seasons (Context: {context})...");
                     
                     foreach (var tmdbSeason in tmdb.Seasons)
                     {

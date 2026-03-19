@@ -72,14 +72,18 @@
                 </Button>
 
                 <!-- Spotlight Info Overlay -->
-                <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="72,0,0,48" MaxWidth="600">
+                <StackPanel x:Name="InfoPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="72,0,0,48" MaxWidth="600">
+                    <StackPanel.RenderTransform>
+                        <CompositeTransform x:Name="InfoTransform" />
+                    </StackPanel.RenderTransform>
                     <!-- Spotlight Badge -->
                     <Border Background="{ThemeResource SystemAccentColor}" CornerRadius="4" Padding="8,4" HorizontalAlignment="Left" Margin="0,0,0,12">
                         <TextBlock Text="SPOTLIGHT" Foreground="White" FontSize="12" FontWeight="Bold" CharacterSpacing="100"/>
                     </Border>
                     
+                    <Image x:Name="LogoImage" Height="60" MaxWidth="400" HorizontalAlignment="Left" Visibility="Collapsed" Stretch="Uniform" Margin="0,0,0,12"/>
                     <TextBlock x:Name="TitleBlock" 
-                                Text="Title" 
+                                Text="" 
                                 Foreground="White" 
                                 FontSize="36" 
                                 FontWeight="Bold" 
@@ -87,13 +91,13 @@
                                 Margin="0,0,0,8"/>
                                 
                     <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,16">
-                        <TextBlock x:Name="YearBlock" Text="2024" Foreground="#B3FFFFFF" FontSize="14"/>
+                        <TextBlock x:Name="YearBlock" Text="" Foreground="#B3FFFFFF" FontSize="14"/>
                         <TextBlock Text="•" Foreground="#4DFFFFFF" FontSize="14"/>
-                        <TextBlock x:Name="RatingBlock" Text="8.5" Foreground="{ThemeResource SystemAccentColor}" FontSize="14" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="RatingBlock" Text="" Foreground="{ThemeResource SystemAccentColor}" FontSize="14" FontWeight="SemiBold"/>
                     </StackPanel>
                     
                     <TextBlock x:Name="DescriptionBlock" 
-                                Text="Description..." 
+                                Text="" 
                                 Foreground="#B3FFFFFF" 
                                 FontSize="14" 
                                 TextWrapping="Wrap" 
@@ -140,6 +144,9 @@
                         <FontIcon Glyph="&#xE740;" FontSize="16" Foreground="White"/>
                     </Button>
                 </StackPanel>
+
+                <!-- Preloader for Logos (Hidden) -->
+                <Image x:Name="LogoPreloader" Opacity="0" IsHitTestVisible="False" Width="1" Height="1"/>
             </Grid>
         </Border>
     </Grid>

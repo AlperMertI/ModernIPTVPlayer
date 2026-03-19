@@ -341,8 +341,8 @@
                         <!-- Alignment Resets -->
                         <Setter Target="InfoColumn.HorizontalAlignment" Value="Left"/>
                         <Setter Target="IdentityContainer.HorizontalAlignment" Value="Left"/>
-                        <Setter Target="ContentLogo.HorizontalAlignment" Value="Left"/>
-                        <Setter Target="ContentLogo.MaxWidth" Value="1000"/>
+                        <Setter Target="ContentLogoHost.HorizontalAlignment" Value="Left"/>
+                        <Setter Target="ContentLogoHost.MaxWidth" Value="1000"/>
                         <Setter Target="TitlePanel.HorizontalAlignment" Value="Left"/>
                         <Setter Target="MetadataRibbon.HorizontalAlignment" Value="Left"/>
                         <Setter Target="MetadataRibbon.Margin" Value="2,0,0,12"/>
@@ -387,7 +387,7 @@
 
                         <Setter Target="IdentityContainer.HorizontalAlignment" Value="Center"/>
                         <Setter Target="IdentityStack.HorizontalAlignment" Value="Center"/>
-                        <Setter Target="ContentLogo.HorizontalAlignment" Value="Center"/>
+                        <Setter Target="ContentLogoHost.HorizontalAlignment" Value="Center"/>
                          <Setter Target="TitlePanel.HorizontalAlignment" Value="Center"/>
                          <Setter Target="TitleGroup.HorizontalAlignment" Value="Center"/> <!-- [FIX] Explicit group alignment -->
                          <Setter Target="MetadataRibbon.HorizontalAlignment" Value="Center"/>
@@ -501,11 +501,9 @@
                     <!-- TITLE / LOGO SLOT: Both share the same Grid space so toggling one does not cause layout shifts -->
                     <Grid x:Name="TitleGroup" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="0,0,0,6">
                         <StackPanel x:Name="TitlePanel" Opacity="0">
-                          <!-- CONTENT LOGO (Optional Branding) - inside TitlePanel so it occupies the same slot -->
-                          <Image x:Name="ContentLogo" MaxHeight="120" MaxWidth="420" HorizontalAlignment="Left"
-                                 Visibility="Collapsed" Margin="0,0,0,0" Stretch="Uniform"
-                                 ImageOpened="ContentLogo_ImageOpened" ImageFailed="ContentLogo_ImageFailed"
-                                 VerticalAlignment="Bottom"/>
+                          <!-- CONTENT LOGO (Optional Branding) - now a Host for Locked Composition surfaces -->
+                          <Border x:Name="ContentLogoHost" Height="120" Width="420" MaxHeight="120" MaxWidth="420" 
+                                  HorizontalAlignment="Left" Visibility="Collapsed" Margin="0,0,0,0" VerticalAlignment="Bottom"/>
 
                           <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Black" Foreground="White" 
                                      TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"

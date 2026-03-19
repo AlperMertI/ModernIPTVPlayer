@@ -35,6 +35,9 @@ namespace ModernIPTVPlayer
             string startupPageTag = AppSettings.DefaultStartupPage;
             UpdateTitleBar();
 
+            // Initialize behaviors immediately to avoid race conditions during async startup
+            InitializeSidebarBehavior();
+
             Type startupPageType = GetPageTypeFromTag(startupPageTag);
 
             // Perform auto-login then navigate
@@ -78,8 +81,6 @@ namespace ModernIPTVPlayer
 
             // Set Window Icon explicitly for Taskbar/Switcher visibility in Debug
             SetIcon("Assets\\Square44x44Logo.targetsize-256.png");
-
-           InitializeSidebarBehavior();
         }
 
         private DispatcherTimer _sidebarHideTimer;
@@ -212,7 +213,7 @@ namespace ModernIPTVPlayer
             sb.Children.Add(anim);
             sb.Begin();
 
-            _titleBarHideTimer.Start();
+            _titleBarHideTimer?.Start();
         }
 
         private void HideTitleBar()

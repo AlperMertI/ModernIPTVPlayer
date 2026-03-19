@@ -23,6 +23,10 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<IMediaStream> DetailsAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> ColorExtracted;
 
+        // Use a private field to store the BitmapImage for navigation since LoadedImageSurface is not an ImageSource
+        private ImageSource _currentLogoSource;
+        public ImageSource LogoSource => _currentLogoSource;
+
         // Data
         private List<StremioMediaStream> _heroItems = new();
         private int _currentHeroIndex = 0;
@@ -35,6 +39,10 @@ namespace ModernIPTVPlayer.Controls
         private Microsoft.UI.Composition.CompositionSurfaceBrush _heroImageBrush;
         private Microsoft.UI.Composition.CompositionLinearGradientBrush _heroAlphaMask;
         private Microsoft.UI.Composition.CompositionMaskBrush _heroMaskBrush;
+
+        private Microsoft.UI.Composition.SpriteVisual _heroLogoVisual;
+        private Microsoft.UI.Composition.CompositionSurfaceBrush _heroLogoBrush;
+        private Dictionary<string, Microsoft.UI.Xaml.Media.LoadedImageSurface> _heroLogoSurfaces = new();
 
         public HeroSectionControl()
         {
@@ -49,8 +57,15 @@ namespace ModernIPTVPlayer.Controls
                 }
                 else
                 {
-                    // Re-attach existing visual if cached
                     ElementCompositionPreview.SetElementChildVisual(HeroImageHost, _heroVisual);
+                }
+            };
+
+            HeroLogoHost.Loaded += (s, e) =>
+            {
+                if (_heroLogoVisual != null)
+                {
+                    ElementCompositionPreview.SetElementChildVisual(HeroLogoHost, _heroLogoVisual);
                 }
             };
             
@@ -95,9 +110,63 @@ namespace ModernIPTVPlayer.Controls
 
             // A genuinely new top item arrived (or first load)
             _heroItems = newItems;
+            
             _currentHeroIndex = 0;
+            
+            // 1. Clear and dispose old surfaces to avoid GPU leaks (prevents 0xc000027b)
+            ClearSurfaces();
+
+            // 2. Pre-load only the first few to avoid overwhelming the engine on startup
+            for (int i = 0; i < Math.Min(3, _heroItems.Count); i++)
+            {
+                PreloadSurface(_heroItems[i].LogoUrl);
+            }
+
+            // 3. Initial Reveal: Update immediately so content is ready before shimmer is hidden
             UpdateHeroSection(_heroItems[0]);
+
             StartHeroAutoRotation();
+        }
+
+        private void ClearSurfaces()
+        {
+            try
+            {
+                foreach (var surface in _heroLogoSurfaces.Values)
+                {
+                    surface?.Dispose();
+                }
+                _heroLogoSurfaces.Clear();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Hero] Surface Disposal Error: {ex.Message}");
+            }
+        }
+
+        private void PreloadSurface(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return;
+            if (_heroLogoSurfaces.ContainsKey(url)) return;
+
+            try
+            {
+                var surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new Uri(url));
+                
+                // If it's the first load and we are waiting, listen for completion
+                if (_isFirstLoad && !_firstLogoReadyTcs.Task.IsCompleted && _heroItems != null && _heroItems.Count > 0 && url == _heroItems[0].LogoUrl)
+                {
+                    surface.LoadCompleted += (s, e) => {
+                        _firstLogoReadyTcs.TrySetResult(true);
+                    };
+                }
+
+                _heroLogoSurfaces[url] = surface;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Hero] Preload Error for {url}: {ex.Message}");
+            }
         }
 
         private void SetupHeroCompositionMask()
@@ -141,6 +210,32 @@ namespace ModernIPTVPlayer.Controls
 
             // 7. Ken Burns
             ApplyKenBurnsComposition(compositor);
+
+            // 8. Logo Visual Setup
+            _heroLogoBrush = compositor.CreateSurfaceBrush();
+            _heroLogoBrush.Stretch = Microsoft.UI.Composition.CompositionStretch.Uniform;
+            _heroLogoBrush.HorizontalAlignmentRatio = 0f; // Left aligned
+            
+            _heroLogoVisual = compositor.CreateSpriteVisual();
+            _heroLogoVisual.Brush = _heroLogoBrush;
+            
+            // Use explicit size if possible, otherwise fallback
+            float lWidth = (float)HeroLogoHost.Width;
+            float lHeight = (float)HeroLogoHost.Height;
+            if (double.IsNaN(lWidth) || lWidth <= 0) lWidth = (float)HeroLogoHost.ActualWidth;
+            if (double.IsNaN(lHeight) || lHeight <= 0) lHeight = (float)HeroLogoHost.ActualHeight;
+            if (lWidth <= 0) lWidth = 500f;
+            if (lHeight <= 0) lHeight = 100f;
+            
+            _heroLogoVisual.Size = new Vector2(lWidth, lHeight);
+            
+            ElementCompositionPreview.SetElementChildVisual(HeroLogoHost, _heroLogoVisual);
+            
+            HeroLogoHost.SizeChanged += (s, e) =>
+            {
+                if (_heroLogoVisual != null)
+                    _heroLogoVisual.Size = new Vector2((float)e.NewSize.Width, (float)e.NewSize.Height);
+            };
         }
 
         private void StopAutoRotation()
@@ -167,7 +262,21 @@ namespace ModernIPTVPlayer.Controls
         {
             _heroAutoTimer?.Stop();
             _heroAutoTimer?.Start();
+
+            // Smart Pre-load: Warm up next and previous item surfaces
+            if (_heroItems != null && _heroItems.Count > 1)
+            {
+                int next = (_currentHeroIndex + 1) % _heroItems.Count;
+                int prev = (_currentHeroIndex - 1 + _heroItems.Count) % _heroItems.Count;
+                PreloadSurface(_heroItems[next].LogoUrl);
+                PreloadSurface(_heroItems[prev].LogoUrl);
+            }
         }
+
+        private bool _isFirstLoad = true;
+        private TaskCompletionSource<bool> _firstLogoReadyTcs = new TaskCompletionSource<bool>();
+        private TaskCompletionSource<bool> _firstBackgroundReadyTcs = new TaskCompletionSource<bool>();
+        private bool _pendingSetLoadingFalse = false;
 
         public void SetLoading(bool isLoading)
         {
@@ -177,26 +286,70 @@ namespace ModernIPTVPlayer.Controls
                 HeroTextShimmer.Visibility = Visibility.Visible;
                 HeroRealContent.Opacity = 0;
                 HeroRealContent.Visibility = Visibility.Collapsed;
+                if (_heroVisual != null) _heroVisual.Opacity = 0; // [FIX] Prepare for fade-in
+                _isFirstLoad = true;
+                _firstLogoReadyTcs = new TaskCompletionSource<bool>();
+                _firstBackgroundReadyTcs = new TaskCompletionSource<bool>();
             }
             else
             {
-                HeroShimmer.Visibility = Visibility.Collapsed;
-                HeroTextShimmer.Visibility = Visibility.Collapsed;
-                HeroRealContent.Visibility = Visibility.Visible;
-                HeroRealContent.Opacity = 1;
+                if (_isFirstLoad && (!_firstLogoReadyTcs.Task.IsCompleted || !_firstBackgroundReadyTcs.Task.IsCompleted))
+                {
+                    // Delay reveal until both primary surfaces are truly locked & ready
+                    _pendingSetLoadingFalse = true;
+                    
+                    // Safety timeout (2.5 seconds) to avoid getting stuck if a CDN is slow
+                    _ = Task.Delay(2500).ContinueWith(_ => {
+                        if (!_firstLogoReadyTcs.Task.IsCompleted) _firstLogoReadyTcs.TrySetResult(false);
+                        if (!_firstBackgroundReadyTcs.Task.IsCompleted) _firstBackgroundReadyTcs.TrySetResult(false);
+                    }, TaskScheduler.FromCurrentSynchronizationContext());
+
+                    Task.WhenAll(_firstLogoReadyTcs.Task, _firstBackgroundReadyTcs.Task).ContinueWith(t => {
+                        DispatcherQueue.TryEnqueue(() => {
+                            if (_pendingSetLoadingFalse)
+                            {
+                                 _pendingSetLoadingFalse = false;
+                                 ShowRealContent();
+                            }
+                        });
+                    });
+                    return;
+                }
+
+                ShowRealContent();
             }
+        }
+
+        private void ShowRealContent()
+        {
+            if (HeroShimmer.Visibility == Visibility.Collapsed) return;
+
+            HeroShimmer.Visibility = Visibility.Collapsed;
+            HeroTextShimmer.Visibility = Visibility.Collapsed;
+            HeroRealContent.Visibility = Visibility.Visible;
+            HeroRealContent.Opacity = 1; // [FIX] Ensure inner content is opaque
+            
+            // [FIX] Reveal metadata with animation
+            AnimateTextIn();
+
+            // [FIX] Reveal background image with smooth fade-in
+            if (_heroVisual != null)
+            {
+                var compositor = _heroVisual.Compositor;
+                var fadeIn = compositor.CreateScalarKeyFrameAnimation();
+                fadeIn.InsertKeyFrame(1f, 1f);
+                fadeIn.Duration = TimeSpan.FromMilliseconds(800);
+                _heroVisual.StartAnimation("Opacity", fadeIn);
+            }
+            
+            _isFirstLoad = false;
         }
         
         private async void UpdateHeroSection(StremioMediaStream item, bool animate = false)
         {
-             // Transition from Shimmer to Real Content
-            if (HeroShimmer.Visibility == Visibility.Visible)
-            {
-                HeroShimmer.Visibility = Visibility.Collapsed;
-                HeroTextShimmer.Visibility = Visibility.Collapsed;
-                HeroRealContent.Opacity = 1; 
-                AnimateTextIn();
-            }
+             // Transition from Shimmer to Real Content is now handled by ShowRealContent()
+             // which is triggered after primary surfaces (Background + Logo) are synchronized and ready.
+             // This prevents staggered arrival.
 
             string imgUrl = item.Meta?.Background ?? item.PosterUrl;
             string itemId = item.IMDbId ?? item.Id.ToString();
@@ -233,12 +386,10 @@ namespace ModernIPTVPlayer.Controls
                 _heroVisual.StartAnimation("Opacity", fadeOut);
 
                 AnimateTextOut();
-                await Task.Delay(420);
-
-                // Phase 2: Swap content
-                PopulateHeroData(item);
+                await Task.Delay(300); // Wait for fade-out to complete
                 
-                // Subscribe to changes (for enrichment updates)
+                // Phase 2: Swap content (while invisible)
+                PopulateHeroData(item);
                 SubscribeToItemChanges(item);
 
                 if (!string.IsNullOrEmpty(imgUrl))
@@ -270,10 +421,20 @@ namespace ModernIPTVPlayer.Controls
                     try
                     {
                         var surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new Uri(imgUrl));
+                        if (_isFirstLoad && !_firstBackgroundReadyTcs.Task.IsCompleted)
+                        {
+                            surface.LoadCompleted += (s, e) => {
+                                _firstBackgroundReadyTcs.TrySetResult(e.Status == Microsoft.UI.Xaml.Media.LoadedImageSourceLoadStatus.Success);
+                            };
+                        }
                         if (_heroImageBrush != null)
                             _heroImageBrush.Surface = surface;
                     }
-                    catch { /* Ignore surface loading errors */ }
+                    catch { _firstBackgroundReadyTcs.TrySetResult(false); }
+                }
+                else
+                {
+                    _firstBackgroundReadyTcs.TrySetResult(true);
                 }
             }
         }
@@ -327,7 +488,8 @@ namespace ModernIPTVPlayer.Controls
                 {
                     // Refresh fields if they might have been enriched
                     if (e.PropertyName == nameof(item.Description) || e.PropertyName == nameof(item.Rating) || 
-                        e.PropertyName == nameof(item.Year) || e.PropertyName == nameof(item.Genres))
+                        e.PropertyName == nameof(item.Year) || e.PropertyName == nameof(item.Genres) ||
+                        e.PropertyName == nameof(item.LogoUrl))
                     {
                         PopulateHeroData(item);
                     }
@@ -347,7 +509,54 @@ namespace ModernIPTVPlayer.Controls
 
         private void PopulateHeroData(StremioMediaStream item)
         {
-            HeroTitle.Text = item.Title;
+            if (!string.IsNullOrEmpty(item.LogoUrl))
+            {
+                // Instant load via Composition Surface (check cache first)
+                if (_heroLogoBrush != null)
+                {
+                    try
+                    {
+                        Microsoft.UI.Xaml.Media.LoadedImageSurface surface = null;
+                        if (!_heroLogoSurfaces.TryGetValue(item.LogoUrl, out surface))
+                        {
+                            // Fallback if not pre-warmed for some reason
+                            surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new Uri(item.LogoUrl));
+                            _heroLogoSurfaces[item.LogoUrl] = surface;
+                        }
+
+                        _heroLogoBrush.Surface = surface;
+                        
+                        // Ensure visual size is updated in case host layout is still zero
+                        if (_heroLogoVisual != null && (_heroLogoVisual.Size.X <= 0 || _heroLogoVisual.Size.Y <= 0))
+                        {
+                            _heroLogoVisual.Size = new Vector2(500, 100);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[HeroControl] Logo surface load failed: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("[HeroControl] _heroLogoBrush is NULL!");
+                }
+
+                // Keep BitmapImage for navigation (details page)
+                _currentLogoSource = ImageHelper.GetCachedLogo(item.LogoUrl);
+
+                HeroLogoHost.Visibility = Visibility.Visible;
+                HeroLogoHost.Opacity = 1; // Ensure it's opaque
+                HeroTitle.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                _currentLogoSource = null;
+                HeroLogoHost.Visibility = Visibility.Collapsed;
+                HeroTitle.Visibility = Visibility.Visible;
+                HeroTitle.Text = item.Title;
+            }
+
             HeroOverview.Text = !string.IsNullOrEmpty(item.Description) ? item.Description : "Sinematik bir serüven sizi bekliyor.";
             HeroYear.Text = item.Year ?? "";
             

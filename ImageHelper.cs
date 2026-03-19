@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Windows.Graphics.Imaging;
 using Windows.Storage.Streams;
 using Windows.UI;
+using Microsoft.UI.Xaml.Media.Imaging;
 
 namespace ModernIPTVPlayer
 {
@@ -15,7 +16,44 @@ namespace ModernIPTVPlayer
     {
         private static readonly HttpClient _httpClient = new HttpClient();
         private static readonly ConcurrentDictionary<string, (Color Primary, Color Secondary)> _colorCache = new();
+        private static readonly ConcurrentDictionary<string, BitmapImage> _logoCache = new();
         private static readonly Random _random = new Random();
+
+        private static readonly int MAX_LOGO_CACHE_SIZE = 120;
+
+        /// <summary>
+        /// Gets a cached BitmapImage for a logo URL. If not cached, creates one and adds it.
+        /// MUST BE CALLED FROM UI THREAD.
+        /// </summary>
+        public static BitmapImage GetCachedLogo(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return null;
+            if (_logoCache.TryGetValue(url, out var existing)) return existing;
+
+            // Cache size management
+            if (_logoCache.Count > MAX_LOGO_CACHE_SIZE)
+            {
+                // Partial clear strategy: remove ~half to maintain some hits
+                var keysToRemove = _logoCache.Keys.Take(MAX_LOGO_CACHE_SIZE / 2).ToList();
+                foreach (var key in keysToRemove) _logoCache.TryRemove(key, out _);
+            }
+
+            try
+            {
+                var bitmap = new BitmapImage();
+                // Optimization: Logos are never shown very large, usually < 120px height
+                bitmap.DecodePixelHeight = 120;
+                bitmap.CreateOptions = BitmapCreateOptions.None; // WinUI 3 handles decoding asynchronously by default
+                bitmap.UriSource = new Uri(url);
+                
+                _logoCache.TryAdd(url, bitmap);
+                return bitmap;
+            }
+            catch
+            {
+                return null;
+            }
+        }
 
         public static async Task<(Color Primary, Color Secondary)?> GetOrExtractColorAsync(string imageUrl)
         {
