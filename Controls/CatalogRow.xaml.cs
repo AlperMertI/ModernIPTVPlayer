@@ -29,6 +29,15 @@ namespace ModernIPTVPlayer.Controls
             set => SetValue(CatalogNameProperty, value);
         }
 
+        public static readonly DependencyProperty IsHeaderInteractiveProperty =
+            DependencyProperty.Register("IsHeaderInteractive", typeof(bool), typeof(CatalogRow), new PropertyMetadata(true));
+
+        public bool IsHeaderInteractive
+        {
+            get => (bool)GetValue(IsHeaderInteractiveProperty);
+            set => SetValue(IsHeaderInteractiveProperty, value);
+        }
+
         public static readonly DependencyProperty ItemsSourceProperty =
             DependencyProperty.Register("ItemsSource", typeof(object), typeof(CatalogRow), new PropertyMetadata(null));
 
@@ -95,6 +104,7 @@ namespace ModernIPTVPlayer.Controls
 
 
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> ItemClicked;
+        public event EventHandler HeaderClicked;
         public event EventHandler<FrameworkElement> HoverStarted;
         public event EventHandler<FrameworkElement> HoverEnded;
         public event EventHandler ScrollStarted;
@@ -141,6 +151,12 @@ namespace ModernIPTVPlayer.Controls
                 ElementSoundPlayer.Play(ElementSoundKind.Invoke);
                 ItemClicked?.Invoke(this, (lStream, lCard.ImageElement));
             }
+        }
+
+        private void HeaderLink_Click(object sender, RoutedEventArgs e)
+        {
+            ElementSoundPlayer.Play(ElementSoundKind.Invoke);
+            HeaderClicked?.Invoke(this, EventArgs.Empty);
         }
 
         private void PosterCard_HoverStarted(object sender, EventArgs e)

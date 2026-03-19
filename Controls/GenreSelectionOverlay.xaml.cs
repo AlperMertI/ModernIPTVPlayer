@@ -129,6 +129,25 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private void BrowseAllButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button btn && btn.DataContext is CatalogDisplayItem catalog && AddonListView.SelectedItem is AddonDisplayItem selected)
+            {
+                var args = new GenreSelectionArgs
+                {
+                    AddonId = selected.Id,
+                    CatalogId = catalog.Id,
+                    CatalogType = _contentType,
+                    GenreValue = null, // No genre filter
+                    FilterKey = catalog.FilterKey,
+                    DisplayName = $"{selected.Name} ({catalog.Name})"
+                };
+
+                SelectionMade?.Invoke(this, args);
+                Hide();
+            }
+        }
+
         public void Hide()
         {
             HideStoryboard.Completed += (s, e) => 

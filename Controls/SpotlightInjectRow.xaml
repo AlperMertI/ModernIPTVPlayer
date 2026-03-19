@@ -77,9 +77,14 @@
                         <CompositeTransform x:Name="InfoTransform" />
                     </StackPanel.RenderTransform>
                     <!-- Spotlight Badge -->
-                    <Border Background="{ThemeResource SystemAccentColor}" CornerRadius="4" Padding="8,4" HorizontalAlignment="Left" Margin="0,0,0,12">
-                        <TextBlock Text="SPOTLIGHT" Foreground="White" FontSize="12" FontWeight="Bold" CharacterSpacing="100"/>
-                    </Border>
+                    <HyperlinkButton Click="HeaderLink_Click" Padding="0" Margin="0,0,0,12" Background="Transparent" BorderThickness="0">
+                        <Border Background="{ThemeResource SystemAccentColor}" CornerRadius="4" Padding="8,4" HorizontalAlignment="Left">
+                            <TextBlock Text="SPOTLIGHT" Foreground="White" FontSize="12" FontWeight="Bold" CharacterSpacing="100"/>
+                        </Border>
+                        <ToolTipService.ToolTip>
+                            <ToolTip Content="Tümünü Gör"/>
+                        </ToolTipService.ToolTip>
+                    </HyperlinkButton>
                     
                     <Image x:Name="LogoImage" Height="60" MaxWidth="400" HorizontalAlignment="Left" Visibility="Collapsed" Stretch="Uniform" Margin="0,0,0,12"/>
                     <TextBlock x:Name="TitleBlock" 

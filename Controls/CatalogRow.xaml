@@ -6,8 +6,13 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:models="using:ModernIPTVPlayer.Models.Stremio"
+    xmlns:converters="using:ModernIPTVPlayer.Converters"
     mc:Ignorable="d"
     x:Name="RootControl">
+
+    <UserControl.Resources>
+        <converters:BoolToVisibleConverter x:Key="BoolToVisibleConverter"/>
+    </UserControl.Resources>
 
     <StackPanel x:Name="RootPanel" Spacing="16" Margin="48,0,0,24" Opacity="0"
                 PointerEntered="RootPanel_PointerEntered" 
@@ -28,7 +33,20 @@
             <TranslateTransform x:Name="EntranceTranslation" Y="40"/>
         </StackPanel.RenderTransform>
         
-        <TextBlock x:Name="RowTitle" Text="{x:Bind CatalogName, Mode=OneWay}" FontSize="22" FontWeight="Bold" Foreground="White" CharacterSpacing="20"/>
+        <HyperlinkButton x:Name="HeaderLink" 
+                         Click="HeaderLink_Click" 
+                         Padding="0" Margin="0" 
+                         Background="Transparent" BorderThickness="0"
+                         IsEnabled="{x:Bind IsHeaderInteractive, Mode=OneWay}">
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock x:Name="RowTitle" Text="{x:Bind CatalogName, Mode=OneWay}" FontSize="22" FontWeight="Bold" Foreground="White" CharacterSpacing="20"/>
+                <FontIcon Glyph="&#xE76C;" FontSize="14" VerticalAlignment="Center" Margin="0,4,0,0"
+                          Visibility="{x:Bind IsHeaderInteractive, Converter={StaticResource BoolToVisibleConverter}, Mode=OneWay}"/>
+            </StackPanel>
+            <ToolTipService.ToolTip>
+                <ToolTip Content="Tümünü Gör" Visibility="{x:Bind IsHeaderInteractive, Converter={StaticResource BoolToVisibleConverter}, Mode=OneWay}"/>
+            </ToolTipService.ToolTip>
+        </HyperlinkButton>
         
 
         <Grid x:Name="ListContainer">

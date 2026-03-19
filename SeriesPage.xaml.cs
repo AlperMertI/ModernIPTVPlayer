@@ -77,6 +77,20 @@ namespace ModernIPTVPlayer
                  BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
             };
             StremioControl.ViewChanged += StremioControl_ViewChanged;
+            StremioControl.HeaderClicked += (s, vm) => 
+            {
+                if (!vm.IsHeaderInteractive) return;
+
+                var args = new GenreSelectionArgs
+                {
+                    AddonId = vm.SourceUrl,
+                    CatalogId = vm.CatalogId,
+                    CatalogType = vm.CatalogType,
+                    DisplayName = vm.CatalogName,
+                    GenreValue = null // Fetch the base catalog
+                };
+                GenreOverlay_SelectionMade(this, args);
+            };
 
             // Connect Overlay to StremioControl's ScrollViewer
             _stremioExpandedCardOverlay = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, StremioControl.MainScrollViewer);

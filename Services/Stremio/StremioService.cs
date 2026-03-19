@@ -307,16 +307,28 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         public async Task<List<StremioMediaStream>> DiscoverAsync(GenreSelectionArgs args, int skip = 0)
         {
-            if (args == null) return new List<StremioMediaStream>();
+            if (args == null || string.IsNullOrEmpty(args.AddonId)) return new List<StremioMediaStream>();
 
             try
             {
-                string encodedGenre = Uri.EscapeDataString(args.GenreValue);
                 string filterKey = args.FilterKey ?? "genre";
-                string pathParams = $"{filterKey}={encodedGenre}";
-                if (skip > 0) pathParams += $"&skip={skip}";
+                string pathParams = "";
+                
+                if (!string.IsNullOrEmpty(args.GenreValue))
+                {
+                    string encodedGenre = Uri.EscapeDataString(args.GenreValue);
+                    pathParams = $"{filterKey}={encodedGenre}";
+                }
+                
+                if (skip > 0) 
+                {
+                    if (string.IsNullOrEmpty(pathParams)) pathParams = $"skip={skip}";
+                    else pathParams += $"&skip={skip}";
+                }
 
-                string url = $"{args.AddonId.TrimEnd('/')}/catalog/{args.CatalogType}/{args.CatalogId}/{pathParams}.json";
+                string url = $"{args.AddonId.TrimEnd('/')}/catalog/{args.CatalogType}/{args.CatalogId}";
+                if (!string.IsNullOrEmpty(pathParams)) url += $"/{pathParams}";
+                url += ".json";
                 System.Diagnostics.Debug.WriteLine($"[StremioService] Pinpoint Discover URL: {url}");
 
                 var root = await GetCatalogAsync(url);

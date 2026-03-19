@@ -69,6 +69,7 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<IMediaStream> DetailsAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> BackdropColorChanged;
         public event EventHandler<ScrollViewerViewChangedEventArgs> ViewChanged;
+        public event EventHandler<CatalogRowViewModel> HeaderClicked;
         
         // Expanded Card Event Bridges
         public event EventHandler<FrameworkElement> CardHoverStarted;
@@ -781,6 +782,14 @@ namespace ModernIPTVPlayer.Controls
         private void CatalogRow_HoverEnded(object sender, FrameworkElement e) => CardHoverEnded?.Invoke(this, e);
         private void CatalogRow_ScrollStarted(object sender, EventArgs e) => RowScrollStarted?.Invoke(this, e);
         private void CatalogRow_ScrollEnded(object sender, EventArgs e) => RowScrollEnded?.Invoke(this, e);
+
+        private void CatalogRow_HeaderClicked(object sender, EventArgs e)
+        {
+            if (sender is FrameworkElement fe && fe.DataContext is CatalogRowViewModel vm)
+            {
+                HeaderClicked?.Invoke(this, vm);
+            }
+        }
 
         private async void CatalogRow_LoadMoreAction(object sender, EventArgs e)
         {

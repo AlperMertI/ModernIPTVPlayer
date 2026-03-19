@@ -22,7 +22,10 @@ namespace ModernIPTVPlayer.Models
         public string CatalogId { get; set; }
         public string Extra { get; set; }
         public int Skip { get; set; } = 0;
-        public bool HasMore { get; set; } = true;
+        public bool HasMore { get => _hasMore; set { _hasMore = value; OnPropertyChanged(); } }
+        private bool _hasMore = true;
+
+        public bool IsHeaderInteractive => !string.IsNullOrEmpty(SourceUrl);
         
         private bool _isLoadingMore;
         public bool IsLoadingMore { get => _isLoadingMore; set { _isLoadingMore = value; OnPropertyChanged(); } }

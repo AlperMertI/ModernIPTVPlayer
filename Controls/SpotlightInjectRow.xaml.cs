@@ -27,6 +27,7 @@ namespace ModernIPTVPlayer.Controls
         private int _currentImageCandidateIndex = 0;
 
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement, Microsoft.UI.Xaml.Media.ImageSource PreloadedLogo)> ItemClicked;
+        public event EventHandler HeaderClicked;
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> TrailerExpandRequested;
 
         public static readonly DependencyProperty IsExpandedProperty =
@@ -897,6 +898,12 @@ namespace ModernIPTVPlayer.Controls
                 var item = _items[_currentIndex];
                 ItemClicked?.Invoke(this, (item, FallbackImage, LogoImage.Source));
             }
+        }
+
+        private void HeaderLink_Click(object sender, RoutedEventArgs e)
+        {
+            ElementSoundPlayer.Play(ElementSoundKind.Invoke);
+            HeaderClicked?.Invoke(this, EventArgs.Empty);
         }
 
         private async void WatchlistButton_Click(object sender, RoutedEventArgs e)
