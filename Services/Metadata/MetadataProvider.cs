@@ -74,6 +74,15 @@ namespace ModernIPTVPlayer.Services.Metadata
         private readonly TimeSpan _addonMetaPositiveCacheDuration = TimeSpan.FromMinutes(20);
         private readonly TimeSpan _addonMetaNegativeCacheDuration = TimeSpan.FromMinutes(3);
 
+        public void ClearCache()
+        {
+            _resultCache.Clear();
+            _activeTasks.Clear();
+            _addonMetaCache.Clear();
+            _activeAddonMetaTasks.Clear();
+            _rawToCanonicalIdCache.Clear();
+        }
+
         /// <summary>
         /// Synchronously checks if metadata is already in cache.
         /// Useful for preventing UI flicker during loading states.
@@ -89,7 +98,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                 string type = (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms_entry && (sms_entry.Meta.Type == "series" || sms_entry.Meta.Type == "tv"))) ? "series" : "movie";
 
                 string addonHash = GetAddonOrderHash();
-                string cacheKey = $"{id ?? stream.Title}_{type}_{addonHash}";
+                string tmdbLang = AppSettings.TmdbLanguage;
+                string cacheKey = $"{id ?? stream.Title}_{type}_{addonHash}_{tmdbLang}";
                 if (context == MetadataContext.Discovery) cacheKey += "_discovery";
 
                 // 1. Check Primary Cache
@@ -153,7 +163,8 @@ namespace ModernIPTVPlayer.Services.Metadata
             string fetchId = id ?? rawId ?? stream.Title;
             
             string addonHash = GetAddonOrderHash();
-            string cacheKey = $"{id ?? stream.Title}_{type}_{addonHash}";
+            string tmdbLang = AppSettings.TmdbLanguage;
+            string cacheKey = $"{id ?? stream.Title}_{type}_{addonHash}_{tmdbLang}";
             if (context == MetadataContext.Discovery) cacheKey += "_discovery";
 
             // 1. Check Result Cache
@@ -1239,41 +1250,68 @@ namespace ModernIPTVPlayer.Services.Metadata
             int updated = 0;
             int added = 0;
 
+            // [NEW] Check for generic titles or missing overviews in localized response
+            // If descriptions are missing, we'll try to fetch English fallback.
+            bool areTitlesGeneric = tmdbSeason.Episodes.Any(e => IsGenericEpisodeTitle(e.Name, metadata.Title));
+            bool areOverviewsMissing = tmdbSeason.Episodes.Any(e => string.IsNullOrEmpty(e.Overview));
+            
+            TmdbSeasonDetails? enSeason = null;
+            if (areTitlesGeneric || areOverviewsMissing)
+            {
+                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] EnrichSeason {seasonNumber}: Missing details (TitlesGeneric={areTitlesGeneric}, OverviewsMissing={areOverviewsMissing}, Lang={AppSettings.TmdbLanguage}). Fetching English fallback...");
+                enSeason = await TmdbHelper.GetSeasonDetailsAsync(metadata.TmdbInfo.Id, seasonNumber, "en-US");
+            }
+
             foreach (var tmdbEp in tmdbSeason.Episodes)
             {
                 var existing = season.Episodes.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
+                
+                // [FIX] Pick best title and overview
+                string? bestName = tmdbEp.Name;
+                string? bestOverview = tmdbEp.Overview;
+
+                if (IsGenericEpisodeTitle(bestName, metadata.Title) || string.IsNullOrEmpty(bestOverview))
+                {
+                    var enEp = enSeason?.Episodes?.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
+                    if (enEp != null)
+                    {
+                        if (IsGenericEpisodeTitle(bestName, metadata.Title) && !IsGenericEpisodeTitle(enEp.Name, metadata.Title))
+                            bestName = enEp.Name;
+                        if (string.IsNullOrEmpty(bestOverview))
+                            bestOverview = enEp.Overview;
+                    }
+                }
+
                 if (existing != null)
                 {
                     // Enhance existing
-                    if (!string.IsNullOrEmpty(tmdbEp.Name)) 
+                    if (!string.IsNullOrEmpty(bestName)) 
                     {
-                        // [FIX] TMDB often returns generic titles ("Season 2 Episode 1") while Stremio has proper ones.
-                        // Only override if the new title is NOT generic, or if the current title IS generic.
                         bool existingIsGeneric = IsGenericEpisodeTitle(existing.Title, metadata.Title);
-                        bool newIsGeneric = IsGenericEpisodeTitle(tmdbEp.Name, metadata.Title);
+                        bool newIsGeneric = IsGenericEpisodeTitle(bestName, metadata.Title);
                         if (existingIsGeneric || !newIsGeneric)
                         {
-                            existing.Title = tmdbEp.Name;
+                            existing.Title = bestName;
                         }
                     }
-                    if (!string.IsNullOrEmpty(tmdbEp.Overview)) existing.Overview = tmdbEp.Overview;
+                    if (!string.IsNullOrEmpty(bestOverview)) existing.Overview = bestOverview;
                     if (!string.IsNullOrEmpty(tmdbEp.StillUrl)) existing.ThumbnailUrl = tmdbEp.StillUrl;
                     if (!existing.AirDate.HasValue && tmdbEp.AirDateDateTime.HasValue) existing.AirDate = tmdbEp.AirDateDateTime;
                     updated++;
                 }
                 else
                 {
-                    // Virtual Episode (TMDB knows it, Stremio doesn't)
+                    // Virtual Episode
                     season.Episodes.Add(new UnifiedEpisode
                     {
-                        Id = $"tmdb:{metadata.TmdbInfo.Id}:{seasonNumber}:{tmdbEp.EpisodeNumber}", // Virtual ID
+                        Id = $"tmdb:{metadata.TmdbInfo.Id}:{seasonNumber}:{tmdbEp.EpisodeNumber}",
                         SeasonNumber = seasonNumber,
                         EpisodeNumber = tmdbEp.EpisodeNumber,
-                        Title = tmdbEp.Name,
-                        Overview = tmdbEp.Overview,
+                        Title = bestName ?? $"Episode {tmdbEp.EpisodeNumber}",
+                        Overview = bestOverview,
                         ThumbnailUrl = tmdbEp.StillUrl,
                         AirDate = tmdbEp.AirDateDateTime,
-                        StreamUrl = null // No stream yet
+                        StreamUrl = null
                     });
                     added++;
                 }
@@ -1668,14 +1706,23 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 if (tmdb == null)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Trying title search = \"{metadata.Title}\", year = \"{metadata.Year?.Split('–')[0]}\"");
-                    tmdb = await TmdbHelper.SearchMovieAsync(metadata.Title, metadata.Year?.Split('–')[0]);
-                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Title search result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
+                    var searchResult = await TmdbHelper.SearchMovieAsync(metadata.Title, metadata.Year?.Split('–')[0]);
+                    if (searchResult != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Search found ID = {searchResult.Id}, fetching full details...");
+                        tmdb = await TmdbHelper.GetMovieByIdAsync(searchResult.Id);
+                    }
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Search result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
                     
                     if (tmdb == null && metadata.ImdbId != null && metadata.ImdbId.StartsWith("tt"))
                     {
                          System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Trying IMDb ID fallback = {metadata.ImdbId}");
-                         tmdb = await TmdbHelper.GetMovieByExternalIdAsync(metadata.ImdbId);
+                         var extResult = await TmdbHelper.GetMovieByExternalIdAsync(metadata.ImdbId);
+                        if (extResult != null)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: IMDb lookup found ID = {extResult.Id}, fetching full details...");
+                            tmdb = await TmdbHelper.GetMovieByIdAsync(extResult.Id);
+                        }
                          System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: IMDb fallback result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
                     }
                 }
@@ -1696,6 +1743,21 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 // Higher quality images
                 if (!string.IsNullOrEmpty(tmdb.FullBackdropUrl)) metadata.BackdropUrl = tmdb.FullBackdropUrl;
+
+                // [LOGO LOCALIZATION] Select best logo based on language preference
+                string? tmdbLogo = SelectBestLogo(tmdb);
+                if (!string.IsNullOrEmpty(tmdbLogo))
+                {
+                    // Check if existing logo is better quality (e.g. from fanart.tv) or if we should override with TMDB localized logo
+                    int existingScore = GetLogoScore(metadata.LogoUrl);
+                    int tmdbScore = 8; // TMDB score
+
+                    // If existing logo is just a metahub logo or missing, or if it's not localized, prefer TMDB
+                    if (existingScore <= 4 || string.IsNullOrEmpty(metadata.LogoUrl))
+                    {
+                        metadata.LogoUrl = tmdbLogo;
+                    }
+                }
                 
                 // Update genres if needed
                 var tmdbGenres = tmdb.GetGenreNames();
@@ -1716,10 +1778,20 @@ namespace ModernIPTVPlayer.Services.Metadata
                         // Check if this season already exists
                         var existingSeason = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == tmdbSeason.SeasonNumber);
                         bool hasExistingEpisodes = existingSeason?.Episodes != null && existingSeason.Episodes.Count > 0;
-                        
-                        var seasonDetails = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, tmdbSeason.SeasonNumber);
+                            var seasonDetails = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, tmdbSeason.SeasonNumber);
                         if (seasonDetails?.Episodes != null && seasonDetails.Episodes.Count > 0)
                         {
+                            // [FIX] Check for generic titles OR missing descriptions in localized response
+                            bool areTitlesGeneric = seasonDetails.Episodes.Count > 0 && seasonDetails.Episodes.Any(e => IsGenericEpisodeTitle(e.Name, metadata.Title));
+                            bool areOverviewsMissing = seasonDetails.Episodes.Count > 0 && seasonDetails.Episodes.Any(e => string.IsNullOrEmpty(e.Overview));
+                            
+                            TmdbSeasonDetails? enSeasonDetails = null;
+                            if (areTitlesGeneric || areOverviewsMissing)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] EnrichWithTmdb Season {tmdbSeason.SeasonNumber}: Missing details (TitlesGeneric={areTitlesGeneric}, OverviewsMissing={areOverviewsMissing}, Lang={AppSettings.TmdbLanguage}). Fetching English fallback...");
+                                enSeasonDetails = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, tmdbSeason.SeasonNumber, "en-US");
+                            }
+
                             // Create the season if it doesn't exist
                             if (existingSeason == null)
                             {
@@ -1736,15 +1808,36 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 foreach (var tmdbEp in seasonDetails.Episodes)
                                 {
                                     var existingEp = existingSeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
+                                    
+                                    // [FIX] Pick the best title and overview
+                                    string? bestName = tmdbEp.Name;
+                                    string? bestOverview = tmdbEp.Overview;
+
+                                    if (IsGenericEpisodeTitle(bestName, metadata.Title) || string.IsNullOrEmpty(bestOverview))
+                                    {
+                                        var enEp = enSeasonDetails?.Episodes?.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
+                                        if (enEp != null)
+                                        {
+                                            if (IsGenericEpisodeTitle(bestName, metadata.Title) && !IsGenericEpisodeTitle(enEp.Name, metadata.Title))
+                                                bestName = enEp.Name;
+                                            if (string.IsNullOrEmpty(bestOverview))
+                                                bestOverview = enEp.Overview;
+                                        }
+                                    }
+
                                     if (existingEp != null)
                                     {
-                                        // Always use TMDB title/overview when available (they are more complete)
-                                        if (!string.IsNullOrEmpty(tmdbEp.Name))
-                                            existingEp.Title = tmdbEp.Name;
-                                        if (!string.IsNullOrEmpty(tmdbEp.Overview))
-                                            existingEp.Overview = tmdbEp.Overview;
-                                        if (!string.IsNullOrEmpty(tmdbEp.StillPath))
-                                            existingEp.ThumbnailUrl = $"https://image.tmdb.org/t/p/w300{tmdbEp.StillPath}";
+                                        // [FIX] Guard: Only overwrite if the new name is NOT generic or the old one IS generic
+                                        bool isNewNameGeneric = IsGenericEpisodeTitle(bestName, metadata.Title);
+                                        bool isExistingNameGeneric = IsGenericEpisodeTitle(existingEp.Title, metadata.Title);
+
+                                        if (!string.IsNullOrEmpty(bestName) && (isExistingNameGeneric || !isNewNameGeneric))
+                                            existingEp.Title = bestName;
+
+                                        if (!string.IsNullOrEmpty(bestOverview))
+                                            existingEp.Overview = bestOverview;
+                                        if (!string.IsNullOrEmpty(tmdbEp.StillUrl))
+                                            existingEp.ThumbnailUrl = tmdbEp.StillUrl;
                                     }
                                     else
                                     {
@@ -1758,9 +1851,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                                             Id = episodeId,
                                             SeasonNumber = tmdbSeason.SeasonNumber,
                                             EpisodeNumber = tmdbEp.EpisodeNumber,
-                                            Title = tmdbEp.Name ?? $"Episode {tmdbEp.EpisodeNumber}",
-                                            Overview = tmdbEp.Overview,
-                                            ThumbnailUrl = !string.IsNullOrEmpty(tmdbEp.StillPath) ? $"https://image.tmdb.org/t/p/w300{tmdbEp.StillPath}" : null
+                                            Title = bestName ?? $"Episode {tmdbEp.EpisodeNumber}",
+                                            Overview = bestOverview,
+                                            ThumbnailUrl = tmdbEp.StillUrl
                                         });
                                     }
                                 }
@@ -1775,19 +1868,35 @@ namespace ModernIPTVPlayer.Services.Metadata
                                         ? $"{tmdb.ImdbId}:{tmdbSeason.SeasonNumber}:{ep.EpisodeNumber}" 
                                         : $"tmdb:{tmdb.Id}:{tmdbSeason.SeasonNumber}:{ep.EpisodeNumber}";
                                     
+                                    // [FIX] Best name and overview for new episodes too
+                                    string? bestName = ep.Name;
+                                    string? bestOverview = ep.Overview;
+
+                                    if (IsGenericEpisodeTitle(bestName, metadata.Title) || string.IsNullOrEmpty(bestOverview))
+                                    {
+                                        var enEp = enSeasonDetails?.Episodes?.FirstOrDefault(e => e.EpisodeNumber == ep.EpisodeNumber);
+                                        if (enEp != null)
+                                        {
+                                            if (IsGenericEpisodeTitle(bestName, metadata.Title) && !IsGenericEpisodeTitle(enEp.Name, metadata.Title))
+                                                bestName = enEp.Name;
+                                            if (string.IsNullOrEmpty(bestOverview))
+                                                bestOverview = enEp.Overview;
+                                        }
+                                    }
+
                                     existingSeason.Episodes.Add(new UnifiedEpisode
                                     {
                                         Id = episodeId,
                                         SeasonNumber = tmdbSeason.SeasonNumber,
                                         EpisodeNumber = ep.EpisodeNumber,
-                                        Title = ep.Name ?? $"Episode {ep.EpisodeNumber}",
-                                        Overview = ep.Overview,
-                                        ThumbnailUrl = !string.IsNullOrEmpty(ep.StillPath) ? $"https://image.tmdb.org/t/p/w300{ep.StillPath}" : null
+                                        Title = bestName ?? (ep.Name ?? $"{ep.EpisodeNumber}. Bölüm"),
+                                        Overview = bestOverview,
+                                        ThumbnailUrl = ep.StillUrl
                                     });
                                 }
-                                
-                                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Added {seasonDetails.Episodes.Count} episodes from TMDB");
                             }
+                          
+                            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Added {seasonDetails.Episodes.Count} episodes from TMDB");
                         }
                     }
                 }
@@ -2226,6 +2335,27 @@ namespace ModernIPTVPlayer.Services.Metadata
             // Simple combined string hash is sufficient for short-term result cache keying
             string combined = string.Join("|", addons);
             return combined.GetHashCode().ToString("X");
+        }
+
+        private string? SelectBestLogo(TmdbMovieResult tmdb)
+        {
+            if (tmdb?.Images?.Logos == null || tmdb.Images.Logos.Count == 0) return null;
+            
+            var preferred = AppSettings.TmdbLanguage.Split('-')[0];
+            
+            // 1. Try preferred language
+            var logo = tmdb.Images.Logos.FirstOrDefault(l => l.Iso639_1 == preferred);
+            
+            // 2. Try English
+            if (logo == null) logo = tmdb.Images.Logos.FirstOrDefault(l => l.Iso639_1 == "en");
+            
+            // 3. Try language-neutral (null or empty)
+            if (logo == null) logo = tmdb.Images.Logos.FirstOrDefault(l => string.IsNullOrEmpty(l.Iso639_1));
+            
+            // 4. Fallback to first available
+            if (logo == null) logo = tmdb.Images.Logos[0];
+            
+            return logo != null ? TmdbHelper.GetImageUrl(logo.FilePath, "original") : null;
         }
 
         private int GetLogoScore(string? url)

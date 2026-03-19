@@ -71,12 +71,22 @@ namespace ModernIPTVPlayer
                 }
             }
 
-            // TMDB Settings
             if (!string.IsNullOrEmpty(AppSettings.TmdbApiKey))
             {
                 TmdbApiKeyBox.Password = AppSettings.TmdbApiKey;
                 TmdbStatusText.Text = "API Anahtarı kayıtlı. TMDB aktif.";
                 TmdbStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.LightGreen);
+            }
+
+            // Set TMDB Language
+            var currentTmdbLang = AppSettings.TmdbLanguage;
+            foreach (ComboBoxItem item in TmdbLanguageCombo.Items)
+            {
+                if (item.Tag?.ToString() == currentTmdbLang)
+                {
+                    TmdbLanguageCombo.SelectedItem = item;
+                    break;
+                }
             }
 
             LoadPlayerSettings();
@@ -213,6 +223,24 @@ namespace ModernIPTVPlayer
                 ShowStatus("TMDB API Anahtarı silindi.");
             }
         }
+        private async void TmdbLanguageCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (TmdbLanguageCombo.SelectedItem is ComboBoxItem item)
+            {
+                var lang = item.Tag?.ToString();
+                if (!string.IsNullOrEmpty(lang) && AppSettings.TmdbLanguage != lang)
+                {
+                    AppSettings.TmdbLanguage = lang;
+                    // [FIX] Clear all metadata related caches when language changes
+                    await Services.ContentCacheService.Instance.ClearCacheAsync();
+                    await Services.TmdbCacheService.Instance.ClearCacheAsync();
+                    Services.Metadata.MetadataProvider.Instance.ClearCache();
+                    
+                    ShowStatus($"TMDB içerik dili ({item.Content}) olarak değiştirildi. Önbellek temizlendi.");
+                }
+            }
+        }
+
         private bool _isUpdatingProfile = false;
 
         private void LoadPlayerSettings()

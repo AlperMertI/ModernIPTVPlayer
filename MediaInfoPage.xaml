@@ -580,7 +580,7 @@
                          </Button>
  
                          <Button x:Name="RestartButton" Click="RestartButton_Click" Visibility="Collapsed"
-                                 Style="{StaticResource GlassButtonStyle}" Height="52" CornerRadius="26" Padding="32,0">
+                                 Style="{StaticResource HeroPlayButtonStyle}" Height="52" CornerRadius="26" Padding="32,0">
                              <StackPanel Orientation="Horizontal" Spacing="8">
                                  <FontIcon Glyph="&#xE777;" FontSize="16"/>
                                  <TextBlock x:Name="RestartButtonText" Text="Baştan Başla" FontSize="14" FontWeight="SemiBold"/>

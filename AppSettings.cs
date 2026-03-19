@@ -193,6 +193,13 @@ namespace ModernIPTVPlayer
             set => Settings.Values[IsTmdbEnabledKey] = value;
         }
 
+        private const string TmdbLanguageKey = "TmdbLanguage";
+        public static string TmdbLanguage
+        {
+            get => (Settings.Values[TmdbLanguageKey] as string) ?? "tr-TR";
+            set => Settings.Values[TmdbLanguageKey] = value;
+        }
+
         private const string DefaultStartupPageKey = "DefaultStartupPage";
         public static string DefaultStartupPage
         {

@@ -325,6 +325,14 @@
                                          PasswordChanged="TmdbApiKeyBox_PasswordChanged"/>
                             <Button Content="Kaydet" Click="BtnSaveTmdb_Click"/>
                         </StackPanel>
+                        
+                        <ComboBox x:Name="TmdbLanguageCombo" Header="TMDB İçerik Dili" HorizontalAlignment="Stretch" SelectionChanged="TmdbLanguageCombo_SelectionChanged" Margin="0,5,0,0">
+                            <ComboBoxItem Content="Türkçe (tr-TR)" Tag="tr-TR"/>
+                            <ComboBoxItem Content="İngilizce (en-US)" Tag="en-US"/>
+                            <ComboBoxItem Content="Almanca (de-DE)" Tag="de-DE"/>
+                            <ComboBoxItem Content="Fransızca (fr-FR)" Tag="fr-FR"/>
+                            <ComboBoxItem Content="İspanyolca (es-ES)" Tag="es-ES"/>
+                        </ComboBox>
                         <TextBlock x:Name="TmdbStatusText" Text="API Anahtarı girilmedi." Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" Margin="0,5,0,0"/>
 
                     </StackPanel>

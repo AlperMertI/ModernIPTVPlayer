@@ -69,6 +69,7 @@ namespace ModernIPTVPlayer
         private string? _sourceAddonUrl; // New: tracking the source addon URL for the current stream
         
         private Models.Metadata.UnifiedMetadata _unifiedMetadata;
+        private string _lastUsedTmdbLanguage;
         private string _prebufferUrl;
         private CancellationTokenSource _probeCts;
         private CancellationTokenSource _prebufferCts;
@@ -1191,8 +1192,9 @@ namespace ModernIPTVPlayer
                                 // [UNIFIED] Keep panel visible during loading to show internal shimmer
                                 if (EpisodesPanel.Visibility != Visibility.Visible) EpisodesPanel.Visibility = Visibility.Visible;
                                 
-                                // [FIX] In narrow mode, ensure it spans appropriately and is top-aligned to be visible
-                                Grid.SetRow(EpisodesPanel, 2);
+                                // [FIX] In narrow mode, ensure it spans appropriately and is top-aligned to be visible.
+                                // [LAYOUT GAP FIX] Set to Row 1 (same as SourcesPanel) to ensure consistent spacing below description.
+                                Grid.SetRow(EpisodesPanel, 1);
                                 Grid.SetColumn(EpisodesPanel, 0);
                                 Grid.SetColumnSpan(EpisodesPanel, 2);
                                 EpisodesPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -1359,7 +1361,7 @@ namespace ModernIPTVPlayer
                 else if (e.Parameter is IMediaStream mediaStream) incomingItem = mediaStream;
 
                 IMediaStream previousItem = _item; // [OPTIMIZATION] Track previous to avoid redundant reloads
-                bool isItemSwitching = incomingItem != null && !IsSameItem(previousItem, incomingItem);
+                bool isItemSwitching = (incomingItem != null && !IsSameItem(previousItem, incomingItem)) || (_lastUsedTmdbLanguage != AppSettings.TmdbLanguage);
                 bool isBackNav = e.NavigationMode == NavigationMode.Back;
                 if (e.NavigationMode != NavigationMode.Back)
                 {
@@ -1716,6 +1718,7 @@ namespace ModernIPTVPlayer
                 {
                     DispatcherQueue.TryEnqueue(() => AddBackdropToSlideshow(url));
                 });
+                _lastUsedTmdbLanguage = AppSettings.TmdbLanguage;
             }
             else if (!isCached && _unifiedMetadata?.BackdropUrls != null && _unifiedMetadata.BackdropUrls.Count > 0)
             {
@@ -1820,7 +1823,10 @@ namespace ModernIPTVPlayer
                 ContentLogo.Source = new BitmapImage(new Uri(unified.LogoUrl));
                 ContentLogo.Visibility = Visibility.Visible;
                 ContentLogo.Opacity = 0; 
+                
+                // [RULE] Hide series title label if a logo is present (for base series view)
                 TitleText.Visibility = Visibility.Collapsed;
+                
                 if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
                 TitlePanel.Visibility = Visibility.Visible;
             }
@@ -1869,7 +1875,15 @@ namespace ModernIPTVPlayer
 
             OverviewText.Text = !string.IsNullOrEmpty(unified.Overview) ? unified.Overview : "Açıklama mevcut değil.";
             YearText.Text = unified.Year?.Split(new char[] { '-', '–' })[0] ?? "";
-            GenresText.Text = unified.Genres;
+            
+            if (GenresText != null) 
+            {
+                GenresText.Text = unified.Genres;
+                GenresText.Visibility = (!string.IsNullOrEmpty(GenresText.Text)) ? Visibility.Visible : Visibility.Collapsed;
+                // [GAP FIX] Ensure the Grid container is collapsed if genres are empty
+                if (GenresText.Parent is Grid pGrid) pGrid.Visibility = GenresText.Visibility;
+            }
+            
             RuntimeText.Text = unified.IsSeries ? "Dizi" : unified.Runtime;
             OverviewText.MaxLines = unified.IsSeries ? 4 : 0;
 
@@ -2351,6 +2365,15 @@ namespace ModernIPTVPlayer
             
             if (isLoading)
             {
+                // [FIX] Clear stale technical metadata to prevent bitrates from previous items
+                if (BadgeBitrate != null) BadgeBitrate.Visibility = Visibility.Collapsed;
+                if (Badge4K != null) Badge4K.Visibility = Visibility.Collapsed;
+                if (BadgeRes != null) BadgeRes.Visibility = Visibility.Collapsed;
+                if (BadgeHDR != null) BadgeHDR.Visibility = Visibility.Collapsed;
+                if (BadgeSDR != null) BadgeSDR.Visibility = Visibility.Collapsed;
+                if (BadgeCodecContainer != null) BadgeCodecContainer.Visibility = Visibility.Collapsed;
+                UpdateTechnicalSectionVisibility(false);
+
                 // Reset Opacities for Loading (Don't hide parents that hold shimmers)
                 if (IdentityContainer != null) ElementCompositionPreview.GetElementVisual(IdentityContainer).Opacity = 1;
 
@@ -2463,18 +2486,16 @@ namespace ModernIPTVPlayer
             // Show the active identity element (logo or title text) and hide the shimmer.
             bool hasLogo = ContentLogo.Visibility == Visibility.Visible;
             ShowImmediate(TitlePanel, TitleShimmer);
-            if (hasLogo)
-            {
-                // [FIX] Explicitly reveal the logo if it's the active identity
-                ShowImmediate(ContentLogo, null);
-                ShowImmediate(TitleText, null, forceHide: true);
-            }
-            else
-            {
-                // [FIX] Explicitly reveal the title text if it's the active identity
-                ShowImmediate(TitleText, null);
-                ShowImmediate(ContentLogo, null, forceHide: true);
-            }
+            
+            // [FIX] Reveal both Logo and Text if they are active, or just the text if no logo.
+            // Ensure internal opacities are 1 so parent visibility/opacity reveals them.
+            if (ContentLogo != null) ContentLogo.Opacity = 1;
+            if (TitleText != null) TitleText.Opacity = 1;
+
+            if (hasLogo) ShowImmediate(ContentLogo, null);
+            ShowImmediate(TitleText, null, forceHide: hasLogo);
+            
+            if (!hasLogo) ShowImmediate(ContentLogo, null, forceHide: true);
             ShowImmediate(MetadataPanel, MetadataShimmer);
             if (MetadataRibbon != null) MetadataRibbon.Opacity = 1;
             ShowImmediate(ActionBarPanel, ActionBarShimmer);
@@ -2623,23 +2644,32 @@ namespace ModernIPTVPlayer
 
             async Task RevealIdentityAsync()
             {
-                UIElement idContent = (ContentLogo.Visibility == Visibility.Visible) ? (UIElement)ContentLogo : (UIElement)TitlePanel;
+                // [FIX] Always use TitlePanel as the reveal target because it contains both Logo and TitleText.
+                // This ensures that even if a logo is present, the TitleText (which is a child) is also revealed.
+                UIElement idContent = TitlePanel;
 
-                // If it's a logo, wait for it to be decoded (max 2s timeout to prevent stuck UI)
-                if (_logoReadyTcs != null && idContent == ContentLogo)
+                // However, we still want to wait for the logo if it's visible
+                if (_logoReadyTcs != null && ContentLogo.Visibility == Visibility.Visible)
                 {
                     await Task.WhenAny(_logoReadyTcs.Task, Task.Delay(2000));
                 }
 
-                // [FIX] If revealing logo specifically, ensure parent TitlePanel is opaque
-                // as it was set to Opacity=0 in SetLoadingState
-                if (idContent == ContentLogo && TitlePanel != null)
+                // [STABILITY] Ensure children of TitlePanel have correct Opacity AND Visibility
+                // so that when the panel reveals, only the correct identity component is shown.
+                bool hasLogo = ContentLogo.Visibility == Visibility.Visible;
+                if (ContentLogo != null) ContentLogo.Opacity = 1;
+                if (TitleText != null) 
+                {
+                    TitleText.Opacity = 1;
+                    TitleText.Visibility = hasLogo ? Visibility.Collapsed : Visibility.Visible;
+                }
+
+                // [FIX] Ensure parent TitlePanel is ready and shimmer is cleared immediately to prevent ghosting.
+                if (TitlePanel != null)
                 {
                     TitlePanel.Opacity = 1;
                     ElementCompositionPreview.GetElementVisual(TitlePanel).Opacity = 1f;
 
-                    // [FIX] Logos have transparency. Cross-fading a solid shimmer block over them
-                    // makes it look like a grey box is lingering. Hide it immediately.
                     if (TitleShimmer != null)
                     {
                         TitleShimmer.Visibility = Visibility.Collapsed;
@@ -3409,9 +3439,19 @@ namespace ModernIPTVPlayer
                 // [CONS] Update Watchlist state (it now uses themeDuration internally via _themeTintBrush link)
                 UpdateWatchlistState(!isProvisionalSource);
 
-                if (RestartButton != null && RestartButton.Visibility == Visibility.Visible)
+                // Adaptive Play Button Foreground
+                Color playForeground = isDarkText ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 255, 255, 255);
+
+                if (RestartButton != null)
                 {
-                    AnimateBrushColor(RestartButton, btnTint, themeDuration);
+                    // [RULE] Always update color even if Collapsed to prevent color persistence from previous items.
+                    AnimateBrushColor(RestartButton, playButtonTint, themeDuration);
+                    
+                    // Update text and icon color to match PlayButton (Adaptive Dark/Light)
+                    if (RestartButtonText != null) UpdateTextColor(RestartButtonText, playForeground, themeDuration);
+                    
+                    var restartIcon = FindVisualChild<FontIcon>(RestartButton);
+                    if (restartIcon != null) UpdateIconColor(restartIcon, playForeground, themeDuration);
                 }
                 
                 // Play Buttons (Premium Vivid)
@@ -3421,8 +3461,6 @@ namespace ModernIPTVPlayer
                 if (PlayButton != null) PlayButton.BorderBrush = new SolidColorBrush(playBorderTint);
                 if (StickyPlayButton != null) StickyPlayButton.BorderBrush = new SolidColorBrush(playBorderTint);
 
-                // Adaptive Play Button Foreground
-                Color playForeground = isDarkText ? Color.FromArgb(255, 0, 0, 0) : Color.FromArgb(255, 255, 255, 255);
                 UpdateTextColor(PlayButtonText, playForeground, themeDuration);
                 UpdateIconColor(PlayButtonIcon, playForeground, themeDuration);
                 UpdateTextColor(StickyPlayButtonText, playForeground, themeDuration);
@@ -4076,6 +4114,12 @@ namespace ModernIPTVPlayer
                             if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
                         }
                         if (StickyPlayButtonText != null) StickyPlayButtonText.Text = PlayButtonText.Text;
+                    }
+
+                    // [FIX] Sync Restart Button visibility for episodes
+                    if (RestartButton != null)
+                    {
+                        RestartButton.Visibility = (ep.HasProgress && ep.ProgressPercent < 95) ? Visibility.Visible : Visibility.Collapsed;
                     }
 
                     // AUTO-RESUME TRIGGER (Series Episode)
@@ -8117,6 +8161,10 @@ namespace ModernIPTVPlayer
                     TitleText.Visibility = Visibility.Visible;
                     TitleText.Opacity = 1; // Ensure text is fully visible
                     
+                    // [FIX] Explicitly restore visual opacity to bypass composition layer freezes
+                    ElementCompositionPreview.GetElementVisual(TitleText).Opacity = 1f;
+                    ElementCompositionPreview.GetElementVisual(ContentLogo).Opacity = 1f;
+                    
                     // [RULE] Hide SuperTitle in Episode View
                     if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
 
@@ -8124,9 +8172,22 @@ namespace ModernIPTVPlayer
                     {
                         TitlePanel.Visibility = Visibility.Visible;
                         TitlePanel.Opacity = 1;
+
+                        // [FIX] Explicitly show TitleText (might have been hidden by Series Logo-only rule)
+                        TitleText.Visibility = Visibility.Visible;
+                        TitleText.Opacity = 1;
+                        ElementCompositionPreview.GetElementVisual(TitleText).Opacity = 1f;
                     }
                     
                     System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Episode view set: TitleText='{TitleText?.Text}', Opacity={TitleText?.Opacity}, Visibility={TitleText?.Visibility}");
+                }
+
+                if (YearText != null)
+                {
+                    if (_selectedEpisode.ReleaseDate.HasValue)
+                        YearText.Text = _selectedEpisode.ReleaseDate.Value.ToString("yyyy-MM-dd");
+                    else
+                        YearText.Text = _unifiedMetadata?.Year ?? "";
                 }
 
                 if (OverviewText != null)
@@ -8134,6 +8195,13 @@ namespace ModernIPTVPlayer
                     OverviewText.Text = !string.IsNullOrEmpty(_selectedEpisode.Overview) 
                         ? _selectedEpisode.Overview 
                         : _unifiedMetadata?.Overview ?? "";
+                }
+                
+                // [GAP FIX] Hide Genres in Episode view to save space and reduce gap
+                if (GenresText != null)
+                {
+                    GenresText.Visibility = Visibility.Collapsed;
+                    if (GenresText.Parent is Grid pGrid1) pGrid1.Visibility = Visibility.Collapsed;
                 }
             }
             else
@@ -8147,15 +8215,18 @@ namespace ModernIPTVPlayer
                     if (SuperTitleText != null) SuperTitleText.Visibility = Visibility.Collapsed;
 
                     // Show Logo if available — ContentLogo lives inside TitlePanel, so keep TitlePanel visible
-                    if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.LogoUrl))
+                        if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.LogoUrl))
                     {
                         if (ContentLogo != null) 
                         {
                             ContentLogo.Visibility = Visibility.Visible;
                             ContentLogo.Opacity = 1; // Ensure it's not transparent from previous states
+                            ElementCompositionPreview.GetElementVisual(ContentLogo).Opacity = 1f;
                         }
-                        // Hide text label; logo is shown instead
+                        
+                        // [RULE] Hide series title label if a logo is present for the base view
                         TitleText.Visibility = Visibility.Collapsed;
+                        
                         if (TitlePanel != null) { TitlePanel.Visibility = Visibility.Visible; TitlePanel.Opacity = 1; }
                     }
                     else
@@ -8174,6 +8245,18 @@ namespace ModernIPTVPlayer
                 {
                     OverviewText.Text = _unifiedMetadata?.Overview ?? _item?.Description ?? "";
                 }
+
+                if (YearText != null)
+                {
+                    YearText.Text = _unifiedMetadata?.Year ?? "";
+                }
+
+                // [GAP FIX] Restore Genres in Series view if content exists
+                if (GenresText != null)
+                {
+                    GenresText.Visibility = string.IsNullOrEmpty(GenresText.Text) ? Visibility.Collapsed : Visibility.Visible;
+                    if (GenresText.Parent is Grid pGrid) pGrid.Visibility = GenresText.Visibility;
+                }
             }
         }
 
@@ -8185,6 +8268,19 @@ namespace ModernIPTVPlayer
         private void BtnBackToEpisodes_Click(object sender, RoutedEventArgs e)
         {
             DeselectEpisode();
+        }
+
+        private T FindVisualChild<T>(DependencyObject obj) where T : DependencyObject
+        {
+            if (obj == null) return null;
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(obj); i++)
+            {
+                var child = VisualTreeHelper.GetChild(obj, i);
+                if (child != null && child is T t) return t;
+                var childOfChild = FindVisualChild<T>(child);
+                if (childOfChild != null) return childOfChild;
+            }
+            return null;
         }
     }
 }
