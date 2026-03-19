@@ -305,7 +305,7 @@
                         <Setter Target="InfoColumn.MaxWidth" Value="800"/>
                         <Setter Target="InfoColumn.HorizontalAlignment" Value="Left"/>
                         
-                        <Setter Target="EpisodesPanel.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="EpisodesPanel.VerticalAlignment" Value="Center"/>
                         <Setter Target="EpisodesPanel.Margin" Value="40,40,0,40"/>
                         <Setter Target="EpisodesPanel.Width" Value="400"/>
                         <Setter Target="EpisodesPanel.(Grid.Row)" Value="0"/>
@@ -332,7 +332,7 @@
                         <Setter Target="EpisodesShimmerPanel.(Grid.Row)" Value="0"/>
                         <Setter Target="EpisodesShimmerPanel.(Grid.Column)" Value="1"/>
                         <Setter Target="EpisodesShimmerPanel.HorizontalAlignment" Value="Right"/>
-                        <Setter Target="EpisodesShimmerPanel.VerticalAlignment" Value="Stretch"/>
+                        <Setter Target="EpisodesShimmerPanel.VerticalAlignment" Value="Center"/>
                         <Setter Target="EpisodesShimmerPanel.Margin" Value="40,40,0,40"/>
                         
                         <!-- Collapse Narrow Sections in Wide Mode -->
@@ -795,6 +795,7 @@
                                  </Grid>
                 
                                  <ListView x:Name="EpisodesListView" Grid.Row="1" SelectionMode="Single" 
+                                           IsItemClickEnabled="True" ItemClick="EpisodesListView_ItemClick"
                                            ScrollViewer.VerticalScrollBarVisibility="Auto"
                                            ScrollViewer.VerticalScrollMode="Enabled"
                                            SelectionChanged="EpisodesListView_SelectionChanged" Padding="8,0,8,20">

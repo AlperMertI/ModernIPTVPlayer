@@ -709,7 +709,7 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("profile_path")]
         public string ProfilePath { get; set; }
 
-        public string FullProfileUrl => !string.IsNullOrEmpty(ProfilePath) ? $"https://image.tmdb.org/t/p/w185{ProfilePath}" : "ms-appx:///Assets/StoreLogo.png";
+        public string FullProfileUrl => !string.IsNullOrEmpty(ProfilePath) ? $"https://image.tmdb.org/t/p/w185{ProfilePath}" : null;
     }
 
     public class TmdbCrew
@@ -726,7 +726,7 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("profile_path")]
         public string ProfilePath { get; set; }
 
-        public string FullProfileUrl => !string.IsNullOrEmpty(ProfilePath) ? $"https://image.tmdb.org/t/p/w185{ProfilePath}" : "ms-appx:///Assets/StoreLogo.png";
+        public string FullProfileUrl => !string.IsNullOrEmpty(ProfilePath) ? $"https://image.tmdb.org/t/p/w185{ProfilePath}" : null;
     }
 
     public class TmdbMovieDetails

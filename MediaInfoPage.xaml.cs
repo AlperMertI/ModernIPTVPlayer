@@ -3695,9 +3695,9 @@ namespace ModernIPTVPlayer
         {
             try
             {
-                // [STABILITY] Force Stretch before population to avoid measurement cycles
-                if (EpisodesPanel != null) EpisodesPanel.VerticalAlignment = VerticalAlignment.Stretch;
-                if (SourcesPanel != null) SourcesPanel.VerticalAlignment = VerticalAlignment.Stretch;
+                // [STABILITY] Removed Force Stretch override to respect XAML/LayoutState Top alignment
+                // if (EpisodesPanel != null) EpisodesPanel.VerticalAlignment = VerticalAlignment.Stretch;
+                // if (SourcesPanel != null) SourcesPanel.VerticalAlignment = VerticalAlignment.Stretch;
 
                 System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 1: LoadSeriesDataAsync ENTER for: {unified.Title}. Seasons: {(unified.Seasons?.Count ?? 0)}");
                 
@@ -4007,6 +4007,26 @@ namespace ModernIPTVPlayer
              {
                  System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] LoadTmdbSeasonDataAsync Error: {ex.Message}");
              }
+        }
+
+        private void EpisodesListView_ItemClick(object sender, ItemClickEventArgs e)
+        {
+            if (sender is ListView lv)
+            {
+                var clicked = e.ClickedItem;
+                var current = lv.SelectedItem;
+
+                if (current != null && current.Equals(clicked))
+                {
+                    // Re-click detected. Use DispatcherQueue to escape the internal click-select cycle.
+                    DispatcherQueue.TryEnqueue(() => 
+                    {
+                        lv.SelectedItem = null;
+                        lv.SelectedIndex = -1;
+                        System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Deselected episode via re-click.");
+                    });
+                }
+            }
         }
 
         private void EpisodesListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -8164,7 +8184,7 @@ namespace ModernIPTVPlayer
 
         private void BtnBackToEpisodes_Click(object sender, RoutedEventArgs e)
         {
-            ShowSourcesPanel(false);
+            DeselectEpisode();
         }
     }
 }
