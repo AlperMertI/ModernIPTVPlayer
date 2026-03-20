@@ -25,6 +25,7 @@
             <controls:PosterCard Title="{x:Bind Title, Mode=OneWay}" 
                               ImageUrl="{x:Bind PosterUrl, Mode=OneWay}"
                               BadgeText="{x:Bind Rating, Mode=OneWay}"
+                              IsAvailableOnIptv="{x:Bind IsAvailableOnIptv, Mode=OneWay}"
                               ShowBadge="True"
                               Width="180" Height="265"
                               Margin="0"
@@ -92,7 +93,7 @@
                     
                     <!-- Title & Badges -->
                     <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-                        <TextBlock x:Name="PageTitle" Text="Arama Sonuçları" FontSize="28" FontWeight="ExtraBold" Foreground="White" CharacterSpacing="50"/>
+                        <TextBlock x:Name="PageTitle" Text="" FontSize="28" FontWeight="ExtraBold" Foreground="White" CharacterSpacing="50"/>
                         
                         <!-- Stremio Count -->
                         <Border x:Name="StremioCountBadge" Visibility="Collapsed" Background="#15FFFFFF" BorderBrush="#15FFFFFF" BorderThickness="1" CornerRadius="8" Padding="10,4" VerticalAlignment="Center" Margin="0,4,0,0">
@@ -102,28 +103,83 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- IPTV Count -->
-                        <Border x:Name="IptvCountBadge" Visibility="Collapsed" Background="{ThemeResource SystemAccentColor}" CornerRadius="8" Padding="10,4" VerticalAlignment="Center" Margin="8,4,0,0">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <TextBlock x:Name="TxtIptvCount" Text="0" FontSize="14" FontWeight="Bold" Foreground="White"/>
-                                <TextBlock Text="IPTV" FontSize="11" Opacity="0.8" VerticalAlignment="Center" Foreground="White"/>
-                            </StackPanel>
-                        </Border>
-
 
                     </StackPanel>
                 </StackPanel>
             </StackPanel>
 
-            <!-- Actions (Filter Toggle) -->
-            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="16" VerticalAlignment="Center">
-                <Button x:Name="GenreFilterButton" Click="GenreFilterButton_Click" 
-                        Style="{StaticResource GlassButtonStyle}" 
-                        Padding="16,8" CornerRadius="20" Background="#10FFFFFF">
-                    <StackPanel Orientation="Horizontal" Spacing="12">
-                        <FontIcon Glyph="&#xE71C;" FontSize="16"/>
-                        <TextBlock Text="Filtrele" FontSize="13" FontWeight="SemiBold"/>
+            <!-- Modern Filter/Sort Pill Bar -->
+            <StackPanel Grid.Column="1" x:Name="SearchContentActions" 
+                        Orientation="Horizontal" Background="#15FFFFFF" 
+                        Padding="4" CornerRadius="20" VerticalAlignment="Center" HorizontalAlignment="Right">
+                
+                <!-- Type Filters -->
+                <StackPanel Orientation="Horizontal" Spacing="2">
+                    <RadioButton x:Name="TypeFilterAll" Content="Tümü" IsChecked="True" 
+                                 Style="{StaticResource PillRadioButtonStyle}" Checked="TypeFilter_Checked" Tag="all" MinWidth="54"/>
+                    <RadioButton x:Name="TypeFilterMovies" Content="Filmler" 
+                                 Style="{StaticResource PillRadioButtonStyle}" Checked="TypeFilter_Checked" Tag="movie" MinWidth="60"/>
+                    <RadioButton x:Name="TypeFilterSeries" Content="Diziler" 
+                                 Style="{StaticResource PillRadioButtonStyle}" Checked="TypeFilter_Checked" Tag="series" MinWidth="60"/>
+                </StackPanel>
+
+                <!-- Divider -->
+                <Rectangle Width="1" Height="20" Fill="#33FFFFFF" Margin="8,0"/>
+
+                <!-- Year Filter -->
+                <Button x:Name="YearFilterButton" HorizontalAlignment="Left"
+                        Background="Transparent" BorderThickness="0" CornerRadius="16" Height="32" Padding="12,0">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xEC92;" FontSize="14" Opacity="0.7"/>
+                        <TextBlock x:Name="YearFilterText" Text="Tüm Yıllar" FontSize="13" VerticalAlignment="Center"/>
                     </StackPanel>
+                    <Button.Flyout>
+                        <Flyout Placement="BottomEdgeAlignedRight">
+                            <StackPanel Spacing="4" MinWidth="120">
+                                <TextBlock Text="Yıla Göre Filtrele" FontSize="12" FontWeight="Bold" Margin="4,0,0,8" Opacity="0.5"/>
+                                <ListView x:Name="YearListView" SelectionMode="Single" 
+                                          MaxHeight="300" BorderThickness="0" 
+                                          SelectionChanged="YearListView_SelectionChanged">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding}" FontSize="14" Padding="0,4"/>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+
+                <!-- Genre Filter (Integrated) -->
+                <Button x:Name="GenreFilterButton" Click="GenreFilterButton_Click" 
+                        Background="Transparent" BorderThickness="0" CornerRadius="16" Height="32" Padding="12,0">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE71C;" FontSize="14" Opacity="0.7"/>
+                        <TextBlock x:Name="GenreFilterText" Text="Türler" FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+
+                <!-- Divider -->
+                <Rectangle Width="1" Height="20" Fill="#33FFFFFF" Margin="8,0"/>
+
+                <!-- Sort Button -->
+                <Button x:Name="SortButton" 
+                        Background="Transparent" BorderThickness="0" CornerRadius="16" 
+                        Padding="12,0" Height="32" MinWidth="110">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8CB;" FontSize="14" Opacity="0.7"/>
+                        <TextBlock x:Name="SortButtonText" Text="Relevance" FontSize="13" VerticalAlignment="Center"/>
+                        <FontIcon Glyph="&#xE70D;" FontSize="10" Opacity="0.5"/>
+                    </StackPanel>
+                    <Button.Flyout>
+                        <MenuFlyout Placement="BottomEdgeAlignedRight">
+                            <MenuFlyoutItem Text="Relevance" Tag="relevance" Click="SortItem_Click"/>
+                            <MenuFlyoutItem Text="Puan (Yüksek)" Tag="rating" Click="SortItem_Click"/>
+                            <MenuFlyoutItem Text="Yıl (Yeni)" Tag="year_desc" Click="SortItem_Click"/>
+                            <MenuFlyoutItem Text="Yıl (Eski)" Tag="year_asc" Click="SortItem_Click"/>
+                        </MenuFlyout>
+                    </Button.Flyout>
                 </Button>
             </StackPanel>
         </Grid>
@@ -142,7 +198,7 @@
                 
                 <!-- Section 1: Stremio Results -->
                 <StackPanel x:Name="StremioSection" Spacing="12" Visibility="Collapsed">
-                    <TextBlock x:Name="StremioSectionTitle" Text="Stremio Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9"/>
+                    <TextBlock x:Name="StremioSectionTitle" Text="Stremio Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9" Visibility="Collapsed"/>
                     
                     <GridView x:Name="StremioGrid" 
                               SelectionMode="None" IsItemClickEnabled="True" 
@@ -150,6 +206,12 @@
                               ItemTemplate="{StaticResource SearchResultTemplate}"
                               ItemsPanel="{StaticResource SearchGridPanelTemplate}"
                               Padding="0,32,0,32">
+                        <GridView.ItemContainerTransitions>
+                            <TransitionCollection>
+                                <AddDeleteThemeTransition/>
+                                <RepositionThemeTransition/>
+                            </TransitionCollection>
+                        </GridView.ItemContainerTransitions>
                         <GridView.ItemContainerStyle>
                             <Style TargetType="GridViewItem">
                                 <Setter Property="Margin" Value="0,0,20,32"/>
@@ -163,28 +225,7 @@
                     </GridView>
                 </StackPanel>
 
-                <!-- Section 2: IPTV Results -->
-                <StackPanel x:Name="IptvSection" Spacing="12" Visibility="Collapsed">
-                    <TextBlock Text="IPTV Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9"/>
                     
-                    <GridView x:Name="IptvGrid" 
-                              SelectionMode="None" IsItemClickEnabled="True" 
-                              ItemClick="ResultsGrid_ItemClick"
-                              ItemTemplate="{StaticResource SearchResultTemplate}"
-                              ItemsPanel="{StaticResource SearchGridPanelTemplate}"
-                              Padding="0,32,0,32">
-                        <GridView.ItemContainerStyle>
-                            <Style TargetType="GridViewItem">
-                                <Setter Property="Margin" Value="0,0,20,32"/>
-                                <Setter Property="Padding" Value="0"/>
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                                <Setter Property="VerticalContentAlignment" Value="Stretch"/>
-                                <Setter Property="MinWidth" Value="0"/>
-                                <Setter Property="MinHeight" Value="0"/>
-                            </Style>
-                        </GridView.ItemContainerStyle>
-                    </GridView>
-                </StackPanel>
 
                 <!-- Load More Indicator -->
                 <ProgressBar x:Name="LoadMoreProgress" IsIndeterminate="True" Visibility="Collapsed" Height="4" HorizontalAlignment="Stretch" Margin="0,20"/>

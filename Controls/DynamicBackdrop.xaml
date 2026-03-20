@@ -10,42 +10,42 @@
 
     <Grid x:Name="BackdropContainer">
         <!-- Layer 1: Large Diffuse Ambient -->
-        <Grid x:Name="AmbientLayer" Opacity="0.25">
+        <Grid x:Name="AmbientLayer" Opacity="0.25" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Grid.Background>
-                <RadialGradientBrush Center="0.0,0.0" RadiusX="1.2" RadiusY="1.0" GradientOrigin="0.0,0.0">
-                    <GradientStop Color="Transparent" Offset="0"/>
+                <RadialGradientBrush Center="0.5,1.0" RadiusX="1.8" RadiusY="1.2" GradientOrigin="0.5,1.0">
+                    <GradientStop x:Name="AmbientStop" Color="Transparent" Offset="0"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </RadialGradientBrush>
             </Grid.Background>
         </Grid>
         
         <!-- Layer 2: Primary Concentrated Glow -->
-        <Grid x:Name="PrimaryGlowLayer" Opacity="0.45">
+        <Grid x:Name="PrimaryGlowLayer" Opacity="0.45" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Grid.Background>
-                <RadialGradientBrush Center="0.5,0.3" RadiusX="0.9" RadiusY="0.7" GradientOrigin="0.5,0.3">
-                    <GradientStop Color="Transparent" Offset="0"/>
+                <RadialGradientBrush Center="0.5,1.0" RadiusX="1.2" RadiusY="0.9" GradientOrigin="0.5,1.0">
+                    <GradientStop x:Name="PrimaryStop" Color="Transparent" Offset="0"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </RadialGradientBrush>
             </Grid.Background>
         </Grid>
         
         <!-- Layer 3: Bloom Accent -->
-        <Grid x:Name="BloomLayer" Opacity="0.15">
+        <Grid x:Name="BloomLayer" Opacity="0.15" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Grid.Background>
-                <RadialGradientBrush Center="0.5,0.1" RadiusX="0.7" RadiusY="0.5" GradientOrigin="0.5,0.1">
-                    <GradientStop Color="Transparent" Offset="0"/>
+                <RadialGradientBrush Center="0.5,1.0" RadiusX="1.0" RadiusY="0.7" GradientOrigin="0.5,1.0">
+                    <GradientStop x:Name="BloomStop" Color="Transparent" Offset="0"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </RadialGradientBrush>
             </Grid.Background>
         </Grid>
-
+ 
         <!-- Layer 4: Floating Accent (subtle) -->
-        <Grid x:Name="FloatingAccentLayer" Opacity="0.15">
+        <Grid x:Name="FloatingAccentLayer" Opacity="0.15" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
             <Grid.RenderTransform>
                 <TranslateTransform x:Name="FloatingTransform"/>
             </Grid.RenderTransform>
             <Grid.Background>
-                <RadialGradientBrush Center="0.5,0.5" RadiusX="0.6" RadiusY="0.4" GradientOrigin="0.5,0.5">
+                <RadialGradientBrush Center="0.5,1.0" RadiusX="0.9" RadiusY="0.6" GradientOrigin="0.5,1.0">
                     <GradientStop x:Name="FloatingStop" Color="Transparent" Offset="0"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </RadialGradientBrush>

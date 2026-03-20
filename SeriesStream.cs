@@ -38,12 +38,17 @@ namespace ModernIPTVPlayer
 
         // IMediaStream Implementation
         public int Id => SeriesId;
-        public string? IMDbId => null;
+
+        [JsonPropertyName("imdb_id")]
+        public string? ImdbId { get; set; }
+        public string? IMDbId => ImdbId;
+        
         public string Title => Name;
         public string? Description => Plot;
         public string PosterUrl => Cover;
         public string? BackdropUrl => null; // IPTV Series usually don't have backdrops in catalog
         public string? Type => "series";
+        public string Year => ReleaseDate ?? "";
         public string StreamUrl { get; set; } = "";
         
         // IMediaStream.Rating implementation - return empty string instead of null to avoid XAML issues
@@ -57,6 +62,7 @@ namespace ModernIPTVPlayer
 
         public string SourceBadgeText => "IPTV";
         public bool ShowSourceBadge => true;
+        public bool IsAvailableOnIptv { get; set; } = true;
         
         [JsonIgnore]
         public TmdbMovieResult TmdbInfo { get; set; }

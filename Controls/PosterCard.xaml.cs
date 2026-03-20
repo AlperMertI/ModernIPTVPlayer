@@ -1,15 +1,13 @@
 using Microsoft.UI;
-using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using System;
-using System.Numerics;
 using System.Threading.Tasks;
 using Windows.UI;
+using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -103,6 +101,15 @@ namespace ModernIPTVPlayer.Controls
             set { SetValue(ShowProgressProperty, value); }
         }
 
+        public static readonly DependencyProperty IsAvailableOnIptvProperty =
+            DependencyProperty.Register("IsAvailableOnIptv", typeof(bool), typeof(PosterCard), new PropertyMetadata(false));
+
+        public bool IsAvailableOnIptv
+        {
+            get { return (bool)GetValue(IsAvailableOnIptvProperty); }
+            set { SetValue(IsAvailableOnIptvProperty, value); }
+        }
+
         public static readonly DependencyProperty ShowBadgeProperty =
             DependencyProperty.Register("ShowBadge", typeof(bool), typeof(PosterCard), new PropertyMetadata(false));
 
@@ -129,6 +136,9 @@ namespace ModernIPTVPlayer.Controls
             }
         }
         
+        private DispatcherTimer? _hoverTimer;
+        private System.Threading.CancellationTokenSource? _renderCts;
+
         public PosterCard()
         {
             this.InitializeComponent();
@@ -142,11 +152,15 @@ namespace ModernIPTVPlayer.Controls
                 PosterImage.Source = null;
                 PosterImage.Opacity = 0;
                 PosterShimmer.Visibility = Visibility.Collapsed;
-                // If there's no image, we should probably show the title so the user knows what it is
-                IsTitleVisible = true;
+                // No valid URL -> Only show centered placeholder
+                TitleOverlay.Visibility = Visibility.Collapsed;
+                PlaceholderTitle.Visibility = Visibility.Visible;
             }
             else
             {
+                // Hide placeholders when image is available (User wanted them only for missing posters)
+                TitleOverlay.Visibility = Visibility.Collapsed;
+                PlaceholderTitle.Visibility = Visibility.Collapsed;
                 // Optimize: Set DecodePixelWidth to save memory (Card width is ~160)
                 var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
                 bitmapImage.DecodePixelWidth = 200; // Slightly larger than 160 for quality
@@ -159,135 +173,79 @@ namespace ModernIPTVPlayer.Controls
                 PosterImage.Opacity = 1;
 
                 PosterShimmer.Visibility = Visibility.Collapsed;
+
+                // [IPTV Integration] Show badge if available
+                var stream = DataContext as StremioMediaStream;
+                if (stream != null)
+                {
+                    if (IptvBadge != null)
+                        IptvBadge.Visibility = (stream.IsAvailableOnIptv || stream.IsIptv) ? Visibility.Visible : Visibility.Collapsed;
+                }
             }
         }
 
 
         private async void Image_ImageOpened(object sender, RoutedEventArgs e)
         {
-            // 2. Extract Colors using RenderTargetBitmap (No extra network request!)
+            // [FIX] Color extraction using URL-based approach (same as hover path, no RenderTargetBitmap)
+            // The previous RenderTargetBitmap.RenderAsync approach caused COMException storms
+            // when many cards loaded simultaneously. URL-based extraction is thread-safe and async.
+            var currentUrl = ImageUrl;
+            if (string.IsNullOrEmpty(currentUrl)) return;
+
             try
             {
-                // Only extract if needed
-                // Check for 0 size and visual tree status to avoid ArgumentException
-                if (PosterImage.ActualWidth > 0 && PosterImage.ActualHeight > 0 && PosterImage.XamlRoot != null)
-                {
-                    var rtb = new Microsoft.UI.Xaml.Media.Imaging.RenderTargetBitmap();
-                    await rtb.RenderAsync(PosterImage);
-                    var pixelBuffer = await rtb.GetPixelsAsync();
-                    var pixels = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(pixelBuffer);
+                // Cancel any previous pending extraction
+                _renderCts?.Cancel();
+                _renderCts = new System.Threading.CancellationTokenSource();
+                var token = _renderCts.Token;
 
-                    var colors = ImageHelper.ExtractColorsFromPixels(pixels, rtb.PixelWidth, rtb.PixelHeight, ImageUrl);
-                    HeroColors = colors;
-                    ColorsExtracted?.Invoke(this, colors);
+                // Small delay to allow the UI to stabilize before doing background work
+                await Task.Delay(50, token);
+                if (token.IsCancellationRequested || !this.IsLoaded) return;
+
+                // Extract colors from the image URL (cached, non-blocking)
+                var colors = await ImageHelper.GetOrExtractColorAsync(currentUrl);
+                
+                if (token.IsCancellationRequested || !this.IsLoaded) return;
+                
+                if (colors.HasValue)
+                {
+                    HeroColors = (colors.Value.Primary, colors.Value.Secondary);
+                    ColorsExtracted?.Invoke(this, colors.Value);
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when card is recycled — no action needed
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[PosterCard] RenderTargetBitmap failed: {ex.Message}");
+                string hResult = string.Format("0x{0:X}", ex.HResult);
+                System.Diagnostics.Debug.WriteLine($"[PosterCard] !!! Extraction error for '{Title}'");
+                System.Diagnostics.Debug.WriteLine($"[PosterCard] HResult: {hResult}, Message: {ex.Message}");
+                // No need for stack trace here since it's likely just a call to ImageHelper
             }
-            
-            // 3. Premium Diagonal Reveal Animation (Composition API)
-            // SKIPPED: We handled Opacity in UpdateImage. 
-            // We can add extra fancy effects here if needed, but not visibility.
-            try
-            {
-                var compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
-                // ... (Keep existing composition logic if it adds value, or remove if it was just for reveal?)
-                // The prompt implies the issue was Opacity=0. The previous code had a complex reveal.
-                // Let's keep the composition Setup but ensure Opacity is ALREADY 1.
-                
-                var imageVisual = ElementCompositionPreview.GetElementVisual(PosterImage);
-                // Ensure image is visible in XAML so composition works
-                // PosterImage.Opacity = 1; // Already handled
-                
-                // Create a VisualSurface to capture the Image content
-                var surface = compositor.CreateVisualSurface();
-                surface.SourceVisual = imageVisual;
-                surface.SourceSize = new Vector2((float)MainBorder.ActualWidth, (float)MainBorder.ActualHeight);
+        }
 
-                var surfaceBrush = compositor.CreateSurfaceBrush(surface);
-                surfaceBrush.Stretch = CompositionStretch.UniformToFill;
-
-                // Create Diagonal Gradient Mask
-                var gradient = compositor.CreateLinearGradientBrush();
-                gradient.StartPoint = new Vector2(0, 0);
-                gradient.EndPoint = new Vector2(1, 1);
-
-                // Stop 1: Visible part (White)
-                var stop1 = compositor.CreateColorGradientStop(0f, Microsoft.UI.Colors.White);
-                // Stop 2: Transition part (Soft edge)
-                var stop2 = compositor.CreateColorGradientStop(0f, Microsoft.UI.Colors.White);
-                // Stop 3: Hidden part (Transparent)
-                var stop3 = compositor.CreateColorGradientStop(0.1f, Microsoft.UI.Colors.Transparent);
-                
-                gradient.ColorStops.Add(stop1);
-                gradient.ColorStops.Add(stop2);
-                gradient.ColorStops.Add(stop3);
-
-                var maskBrush = compositor.CreateMaskBrush();
-                maskBrush.Source = surfaceBrush;
-                maskBrush.Mask = gradient;
-
-
-                // SpriteVisual to host the masked content
-                var revealVisual = compositor.CreateSpriteVisual();
-                revealVisual.Brush = maskBrush;
-                revealVisual.Size = new Vector2((float)MainBorder.ActualWidth, (float)MainBorder.ActualHeight);
-
-                // Attach to MainBorder
-                ElementCompositionPreview.SetElementChildVisual(MainBorder, revealVisual);
-
-                // Create Easing function
-                var cubicBezier = compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(0.2f, 1f));
-
-                // ANIMATION: Move the gradient stops from 0 to 1
-                var revealAnim = compositor.CreateScalarKeyFrameAnimation();
-                revealAnim.Duration = TimeSpan.FromMilliseconds(1200);
-                revealAnim.InsertKeyFrame(0f, 0f);
-                revealAnim.InsertKeyFrame(1f, 1.2f, cubicBezier); 
-
-                stop1.StartAnimation("Offset", revealAnim);
-                
-                var revealAnim2 = compositor.CreateScalarKeyFrameAnimation();
-                revealAnim2.Duration = TimeSpan.FromMilliseconds(1200);
-                revealAnim2.InsertKeyFrame(0f, 0.05f);
-                revealAnim2.InsertKeyFrame(1f, 1.25f, cubicBezier);
-                stop2.StartAnimation("Offset", revealAnim2);
-
-                var revealAnim3 = compositor.CreateScalarKeyFrameAnimation();
-                revealAnim3.Duration = TimeSpan.FromMilliseconds(1200);
-                revealAnim3.InsertKeyFrame(0f, 0.3f);
-                revealAnim3.InsertKeyFrame(1f, 1.5f, cubicBezier);
-                stop3.StartAnimation("Offset", revealAnim3);
-
-
-                // Final cleanup: Remove MaskBrush after animation to save GPU
-                var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
-                batch.Completed += (s, args) =>
-                {
-                    ElementCompositionPreview.SetElementChildVisual(MainBorder, null);
-                    PosterImage.Opacity = 1; // Pure XAML now
-                };
-                batch.End();
-            }
-            catch
-            {
-                // Fallback for safety
-                PosterImage.Opacity = 1;
-            }
+    private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
+        {
+            // If the image fails to load, only show centered placeholder
+            TitleOverlay.Visibility = Visibility.Collapsed;
+            PlaceholderTitle.Visibility = Visibility.Visible;
+            PosterShimmer.Visibility = Visibility.Collapsed;
+            PosterImage.Opacity = 0;
         }
 
         private void PosterCard_Loaded(object sender, RoutedEventArgs e)
         {
-            //System.Diagnostics.Debug.WriteLine($"[PosterCard] Loaded: {Title}");
             UpdateImage();
         }
 
         private void PosterCard_Unloaded(object sender, RoutedEventArgs e)
         {
-            // System.Diagnostics.Debug.WriteLine($"[PosterCard] Unloaded: {Title}");
-            // [FIX] Ensure hover state is reset when card is recycled/unloaded
+            _renderCts?.Cancel();
+            _renderCts = null;
             ResetHoverState();
         }
 

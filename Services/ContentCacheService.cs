@@ -28,6 +28,9 @@ namespace ModernIPTVPlayer.Services
         // Key: cacheKey, Value: (Data, Expiration)
         private ConcurrentDictionary<string, (object Data, DateTime LastAccessed)> _memoryCache = new();
 
+        // **NEW: RAM Cache for Full Stream Lists (VOD/Series/Live)**
+        private ConcurrentDictionary<string, object> _streamListsCache = new();
+
         private ContentCacheService()
         {
             // Start Background Timer
@@ -68,7 +71,14 @@ namespace ModernIPTVPlayer.Services
         
         public async Task<List<T>> LoadCacheAsync<T>(string playlistId, string category)
         {
-            string fileName = $"cache_{playlistId}_{category}.json.gz";
+            string safeId = GetSafePlaylistId(playlistId);
+            string cacheKey = $"{safeId}_{category}";
+            if (_streamListsCache.TryGetValue(cacheKey, out var cached) && cached is List<T> list)
+            {
+                return list;
+            }
+
+            string fileName = $"cache_{safeId}_{category}.json.gz";
             try 
             {
                 var folder = ApplicationData.Current.LocalFolder;
@@ -79,7 +89,14 @@ namespace ModernIPTVPlayer.Services
                 using var gzip = new GZipStream(stream, CompressionMode.Decompress);
                 
                 var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                return await JsonSerializer.DeserializeAsync<List<T>>(gzip, options);
+                var result = await JsonSerializer.DeserializeAsync<List<T>>(gzip, options);
+                
+                if (result != null)
+                {
+                    _streamListsCache[cacheKey] = result;
+                }
+                
+                return result;
             }
             catch (Exception ex)
             {
@@ -90,7 +107,8 @@ namespace ModernIPTVPlayer.Services
 
         public async Task SaveCacheAsync<T>(string playlistId, string category, List<T> data)
         {
-            string fileName = $"cache_{playlistId}_{category}.json.gz";
+            string safeId = GetSafePlaylistId(playlistId);
+            string fileName = $"cache_{safeId}_{category}.json.gz";
             try
             {
                 // Run heavy serialization & hashing on background thread to prevent UI freeze
@@ -125,6 +143,10 @@ namespace ModernIPTVPlayer.Services
                         // Save Hash
                         await WriteTextAsync(hashFile, newHash);
                         
+                        // Update Memory Cache
+                        string cacheKey = $"{safeId}_{category}";
+                        _streamListsCache[cacheKey] = data;
+
                         // Notify User if not first run (OldHash exists)
                         // Note: Events should be invoked on UI thread if they touch UI, but string message is safe
                         if (!string.IsNullOrEmpty(oldHash))
@@ -157,6 +179,23 @@ namespace ModernIPTVPlayer.Services
             using var md5 = MD5.Create();
             var bytes = md5.ComputeHash(stream);
             return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+        }
+
+        private string GetSafePlaylistId(string playlistId)
+        {
+            if (string.IsNullOrEmpty(playlistId)) return "default";
+            
+            // Check for invalid path characters or URLs
+            if (playlistId.Contains("://") || playlistId.Length > 40 || playlistId.Any(c => Path.GetInvalidFileNameChars().Contains(c)))
+            {
+                using (var md5 = MD5.Create())
+                {
+                    byte[] inputBytes = Encoding.UTF8.GetBytes(playlistId);
+                    byte[] hashBytes = md5.ComputeHash(inputBytes);
+                    return BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant().Substring(0, 16);
+                }
+            }
+            return playlistId;
         }
 
         private async Task<string> ReadTextAsync(string filename)
@@ -288,17 +327,7 @@ namespace ModernIPTVPlayer.Services
 
         private async Task SaveSingularCacheAsync<T>(string playlistId, string key, T data)
         {
-             string safeId = playlistId;
-             if (playlistId.Contains("://") || playlistId.Length > 50)
-             {
-                 using (var md5 = System.Security.Cryptography.MD5.Create())
-                 {
-                     byte[] inputBytes = System.Text.Encoding.ASCII.GetBytes(playlistId);
-                     byte[] hashBytes = md5.ComputeHash(inputBytes);
-                     safeId = Convert.ToHexString(hashBytes);
-                 }
-             }
-
+             string safeId = GetSafePlaylistId(playlistId);
              string fileName = $"cache_{safeId}_{key}.json.gz";
              try
              {
@@ -368,16 +397,7 @@ namespace ModernIPTVPlayer.Services
 
         public async Task<T> LoadCacheObjectAsync<T>(string playlistId, string key)
         {
-            string safeId = playlistId;
-            if (playlistId.Contains("://") || playlistId.Length > 50)
-            {
-                using (var md5 = System.Security.Cryptography.MD5.Create())
-                {
-                    byte[] inputBytes = System.Text.Encoding.ASCII.GetBytes(playlistId);
-                    byte[] hashBytes = md5.ComputeHash(inputBytes);
-                    safeId = Convert.ToHexString(hashBytes);
-                }
-            }
+            string safeId = GetSafePlaylistId(playlistId);
             string fileName = $"cache_{safeId}_{key}.json.gz";
             try 
             {

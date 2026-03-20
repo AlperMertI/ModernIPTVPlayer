@@ -381,6 +381,7 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             var trace = new MetadataTrace(context.ToString(), id, sourceStream?.Title);
             bool isSeriesType = type == "series" || type == "tv";
+            bool isContinueWatching = (sourceStream as StremioMediaStream)?.IsContinueWatching ?? false;
             var metadata = seed ?? new UnifiedMetadata
             {
                 ImdbId = id,
@@ -432,8 +433,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                 
                 if (tmdbEnabled)
                 {
-                    trace.Log("TMDB", "TMDB is enabled. Trying direct enrichment and skipping addon detail chain on success.");
-                    var tmdb = await EnrichWithTmdbAsync(metadata, context);
+                    trace.Log("TMDB", $"TMDB is enabled. CW={isContinueWatching}. Trying direct enrichment...");
+                    var tmdb = await EnrichWithTmdbAsync(metadata, context, isContinueWatching);
                     if (tmdb != null)
                     {
                         metadata.TmdbInfo = tmdb;
@@ -487,7 +488,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 if (!tmdbEnabled || (metadata.TmdbInfo == null && GetMissingFields(metadata, required) != MetadataField.None) || (metadata.TmdbInfo != null && GetMissingFields(metadata, required) != MetadataField.None))
                 {
-                    var addonUrls = StremioAddonManager.Instance.GetAddons();
+                    var addonUrls = StremioAddonManager.Instance.GetAddonsByResource("meta");
                     if (addonUrls.Count > 0)
                     {
                         int sourcePriority = GetAddonPriorityIndex(addonUrls, metadata.CatalogSourceAddonUrl);
@@ -500,6 +501,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                             sourcePriority >= 0 ? sourcePriority : int.MaxValue,
                             existingPrimaryPriority >= 0 ? existingPrimaryPriority : int.MaxValue
                         );
+
+                        // [NEW] If TMDB has already provided primary metadata, treat it as the highest priority source (-1)
+                        // to prevent addons from overwriting better (often localized) TMDB data.
+                        if (metadata.TmdbInfo != null)
+                        {
+                            primaryPriority = -1;
+                        }
+
                         string rawCatalogId = (sourceStream as StremioMediaStream)?.Meta?.Id ?? sourceStream?.IMDbId ?? id;
                         string currentSearchId = NormalizeId(metadata.ImdbId) ?? NormalizeId(id) ?? id;
                         if (!IsCanonicalId(currentSearchId) && !string.IsNullOrWhiteSpace(rawCatalogId) &&
@@ -1418,6 +1427,8 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private void MapStremioToUnified(StremioMeta stremio, UnifiedMetadata unified, bool overwritePrimary, bool quiet = false)
         {
+            if (stremio == null || stremio.Name == "#DUPE#") return;
+
             // Only overwrite if currently empty or explicitly requested by priority, as TMDB has higher priority for descriptive text
             // [REFINEMENT] If overwritePrimary is true, only overwrite if source has data (don't overwrite with null)
             string previousTitle = unified.Title;
@@ -1730,12 +1741,12 @@ namespace ModernIPTVPlayer.Services.Metadata
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Mapped data [Primary={overwritePrimary}] for: '{unified.Title}' (Source: {stremio.Name} [{stremio.Id}])");
         }
 
-        private async Task<TmdbMovieResult?> EnrichWithTmdbAsync(UnifiedMetadata metadata, MetadataContext context)
+        private async Task<TmdbMovieResult?> EnrichWithTmdbAsync(UnifiedMetadata metadata, MetadataContext context, bool isContinueWatching = false)
         {
             TmdbMovieResult? tmdb = null;
             
             // [DEBUG] Log the lookup details for series
-            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] {(metadata.IsSeries ? "SERIES" : "MOVIE")}: Title=\"{metadata.Title}\", ImdbId=\"{metadata.ImdbId}\", Year=\"{metadata.Year}\", Context={metadata.DataSource}");
+            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] {(metadata.IsSeries ? "SERIES" : "MOVIE")}: Title=\"{metadata.Title}\", ImdbId=\"{metadata.ImdbId}\", Year=\"{metadata.Year}\", CW={isContinueWatching}");
             
             // Search TMDB
             if (metadata.IsSeries)
@@ -1776,9 +1787,17 @@ namespace ModernIPTVPlayer.Services.Metadata
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Title search found ID = {titleSearch.Id}, fetching full details...");
                         tmdb = await TmdbHelper.GetTvByIdAsync(titleSearch.Id);
                     }
-                    else
+                }
+
+                // Step 4: Try title search WITHOUT YEAR (sometimes Stremio year doesn't match TMDB first_air_date)
+                if (tmdb == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying title search WITHOUT YEAR = \"{metadata.Title}\"");
+                    var titleSearch = await TmdbHelper.SearchTvAsync(metadata.Title, null);
+                    if (titleSearch != null)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Title search returned NULL");
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Title search (no year) found ID = {titleSearch.Id}, fetching full details...");
+                        tmdb = await TmdbHelper.GetTvByIdAsync(titleSearch.Id);
                     }
                 }
             }
@@ -1857,8 +1876,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 metadata.TmdbInfo = tmdb;
 
                 // [NEW] For series, fetch season details from TMDB to get episodes
-                // [OPTIMIZATION] Only fetch season details for high-detail views (MediaInfo page)
-                if (metadata.IsSeries && context == MetadataContext.Detail && tmdb.Seasons != null && tmdb.Seasons.Count > 0)
+                // [OPTIMIZATION] Only fetch season details for high-detail views (MediaInfo page) OR ExpandedCard for CW items
+                bool shouldFetchSeasons = context == MetadataContext.Detail || (context == MetadataContext.ExpandedCard && isContinueWatching);
+                if (metadata.IsSeries && shouldFetchSeasons && tmdb != null && tmdb.Seasons != null && tmdb.Seasons.Count > 0)
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Fetching season details for {tmdb.Seasons.Count} TMDB seasons (Context: {context})...");
                     

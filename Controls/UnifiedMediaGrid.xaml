@@ -41,6 +41,7 @@
                   ItemClick="MediaGridView_ItemClick"
                   ContainerContentChanging="MediaGridView_ContainerContentChanging"
                   Padding="24,0,24,36"
+                  Background="Transparent"
                   ItemContainerStyle="{StaticResource MediaCardStyle}">
             
             <GridView.ItemContainerTransitions>
@@ -62,6 +63,7 @@
                         Title="{Binding Title}" 
                         ProgressValue="{Binding ProgressValue}"
                         BadgeText="{Binding BadgeText}"
+                        IsAvailableOnIptv="{Binding IsAvailableOnIptv}"
                         ShowProgress="{Binding ShowProgress}"
                         ShowBadge="{Binding ShowBadge}"
                         IsTitleVisible="{Binding ShowTitles, ElementName=RootGridControl}"

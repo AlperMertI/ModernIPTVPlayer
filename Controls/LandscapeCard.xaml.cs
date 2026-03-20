@@ -105,8 +105,8 @@ namespace ModernIPTVPlayer.Controls
             set { SetValue(ShowMetaProperty, value); }
         }
 
-        public bool HasRating => !string.IsNullOrEmpty(RatingText);
-        public bool HasSubtext => !string.IsNullOrEmpty(Subtext);
+        public Visibility GetVisibility(string text) => string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility GetVisibility(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
 
         private static void OnImageUrlChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {

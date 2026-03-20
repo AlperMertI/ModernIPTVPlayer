@@ -33,6 +33,13 @@ namespace ModernIPTVPlayer.Pages
         private bool _isLoadingMore = false;
         private bool _hasMoreStremio = true;
         
+        // Filter & Sort State
+        private List<IMediaStream> _allRawResults = new();
+        private List<string> _availableYears = new() { "Tüm Yıllar" };
+        private string _filterType = "all";
+        private string _filterYear = "Tüm Yıllar";
+        private string _sortOrder = "relevance";
+        
         private readonly ExpandedCardOverlayController _expandedCardController;
         
         public ObservableCollection<int> ShimmerItems { get; } = 
@@ -40,6 +47,7 @@ namespace ModernIPTVPlayer.Pages
 
         public SearchResultsPage()
         {
+            _stremioCollection = new ObservableCollection<IMediaStream>();
             this.InitializeComponent();
             this.NavigationCacheMode = NavigationCacheMode.Enabled;
             InitializeGenreOverlay();
@@ -91,23 +99,6 @@ namespace ModernIPTVPlayer.Pages
                         UpdateBreadcrumbs(_args.Type, "Arama");
                     }
 
-                    // Reorder sections based on preference
-                    if (_args.PreferredSource == "IPTV")
-                    {
-                        if (ResultsStack.Children.Contains(IptvSection) && ResultsStack.Children.IndexOf(IptvSection) > 0)
-                        {
-                            ResultsStack.Children.Remove(IptvSection);
-                            ResultsStack.Children.Insert(0, IptvSection);
-                        }
-                    }
-                    else
-                    {
-                        if (ResultsStack.Children.Contains(StremioSection) && ResultsStack.Children.IndexOf(StremioSection) > 0)
-                        {
-                            ResultsStack.Children.Remove(StremioSection);
-                            ResultsStack.Children.Insert(0, StremioSection);
-                        }
-                    }
 
                     await PerformSearchAsync();
                 }
@@ -116,7 +107,7 @@ namespace ModernIPTVPlayer.Pages
             {
                 // Fallback for string query
                 _args = new SearchArgs { Query = query, PreferredSource = "Stremio" };
-                PageTitle.Text = $"Arama Sonuçları: '{_args.Query}'";
+                PageTitle.Text = $"'{_args.Query}'";
                 GenreFilterButton.Visibility = Visibility.Collapsed;
                 await PerformSearchAsync();
             }
@@ -130,11 +121,11 @@ namespace ModernIPTVPlayer.Pages
                 StremioSection.Visibility = Visibility.Collapsed;
                 // Header Reset
                 StremioCountBadge.Visibility = Visibility.Collapsed;
-                IptvCountBadge.Visibility = Visibility.Collapsed;
 
                 // Reset Pagination
                 _stremioSkip = 0;
                 _hasMoreStremio = true;
+                _allRawResults.Clear();
                 _stremioCollection = new ObservableCollection<IMediaStream>();
                 StremioGrid.ItemsSource = _stremioCollection;
 
@@ -145,7 +136,10 @@ namespace ModernIPTVPlayer.Pages
                     
                     if (results != null && results.Any())
                     {
-                        foreach(var item in results) _stremioCollection.Add(item);
+                        _allRawResults = results.Cast<IMediaStream>().ToList();
+                        UpdateYearList();
+                        ApplyFiltersAndSort();
+
                         TxtStremioCount.Text = _stremioCollection.Count.ToString();
                         StremioCountBadge.Visibility = Visibility.Visible;
                         StremioSection.Visibility = Visibility.Visible;
@@ -171,7 +165,10 @@ namespace ModernIPTVPlayer.Pages
                     
                     if (results != null && results.Any())
                     {
-                        foreach(var item in results) _stremioCollection.Add(item);
+                        _allRawResults = results.Cast<IMediaStream>().ToList();
+                        UpdateYearList();
+                        ApplyFiltersAndSort();
+
                         TxtStremioCount.Text = _stremioCollection.Count.ToString();
                         StremioCountBadge.Visibility = Visibility.Visible;
                         StremioSection.Visibility = Visibility.Visible;
@@ -188,34 +185,26 @@ namespace ModernIPTVPlayer.Pages
                 }
 
                 // SEARCH MODE
-                var stremioTask = StremioService.Instance.SearchAsync(_args.Query);
-                var iptvTask = SearchIptvAsync(_args.Query);
-
-                await Task.WhenAll(stremioTask, iptvTask);
-
-                var stremioResults = await stremioTask;
-                var iptvResults = await iptvTask;
-
-                GlobalShimmer.Visibility = Visibility.Collapsed;
-
-                if (stremioResults != null && stremioResults.Any())
+                await StremioService.Instance.SearchAsync(_args.Query, (partialResults) => 
                 {
-                    foreach(var item in stremioResults) _stremioCollection.Add(item);
-                    TxtStremioCount.Text = _stremioCollection.Count.ToString();
-                    StremioCountBadge.Visibility = Visibility.Visible;
-                    StremioSection.Visibility = Visibility.Visible;
-                    StremioSectionTitle.Text = "Stremio Sonuçları";
-                }
+                    this.DispatcherQueue.TryEnqueue(() => 
+                    {
+                        // Update raw results and year list
+                        _allRawResults = partialResults.Cast<IMediaStream>().ToList();
+                        UpdateYearList();
 
-                if (iptvResults != null && iptvResults.Any())
-                {
-                    IptvGrid.ItemsSource = iptvResults;
-                    TxtIptvCount.Text = iptvResults.Count.ToString();
-                    IptvCountBadge.Visibility = Visibility.Visible;
-                    IptvSection.Visibility = Visibility.Visible;
-                }
+                        // Use filtered/sorted results for the UI sync
+                        ApplyFiltersAndSort();
 
-                if (_stremioCollection.Count == 0 && (iptvResults == null || !iptvResults.Any()))
+                        TxtStremioCount.Text = _stremioCollection.Count.ToString();
+                        StremioCountBadge.Visibility = Visibility.Visible;
+                        StremioSection.Visibility = Visibility.Visible;
+                        StremioSectionTitle.Text = "Arama Sonuçları";
+                        GlobalShimmer.Visibility = Visibility.Collapsed;
+                    });
+                });
+
+                if (_stremioCollection.Count == 0)
                 {
                     ShowEmptyStateWithSuggestions();
                 }
@@ -353,11 +342,13 @@ namespace ModernIPTVPlayer.Pages
                 {
                     foreach (var item in newResults)
                     {
-                        if (!_stremioCollection.Any(x => x.Id == item.Id))
+                        if (!_allRawResults.Any(x => x.Id == item.Id))
                         {
-                            _stremioCollection.Add(item);
+                            _allRawResults.Add(item);
                         }
                     }
+                    UpdateYearList();
+                    ApplyFiltersAndSort();
                     TxtStremioCount.Text = _stremioCollection.Count.ToString();
                 }
                 else
@@ -396,6 +387,138 @@ namespace ModernIPTVPlayer.Pages
              // PerformSearchAsync will handle clearing collections and resetting pagination
              _ = PerformSearchAsync();
         }
+        // FILTER & SORT LOGIC
+        private void TypeFilter_Checked(object sender, RoutedEventArgs e)
+        {
+            if (sender is RadioButton rb)
+            {
+                _filterType = rb.Tag?.ToString() ?? "all";
+                ApplyFiltersAndSort();
+            }
+        }
+
+        private void YearListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (YearListView.SelectedItem is string year)
+            {
+                _filterYear = year;
+                YearFilterText.Text = year;
+                ApplyFiltersAndSort();
+                YearFilterButton.Flyout?.Hide();
+            }
+        }
+
+        private void SortItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuFlyoutItem item)
+            {
+                _sortOrder = item.Tag?.ToString() ?? "relevance";
+                SortButtonText.Text = item.Text;
+                ApplyFiltersAndSort();
+            }
+        }
+
+        private void UpdateYearList()
+        {
+            var years = _allRawResults
+                .Select(x => GetYearDigits(x.Year))
+                .Where(y => !string.IsNullOrEmpty(y))
+                .Distinct()
+                .OrderByDescending(y => y)
+                .ToList();
+
+            if (years.Count > 0)
+            {
+                var currentSelection = _filterYear;
+                var newList = new List<string> { "Tüm Yıllar" };
+                newList.AddRange(years);
+                
+                // Check if list actually changed to avoid UI flicker
+                if (YearListView.ItemsSource is List<string> existingList && existingList.SequenceEqual(newList))
+                    return;
+
+                YearListView.ItemsSource = newList;
+                
+                // Re-select if still valid
+                if (newList.Contains(currentSelection))
+                    YearListView.SelectedItem = currentSelection;
+            }
+        }
+
+        private void ApplyFiltersAndSort()
+        {
+            if (_stremioCollection == null) return;
+            var items = _allRawResults.AsEnumerable();
+
+            // 1. Filter by Type
+            if (_filterType != "all")
+            {
+                items = items.Where(x => x.Type == _filterType);
+            }
+
+            // 2. Filter by Year
+            if (_filterYear != "Tüm Yıllar")
+            {
+                items = items.Where(x => GetYearDigits(x.Year) == _filterYear);
+            }
+
+            // 3. Sort
+            items = _sortOrder switch
+            {
+                "rating" => items.OrderByDescending(x => GetRatingNumeric(x.Rating)),
+                "year_desc" => items.OrderByDescending(x => GetYearDigits(x.Year)),
+                "year_asc" => items.OrderBy(x => GetYearDigits(x.Year)),
+                _ => items // "relevance" or default (Already ranked by service)
+            };
+
+            var processedList = items.ToList();
+
+            // Synchronize _stremioCollection with processedList
+            for (int i = 0; i < processedList.Count; i++)
+            {
+                var target = processedList[i];
+                var existingIndex = -1;
+                for (int j = i; j < _stremioCollection.Count; j++)
+                {
+                    if (_stremioCollection[j].Id == target.Id) { existingIndex = j; break; }
+                }
+
+                if (existingIndex == -1)
+                {
+                    var anyIndex = -1;
+                    for (int k = 0; k < _stremioCollection.Count; k++) if (_stremioCollection[k].Id == target.Id) { anyIndex = k; break; }
+                    if (anyIndex != -1) _stremioCollection.Move(anyIndex, i);
+                    else _stremioCollection.Insert(i, target);
+                }
+                else if (existingIndex != i)
+                {
+                    _stremioCollection.Move(existingIndex, i);
+                }
+            }
+
+            while (_stremioCollection.Count > processedList.Count)
+            {
+                _stremioCollection.RemoveAt(_stremioCollection.Count - 1);
+            }
+        }
+
+        private string GetYearDigits(string year)
+        {
+            if (string.IsNullOrEmpty(year)) return "";
+            var match = System.Text.RegularExpressions.Regex.Match(year, @"\d{4}");
+            return match.Success ? match.Value : "";
+        }
+
+        private double GetRatingNumeric(string rating)
+        {
+            if (string.IsNullOrEmpty(rating)) return 0;
+            // Handle formats like "8.5 / 10" or just "8.5"
+            var parts = rating.Split(' ');
+            if (double.TryParse(parts[0], System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+                return r;
+            return 0;
+        }
+
         private void UpdateBreadcrumbs(string type, string current)
         {
             System.Diagnostics.Debug.WriteLine($"[SearchResults] UpdateBreadcrumbs: type={type}, parentContext={_args.ParentContext}, genre={_args.Genre}");
@@ -443,7 +566,17 @@ namespace ModernIPTVPlayer.Pages
             else
             {
                 CategoryBreadcrumbArea.Visibility = Visibility.Collapsed;
-                GenreBreadcrumbArea.Visibility = Visibility.Collapsed;
+                
+                // [NEW] If it's a search, show it as a breadcrumb level
+                if (!string.IsNullOrEmpty(_args.Query) && _args.GenreArgs == null && string.IsNullOrEmpty(_args.Genre))
+                {
+                    GenreBreadcrumbArea.Visibility = Visibility.Visible;
+                    GenreBreadcrumbText.Text = $"'{_args.Query}'";
+                }
+                else
+                {
+                    GenreBreadcrumbArea.Visibility = Visibility.Collapsed;
+                }
             }
         }
 

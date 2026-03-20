@@ -43,6 +43,7 @@ namespace ModernIPTVPlayer.Controls
         private Microsoft.UI.Composition.SpriteVisual _heroLogoVisual;
         private Microsoft.UI.Composition.CompositionSurfaceBrush _heroLogoBrush;
         private Dictionary<string, Microsoft.UI.Xaml.Media.LoadedImageSurface> _heroLogoSurfaces = new();
+        private System.Threading.CancellationTokenSource? _heroCts;
 
         public HeroSectionControl()
         {
@@ -74,6 +75,8 @@ namespace ModernIPTVPlayer.Controls
 
         private void HeroSectionControl_Unloaded(object sender, RoutedEventArgs e)
         {
+            _heroCts?.Cancel();
+            _heroCts = null;
             StopAutoRotation();
             if (_lastSubscribedItem != null)
             {
@@ -84,6 +87,7 @@ namespace ModernIPTVPlayer.Controls
 
         public void SetItems(IEnumerable<StremioMediaStream> items)
         {
+            if (items == null) return;
             var newItems = items.ToList();
             if (newItems.Count == 0) return;
 
@@ -171,7 +175,12 @@ namespace ModernIPTVPlayer.Controls
 
         private void SetupHeroCompositionMask()
         {
-            var compositor = ElementCompositionPreview.GetElementVisual(HeroImageHost).Compositor;
+            try
+            {
+                if (HeroImageHost.XamlRoot == null) return;
+                var hostVisual = ElementCompositionPreview.GetElementVisual(HeroImageHost);
+                if (hostVisual == null) return;
+                var compositor = hostVisual.Compositor;
 
             // 1. Image source brush
             _heroImageBrush = compositor.CreateSurfaceBrush();
@@ -200,6 +209,9 @@ namespace ModernIPTVPlayer.Controls
 
             // 5. Attach
             ElementCompositionPreview.SetElementChildVisual(HeroImageHost, _heroVisual);
+
+            // [FIX] Required for stable Offset/Translation animations
+            ElementCompositionPreview.SetIsTranslationEnabled(HeroImageHost, true);
 
             // 6. Size sync
             HeroImageHost.SizeChanged += (s, e) =>
@@ -237,19 +249,28 @@ namespace ModernIPTVPlayer.Controls
                     _heroLogoVisual.Size = new Vector2((float)e.NewSize.Width, (float)e.NewSize.Height);
             };
         }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[HeroControl] Setup Composition Error: {ex.Message}");
+        }
+    }
 
-        private void StopAutoRotation()
+        public void StopAutoRotation()
         {
             _heroAutoTimer?.Stop();
         }
 
-        private void StartHeroAutoRotation()
+        public void StartHeroAutoRotation()
         {
             _heroAutoTimer?.Stop();
             _heroAutoTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
             _heroAutoTimer.Tick += (s, e) =>
             {
-                if (_heroItems.Count > 1 && !_heroTransitioning && this.XamlRoot != null)
+                // [FIX] Global Visibility Check: Stop rotation if the control is collapsed (IPTV mode)
+                if (this.Visibility != Visibility.Visible || this.ActualWidth <= 0 || this.XamlRoot == null)
+                    return;
+
+                if (_heroItems.Count > 1 && !_heroTransitioning)
                 {
                     _currentHeroIndex = (_currentHeroIndex + 1) % _heroItems.Count;
                     UpdateHeroSection(_heroItems[_currentHeroIndex], animate: true);
@@ -335,11 +356,15 @@ namespace ModernIPTVPlayer.Controls
             // [FIX] Reveal background image with smooth fade-in
             if (_heroVisual != null)
             {
-                var compositor = _heroVisual.Compositor;
-                var fadeIn = compositor.CreateScalarKeyFrameAnimation();
-                fadeIn.InsertKeyFrame(1f, 1f);
-                fadeIn.Duration = TimeSpan.FromMilliseconds(800);
-                _heroVisual.StartAnimation("Opacity", fadeIn);
+                try
+                {
+                    var compositor = _heroVisual.Compositor;
+                    var fadeIn = compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(1f, 1f);
+                    fadeIn.Duration = TimeSpan.FromMilliseconds(800);
+                    _heroVisual.StartAnimation("Opacity", fadeIn);
+                }
+                catch { /* Harmless if disposed */ }
             }
             
             _isFirstLoad = false;
@@ -347,29 +372,23 @@ namespace ModernIPTVPlayer.Controls
         
         private async void UpdateHeroSection(StremioMediaStream item, bool animate = false)
         {
-             // Transition from Shimmer to Real Content is now handled by ShowRealContent()
-             // which is triggered after primary surfaces (Background + Logo) are synchronized and ready.
-             // This prevents staggered arrival.
-
             string imgUrl = item.Meta?.Background ?? item.PosterUrl;
             string itemId = item.IMDbId ?? item.Id.ToString();
 
-            // Prevent redundant assignments and flickering
             if (_currentHeroId == itemId && !HeroShimmer.Visibility.Equals(Visibility.Visible))
-            {
-                // We're already showing this item. No need to reload surface/extract colors again.
                 return;
-            }
 
             _currentHeroId = itemId;
+
+            _heroCts?.Cancel();
+            _heroCts = new System.Threading.CancellationTokenSource();
+            var token = _heroCts.Token;
 
             // Trigger color extraction via hidden image
             if (!string.IsNullOrEmpty(imgUrl))
             {
-                // Tiny decode for extraction only - satisfies technical need for Image control
-                // while keeping memory footprint negligible (kb vs mb).
                 var bitmap = new BitmapImage();
-                bitmap.DecodePixelWidth = 50; 
+                bitmap.DecodePixelWidth = 50;
                 bitmap.UriSource = new Uri(imgUrl);
                 ColorExtractionImage.Source = bitmap;
             }
@@ -377,38 +396,48 @@ namespace ModernIPTVPlayer.Controls
             if (animate && _heroVisual != null && !_heroTransitioning)
             {
                 _heroTransitioning = true;
-                var compositor = _heroVisual.Compositor;
-
-                // Phase 1: Fade out image
-                var fadeOut = compositor.CreateScalarKeyFrameAnimation();
-                fadeOut.InsertKeyFrame(1f, 0f, compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(1f, 1f)));
-                fadeOut.Duration = TimeSpan.FromMilliseconds(400);
-                _heroVisual.StartAnimation("Opacity", fadeOut);
-
-                AnimateTextOut();
-                await Task.Delay(300); // Wait for fade-out to complete
-                
-                // Phase 2: Swap content (while invisible)
-                PopulateHeroData(item);
-                SubscribeToItemChanges(item);
-
-                if (!string.IsNullOrEmpty(imgUrl))
+                try
                 {
-                    var surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new Uri(imgUrl));
-                    _heroImageBrush.Surface = surface;
+                    var compositor = _heroVisual.Compositor;
+
+                    // Phase 1: Fade out
+                    var fadeOut = compositor.CreateScalarKeyFrameAnimation();
+                    fadeOut.InsertKeyFrame(1f, 0f, compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(1f, 1f)));
+                    fadeOut.Duration = TimeSpan.FromMilliseconds(400);
+                    _heroVisual.StartAnimation("Opacity", fadeOut);
+                    AnimateTextOut();
+                    
+                    await Task.Delay(300, token);
+                    if (token.IsCancellationRequested || !this.IsLoaded || this.XamlRoot == null) { _heroTransitioning = false; return; }
+
+                    // Phase 2: Swap content
+                    PopulateHeroData(item);
+                    SubscribeToItemChanges(item);
+
+                    if (!string.IsNullOrEmpty(imgUrl))
+                    {
+                        var surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new Uri(imgUrl));
+                        _heroImageBrush.Surface = surface;
+                    }
+
+                    if (token.IsCancellationRequested || !this.IsLoaded) { _heroTransitioning = false; return; }
+
+                    // Phase 3: Fade in
+                    var fadeIn = compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(1f, 1f, compositor.CreateCubicBezierEasingFunction(new Vector2(0f, 0f), new Vector2(0.2f, 1f)));
+                    fadeIn.Duration = TimeSpan.FromMilliseconds(600);
+                    _heroVisual.StartAnimation("Opacity", fadeIn);
+                    AnimateTextIn();
                 }
-
-                // Phase 3: Fade in image
-                var fadeIn = compositor.CreateScalarKeyFrameAnimation();
-                fadeIn.InsertKeyFrame(1f, 1f, compositor.CreateCubicBezierEasingFunction(new Vector2(0f, 0f), new Vector2(0.2f, 1f)));
-                fadeIn.Duration = TimeSpan.FromMilliseconds(600);
-                _heroVisual.StartAnimation("Opacity", fadeIn);
-
-                AnimateTextIn();
-
-                // Phase 4: Bleed colors (Now handled by ColorExtractionImage_ImageOpened)
-
-                _heroTransitioning = false;
+                catch (OperationCanceledException) { }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[HeroControl] Transition error: {ex.Message}");
+                }
+                finally
+                {
+                    _heroTransitioning = false;
+                }
             }
             else
             {
@@ -423,8 +452,9 @@ namespace ModernIPTVPlayer.Controls
                         var surface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(new Uri(imgUrl));
                         if (_isFirstLoad && !_firstBackgroundReadyTcs.Task.IsCompleted)
                         {
-                            surface.LoadCompleted += (s, e) => {
-                                _firstBackgroundReadyTcs.TrySetResult(e.Status == Microsoft.UI.Xaml.Media.LoadedImageSourceLoadStatus.Success);
+                            surface.LoadCompleted += (s, ev) =>
+                            {
+                                _firstBackgroundReadyTcs.TrySetResult(ev.Status == Microsoft.UI.Xaml.Media.LoadedImageSourceLoadStatus.Success);
                             };
                         }
                         if (_heroImageBrush != null)
@@ -441,27 +471,23 @@ namespace ModernIPTVPlayer.Controls
 
         private async void ColorExtractionImage_ImageOpened(object sender, RoutedEventArgs e)
         {
+            // [FIX] Use URL-based color extraction — no RenderTargetBitmap.RenderAsync
+            // The previous implementation used RenderAsync inside a DispatcherQueue.TryEnqueue(async),
+            // which could execute AFTER StremioControl was Collapsed, causing uncaught COMException.
+            var token = _heroCts?.Token ?? default;
+            if (token.IsCancellationRequested || !this.IsLoaded) return;
+            
+            string cacheKey = (ColorExtractionImage.Source as BitmapImage)?.UriSource?.ToString();
+            if (string.IsNullOrEmpty(cacheKey)) return;
+            
             try
             {
-                // Ensure the element is ready for rendering
-                if (ColorExtractionImage.ActualWidth == 0 || ColorExtractionImage.XamlRoot == null)
-                {
-                    await Task.Delay(50); // Give layout a moment
-                }
-                
-                if (ColorExtractionImage.ActualWidth == 0 || ColorExtractionImage.XamlRoot == null) return;
-
-                var rtb = new RenderTargetBitmap();
-                await rtb.RenderAsync(ColorExtractionImage);
-                var pixelBuffer = await rtb.GetPixelsAsync();
-                var pixels = System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions.ToArray(pixelBuffer);
-
-                // Use the image URL as cache key if possible, or just "Hero"
-                string cacheKey = (ColorExtractionImage.Source as BitmapImage)?.UriSource?.ToString() ?? "Hero";
-                var colors = ImageHelper.ExtractColorsFromPixels(pixels, rtb.PixelWidth, rtb.PixelHeight, cacheKey);
-                
-                ColorExtracted?.Invoke(this, colors);
+                var colors = await ImageHelper.GetOrExtractColorAsync(cacheKey);
+                if (token.IsCancellationRequested || !this.IsLoaded) return;
+                if (colors.HasValue)
+                    ColorExtracted?.Invoke(this, colors.Value);
             }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[HeroControl] Color extraction failed: {ex.Message}");
@@ -614,15 +640,25 @@ namespace ModernIPTVPlayer.Controls
 
         private void ApplyKenBurnsComposition(Microsoft.UI.Composition.Compositor compositor)
         {
-            var hostVisual = ElementCompositionPreview.GetElementVisual(HeroImageHost);
-            var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
-            var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(0.6f, 1f));
-            offsetAnim.InsertKeyFrame(0f, Vector3.Zero, easing);
-            offsetAnim.InsertKeyFrame(0.5f, new Vector3(-12f, -4f, 0f), easing);
-            offsetAnim.InsertKeyFrame(1f, Vector3.Zero, easing);
-            offsetAnim.Duration = TimeSpan.FromSeconds(25);
-            offsetAnim.IterationBehavior = Microsoft.UI.Composition.AnimationIterationBehavior.Forever;
-            hostVisual.StartAnimation("Offset", offsetAnim);
+            try
+            {
+                if (HeroImageHost.XamlRoot == null) return;
+                var hostVisual = ElementCompositionPreview.GetElementVisual(HeroImageHost);
+                if (hostVisual == null) return;
+                
+                var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
+                var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(0.6f, 1f));
+                offsetAnim.InsertKeyFrame(0f, Vector3.Zero, easing);
+                offsetAnim.InsertKeyFrame(0.5f, new Vector3(-12f, -4f, 0f), easing);
+                offsetAnim.InsertKeyFrame(1f, Vector3.Zero, easing);
+                offsetAnim.Duration = TimeSpan.FromSeconds(25);
+                offsetAnim.IterationBehavior = Microsoft.UI.Composition.AnimationIterationBehavior.Forever;
+                hostVisual.StartAnimation("Offset", offsetAnim);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[HeroControl] KenBurns Animation Error: {ex.Message}");
+            }
         }
 
         private void HeroPlayButton_Click(object sender, RoutedEventArgs e)

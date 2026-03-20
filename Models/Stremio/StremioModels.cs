@@ -22,7 +22,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Description { get; set; }
 
         [JsonPropertyName("resources")]
-        public List<object> Resources { get; set; } // Can be strings or StremioResource objects
+        public List<System.Text.Json.JsonElement> Resources { get; set; } // Can be strings or StremioResource objects
 
         [JsonPropertyName("types")]
         public List<string> Types { get; set; }

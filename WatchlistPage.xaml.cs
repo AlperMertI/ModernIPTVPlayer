@@ -312,7 +312,7 @@ namespace ModernIPTVPlayer
         private void BrowseButton_Click(object sender, RoutedEventArgs e)
         {
             // Navigate to Movies or Main Page
-            Frame.Navigate(typeof(MoviesPage), App.CurrentLogin); // Or whatever main discovery page is preferred
+            Frame.Navigate(typeof(MediaLibraryPage), new MediaLibraryArgs { Type = MediaType.Movie });
         }
     }
 }

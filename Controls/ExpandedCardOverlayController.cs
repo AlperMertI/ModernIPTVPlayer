@@ -64,6 +64,9 @@ namespace ModernIPTVPlayer.Controls
             _cinemaScrim = cinemaScrim;
             _scrollLockTarget = scrollLockTarget;
 
+            // [FIX] Enable Translation property early to avoid "Property not found" errors during StopAnimation or early access
+            ElementCompositionPreview.SetIsTranslationEnabled(_expandedCard, true);
+
             _expandedCard.PlayClicked += ExpandedCard_PlayClicked;
             _expandedCard.DetailsClicked += ExpandedCard_DetailsClicked;
             _expandedCard.AddListClicked += ExpandedCard_AddListClicked;
@@ -104,47 +107,55 @@ namespace ModernIPTVPlayer.Controls
         {
             if (_isInCinemaMode) return;
 
-            _closeCts?.Cancel();
-
-            // [FIX] Robust Hover Management: Reset previous cards immediately when moving to a new one.
-            // This prevents "sticky" hover states when moving mouse quickly between adjacent posters.
-            if (_activeSourceCard != null && _activeSourceCard != card)
+            try 
             {
-                if (_activeSourceCard is PosterCard p) p.ResetHoverState();
-                else if (_activeSourceCard is LandscapeCard l) l.ResetHoverState();
+                _closeCts?.Cancel();
+
+                // [FIX] Robust Hover Management: Reset previous cards immediately when moving to a new one.
+                if (_activeSourceCard != null && _activeSourceCard != card)
+                {
+                    if (_activeSourceCard is PosterCard p) p.ResetHoverState();
+                    else if (_activeSourceCard is LandscapeCard l) l.ResetHoverState();
+                }
+                if (_pendingHoverCard != null && _pendingHoverCard != card)
+                {
+                    if (_pendingHoverCard is PosterCard p) p.ResetHoverState();
+                    else if (_pendingHoverCard is LandscapeCard l) l.ResetHoverState();
+                }
+
+                if (_expandedCard.XamlRoot == null) return;
+                var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
+                if (visual == null) return;
+
+                TryStopAnimation(visual, "Opacity");
+                TryStopAnimation(visual, "Scale");
+                TryStopAnimation(visual, "Translation");
+
+                bool isAlreadyOpen = _expandedCard.Visibility == Visibility.Visible;
+
+                if (isAlreadyOpen)
+                {
+                    visual.Opacity = 1f;
+                    _flightTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+                    _flightTimer.Tick -= FlightTimer_Tick;
+                    _flightTimer.Tick += FlightTimer_Tick;
+                    _flightTimer.Stop();
+                    _pendingHoverCard = card;
+                    _flightTimer.Start();
+                }
+                else
+                {
+                    _hoverTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+                    _hoverTimer.Tick -= HoverTimer_Tick;
+                    _hoverTimer.Tick += HoverTimer_Tick;
+                    _hoverTimer.Stop();
+                    _pendingHoverCard = card;
+                    _hoverTimer.Start();
+                }
             }
-            if (_pendingHoverCard != null && _pendingHoverCard != card)
+            catch (Exception ex)
             {
-                if (_pendingHoverCard is PosterCard p) p.ResetHoverState();
-                else if (_pendingHoverCard is LandscapeCard l) l.ResetHoverState();
-            }
-
-            var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
-            TryStopAnimation(visual, "Opacity");
-            TryStopAnimation(visual, "Scale");
-            TryStopAnimation(visual, "Translation");
-
-            bool isAlreadyOpen = _expandedCard.Visibility == Visibility.Visible;
-
-            if (isAlreadyOpen)
-            {
-                visual.Opacity = 1f;
-                _flightTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
-                _flightTimer.Tick -= FlightTimer_Tick;
-                _flightTimer.Tick += FlightTimer_Tick;
-                _flightTimer.Stop();
-                _pendingHoverCard = card;
-                _flightTimer.Start();
-            }
-            else
-            {
-                _hoverTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
-                _hoverTimer.Tick -= HoverTimer_Tick;
-                _hoverTimer.Tick += HoverTimer_Tick;
-                _hoverTimer.Stop();
-                _pendingHoverCard = card;
-                _hoverTimer.Start();
-                // [FIX] Defer PrepareForTrailer to the timer tick to avoid spamming YouTube
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlayController] OnHoverStarted error: {ex.Message}");
             }
         }
 
@@ -176,13 +187,19 @@ namespace ModernIPTVPlayer.Controls
                 await Task.Delay(50, token);
                 if (token.IsCancellationRequested) return;
 
-                if (_expandedCard.Visibility != Visibility.Visible)
+                if (_expandedCard.Visibility != Visibility.Visible || _expandedCard.XamlRoot == null)
                 {
                     FinalizeCloseVisualState();
                     return;
                 }
 
                 var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
+                if (visual == null)
+                {
+                    FinalizeCloseVisualState();
+                    return;
+                }
+
                 var compositor = visual.Compositor;
 
                 var fadeOut = compositor.CreateScalarKeyFrameAnimation();
@@ -230,7 +247,7 @@ namespace ModernIPTVPlayer.Controls
                 }
                 FinalizeCloseVisualState();
                 
-                System.Diagnostics.Debug.WriteLine("[ExpandedCardOverlayController] ForceClose executed.");
+                // System.Diagnostics.Debug.WriteLine("[ExpandedCardOverlayController] ForceClose executed.");
             }
             catch (Exception ex)
             {
@@ -269,6 +286,8 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
+                if (_expandedCard.XamlRoot == null || sourceCard.XamlRoot == null) return;
+
                 _closeCts?.Cancel();
                 _closeCts = new CancellationTokenSource();
                 _activeSourceCard = sourceCard;
@@ -299,8 +318,10 @@ namespace ModernIPTVPlayer.Controls
                 if (targetY < 10) targetY = 10;
 
                 var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
+                if (visual == null) return;
+
                 var compositor = visual.Compositor;
-                ElementCompositionPreview.SetIsTranslationEnabled(_expandedCard, true);
+                // [FIX] Already enabled in constructor
 
                 bool isMorph = _expandedCard.Visibility == Visibility.Visible && visual.Opacity > 0.1f && !_isInCinemaMode;
 
@@ -732,10 +753,19 @@ namespace ModernIPTVPlayer.Controls
             _pendingHoverCard = null;
             _isPointerOverCard = false;
 
-            var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
-            visual.Opacity = 1f;
-            visual.Scale = Vector3.One;
-            try { visual.Properties.InsertVector3("Translation", Vector3.Zero); } catch { }
+            try 
+            {
+                if (_expandedCard.XamlRoot != null)
+                {
+                    var visual = ElementCompositionPreview.GetElementVisual(_expandedCard);
+                    if (visual != null)
+                    {
+                        visual.Opacity = 1f;
+                        visual.Scale = Vector3.One;
+                        try { visual.Properties.InsertVector3("Translation", Vector3.Zero); } catch { }
+                    }
+                }
+            } catch { }
 
             HideScrimImmediately();
 
@@ -767,11 +797,18 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                visual.StopAnimation(propertyName);
+                // Property check before stopping to avoid ArgumentException if not enabled yet
+                if (propertyName == "Translation")
+                {
+                    // Even if enabled, sometimes the property isn't "initialized" in the property bag yet
+                    visual.StopAnimation(propertyName);
+                }
+                else
+                {
+                    visual.StopAnimation(propertyName);
+                }
             }
-            catch
-            {
-            }
+            catch { }
         }
     }
 }

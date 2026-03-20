@@ -150,6 +150,20 @@ namespace ModernIPTVPlayer.Controls
             });
         }
 
+        public void CancelLoading()
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine("[StremioControl] CancelLoading invoked.");
+                _loadCts?.Cancel();
+                HeroControl.StopAutoRotation();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[StremioControl] CancelLoading Error: {ex.Message}");
+            }
+        }
+
         public bool HasContent => _discoveryRows.Count > 0 && !_discoveryRows.Any(r => r.IsLoading && r.CatalogName == "Yükleniyor...");
 
         /// <summary>
@@ -198,6 +212,9 @@ namespace ModernIPTVPlayer.Controls
                         : null
                 });
                 stream.IsContinueWatching = true;
+                stream.EpisodeSubtext = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0 
+                    ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 
+                    : null;
                 stream.ProgressValue = hist.Duration > 0 ? ((double)hist.Position / hist.Duration) * 100 : 0;
                 cwItems.Add(stream);
             }
@@ -268,6 +285,13 @@ namespace ModernIPTVPlayer.Controls
                 {
                     try
                     {
+                        // [FIX] Guard against late UI updates after source switch
+                        if (!this.IsLoaded || (_loadCts != null && _loadCts.Token.IsCancellationRequested))
+                        {
+                            tcs.SetResult(false);
+                            return;
+                        }
+
                         foreach (var pair in results)
                         {
                             ApplyMetadataToStream(pair.Key, pair.Value);
@@ -370,13 +394,13 @@ namespace ModernIPTVPlayer.Controls
                             Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
                             Poster = hist.PosterUrl,
                             Background = hist.BackdropUrl,
-                            Type = hist.ParentSeriesId != null ? "series" : contentType,
-                            Description = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0 
-                                ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 
-                                : null
+                            Type = hist.ParentSeriesId != null ? "series" : contentType
                         });
                         
                         stream.IsContinueWatching = true;
+                        stream.EpisodeSubtext = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0 
+                                ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 
+                                : null;
                         stream.ProgressValue = hist.Duration > 0 ? (hist.Position / hist.Duration) * 100 : 0;
                         cwItems.Add(stream);
                     }
@@ -586,7 +610,7 @@ namespace ModernIPTVPlayer.Controls
 
                             DispatcherQueue.TryEnqueue(() =>
                             {
-                                if (token.IsCancellationRequested || myVersion != _discoveryVersion) return;
+                                if (token.IsCancellationRequested || myVersion != _discoveryVersion || !this.IsLoaded) return;
 
                                 if (rowResult != null && rowResult.Items.Count > 0)
                                 {
@@ -628,6 +652,7 @@ namespace ModernIPTVPlayer.Controls
                             System.Diagnostics.Debug.WriteLine($"[Stremio] Error loading row {cat.Name}: {ex.Message}");
                              DispatcherQueue.TryEnqueue(() => 
                             {
+                                if (token.IsCancellationRequested || myVersion != _discoveryVersion || !this.IsLoaded) return;
                                 lock(_rowItemsBuffer) {
                                     _rowStates[rowId] = RowState.Failed;
                                 }
@@ -990,6 +1015,14 @@ namespace ModernIPTVPlayer.Controls
                     }
                 }
             }
+        }
+
+        public void Clear()
+        {
+            _discoveryRows.Clear();
+            HeroControl.SetLoading(false);
+            HeroControl.SetItems(null);
+            _currentContentType = string.Empty;
         }
     }
 }

@@ -503,7 +503,9 @@
                         <StackPanel x:Name="TitlePanel" Opacity="0">
                           <!-- CONTENT LOGO (Optional Branding) - now a Host for Locked Composition surfaces -->
                           <Border x:Name="ContentLogoHost" Height="120" Width="420" MaxHeight="120" MaxWidth="420" 
-                                  HorizontalAlignment="Left" Visibility="Collapsed" Margin="0,0,0,0" VerticalAlignment="Bottom"/>
+                                  HorizontalAlignment="Left" Visibility="Collapsed" Margin="0,0,0,0" VerticalAlignment="Bottom">
+                              <Image x:Name="ContentLogoImage" Stretch="Uniform" HorizontalAlignment="Left" VerticalAlignment="Bottom"/>
+                          </Border>
 
                           <TextBlock x:Name="TitleText" Text="Loading..." FontSize="48" FontWeight="Black" Foreground="White" 
                                      TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"

@@ -41,6 +41,7 @@ namespace ModernIPTVPlayer.Models
 
         public string SourceBadgeText { get; set; }
         public bool ShowSourceBadge { get; set; }
+        public bool IsAvailableOnIptv { get; set; }
 
         [JsonIgnore]
         public TmdbMovieResult TmdbInfo { get; set; }
@@ -96,6 +97,7 @@ namespace ModernIPTVPlayer.Models
 
             SourceBadgeText = stream.SourceBadgeText;
             ShowSourceBadge = stream.ShowSourceBadge;
+            IsAvailableOnIptv = stream.IsAvailableOnIptv;
 
             // Sync Metadata
             if (stream is LiveStream l2)

@@ -31,9 +31,9 @@ namespace ModernIPTVPlayer.Controls
         }
 
         private readonly ExpandedCardOverlayController _expandedCardOverlay;
-        private List<IMediaStream>? _items;
+        private System.Collections.IEnumerable? _items;
 
-        public List<IMediaStream>? ItemsSource
+        public System.Collections.IEnumerable? ItemsSource
         {
             get => _items;
             set
@@ -59,7 +59,7 @@ namespace ModernIPTVPlayer.Controls
                 {
                     SkeletonGrid.Visibility = Visibility.Collapsed;
                     
-                    if (_items == null || _items.Count == 0)
+                    if (_items == null || !EnumerableAny(_items))
                     {
                         MediaGridView.Visibility = Visibility.Collapsed;
                         EmptyStatePanel.Visibility = Visibility.Visible;
@@ -95,47 +95,69 @@ namespace ModernIPTVPlayer.Controls
 
         private void MediaGridView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
         {
-            if (args.InRecycleQueue) return;
+            if (args.InRecycleQueue || args.ItemContainer == null) return;
 
-            // Staggered Entrance Animation
-            // Only animate if it hasn't been shown before to avoid flickering on scroll up
-            if (args.ItemContainer != null && args.ItemContainer.Tag == null)
+            // Only animate the first appearance (not on scroll recycle)
+            if (args.ItemContainer.Tag == null)
             {
-                // Calculate delay based on index relative to the first visible index or just modulo
-                // A simple index-based delay works well for initial load
-                int index = args.ItemIndex;
-                int staggerDelay = (index % 40) * 25; // Increase batch to 40 items for 4K screens, slightly faster 25ms delay
+                try
+                {
+                    if (args.ItemContainer.XamlRoot == null || !args.ItemContainer.IsLoaded) return;
 
-                // Ensure XAML Opacity is 1 (Visible) so hit-testing works, and we strictly animate Visual Layer
-                args.ItemContainer.Opacity = 1; 
+                    int index = args.ItemIndex;
+                    // Stagger: max 300ms total so final items don't wait forever
+                    int staggerDelay = Math.Min(index % 20 * 30, 300);
 
-                var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(args.ItemContainer);
-                var compositor = visual.Compositor;
+                    // Use safe XAML Storyboard (same pattern as CatalogRow which works correctly)
+                    var translateTransform = new Microsoft.UI.Xaml.Media.TranslateTransform { Y = 24 };
+                    args.ItemContainer.RenderTransform = translateTransform;
+                    args.ItemContainer.Opacity = 0;
 
-                // Initial State: Invisible via Visual Layer
-                visual.Opacity = 0f;
+                    var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
 
-                // Opacity Animation
-                var opacityAnim = compositor.CreateScalarKeyFrameAnimation();
-                opacityAnim.Target = "Opacity";
-                opacityAnim.InsertKeyFrame(0, 0);
-                opacityAnim.InsertKeyFrame(1, 1);
-                opacityAnim.Duration = TimeSpan.FromMilliseconds(400);
-                opacityAnim.DelayTime = TimeSpan.FromMilliseconds(staggerDelay);
-                opacityAnim.DelayTime = TimeSpan.FromMilliseconds(staggerDelay);
+                    var fadeIn = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+                    {
+                        To = 1,
+                        Duration = TimeSpan.FromMilliseconds(380),
+                        BeginTime = TimeSpan.FromMilliseconds(staggerDelay),
+                        EasingFunction = new Microsoft.UI.Xaml.Media.Animation.QuadraticEase 
+                        { 
+                            EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut 
+                        }
+                    };
+                    Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(fadeIn, args.ItemContainer);
+                    Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(fadeIn, "Opacity");
 
-                // Offset Animation (Slide Up)
-                var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
-                offsetAnim.Target = "Offset";
-                offsetAnim.InsertKeyFrame(0, new System.Numerics.Vector3(0, 20, 0)); // Start 20px down
-                offsetAnim.InsertKeyFrame(1, new System.Numerics.Vector3(0, 0, 0));
-                offsetAnim.Duration = TimeSpan.FromMilliseconds(400);
-                offsetAnim.DelayTime = TimeSpan.FromMilliseconds(staggerDelay);
+                    var slideIn = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
+                    {
+                        To = 0,
+                        Duration = TimeSpan.FromMilliseconds(380),
+                        BeginTime = TimeSpan.FromMilliseconds(staggerDelay),
+                        EasingFunction = new Microsoft.UI.Xaml.Media.Animation.CubicEase 
+                        { 
+                            EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut 
+                        }
+                    };
+                    Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(slideIn, translateTransform);
+                    Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(slideIn, "Y");
 
-                visual.StartAnimation("Opacity", opacityAnim);
-                visual.StartAnimation("Offset", offsetAnim);
+                    sb.Children.Add(fadeIn);
+                    sb.Children.Add(slideIn);
+                    sb.Begin();
 
-                args.ItemContainer.Tag = "Shown"; // Mark as shown
+                    args.ItemContainer.Tag = "Shown";
+                }
+                catch (Exception ex)
+                {
+                    // Fail-safe: make item visible if animation fails
+                    try 
+                    { 
+                        args.ItemContainer.Opacity = 1;
+                        args.ItemContainer.RenderTransform = null;
+                    } 
+                    catch { }
+                    System.Diagnostics.Debug.WriteLine($"[UnifiedMediaGrid] !!! Animation error for Index {args.ItemIndex}: {ex.GetType().Name}: {ex.Message}");
+                }
             }
         }
 
@@ -178,6 +200,15 @@ namespace ModernIPTVPlayer.Controls
             {
                 HoverEnded?.Invoke(this, card);
             }
+        }
+
+        private bool EnumerableAny(System.Collections.IEnumerable source)
+        {
+            if (source == null) return false;
+            if (source is System.Collections.ICollection collection) return collection.Count > 0;
+            
+            var enumerator = source.GetEnumerator();
+            return enumerator.MoveNext();
         }
 
         public Task CloseExpandedCardAsync() => _expandedCardOverlay.CloseExpandedCardAsync();

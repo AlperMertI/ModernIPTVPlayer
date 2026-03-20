@@ -110,59 +110,22 @@ namespace ModernIPTVPlayer.Controls
             SeeAllText.Text = $"Tüm sonuçları gör: '{query}'";
             SeeAllButton.Visibility = Visibility.Visible;
 
-            // Perform Hybrid Search
-            var stremioTask = StremioService.Instance.SearchAsync(query);
-            var iptvTask = SearchIptvAsync(query);
-
-            await Task.WhenAll(stremioTask, iptvTask);
-
-            var stremioResults = await stremioTask;
-            var iptvResults = await iptvTask;
-
-            // Combine Results
-            var combined = new List<IMediaStream>();
-            combined.AddRange(iptvResults.Take(2)); // Limit IPTV in spotlight for quick look
-            combined.AddRange(stremioResults);
-            
-            // Update UI State -> Result
-            ShimmerPanel.Visibility = Visibility.Collapsed;
-            
-            if (combined.Any())
+            // Perform Unified Search (Service now handles IPTV + Ranking)
+            await StremioService.Instance.SearchAsync(query, (partialResults) =>
             {
-                ResultsList.ItemsSource = combined.Take(7); // Show top 7 inline
-                ResultsList.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                EmptyStatePanel.Visibility = Visibility.Visible;
-            }
-        }
-
-        private async Task<List<IMediaStream>> SearchIptvAsync(string query)
-        {
-            var results = new List<IMediaStream>();
-            var login = App.CurrentLogin;
-            if (login == null) return results;
-
-            string playlistId = login.PlaylistUrl ?? "default";
-            
-            // Search Movies
-            var movies = await ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "vod");
-            if (movies != null)
-            {
-                var filtered = movies.Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(5);
-                results.AddRange(filtered);
-            }
-
-            // Search Series
-            var series = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
-            if (series != null)
-            {
-                var filtered = series.Where(s => s.Name.Contains(query, StringComparison.OrdinalIgnoreCase)).Take(5);
-                results.AddRange(filtered);
-            }
-
-            return results;
+                this.DispatcherQueue.TryEnqueue(() =>
+                {
+                    // partialResults already includes ranked IPTV + Addon results
+                    ResultsList.ItemsSource = partialResults.Take(8).ToList();
+                    ResultsList.Visibility = ResultsList.Items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                    ShimmerPanel.Visibility = Visibility.Collapsed;
+                    
+                    if (ResultsList.Items.Count == 0 && !string.IsNullOrEmpty(query)) 
+                        EmptyStatePanel.Visibility = Visibility.Visible;
+                    else
+                        EmptyStatePanel.Visibility = Visibility.Collapsed;
+                });
+            });
         }
 
         private void ResultsList_ItemClick(object sender, ItemClickEventArgs e)

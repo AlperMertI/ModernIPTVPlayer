@@ -79,14 +79,14 @@
                                    FontSize="13" 
                                    Opacity="0.8"
                                    FontWeight="SemiBold"
-                                   Visibility="{x:Bind HasSubtext, Mode=OneWay}"
+                                   Visibility="{x:Bind GetVisibility(Subtext), Mode=OneWay}"
                                    Margin="0,2,0,0"/>
                                    
                         <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0"
-                                    Visibility="{x:Bind ShowMeta, Mode=OneWay}">
+                                    Visibility="{x:Bind GetVisibility(ShowMeta), Mode=OneWay}">
                              <TextBlock Text="{x:Bind Year, Mode=OneWay}" Foreground="#B3FFFFFF" FontSize="12"/>
-                             <TextBlock Text="•" Foreground="#4DFFFFFF" FontSize="12" Visibility="{x:Bind HasRating, Mode=OneWay}"/>
-                             <TextBlock Text="{x:Bind RatingText, Mode=OneWay}" Foreground="{ThemeResource SystemAccentColor}" FontSize="12" FontWeight="SemiBold" Visibility="{x:Bind HasRating, Mode=OneWay}"/>
+                             <TextBlock Text="•" Foreground="#4DFFFFFF" FontSize="12" Visibility="{x:Bind GetVisibility(RatingText), Mode=OneWay}"/>
+                             <TextBlock Text="{x:Bind RatingText, Mode=OneWay}" Foreground="{ThemeResource SystemAccentColor}" FontSize="12" FontWeight="SemiBold" Visibility="{x:Bind GetVisibility(RatingText), Mode=OneWay}"/>
                         </StackPanel>
                     </StackPanel>
                 </Grid>
@@ -100,11 +100,11 @@
                 </Viewbox>
 
                 <!-- Progress Bar -->
-                <ProgressBar VerticalAlignment="Bottom" Height="4" 
+                <ProgressBar VerticalAlignment="Bottom" Height="6" 
                              Value="{x:Bind ProgressValue, Mode=OneWay}" 
                              Maximum="100"
                              Foreground="{ThemeResource SystemAccentColor}"
-                             Background="#40FFFFFF"
+                             Background="#60000000"
                              BorderThickness="0"
                              Visibility="{x:Bind ShowProgress, Mode=OneWay}"/>
                 

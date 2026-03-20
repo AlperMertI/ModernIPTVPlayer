@@ -5,7 +5,12 @@
     xmlns:local="using:ModernIPTVPlayer.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:converters="using:ModernIPTVPlayer.Converters"
     mc:Ignorable="d">
+
+    <UserControl.Resources>
+        <converters:BoolToVisibleConverter x:Key="BoolToVis"/>
+    </UserControl.Resources>
 
     <Grid x:Name="RootGrid" 
           Background="Transparent" 
@@ -60,9 +65,37 @@
             </Border.Projection>
             <Grid>
                 <local:ShimmerCard x:Name="PosterShimmer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
-                <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
+                <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened" ImageFailed="Image_ImageFailed"/>
                 
-                <Grid VerticalAlignment="Bottom" 
+                <!-- IPTV Badge -->
+                <Border x:Name="IptvBadge" 
+                        Visibility="{x:Bind IsAvailableOnIptv, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                        Background="#E50914" 
+                        HorizontalAlignment="Right" 
+                        VerticalAlignment="Top" 
+                        Margin="0,8,8,0" 
+                        Padding="6,2" 
+                        CornerRadius="4"
+                        Canvas.ZIndex="10">
+                    <TextBlock Text="IPTV" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                </Border>
+
+                <!-- Center Placeholder for missing posters -->
+                <TextBlock x:Name="PlaceholderTitle"
+                           Text="{x:Bind Title, Mode=OneWay}"
+                           Foreground="#44FFFFFF"
+                           FontSize="14"
+                           FontWeight="Bold"
+                           TextWrapping="Wrap"
+                           TextAlignment="Center"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Center"
+                           Margin="12"
+                           Opacity="0.8"
+                           Visibility="Collapsed"/>
+
+                <Grid x:Name="TitleOverlay"
+                      VerticalAlignment="Bottom" 
                       Height="70" 
                       IsHitTestVisible="False"
                       Visibility="Collapsed">

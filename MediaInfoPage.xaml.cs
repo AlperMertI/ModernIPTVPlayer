@@ -2717,15 +2717,24 @@ namespace ModernIPTVPlayer
                 bool hasLogo = ContentLogoHost != null && ContentLogoHost.Visibility == Visibility.Visible;
                 if (_logoReadyTcs != null && hasLogo)
                 {
-                    await Task.WhenAny(_logoReadyTcs.Task, Task.Delay(2000));
+                    var completedTask = await Task.WhenAny(_logoReadyTcs.Task, Task.Delay(2000));
+                    bool logoLoaded = (completedTask == _logoReadyTcs.Task) && await _logoReadyTcs.Task;
+                    
+                    if (!logoLoaded)
+                    {
+                        System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Logo load FAILED or TIMED OUT. Falling back to TitleText.");
+                        hasLogo = false;
+                        if (ContentLogoHost != null) ContentLogoHost.Visibility = Visibility.Collapsed;
+                    }
                 }
 
-                if (ContentLogoHost != null) ContentLogoHost.Opacity = 1;
+                if (ContentLogoHost != null && hasLogo) ContentLogoHost.Opacity = 1;
                 if (_logoVisual != null && hasLogo) _logoVisual.Opacity = 1f;
 
                 if (TitleText != null) 
                 {
                     TitleText.Opacity = 1;
+                    // IF we have no logo (either none provided OR load failed), ensure TitleText is Visible
                     if (TitleText.Visibility != (hasLogo ? Visibility.Collapsed : Visibility.Visible))
                         TitleText.Visibility = hasLogo ? Visibility.Collapsed : Visibility.Visible;
                 }
@@ -3025,7 +3034,7 @@ namespace ModernIPTVPlayer
 
         private async Task<string> CalculateVisualSignatureAsync(Image img)
         {
-            if (img == null || img.Source == null) return null;
+            if (img == null || img.Source == null || img.XamlRoot == null || img.ActualWidth <= 1 || img.ActualHeight <= 1) return null;
 
             string url = GetImageSourceUrl(img);
             if (!string.IsNullOrEmpty(url) && _urlToSignatureCache.TryGetValue(url, out string cached))
@@ -3165,19 +3174,34 @@ namespace ModernIPTVPlayer
                 string? failingUrl = (img.Source as BitmapImage)?.UriSource?.ToString();
                 if (!string.IsNullOrEmpty(failingUrl) && failingUrl.Contains("metahub.space"))
                 {
-                    string retryUrl = failingUrl;
-                    if (failingUrl.Contains("live.metahub.space"))
-                        retryUrl = failingUrl.Replace("live.metahub.space", "images.metahub.space");
-                    else if (failingUrl.Contains("images.metahub.space"))
-                        retryUrl = failingUrl.Replace("images.metahub.space", "live.metahub.space");
-
-                    if (retryUrl != failingUrl)
+                    // [FIX] Prevent infinite MetaHub retry loops
+                    int retryCount = (img.Tag as int?) ?? 0;
+                    if (retryCount == -1)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Retrying MetaHub with alternative domain: {retryUrl}");
-                        // Unsubscribe temporarily to avoid potential loops if failure is immediate, 
-                        // though WinUI ImageFailed handles this gracefully usually.
-                        img.Source = new BitmapImage(new Uri(retryUrl));
-                        return; // Wait for next load result
+                        System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Already failed fallback for: {failingUrl}. Stopping.");
+                        return;
+                    }
+
+                    if (retryCount >= 1)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Giving up on MetaHub after retry for: {failingUrl}");
+                        img.Tag = -1; // Mark as "tried alternative domain and failed"
+                    }
+                    else
+                    {
+                        string retryUrl = failingUrl;
+                        if (failingUrl.Contains("live.metahub.space"))
+                            retryUrl = failingUrl.Replace("live.metahub.space", "images.metahub.space");
+                        else if (failingUrl.Contains("images.metahub.space"))
+                            retryUrl = failingUrl.Replace("images.metahub.space", "live.metahub.space");
+
+                        if (retryUrl != failingUrl)
+                        {
+                            img.Tag = retryCount + 1;
+                            System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Retrying MetaHub ({img.Tag}) with alternative domain: {retryUrl}");
+                            img.Source = new BitmapImage(new Uri(retryUrl));
+                            return; // Wait for next load result
+                        }
                     }
                 }
                 
@@ -3185,6 +3209,7 @@ namespace ModernIPTVPlayer
                 if (_backdropUrls != null && _backdropUrls.Count > 1)
                 {
                     System.Diagnostics.Debug.WriteLine("[SLIDESHOW] Skipping to next image due to load failure.");
+                    img.Tag = 0; // Reset for next image
                     _slideshowTimer?.Stop();
                     _slideshowTimer?.Start(); // Immediate-ish tick
                     
@@ -3201,6 +3226,7 @@ namespace ModernIPTVPlayer
                         string currentUrl = (img.Source as BitmapImage)?.UriSource?.ToString();
                         if (!string.Equals(currentUrl, fallbackPoster, StringComparison.OrdinalIgnoreCase))
                         {
+                            img.Tag = -1; // Mark that we are now trying the absolute final fallback
                             img.Source = new BitmapImage(new Uri(fallbackPoster));
                             img.Opacity = 1;
                             System.Diagnostics.Debug.WriteLine($"[SLIDESHOW] Applied poster fallback after image failure: {fallbackPoster}");
@@ -5785,6 +5811,56 @@ namespace ModernIPTVPlayer
                 }
 
                 var tasks = new List<Task>();
+
+                // [IPTV VOD INTEGRATION] Add IPTV as a source if the item is flagged
+                if (_item.IsAvailableOnIptv)
+                {
+                    tasks.Add(Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var playlistId = App.CurrentLogin?.PlaylistUrl ?? "default";
+                            IEnumerable<IMediaStream>? iptvItems = null;
+
+                            if (type == "movie") 
+                                iptvItems = await ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "vod_streams");
+                            else 
+                                iptvItems = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series_streams");
+
+                            if (iptvItems != null)
+                            {
+                                var match = iptvItems.FirstOrDefault(x => 
+                                    (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == _item.IMDbId) || 
+                                    (x.Title.Replace(" ", "").ToLower() == _item.Title.Replace(" ", "").ToLower()));
+
+                                if (match != null)
+                                {
+                                    var iptvStream = new StremioStreamViewModel
+                                    {
+                                        Title = match.Title,
+                                        ProviderText = "IPTV",
+                                        AddonName = "IPTV",
+                                        Url = match.StreamUrl,
+                                        IsCached = true,
+                                        Quality = "FHD",
+                                        IsActive = !string.IsNullOrEmpty(lastStreamUrl) && match.StreamUrl == lastStreamUrl
+                                    };
+
+                                    var iptvAddon = new StremioAddonViewModel { Name = "IPTV", Streams = new List<StremioStreamViewModel> { iptvStream }, IsLoading = false, SortIndex = -1 };
+                                    dispatcherQueue.TryEnqueue(() => 
+                                    {
+                                        if (_addonResults != null)
+                                        {
+                                            _addonResults.Insert(0, iptvAddon);
+                                            if (AddonSelectorList.SelectedItem == null) AddonSelectorList.SelectedItem = iptvAddon;
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                        catch { /* Silent IPTV Fail */ }
+                    }));
+                }
                 
                 for (int i = 0; i < addons.Count; i++)
                 {
@@ -5798,29 +5874,7 @@ namespace ModernIPTVPlayer
                             var manifest = await Services.Stremio.StremioService.Instance.GetManifestAsync(baseUrl);
                             if (manifest == null) return;
 
-                            bool handled = true;
-                            if (manifest.Resources != null && manifest.Resources.Count > 0)
-                            {
-                                bool hasStream = false;
-                                bool isSimpleList = true;
-                                foreach (var r in manifest.Resources)
-                                {
-                                    if (r is string s && s == "stream") hasStream = true;
-                                    else if (r is JsonElement je)
-                                    {
-                                        if (je.ValueKind == JsonValueKind.String && je.GetString() == "stream") hasStream = true;
-                                        else if (je.ValueKind == JsonValueKind.Object)
-                                        {
-                                            if (je.TryGetProperty("name", out var nameProp) && nameProp.GetString() == "stream") hasStream = true;
-                                            isSimpleList = false;
-                                        }
-                                    }
-                                    else isSimpleList = false;
-                                }
-                                if (isSimpleList && !hasStream) handled = false;
-                            }
-
-                            if (!handled) return;
+                            if (!Services.Stremio.StremioAddonManager.Instance.SupportsResource(baseUrl, "stream")) return;
 
                             string addonDisplayName = NormalizeAddonText(manifest.Name ?? baseUrl.Replace("https://", "").Replace("http://", "").Split('/')[0]);
                             var streams = await Services.Stremio.StremioService.Instance.GetStreamsAsync(new List<string> { baseUrl }, type, resolvedVideoId);
@@ -8322,24 +8376,47 @@ namespace ModernIPTVPlayer
             if (string.IsNullOrEmpty(url) || _compositor == null) return;
             
             // Redundancy guard
-            if (_currentLogoUrl == url && _logoSurface != null) return;
+            if (_currentLogoUrl == url) return;
             _currentLogoUrl = url;
 
+            // Reset existing state
             if (_logoSurface != null)
             {
                 _logoSurface.Dispose();
                 _logoSurface = null;
             }
+            if (ContentLogoImage != null) ContentLogoImage.Source = null;
 
             _logoReadyTcs = new TaskCompletionSource<bool>();
 
             try
             {
-                _logoSurface = LoadedImageSurface.StartLoadFromUri(new Uri(url));
-                _logoSurface.LoadCompleted += (s, e) => {
-                    _logoReadyTcs?.TrySetResult(e.Status == LoadedImageSourceLoadStatus.Success);
-                };
-                if (_logoBrush != null) _logoBrush.Surface = _logoSurface;
+                if (url.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+                {
+                    // [FIX] Support SVG logos using SvgImageSource (WinUI 3 native)
+                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Loading SVG Logo: {url}");
+                    var svgSource = new SvgImageSource(new Uri(url));
+                    ContentLogoImage.Source = svgSource;
+                    ContentLogoImage.Visibility = Visibility.Visible;
+                    
+                    if (_logoVisual != null) _logoVisual.Opacity = 0; // Hide composition visual for SVG
+                    
+                    svgSource.Opened += (s, e) => _logoReadyTcs?.TrySetResult(true);
+                    svgSource.OpenFailed += (s, e) => _logoReadyTcs?.TrySetResult(false);
+                }
+                else
+                {
+                    // Standard Image Loading (Composition-based for performance/flicker-free)
+                    ContentLogoImage.Visibility = Visibility.Collapsed;
+                    if (_logoVisual != null) _logoVisual.Opacity = 1;
+
+                    _logoSurface = LoadedImageSurface.StartLoadFromUri(new Uri(url));
+                    _logoSurface.LoadCompleted += (s, e) => {
+                        _logoReadyTcs?.TrySetResult(e.Status == LoadedImageSourceLoadStatus.Success);
+                    };
+                    if (_logoBrush != null) _logoBrush.Surface = _logoSurface;
+                }
+                
                 System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Logo surface assigned for: {url}");
             }
             catch (Exception ex)

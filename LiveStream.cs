@@ -18,7 +18,10 @@ namespace ModernIPTVPlayer
     {
         // IMediaStream Implementation
         public int Id => StreamId;
-        public string? IMDbId => null;
+        
+        [JsonPropertyName("imdb_id")]
+        public string? ImdbId { get; set; }
+        public string? IMDbId => ImdbId;
         public string Title => Name;
         public string? Description => null;
         public string PosterUrl => IconUrl;
@@ -74,6 +77,7 @@ namespace ModernIPTVPlayer
 
         public string SourceBadgeText => "IPTV";
         public bool ShowSourceBadge => true;
+        public bool IsAvailableOnIptv { get; set; } = true;
         
         // ==========================================
         // PROBING METADATA (Dynamic)

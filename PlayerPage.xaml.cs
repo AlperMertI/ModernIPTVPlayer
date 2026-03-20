@@ -1311,8 +1311,7 @@ namespace ModernIPTVPlayer
                  // 1. Search for stream for next episode
                  string type = "series";
                  string id = $"{_navArgs.ParentId}:{_nextEpisode.SeasonNumber}:{_nextEpisode.EpisodeNumber}";
-                 
-                 var addonUrls = Services.Stremio.StremioAddonManager.Instance.GetAddons();
+                 var addonUrls = Services.Stremio.StremioAddonManager.Instance.GetAddonsByResource("stream");
                  var streams = await Services.Stremio.StremioService.Instance.GetStreamsAsync(addonUrls, type, id);
                  
                  if (streams == null || streams.Count == 0)

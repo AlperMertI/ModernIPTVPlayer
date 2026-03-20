@@ -6,10 +6,14 @@ using System;
 using System.Linq;
 using System.Numerics;
 using Microsoft.UI.Composition;
+using Windows.Foundation.Collections;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
+using ModernIPTVPlayer.Services;
+using ModernIPTVPlayer.Models;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Windowing;
 using System.Threading.Tasks;
-using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer
 {
@@ -282,10 +286,35 @@ namespace ModernIPTVPlayer
             if (sender is RadioButton btn && btn.Tag is string tag)
             {
                 Type? pageType = GetPageTypeFromTag(tag);
-                if (pageType != null && ContentFrame.CurrentSourcePageType != pageType)
+                if (pageType != null)
                 {
-                    ContentFrame.Navigate(pageType, App.CurrentLogin);
+                    if (tag == "MoviesPage" || tag == "SeriesPage")
+                    {
+                        var targetType = tag == "MoviesPage" ? MediaType.Movie : MediaType.Series;
+                        
+                        // If we're already on a MediaLibraryPage, just switch the type for fast loading
+                        if (ContentFrame.Content is MediaLibraryPage mlp)
+                        {
+                            if (mlp.MediaType != targetType)
+                            {
+                                mlp.SwitchMediaType(targetType);
+                            }
+                            // Important: We return here as we've handled the "navigation" internally
+                            UpdatePillPosition(btn);
+                            return;
+                        }
+                        else
+                        {
+                            var args = new MediaLibraryArgs { Type = targetType };
+                            ContentFrame.Navigate(pageType, args);
+                        }
+                    }
+                    else if (ContentFrame.CurrentSourcePageType != pageType)
+                    {
+                        ContentFrame.Navigate(pageType, App.CurrentLogin);
+                    }
                 }
+
                 UpdatePillPosition(btn);
             }
         }
@@ -455,14 +484,10 @@ namespace ModernIPTVPlayer
         // Global Back Handler logic (Can be called from a Back Button if added, or keyboard shortcut)
         public void TryGoBack()
         {
-            // Check if current page handles back request (e.g. Closing Search)
-            if (ContentFrame.Content is MoviesPage moviesPage)
+            // Check if current page handles back request
+            if (ContentFrame.Content is MediaLibraryPage libPage)
             {
-                if (moviesPage.HandleBackRequest()) return;
-            }
-            else if (ContentFrame.Content is SeriesPage seriesPage)
-            {
-                if (seriesPage.HandleBackRequest()) return;
+                if (libPage.HandleBackRequest()) return;
             }
 
             if (ContentFrame.CanGoBack)
@@ -795,13 +820,13 @@ namespace ModernIPTVPlayer
             {
                 "LoginPage" => typeof(LoginPage),
                 "LiveTVPage" => typeof(LiveTVPage),
-                "MoviesPage" => typeof(MoviesPage),
-                "SeriesPage" => typeof(SeriesPage),
+                "MoviesPage" => typeof(MediaLibraryPage),
+                "SeriesPage" => typeof(MediaLibraryPage),
                 "MultiPlayerPage" => typeof(MultiPlayerPage),
                 "AddonsPage" => typeof(Pages.AddonsPage),
                 "WatchlistPage" => typeof(WatchlistPage),
                 "SettingsPage" => typeof(SettingsPage),
-                _ => typeof(MoviesPage) // Default fallback
+                _ => typeof(MediaLibraryPage) // Default fallback
             };
         }
 

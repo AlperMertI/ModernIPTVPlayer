@@ -16,6 +16,7 @@
             <local:PosterCard ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" 
                               ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
                               ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
+                              IsAvailableOnIptv="{x:Bind IsAvailableOnIptv, Mode=OneWay}"
                               Width="172" Height="252" 
                               HoverStarted="PosterCard_HoverStarted" 
                               HoverEnded="PosterCard_HoverEnded"
@@ -25,7 +26,7 @@
         <DataTemplate x:Key="LandscapeCardTemplate" x:DataType="stremioModels:StremioMediaStream">
             <local:LandscapeCard ImageUrl="{x:Bind LandscapeImageUrl, Mode=OneWay}" 
                                  Title="{x:Bind Title, Mode=OneWay}"
-                                 Subtext="{x:Bind Genres, Mode=OneWay}"
+                                 Subtext="{x:Bind DisplaySubtext, Mode=OneWay}"
                                  Year="{x:Bind Year, Mode=OneWay}"
                                  RatingText="{x:Bind Rating, Mode=OneWay}"
                                  ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
@@ -76,6 +77,7 @@
                   IsItemClickEnabled="False"
                   ItemTemplateSelector="{StaticResource DiscoveryRowTemplateSelector}"
                   Padding="0,0,0,48"
+                  Background="Transparent"
                   Loaded="DiscoveryRows_Loaded">
             <ListView.Header>
                 <local:HeroSectionControl x:Name="HeroControl" />

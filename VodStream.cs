@@ -29,6 +29,7 @@ namespace ModernIPTVPlayer
 
         public string SourceBadgeText => "IPTV";
         public bool ShowSourceBadge => true;
+        public bool IsAvailableOnIptv { get; set; } = true;
         
         // Custom
         public string Year { get; set; } 

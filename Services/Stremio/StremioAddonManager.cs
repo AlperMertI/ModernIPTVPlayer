@@ -203,6 +203,61 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
         }
         
+        public List<string> GetAddonsByResource(string resourceName)
+        {
+            var result = new List<string>();
+            lock (_addonLock)
+            {
+                foreach (var url in _addonUrls)
+                {
+                    if (SupportsResourceInternal(url, resourceName))
+                    {
+                        result.Add(url);
+                    }
+                }
+            }
+            return result;
+        }
+
+        public bool SupportsResource(string url, string resourceName)
+        {
+            lock (_addonLock)
+            {
+                return SupportsResourceInternal(url, resourceName);
+            }
+        }
+
+        private bool SupportsResourceInternal(string url, string resourceName)
+        {
+            if (!_manifestCache.TryGetValue(url, out var manifest) || manifest == null)
+            {
+                // Fallback: If no manifest cached yet, assume official-looking ones support catalog/meta
+                bool looksOfficial = url.Contains("cinemeta") || url.Contains("strem.io");
+                return looksOfficial;
+            }
+
+            if (manifest.Resources == null) return false;
+
+            foreach (var res in manifest.Resources)
+            {
+                if (res.ValueKind == JsonValueKind.String)
+                {
+                    if (string.Equals(res.GetString(), resourceName, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+                else if (res.ValueKind == JsonValueKind.Object)
+                {
+                    if (res.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String)
+                    {
+                        if (string.Equals(nameProp.GetString(), resourceName, StringComparison.OrdinalIgnoreCase))
+                            return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+        
         public List<(string BaseUrl, StremioManifest Manifest)> GetAddonsWithManifests()
         {
             var list = new List<(string, StremioManifest)>();

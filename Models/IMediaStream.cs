@@ -6,12 +6,14 @@ namespace ModernIPTVPlayer.Models
     {
         int Id { get; }
         string? IMDbId { get; }
+        bool IsAvailableOnIptv { get; set; }
         string Title { get; }
         string? Description { get; }
         string PosterUrl { get; }
         string? BackdropUrl { get; }
         string Rating { get; }
         string? Type { get; }
+        string Year { get; }
         string StreamUrl { get; set; }
         TmdbMovieResult TmdbInfo { get; set; }
 
@@ -55,5 +57,12 @@ namespace ModernIPTVPlayer.Models
             PreloadedImage = preloadedImage;
             PreloadedLogo = preloadedLogo;
         }
+    }
+    public enum MediaType { Movie, Series }
+
+    public class MediaLibraryArgs
+    {
+        public MediaType Type { get; set; }
+        public string? InitialCategoryId { get; set; }
     }
 }

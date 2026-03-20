@@ -18,6 +18,7 @@ namespace ModernIPTVPlayer
         private static readonly ConcurrentDictionary<string, (Color Primary, Color Secondary)> _colorCache = new();
         private static readonly ConcurrentDictionary<string, BitmapImage> _logoCache = new();
         private static readonly Random _random = new Random();
+        private static readonly System.Threading.SemaphoreSlim _decodeSemaphore = new System.Threading.SemaphoreSlim(2);
 
         private static readonly int MAX_LOGO_CACHE_SIZE = 120;
 
@@ -100,52 +101,61 @@ namespace ModernIPTVPlayer
 
         private static async Task<(Color Primary, Color Secondary)> ExtractDominantColorsAsync(string imageUrl)
         {
+            await _decodeSemaphore.WaitAsync();
             try
             {
-                // Use HttpHelper.Client for better headers and reliability
                 using var response = await HttpHelper.Client.GetAsync(imageUrl);
                 response.EnsureSuccessStatusCode();
 
-                using var stream = await response.Content.ReadAsStreamAsync();
-                using var memStream = new InMemoryRandomAccessStream();
-                await stream.CopyToAsync(memStream.AsStreamForWrite());
-                memStream.Seek(0);
-
-                var decoder = await BitmapDecoder.CreateAsync(memStream);
-
-                uint targetSize = 50;
-                var transform = new BitmapTransform
+                using (var stream = await RandomAccessStreamReference.CreateFromUri(new Uri(imageUrl)).OpenReadAsync())
                 {
-                    ScaledWidth = targetSize,
-                    ScaledHeight = targetSize,
-                    InterpolationMode = BitmapInterpolationMode.Linear
-                };
+                    if (stream == null || stream.Size == 0) return (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
+                    
+                    var decoder = await BitmapDecoder.CreateAsync(stream);
 
-                var pixelData = await decoder.GetPixelDataAsync(
-                    BitmapPixelFormat.Bgra8,
-                    BitmapAlphaMode.Premultiplied,
-                    transform,
-                    ExifOrientationMode.IgnoreExifOrientation,
-                    ColorManagementMode.DoNotColorManage);
+                    uint targetSize = 50;
+                    var transform = new BitmapTransform
+                    {
+                        ScaledWidth = targetSize,
+                        ScaledHeight = targetSize,
+                        InterpolationMode = BitmapInterpolationMode.Linear
+                    };
 
-                var pixels = pixelData.DetachPixelData();
-                int width = (int)targetSize;
-                int height = (int)targetSize;
+                    var pixelData = await decoder.GetPixelDataAsync(
+                        BitmapPixelFormat.Bgra8,
+                        BitmapAlphaMode.Premultiplied,
+                        transform,
+                        ExifOrientationMode.IgnoreExifOrientation,
+                        ColorManagementMode.DoNotColorManage);
 
-                var (color1, ratio1, color2, ratio2) = FindTopTwoColorsWithRatios(pixels, width, height);
+                    var pixels = pixelData.DetachPixelData();
+                    int width = (int)targetSize;
+                    int height = (int)targetSize;
 
-                // Randomly decide which side gets the dominant color
-                bool dominantOnLeft = _random.Next(2) == 0;
+                    var (color1, ratio1, color2, ratio2) = FindTopTwoColorsWithRatios(pixels, width, height);
 
-                if (dominantOnLeft)
-                    return (color1, color2);
-                else
-                    return (color2, color1);
+                    // Randomly decide which side gets the dominant color
+                    bool dominantOnLeft = _random.Next(2) == 0;
+
+                    if (dominantOnLeft)
+                        return (color1, color2);
+                    else
+                        return (color2, color1);
+                }
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"COLOR EXTRACTION FAILED: {ex.Message}");
+                string hResult = string.Format("0x{0:X}", ex.HResult);
+                System.Diagnostics.Debug.WriteLine($"[ImageHelper] !!! COLOR EXTRACTION FAILED for {imageUrl}");
+                System.Diagnostics.Debug.WriteLine($"[ImageHelper] Type: {ex.GetType().Name}, HResult: {hResult}");
+                System.Diagnostics.Debug.WriteLine($"[ImageHelper] Message: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[ImageHelper] StackTrace: {ex.StackTrace}");
+                
                 return (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
+            }
+            finally
+            {
+                _decodeSemaphore.Release();
             }
         }
 

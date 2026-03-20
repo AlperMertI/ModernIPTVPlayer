@@ -203,6 +203,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                     }
                     catch (Exception ex)
                     {
+                        // Barebones penalty: Log the error and return an empty list for this addon
                         System.Diagnostics.Debug.WriteLine($"[StremioService] Error fetching streams from {baseUrl}: {ex.Message}");
                     }
                     return new List<StremioStream>();
@@ -222,24 +223,72 @@ namespace ModernIPTVPlayer.Services.Stremio
         // ==========================================
         // 5. SEARCH (Multi-Addon)
         // ==========================================
-        public async Task<List<StremioMediaStream>> SearchAsync(string query)
+        public async Task<List<StremioMediaStream>> SearchAsync(string query, Action<List<StremioMediaStream>>? onResultsFound = null)
         {
             if (string.IsNullOrWhiteSpace(query)) return new List<StremioMediaStream>();
-
+            
             // Get all active addons with their manifests
             var addons = StremioAddonManager.Instance.GetAddonsWithManifests();
             var tasks = new List<Task<List<StremioMediaStream>>>();
             string encodedQuery = Uri.EscapeDataString(query);
 
+            // [VOD/SERIES INTEGRATION] Start IPTV VOD/Series search from cache in parallel
+            var playlistId = App.CurrentLogin?.PlaylistUrl ?? "default";
+            var iptvVodTask = ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "vod_streams");
+            var iptvSeriesTask = ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series_streams");
+
+            var allResults = new List<StremioMediaStream>();
+
+            // [NEW] Local function for IPTV matching (moved from end to beginning)
+            void ProcessIptvMatch(IEnumerable<IMediaStream>? iptvItems, string query)
+            {
+                if (iptvItems == null) return;
+                var matches = iptvItems.Where(x => x.Title.Contains(query, StringComparison.OrdinalIgnoreCase)).ToList();
+                foreach (var iptv in matches)
+                {
+                    string iptvNorm = NormalizeTitle(iptv.Title);
+                    // Match by IMDb ID (Strongest) or Normalized Title
+                    var existing = allResults.FirstOrDefault(x => 
+                        (!string.IsNullOrEmpty(x.IMDbId) && !string.IsNullOrEmpty(iptv.IMDbId) && x.IMDbId == iptv.IMDbId) ||
+                        (NormalizeTitle(x.Title) == iptvNorm)
+                    );
+
+                    if (existing != null)
+                    {
+                        existing.IsAvailableOnIptv = true;
+                    }
+                    else
+                    {
+                        // Standalone IPTV VOD/Series result
+                        var iptvStream = new StremioMediaStream
+                        {
+                            Title = iptv.Title,
+                            IsIptv = true,
+                            IsAvailableOnIptv = true,
+                            PosterUrl = iptv.PosterUrl,
+                            Type = iptv.Type ?? "movie",
+                            IMDbIdRaw = iptv.IMDbId // Use Raw property to set it
+                        };
+                        allResults.Add(iptvStream);
+                    }
+                }
+            }
+
+            // [NEW] Await and process IPTV immediately for instant results
+            var iptvVods = await iptvVodTask;
+            var iptvSeries = await iptvSeriesTask;
+            ProcessIptvMatch(iptvVods, query);
+            ProcessIptvMatch(iptvSeries, query);
+
+            if (allResults.Count > 0 && onResultsFound != null)
+            {
+                onResultsFound(DeduplicateAndRank(allResults, query));
+            }
+
             foreach (var (baseUrl, manifest) in addons)
             {
                 if (manifest?.Catalogs == null) continue;
 
-                // Find catalogs that support search (extra: "search" or "name": "search" in extra items)
-                // If an addon doesn't explicitly advertise search in extra, we generally skip it or try 'top' if desperately needed, 
-                // but probing 'top' for search usually causes 404s.
-                // Standard: "extra": [ { "name": "search", "isRequired": false } ]
-                
                 var searchCatalogs = manifest.Catalogs.Where(c => 
                     (c.Type == "movie" || c.Type == "series") && 
                     c.Extra != null && 
@@ -254,13 +303,11 @@ namespace ModernIPTVPlayer.Services.Stremio
                     {
                         try
                         {
+                            // 8s timeout per addon search
+                            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(8));
                             var root = await GetCatalogAsync(url);
-                            var items = root?.Metas?.Select(m => new StremioMediaStream(m) { SourceAddon = baseUrl }).ToList() ?? new List<StremioMediaStream>();
+                            var items = root?.Metas?.Select((m, index) => new StremioMediaStream(m) { SourceAddon = baseUrl, SourceIndex = index }).ToList() ?? new List<StremioMediaStream>();
                             return items;
-                        }
-                        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-                        {
-                            return new List<StremioMediaStream>();
                         }
                         catch (Exception ex)
                         {
@@ -271,26 +318,54 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
             }
 
-            var resultsArray = await Task.WhenAll(tasks);
+            var remainingTasks = new HashSet<Task<List<StremioMediaStream>>>(tasks);
 
-            // Flatten
-            var allResults = resultsArray.SelectMany(x => x).ToList();
-
-            // Update Global Index
-            lock (_indexLock)
+            while (remainingTasks.Count > 0)
             {
-                foreach (var stream in allResults) IndexStreamInternal(stream);
+                var completedTask = await Task.WhenAny(remainingTasks);
+                remainingTasks.Remove(completedTask);
+
+                try
+                {
+                    var results = await completedTask;
+                    if (results != null && results.Count > 0)
+                    {
+                        lock (_indexLock)
+                        {
+                            foreach (var stream in results) IndexStreamInternal(stream);
+                        }
+
+                        // Deduplicate against already found results
+                        var newUniqueResults = new List<StremioMediaStream>();
+                        foreach (var item in results)
+                        {
+                            string normTitle = NormalizeTitle(item.Title);
+                            var existing = allResults.FirstOrDefault(x => IsMatch(x, item, normTitle));
+                            if (existing != null)
+                            {
+                                MergeItems(existing, item);
+                            }
+                            else
+                            {
+                                allResults.Add(item);
+                                newUniqueResults.Add(item);
+                            }
+                        }
+
+                        if (onResultsFound != null)
+                        {
+                            // Report latest ranked results (includes IPTV and all addons found so far)
+                            // We call this every time any results arrive, because merging might have improved the rank of existing items
+                            onResultsFound(DeduplicateAndRank(allResults, query));
+                        }
+                    }
+                }
+                catch { /* Ignore Individual Addon Failures */ }
             }
 
-            // DEBUG: Log Raw Results
-            System.Diagnostics.Debug.WriteLine($"[StremioService] Total Raw Results: {allResults.Count}");
-            foreach (var item in allResults)
-            {
-                System.Diagnostics.Debug.WriteLine($"[RawResult] Source: '{item.SourceAddon}' | Title: '{item.Title}' | Year: '{item.Year}' | ID: '{item.IMDbId}' | Type: '{item.Type}'");
-            }
-
-            // Deduplicate & Rank
-            return DeduplicateAndRank(allResults, query);
+            var finalResults = DeduplicateAndRank(allResults, query);
+            onResultsFound?.Invoke(finalResults); // Final definitive update
+            return finalResults;
         }
 
         // ==========================================
@@ -443,8 +518,107 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
             }
 
-            // Returning unique items exactly as they came from addons (Zero Logic)
-            return uniqueItems;
+            // Deduplicate and Rank based on Weighted Score (Relevance + Popularity)
+            var sorted = uniqueItems
+                .OrderByDescending(x => CalculateRankWeight(x, query))
+                .ThenByDescending(x => GetYearDigits(x.Year)) // Recency tie-breaker
+                .ToList();
+
+            // [DEBUG] Log Top 10 Results with Extensive Breakdown
+            System.Diagnostics.Debug.WriteLine($"\n[SEARCH_RANK] Query: '{query}' | Total: {sorted.Count}");
+            int rank = 1;
+            foreach (var x in sorted.Take(10))
+            {
+                double baseS = GetScore(x, query);
+                double s = baseS * 3.0; // [REFINED] Higher multiplier for base relevance
+                string normQ = NormalizeTitle(query);
+                string normT = NormalizeTitle(x.Title);
+                double lp = (normT.Length - normQ.Length) * 3.5; 
+                double pp = StremioMediaStream.IsPosterValid(x.PosterUrl) ? 0 : 1000;
+                double ib = Math.Max(0, (25 - x.SourceIndex) * 3.0);
+                double rawRating = ParseRating(x.Rating);
+                double er = (rawRating <= 0) ? 6.0 : rawRating; 
+                double rb = er * 10.0;
+                if (rawRating > 0 && rawRating < 4.5) rb -= 100;
+                else if (rawRating >= 7.5) rb += 25;
+                double sb = (x.SourceAddon?.Contains("cinemeta") == true) ? 50 : 0;
+                double qb = (!string.IsNullOrEmpty(x.Description) && !string.IsNullOrEmpty(x.PosterUrl)) ? 5 : 0;
+                double recb = 0;
+                if (int.TryParse(GetYearDigits(x.Year), out int y))
+                {
+                   int currentYear = DateTime.Now.Year;
+                   if (y > currentYear + 1) recb = -100;
+                   else if (y >= 2000) recb = (Math.Min(y, currentYear) - 2000) * 0.2; 
+                   else if (y >= 1970) recb = (y - 1970) * 0.05;
+                }
+                double tb = (x.Type == "movie") ? 40 : 0;
+                
+                // [REFINED] Lower penalties for missing info (10 vs 50)
+                double mp = 0;
+                if (string.IsNullOrEmpty(x.Description)) mp += 10;
+                if (rawRating <= 0) mp += 10;
+
+                double final = CalculateRankWeight(x, query);
+                
+                System.Diagnostics.Debug.WriteLine($" #{rank++} | Score:{final,5:F1} | {x.Title} ({x.Year}) | MetaID: {x.Meta?.Id} (Hash: {x.Id})");
+                System.Diagnostics.Debug.WriteLine($"     > IPTV: {x.IsAvailableOnIptv} | Addon: {x.SourceAddon}");
+                System.Diagnostics.Debug.WriteLine($"     > Rel:{s,3:F0} LPen:{lp,3:F1} PPen:{pp,4:F0} IdxB:{ib,3:F1} RatB:{rb,3:F0} SrcB:{sb,2:F0} Qual:{qb,2:F0} YearB:{recb,3:F1} TypeB:{tb,2:F0} MetaP:{mp,3:F0} (Idx:{x.SourceIndex})");
+            }
+            System.Diagnostics.Debug.WriteLine("------------------------------------------\n");
+
+            return sorted;
+        }
+
+        private double CalculateRankWeight(StremioMediaStream x, string query)
+        {
+            double score = GetScore(x, query); // Base relevance (Exact=100, NormalizedStartsWith=98)
+            
+            // [CRITICAL] Length-based Similarity Penalty:
+            // Favor shorter titles but less aggressively than before (3.5x instead of 8.0x)
+            string normQ = NormalizeTitle(query);
+            string normT = NormalizeTitle(x.Title);
+            double lengthPenalty = (normT.Length - normQ.Length) * 3.5; 
+            
+            // [CRITICAL] Massive Poster Penalty:
+            // Results without posters must stay at the bottom.
+            double posterPenalty = StremioMediaStream.IsPosterValid(x.PosterUrl) ? 0 : 1000;
+
+            // Popularity Boost: Addons rank by popularity.
+            double indexBoost = Math.Max(0, (25 - x.SourceIndex) * 3.0);
+            
+            // Rating Boost & Quality Filter (Aggressive)
+            double rawRating = ParseRating(x.Rating);
+            double effectiveRating = (rawRating <= 0) ? 6.0 : rawRating; 
+            double ratingBoost = effectiveRating * 10.0;
+            
+            if (rawRating > 0 && rawRating < 4.5) ratingBoost -= 100;
+            else if (rawRating >= 7.5) ratingBoost += 25;
+            
+            // Primary Source Boost (Cinemeta): Source of truth for major franchises.
+            double sourceBoost = (x.SourceAddon?.Contains("cinemeta") == true) ? 50 : 0;
+            
+            // Content Quality Boost
+            double qualityBoost = (!string.IsNullOrEmpty(x.Description) && !string.IsNullOrEmpty(x.PosterUrl)) ? 5 : 0;
+
+            // Linear Recency Boost (Subtle Tie-Breaker):
+            double recencyBoost = 0;
+            if (int.TryParse(GetYearDigits(x.Year), out int y))
+            {
+                int currentYear = DateTime.Now.Year;
+                if (y > currentYear + 1) recencyBoost = -100; // Future/Placeholder Penalty
+                else if (y >= 2000) recencyBoost = (Math.Min(y, currentYear) - 2000) * 0.2; 
+                else if (y >= 1970) recencyBoost = (y - 1970) * 0.05;
+            }
+
+            // Movie vs Series Bias: Favor films significantly for general searches
+            double typeBoost = (x.Type == "movie") ? 40 : 0;
+
+            // Metadata Completion Penalty: Cumulative penalty for missing info
+            double metaPenalty = 0;
+            if (string.IsNullOrEmpty(x.Description)) metaPenalty += 10;
+            if (rawRating <= 0) metaPenalty += 10;
+
+            return (score * 3.0) + indexBoost + ratingBoost + sourceBoost + qualityBoost + recencyBoost + typeBoost - lengthPenalty - posterPenalty - metaPenalty;
         }
 
         private void IndexStreamInternal(StremioMediaStream stream)
@@ -566,12 +740,18 @@ namespace ModernIPTVPlayer.Services.Stremio
             // But replacing the object in the list is hard with this reference.
             // Instead, copy property values FROM current TO existing.
 
+            // [NEW] Rank Preference: Keep the best SourceIndex/Addon for the final rank
+            if (current.SourceIndex < existing.SourceIndex)
+            {
+                existing.SourceIndex = current.SourceIndex;
+                existing.SourceAddon = current.SourceAddon;
+            }
+
             if (!existingIsCinemeta && currentIsCinemeta)
             {
                 // Swap core identities to use the "better" source
                 existing.Meta.Id = current.Meta.Id; // Use the tt ID
                 existing.Meta.Type = current.Meta.Type; 
-                // existing.SourceAddon = current.SourceAddon; // Maybe?
             }
 
             // Keep identifier hints from any source. These are critical for later canonical ID resolution.
@@ -588,9 +768,25 @@ namespace ModernIPTVPlayer.Services.Stremio
                                           System.Text.RegularExpressions.Regex.IsMatch(existing.Meta.Website, @"tt\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             bool currentWebsiteHasImdb = !string.IsNullOrWhiteSpace(current.Meta.Website) &&
                                          System.Text.RegularExpressions.Regex.IsMatch(current.Meta.Website, @"tt\d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
             if ((!existingWebsiteHasImdb && currentWebsiteHasImdb) || string.IsNullOrWhiteSpace(existing.Meta.Website))
             {
                 existing.Meta.Website = current.Meta.Website;
+            }
+
+            // [NEW] Poster Preference: Always take the poster if existing is missing it
+            if (!StremioMediaStream.IsPosterValid(existing.PosterUrl) && StremioMediaStream.IsPosterValid(current.PosterUrl))
+            {
+                existing.Meta.Poster = current.Meta.Poster;
+            }
+
+            // [IPTV Integration] Propagate flag
+            existing.IsAvailableOnIptv |= current.IsAvailableOnIptv;
+
+            // [NEW] Description Preference: Take if existing is missing it
+            if (string.IsNullOrEmpty(existing.Description) && !string.IsNullOrEmpty(current.Description))
+            {
+                existing.Meta.Description = current.Description;
             }
 
             if (existing.Meta.MovieDbId == null && current.Meta.MovieDbId != null)
@@ -673,20 +869,51 @@ namespace ModernIPTVPlayer.Services.Stremio
             if (string.IsNullOrEmpty(item.Title)) return 0;
             
             string title = item.Title.Trim();
-            string q = query.Trim();
+            string q = query.Trim().ToLowerInvariant();
+            string lowTitle = title.ToLowerInvariant();
 
-            if (title.Equals(q, StringComparison.OrdinalIgnoreCase)) return 100; // Exact
-            if (title.StartsWith(q, StringComparison.OrdinalIgnoreCase)) return 50; // Starts With
-            if (title.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0) return 10; // Contains (Relaxed)
-            
-            // fuzzy match or split words?
+            // Normalized variants (no spaces, no punctuation)
+            string normQuery = NormalizeTitle(q);
+            string normTitle = NormalizeTitle(lowTitle);
+
+            // 1. Normalized Exact Match (e.g. "spider-man" == "spider man")
+            if (normTitle == normQuery) return 100;
+
+            // 2. Normalized Starts With (Very high relevance for sequels)
+            if (normTitle.StartsWith(normQuery)) return 98;
+
+            // 3. Exact Match (Standard) or stripped article match
+            if (lowTitle == q || StripLeadingArticles(lowTitle) == q) return 100;
+
+            // 4. Word-based "Starts With" (on original title words)
+            var titleWords = title.Split(new[] { ' ', '-', ':', '.' }, StringSplitOptions.RemoveEmptyEntries);
+            if (titleWords.Any(w => w.StartsWith(q, StringComparison.OrdinalIgnoreCase))) return 90;
+
+            // 5. Normalized Contains
+            if (normTitle.Contains(normQuery)) return 50;
+
+            // 6. Partial word match
             var queryWords = q.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            if (queryWords.Any(word => title.IndexOf(word, StringComparison.OrdinalIgnoreCase) >= 0))
+            if (queryWords.Any(word => lowTitle.Contains(word)))
             {
-                return 5; // Partial word match
+                return 10;
             }
             
-            return 0; // Other
+            return 0;
+        }
+
+        private string StripLeadingArticles(string title)
+        {
+            if (string.IsNullOrEmpty(title)) return title;
+            string[] articles = { "the ", "a ", "an " };
+            foreach (var art in articles)
+            {
+                if (title.StartsWith(art, StringComparison.OrdinalIgnoreCase))
+                {
+                    return title.Substring(art.Length).Trim();
+                }
+            }
+            return title;
         }
 
         // ==========================================
