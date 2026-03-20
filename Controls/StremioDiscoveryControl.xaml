@@ -75,10 +75,9 @@
         <ListView x:Name="DiscoveryRows" 
                   SelectionMode="None" 
                   IsItemClickEnabled="False"
+                  IsTabStop="False"
                   ItemTemplateSelector="{StaticResource DiscoveryRowTemplateSelector}"
-                  Padding="0,0,0,48"
-                  Background="Transparent"
-                  Loaded="DiscoveryRows_Loaded">
+                  Padding="0,0,0,40">
             <ListView.Header>
                 <local:HeroSectionControl x:Name="HeroControl" />
             </ListView.Header>
@@ -87,7 +86,23 @@
                     <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                     <Setter Property="Padding" Value="0"/>
                     <Setter Property="Margin" Value="0"/>
-                    <Setter Property="MinWidth" Value="0"/>
+                    <Setter Property="MinWidth" Value="10"/>
+                    <Setter Property="IsTabStop" Value="False"/>
+                    <Setter Property="FocusVisualPrimaryThickness" Value="0"/>
+                    <Setter Property="FocusVisualSecondaryThickness" Value="0"/>
+                    <Setter Property="Control.Background" Value="Transparent"/>
+                    <Setter Property="Control.BorderThickness" Value="0"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ListViewItem">
+                                <ContentPresenter ContentTemplate="{TemplateBinding ContentTemplate}" 
+                                                  ContentTransitions="{TemplateBinding ContentTransitions}" 
+                                                  Content="{TemplateBinding Content}" 
+                                                  HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" 
+                                                  VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
                 </Style>
             </ListView.ItemContainerStyle>
         </ListView>

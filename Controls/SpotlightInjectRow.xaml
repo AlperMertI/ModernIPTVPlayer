@@ -11,7 +11,8 @@
     d:DesignHeight="400"
     d:DesignWidth="1200"
     Loaded="UserControl_Loaded"
-    Unloaded="UserControl_Unloaded">
+    Unloaded="UserControl_Unloaded"
+    SizeChanged="UserControl_SizeChanged">
 
     <UserControl.Resources>
         <Style x:Key="SpotlightArrowButtonStyle" TargetType="Button">
@@ -22,6 +23,9 @@
             <Setter Property="Padding" Value="0"/>
             <Setter Property="CornerRadius" Value="24"/>
             <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="FocusVisualPrimaryThickness" Value="0"/>
+            <Setter Property="FocusVisualSecondaryThickness" Value="0"/>
+            <Setter Property="IsTabStop" Value="False"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
@@ -50,18 +54,22 @@
     </UserControl.Resources>
 
 
-    <Grid Margin="0,16,0,32" x:Name="RootContainer">
-        <Border CornerRadius="20" Background="#111" Height="400" x:Name="ContainerBorder" HorizontalAlignment="Stretch" RenderTransformOrigin="0.5,0.5">
+    <Grid Padding="0,16,0,32" x:Name="RootContainer" IsTabStop="False" Background="Transparent">
+        <Border Background="#111" 
+                Height="400" 
+                x:Name="ContainerBorder" 
+                VerticalAlignment="Top"
+                Margin="48,0">
             <Border.RenderTransform>
-                <CompositeTransform x:Name="ContainerTransform" />
+                <CompositeTransform x:Name="ContainerTransform" CenterX="600" />
             </Border.RenderTransform>
-            <!-- Content Grid -->
-            <Grid>
+            <!-- Content Grid for Spotlight items -->
+            <Grid x:Name="ContainerGrid" Background="#111">
                 <!-- Image Fallback -->
                 <Image x:Name="FallbackImage" Stretch="UniformToFill" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
 
-                <!-- WebView for Video -->
-                <Grid x:Name="VideoContainer" Opacity="0" IsHitTestVisible="False" />
+                <!-- WebView for Video (Solid background prevents backdrop bleed at clipped edges) -->
+                <Grid x:Name="VideoContainer" Background="Black" Opacity="0" IsHitTestVisible="False" />
 
                 <!-- Navigation Arrows -->
                 <Button x:Name="PrevButton" Click="PrevButton_Click" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="12,0,0,0" Style="{StaticResource SpotlightArrowButtonStyle}" Canvas.ZIndex="10">
@@ -77,7 +85,7 @@
                         <CompositeTransform x:Name="InfoTransform" />
                     </StackPanel.RenderTransform>
                     <!-- Spotlight Badge -->
-                    <HyperlinkButton Click="HeaderLink_Click" Padding="0" Margin="0,0,0,12" Background="Transparent" BorderThickness="0">
+                    <HyperlinkButton Click="HeaderLink_Click" Padding="0" Margin="0,0,0,12" Background="Transparent" BorderThickness="0" IsTabStop="False" FocusVisualPrimaryThickness="0" FocusVisualSecondaryThickness="0">
                         <Border Background="{ThemeResource SystemAccentColor}" CornerRadius="4" Padding="8,4" HorizontalAlignment="Left">
                             <TextBlock Text="SPOTLIGHT" Foreground="White" FontSize="12" FontWeight="Bold" CharacterSpacing="100"/>
                         </Border>
@@ -100,24 +108,25 @@
                         <TextBlock Text="•" Foreground="#4DFFFFFF" FontSize="14"/>
                         <TextBlock x:Name="RatingBlock" Text="" Foreground="{ThemeResource SystemAccentColor}" FontSize="14" FontWeight="SemiBold"/>
                     </StackPanel>
-                    
-                    <TextBlock x:Name="DescriptionBlock" 
-                                Text="" 
-                                Foreground="#B3FFFFFF" 
-                                FontSize="14" 
-                                TextWrapping="Wrap" 
-                                MaxLines="3" 
-                                TextTrimming="CharacterEllipsis" 
+                                    <TextBlock x:Name="DescriptionBlock"
+                                Text=""
+                                Foreground="#B3FFFFFF"
+                                FontSize="14"
+                                TextWrapping="Wrap"
+                                MaxLines="3"
+                                TextTrimming="CharacterEllipsis"
                                 Margin="0,0,0,24"/>
                                 
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <Button x:Name="PlayButton" Style="{StaticResource AccentButtonStyle}" Padding="24,12" Click="PlayButton_Click">
+                    <!-- Action Buttons -->
+                    <StackPanel Orientation="Horizontal" Spacing="16">
+                        <Button x:Name="PlayButton" Click="PlayButton_Click" Background="{ThemeResource SystemAccentColor}" Padding="24,12" CornerRadius="8" IsTabStop="False" FocusVisualPrimaryThickness="0" FocusVisualSecondaryThickness="0">
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <FontIcon Glyph="&#xE768;" FontSize="16"/>
-                                <TextBlock Text="Play Now" FontWeight="SemiBold"/>
+                                <TextBlock Text="Şimdi İzle" FontWeight="SemiBold"/>
                             </StackPanel>
                         </Button>
-                        <Button x:Name="WatchlistButton" Style="{StaticResource SpotlightArrowButtonStyle}" Width="44" Height="44" Click="WatchlistButton_Click" ToolTipService.ToolTip="İzleme Listesine Ekle">
+
+                        <Button x:Name="WatchlistButton" Click="WatchlistButton_Click" Background="#33FFFFFF" Padding="16,12" CornerRadius="8" IsTabStop="False" FocusVisualPrimaryThickness="0" FocusVisualSecondaryThickness="0">
                             <FontIcon Glyph="&#xE710;" FontSize="16"/>
                         </Button>
                     </StackPanel>
@@ -125,7 +134,7 @@
 
                 <!-- Trailer Controls -->
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,24,24" Spacing="8">
-                    <Button x:Name="MuteButton" 
+                    <Button x:Name="MuteButton"
                             Click="MuteButton_Click"
                             Width="44" Height="44"
                             CornerRadius="22"
@@ -133,7 +142,8 @@
                             BorderThickness="1"
                             BorderBrush="#44FFFFFF"
                             Padding="0"
-                            Visibility="Collapsed">
+                            Visibility="Collapsed"
+                            IsTabStop="False" FocusVisualPrimaryThickness="0" FocusVisualSecondaryThickness="0">
                         <FontIcon x:Name="MuteIcon" Glyph="&#xE74F;" FontSize="16" Foreground="White"/>
                     </Button>
 
@@ -145,7 +155,8 @@
                             BorderThickness="1"
                             BorderBrush="#44FFFFFF"
                             Padding="0"
-                            Visibility="Collapsed">
+                            Visibility="Collapsed"
+                            IsTabStop="False" FocusVisualPrimaryThickness="0" FocusVisualSecondaryThickness="0">
                         <FontIcon Glyph="&#xE740;" FontSize="16" Foreground="White"/>
                     </Button>
                 </StackPanel>
