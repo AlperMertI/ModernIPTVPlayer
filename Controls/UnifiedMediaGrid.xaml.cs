@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Input;
 using ModernIPTVPlayer.Models;
 using System;
@@ -28,6 +29,15 @@ namespace ModernIPTVPlayer.Controls
         {
             get => (bool)GetValue(ShowTitlesProperty);
             set => SetValue(ShowTitlesProperty, value);
+        }
+
+        public static readonly DependencyProperty ShowIptvBadgeProperty =
+            DependencyProperty.Register("ShowIptvBadge", typeof(bool), typeof(UnifiedMediaGrid), new PropertyMetadata(true));
+
+        public bool ShowIptvBadge
+        {
+            get => (bool)GetValue(ShowIptvBadgeProperty);
+            set => SetValue(ShowIptvBadgeProperty, value);
         }
 
         private readonly ExpandedCardOverlayController _expandedCardOverlay;
@@ -83,6 +93,38 @@ namespace ModernIPTVPlayer.Controls
             _expandedCardOverlay.AddListRequested += (_, stream) => AddListAction?.Invoke(this, stream);
 
             PointerExited += UnifiedMediaGrid_PointerExited;
+            Loaded += UnifiedMediaGrid_Loaded;
+        }
+
+        private void UnifiedMediaGrid_Loaded(object sender, RoutedEventArgs e)
+        {
+            // Find the ScrollViewer within the MediaGridView to detect manipulation (scrolling)
+            var scrollViewer = FindScrollViewer(MediaGridView);
+            if (scrollViewer != null)
+            {
+                scrollViewer.DirectManipulationStarted += (s, args) => 
+                {
+                    _expandedCardOverlay.IsManipulationInProgress = true;
+                    _expandedCardOverlay.CancelPendingShow();
+                };
+                scrollViewer.DirectManipulationCompleted += (s, args) => 
+                {
+                    _expandedCardOverlay.IsManipulationInProgress = false;
+                };
+            }
+        }
+
+        private ScrollViewer? FindScrollViewer(DependencyObject element)
+        {
+            if (element is ScrollViewer sv) return sv;
+            int childrenCount = VisualTreeHelper.GetChildrenCount(element);
+            for (int i = 0; i < childrenCount; i++)
+            {
+                var child = VisualTreeHelper.GetChild(element, i);
+                var result = FindScrollViewer(child);
+                if (result != null) return result;
+            }
+            return null;
         }
 
         private async void UnifiedMediaGrid_PointerExited(object sender, PointerRoutedEventArgs e)

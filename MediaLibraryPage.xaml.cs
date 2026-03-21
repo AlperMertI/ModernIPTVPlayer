@@ -15,6 +15,7 @@ using ModernIPTVPlayer.Services.Stremio;
 using System.Numerics;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
+using ModernIPTVPlayer.Pages;
 
 namespace ModernIPTVPlayer
 {
@@ -81,6 +82,18 @@ namespace ModernIPTVPlayer
                 BackdropControl.SetVerticalShift(StremioControl.MainScrollViewer.VerticalOffset);
                 if (_stremioExpandedCardOverlay?.IsCardVisible == true) _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync();
             };
+            StremioControl.RowScrollStarted += (s, e) => 
+            { 
+                if (_stremioExpandedCardOverlay != null) 
+                {
+                    _stremioExpandedCardOverlay.IsManipulationInProgress = true; 
+                    _stremioExpandedCardOverlay.CancelPendingShow();
+                }
+            };
+            StremioControl.RowScrollEnded += (s, e) => 
+            { 
+                if (_stremioExpandedCardOverlay != null) _stremioExpandedCardOverlay.IsManipulationInProgress = false; 
+            };
 
             // Overlay Controller
             _stremioExpandedCardOverlay = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, StremioControl.MainScrollViewer);
@@ -89,6 +102,7 @@ namespace ModernIPTVPlayer
 
             // Spotlight Search
             SpotlightSearch.ItemClicked += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
+            SpotlightSearch.SeeAllClicked += (s, query) => Frame.Navigate(typeof(SearchResultsPage), query);
         }
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)

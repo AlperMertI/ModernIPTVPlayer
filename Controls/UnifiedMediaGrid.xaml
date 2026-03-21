@@ -65,6 +65,7 @@
                         BadgeText="{Binding BadgeText}"
                         IsAvailableOnIptv="{Binding IsAvailableOnIptv}"
                         ShowProgress="{Binding ShowProgress}"
+                        ShowIptvBadge="{Binding ShowIptvBadge, ElementName=RootGridControl}"
                         ShowBadge="{Binding ShowBadge}"
                         IsTitleVisible="{Binding ShowTitles, ElementName=RootGridControl}"
                         Width="212" 

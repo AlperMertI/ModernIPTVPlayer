@@ -601,6 +601,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 {
                                     bool isTbmNamespace = currentSearchId.StartsWith("tbm:", StringComparison.OrdinalIgnoreCase);
                                     bool isTorboxResolver = GetHostSafe(url).Contains("torbox", StringComparison.OrdinalIgnoreCase);
+                                    
+                                    // [FIX] Never probe Cinemeta with a non-canonical ID (like IPTV name/id) to avoid 404 spam.
+                                    if (GetHostSafe(url).Contains("cinemeta", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin Cinemeta probe edilmez.");
+                                        continue;
+                                    }
+
                                     if (sourcePriority >= 0)
                                     {
                                         bool isCatalogSource = index == sourcePriority;
@@ -728,17 +736,17 @@ namespace ModernIPTVPlayer.Services.Metadata
                     ReconcileTmdbSeasons(metadata, metadata.TmdbInfo);
                 }
 
-                bool needsIptvEnrichment = string.IsNullOrEmpty(metadata.Overview) || metadata.Overview == "Açıklama mevcut değil." || !IsImdbId(metadata.ImdbId);
-                if (needsIptvEnrichment)
+                if (App.CurrentLogin != null)
                 {
-                    trace.Log("IPTV", "Trying IPTV enrichment due to missing overview or non-imdb id.");
-                    if (metadata.IsSeries && sourceStream is SeriesStream seriesStream)
+                    if (metadata.IsSeries)
                     {
-                        await EnrichWithIptvAsync(metadata, seriesStream);
+                        var seriesStream = sourceStream as SeriesStream;
+                        await EnrichWithIptvAsync(metadata, seriesStream ?? new SeriesStream { Name = metadata.Title });
                     }
-                    else if (!metadata.IsSeries && sourceStream != null)
+                    else
                     {
-                        await EnrichWithIptvMovieAsync(metadata, sourceStream);
+                        var movieStream = sourceStream as VodStream;
+                        await EnrichWithIptvMovieAsync(metadata, movieStream ?? new VodStream { Name = metadata.Title });
                     }
                 }
             }
@@ -746,6 +754,12 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 trace.Log("Error", ex.Message);
                 AppLogger.Critical("CRITICAL ERROR in GetMetadataAsync", ex);
+            }
+
+            // [FIX] Cross-cache by IMDb ID to prevent duplicate fetches for the same content
+            if (!string.IsNullOrEmpty(metadata.ImdbId) && IsImdbId(metadata.ImdbId))
+            {
+                _resultCache[metadata.ImdbId] = (metadata, DateTime.Now.Add(_cacheDuration));
             }
 
             if (metadata.IsSeries)
@@ -1174,7 +1188,34 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             try
             {
-                var result = await ContentCacheService.Instance.GetMovieInfoAsync(vod.Id, App.CurrentLogin);
+                int streamId = vod.Id;
+                
+                // [FIX] If navigating from search (Stremio item), we need to find the matching IPTV item by IMDb ID or Title
+                if (streamId <= 0)
+                {
+                    var allVod = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(App.CurrentLogin.PlaylistUrl, "vod");
+                    if (allVod != null)
+                    {
+                        // 1. Try IMDb ID Match
+                        var match = IsImdbId(metadata.ImdbId) ? allVod.FirstOrDefault(v => v.IMDbId == metadata.ImdbId) : null;
+                        
+                        // 2. Try Exact Title Match
+                        if (match == null) match = allVod.FirstOrDefault(v => string.Equals(v.Name, metadata.Title, StringComparison.OrdinalIgnoreCase));
+                        
+                        // 3. Try Clean Title Match (removing year etc.)
+                        if (match == null)
+                        {
+                            string cleanTitle = CleanTitleForMatch(metadata.Title);
+                            match = allVod.FirstOrDefault(v => CleanTitleForMatch(v.Name) == cleanTitle);
+                        }
+
+                        if (match != null) streamId = match.StreamId;
+                    }
+                }
+
+                if (streamId <= 0) return;
+
+                var result = await ContentCacheService.Instance.GetMovieInfoAsync(streamId, App.CurrentLogin);
                 if (result?.Info != null)
                 {
                     System.Diagnostics.Debug.WriteLine($"[MetadataProvider] IPTV Movie Info Found: {result.Info.Name}");
@@ -1194,6 +1235,10 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                     if (string.IsNullOrEmpty(metadata.PosterUrl))
                         metadata.PosterUrl = result.Info.MovieImage;
+
+                    // [LOGO FALLBACK] Use IPTV logo if we don't have one from Stremio/TMDB
+                    if (string.IsNullOrEmpty(metadata.LogoUrl))
+                        metadata.LogoUrl = result.Info.MovieImage;
 
                     if (metadata.Rating == 0)
                     {
@@ -1228,6 +1273,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                         
                         string streamUrl = $"{App.CurrentLogin.Host}/movie/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{result.MovieData.StreamId}{ext}";
                         vod.StreamUrl = streamUrl;
+                        metadata.StreamUrl = streamUrl;
+                        metadata.IsAvailableOnIptv = true;
 
                         // However, for consistency with episodes:
                         metadata.MetadataId = result.MovieData.StreamId.ToString();
@@ -1248,7 +1295,33 @@ namespace ModernIPTVPlayer.Services.Metadata
             
             try 
             {
-                var info = await ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, App.CurrentLogin);
+                int seriesId = series.SeriesId;
+
+                // [FIX] If seriesId is 0 (or we are in a Stremio context), try to find by IMDbId or Title
+                if (seriesId <= 0)
+                {
+                    var allSeries = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(App.CurrentLogin.PlaylistUrl, "series");
+                    if (allSeries != null)
+                    {
+                        // 1. Try IMDb ID Match
+                        var match = IsImdbId(metadata.ImdbId) ? allSeries.FirstOrDefault(s => s.IMDbId == metadata.ImdbId) : null;
+                        
+                        // 2. Try Title Match
+                        if (match == null) match = allSeries.FirstOrDefault(s => string.Equals(s.Name, metadata.Title, StringComparison.OrdinalIgnoreCase));
+                        
+                        if (match == null)
+                        {
+                            string cleanTitle = CleanTitleForMatch(metadata.Title);
+                            match = allSeries.FirstOrDefault(s => CleanTitleForMatch(s.Name) == cleanTitle);
+                        }
+
+                        if (match != null) seriesId = match.SeriesId;
+                    }
+                }
+
+                if (seriesId <= 0) return;
+
+                var info = await ContentCacheService.Instance.GetSeriesInfoAsync(seriesId, App.CurrentLogin);
                 if (info?.Info != null)
                 {
                     // Map Basic Info
@@ -1257,6 +1330,10 @@ namespace ModernIPTVPlayer.Services.Metadata
                     if (string.IsNullOrEmpty(metadata.Title)) metadata.Title = info.Info.Name;
                     if (string.IsNullOrEmpty(metadata.BackdropUrl)) metadata.BackdropUrl = info.Info.Cover;
                     if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = info.Info.Cover;
+
+                    // [LOGO FALLBACK] Use IPTV logo if we don't have one from Stremio/TMDB
+                    if (string.IsNullOrEmpty(metadata.LogoUrl))
+                        metadata.LogoUrl = info.Info.Cover;
                     
                     // Map Rating & Year
                     string ratingStr = !string.IsNullOrEmpty(info.Info.Rating) ? info.Info.Rating : series.Rating;
@@ -1842,6 +1919,17 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SUCCESS: Found TMDB ID = {tmdb.Id}, Title = {tmdb.DisplayTitle}");
                 metadata.DataSource = "Stremio + TMDB";
+
+                // [FIX] Store the resolved canonical ID if we don't have one yet. Favor IMDb, fallback to tmdb:ID.
+                // This allows subsequent addon probing to use a real ID even for IPTV items.
+                string? resolvedId = tmdb.ResolvedImdbId;
+                if (!IsImdbId(resolvedId)) resolvedId = $"tmdb:{tmdb.Id}";
+
+                if (IsCanonicalId(resolvedId) && !IsCanonicalId(metadata.ImdbId))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Propagating Resolved ID: {resolvedId}");
+                    metadata.ImdbId = resolvedId;
+                }
                 
                 // Prioritize localized TMDB data
                 if (!string.IsNullOrEmpty(tmdb.Overview)) metadata.Overview = tmdb.Overview;
@@ -2368,14 +2456,36 @@ namespace ModernIPTVPlayer.Services.Metadata
             return 1;
         }
 
-        private bool IsImdbId(string? id)
+        public static bool IsImdbId(string? id)
         {
             if (string.IsNullOrEmpty(id)) return false;
             // IMDb IDs start with 'tt' followed by numbers
             return Regex.IsMatch(id, @"^tt\d+$", RegexOptions.IgnoreCase);
         }
 
-        private bool IsCanonicalId(string? id)
+        private string CleanTitleForMatch(string? title)
+        {
+            if (string.IsNullOrEmpty(title)) return "";
+            
+            // Remove Year (e.g. "Movie (2024)" -> "Movie")
+            string cleaned = Regex.Replace(title, @"\(\d{4}\)", "").Trim();
+            
+            // [NEW] Remove common IPTV tags/prefixes
+            cleaned = Regex.Replace(cleaned, @"^\[.*?\]", ""); // [TR], [ENG] etc.
+            cleaned = Regex.Replace(cleaned, @"^4K-TOP\s*-\s*", "", RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"^4K\s*-\s*", "", RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"^FHD\s*-\s*", "", RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"^HD\s*-\s*", "", RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"\s+4K$", "", RegexOptions.IgnoreCase);
+            cleaned = Regex.Replace(cleaned, @"\s+FHD$", "", RegexOptions.IgnoreCase);
+            
+            // Remove non-alphanumeric characters for fuzzy matching
+            cleaned = Regex.Replace(cleaned, @"[^a-zA-Z0-9]", "").ToLowerInvariant();
+            
+            return cleaned;
+        }
+
+        public static bool IsCanonicalId(string? id)
         {
             return IsImdbId(id) || (!string.IsNullOrWhiteSpace(id) && id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase));
         }

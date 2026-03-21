@@ -356,7 +356,8 @@ namespace ModernIPTVPlayer
                 var shortLang = language.Split('-')[0];
                 var cacheKey = $"movie_id_{movieId}_{language}";
                 if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
-                var url = $"{BASE_URL}/movie/{movieId}?api_key={API_KEY}&language={language}&append_to_response=images&include_image_language={shortLang},en,null";
+                var url = $"{BASE_URL}/movie/{movieId}?api_key={API_KEY}&language={language}&append_to_response=images,external_ids&include_image_language={shortLang},en,null";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Request: {url}");
                 var json = await _client.GetStringAsync(url);
                 var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
                 if (result != null) 
@@ -378,7 +379,8 @@ namespace ModernIPTVPlayer
                 var shortLang = language.Split('-')[0];
                 var cacheKey = $"tv_id_{tvId}_{language}";
                 if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
-                var url = $"{BASE_URL}/tv/{tvId}?api_key={API_KEY}&language={language}&append_to_response=images&include_image_language={shortLang},en,null";
+                var url = $"{BASE_URL}/tv/{tvId}?api_key={API_KEY}&language={language}&append_to_response=images,external_ids&include_image_language={shortLang},en,null";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Request: {url}");
                 var json = await _client.GetStringAsync(url);
                 var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
                 if (result != null) 
@@ -651,7 +653,12 @@ namespace ModernIPTVPlayer
         public List<TmdbSeason> Seasons { get; set; }
 
         [JsonPropertyName("imdb_id")]
-        public string ImdbId { get; set; }
+        public string? ImdbId { get; set; }
+
+        [JsonPropertyName("external_ids")]
+        public TmdbExternalIds? ExternalIds { get; set; }
+
+        public string? ResolvedImdbId => ImdbId ?? ExternalIds?.ImdbId;
 
         public string GetGenreNames()
         {
@@ -827,5 +834,14 @@ namespace ModernIPTVPlayer
         public DateTime? AirDateDateTime => !string.IsNullOrEmpty(AirDate) && DateTime.TryParse(AirDate, out var d) ? d : null;
         
         public string StillUrl => !string.IsNullOrEmpty(StillPath) ? $"https://image.tmdb.org/t/p/w300{StillPath}" : null;
+    }
+
+    public class TmdbExternalIds
+    {
+        [JsonPropertyName("imdb_id")]
+        public string? ImdbId { get; set; }
+
+        [JsonPropertyName("tv_db_id")]
+        public object? TvdbId { get; set; }
     }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
+using ModernIPTVPlayer;
 
 namespace ModernIPTVPlayer.Models.Metadata
 {
@@ -29,6 +30,12 @@ namespace ModernIPTVPlayer.Models.Metadata
         public bool IsSeries { get; set; }
         public TmdbMovieResult TmdbInfo { get; set; } // Optional enrichment
         public MetadataContext MaxEnrichmentContext { get; set; } // [NEW] Track highest successful enrichment level
+
+        // [NEW] IPTV Integration Properties
+        public string StreamUrl { get; set; }
+        public bool IsAvailableOnIptv { get; set; }
+        public List<VodStream> IptvVods { get; set; } = new List<VodStream>();
+        public List<SeriesStream> IptvSeries { get; set; } = new List<SeriesStream>();
 
         // Tracking source
         public string DataSource { get; set; } // e.g. "Stremio", "Stremio + TMDB"

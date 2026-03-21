@@ -29,6 +29,7 @@ using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Helpers;
 using Microsoft.UI.Xaml.Media;
+using ModernIPTVPlayer.Services;
 using Microsoft.UI.Text;
 
 namespace ModernIPTVPlayer
@@ -3798,6 +3799,26 @@ namespace ModernIPTVPlayer
         {
             try
             {
+                // [FIX] Resolve internal iptv:// protocol before checking or playing
+                if (url.StartsWith("iptv://", StringComparison.OrdinalIgnoreCase))
+                {
+                    string streamIdStr = url.Substring(7);
+                    if (int.TryParse(streamIdStr, out int streamId) && App.CurrentLogin != null)
+                    {
+                        var playlistId = App.CurrentLogin.PlaylistUrl ?? "default";
+                        // Try VOD first
+                        var vods = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod_streams");
+                        var match = vods?.FirstOrDefault(v => v.StreamId == streamId);
+                        if (match != null)
+                        {
+                            string ext = match.ContainerExtension ?? "mkv";
+                            if (!ext.StartsWith(".")) ext = "." + ext;
+                            url = $"{App.CurrentLogin.Host}/movie/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{match.StreamId}{ext}";
+                            Debug.WriteLine($"[PlayerPage] Resolved iptv://{streamId} to {url}");
+                        }
+                    }
+                }
+
                 // Basic cleanup: some servers dislike explicit :80
                 var finalUrl = url.Replace(":80/", "/");
 

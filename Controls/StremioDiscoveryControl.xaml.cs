@@ -70,6 +70,15 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> BackdropColorChanged;
         public event EventHandler<ScrollViewerViewChangedEventArgs> ViewChanged;
         public event EventHandler<CatalogRowViewModel> HeaderClicked;
+
+        public static readonly DependencyProperty ShowIptvBadgeProperty =
+            DependencyProperty.Register("ShowIptvBadge", typeof(bool), typeof(StremioDiscoveryControl), new PropertyMetadata(true));
+
+        public bool ShowIptvBadge
+        {
+            get => (bool)GetValue(ShowIptvBadgeProperty);
+            set => SetValue(ShowIptvBadgeProperty, value);
+        }
         
         // Expanded Card Event Bridges
         public event EventHandler<FrameworkElement> CardHoverStarted;

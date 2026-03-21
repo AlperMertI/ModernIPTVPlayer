@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Mpv.Core;
+using Mpv.Core.Interop;
 using System.Globalization;
 using System.Linq;
 using System.Reflection;
@@ -146,9 +147,9 @@ namespace ModernIPTVPlayer.Services
                 {
                     try 
                     {
-                        // Use string-based access + manual parsing (Avoids many native bridge exceptions)
-                        string wStr = player.Client.GetPropertyToString("video-params/w");
-                        string hStr = player.Client.GetPropertyToString("video-params/h");
+                        // Use safe wrapper for resolution
+                        string wStr = await GetPropertySafeAsync(player.Client, "video-params/w");
+                        string hStr = await GetPropertySafeAsync(player.Client, "video-params/h");
                         
                         if (!string.IsNullOrEmpty(wStr) && !string.IsNullOrEmpty(hStr) && 
                             long.TryParse(wStr, out long width) && long.TryParse(hStr, out long height) && 
@@ -158,9 +159,9 @@ namespace ModernIPTVPlayer.Services
                             result.Resolution = $"{width}x{height}";
                             
                             // Better FPS Detection (Check multiple sources)
-                            string fpsStr = player.Client.GetPropertyToString("container-fps") ?? 
-                                           player.Client.GetPropertyToString("video-params/fps") ??
-                                           player.Client.GetPropertyToString("estimated-fps");
+                            string fpsStr = await GetPropertySafeAsync(player.Client, "container-fps") ?? 
+                                           await GetPropertySafeAsync(player.Client, "video-params/fps") ??
+                                           await GetPropertySafeAsync(player.Client, "estimated-fps");
                             
                             if (double.TryParse(fpsStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double fpsVal) && fpsVal > 0)
                                 result.Fps = $"{fpsVal:0.##} FPS";
@@ -168,7 +169,7 @@ namespace ModernIPTVPlayer.Services
                                 result.Fps = "0 FPS";
 
                             // Simplified Codec Mapping
-                            string rawCodec = player.Client.GetPropertyToString("video-codec")?.ToUpper() ?? "UNKNOWN";
+                            string rawCodec = (await GetPropertySafeAsync(player.Client, "video-codec"))?.ToUpper() ?? "UNKNOWN";
                             result.Codec = rawCodec switch
                             {
                                 string c when c.Contains("H264") || c.Contains("AVC") => "H.264",
@@ -179,18 +180,18 @@ namespace ModernIPTVPlayer.Services
                                 _ => rawCodec.Split('/').FirstOrDefault()?.Trim() ?? rawCodec
                             };
                             
-                            string br1 = player.Client.GetPropertyToString("video-bitrate");
-                            string br2 = player.Client.GetPropertyToString("bitrate");
-                            string br3 = player.Client.GetPropertyToString("estimated-bitrate");
-                            string br4 = player.Client.GetPropertyToString("demuxer-bitrate");
-                            string br5 = player.Client.GetPropertyToString("packet-video-bitrate");
-                            string br6 = player.Client.GetPropertyToString("packet-bitrate");
+                            string br1 = await GetPropertySafeAsync(player.Client, "video-bitrate");
+                            string br2 = await GetPropertySafeAsync(player.Client, "bitrate");
+                            string br3 = await GetPropertySafeAsync(player.Client, "estimated-bitrate");
+                            string br4 = await GetPropertySafeAsync(player.Client, "demuxer-bitrate");
+                            string br5 = await GetPropertySafeAsync(player.Client, "packet-video-bitrate");
+                            string br6 = await GetPropertySafeAsync(player.Client, "packet-bitrate");
 
                             Debug.WriteLine($"[StreamProber] Bitrate Trace ({stopwatch.ElapsedMilliseconds}ms): v-br:{br1} | br:{br2} | est:{br3} | demux:{br4} | p-v-br:{br5} | p-br:{br6}");
 
                             // HDR Detection
-                            string primaries = player.Client.GetPropertyToString("video-params/primaries");
-                            string trc = player.Client.GetPropertyToString("video-params/trc");
+                            string primaries = await GetPropertySafeAsync(player.Client, "video-params/primaries");
+                            string trc = await GetPropertySafeAsync(player.Client, "video-params/trc");
                             result.IsHdr = (primaries == "bt.2020") || (trc == "pq" || trc == "hlg");
                             
                             string brStr = br1 ?? br2 ?? br3 ?? br4 ?? br5 ?? br6;
@@ -224,7 +225,7 @@ namespace ModernIPTVPlayer.Services
                         }
                         
                         // Check for error/idle
-                        string idleStr = player.Client.GetPropertyToString("idle-active");
+                        string idleStr = await GetPropertySafeAsync(player.Client, "idle-active");
                         if (idleStr == "yes" && stopwatch.ElapsedMilliseconds > 3000)
                         {
                             result.Error = "Idle state reached without metadata";
@@ -282,23 +283,24 @@ namespace ModernIPTVPlayer.Services
                 var stopwatch = Stopwatch.StartNew();
                 while (stopwatch.ElapsedMilliseconds < 5000 && !ct.IsCancellationRequested)
                 {
-                    var width = await player.GetPropertyLongAsync("video-params/w");
-                    var height = await player.GetPropertyLongAsync("video-params/h");
+                    string wStr = await GetPropertySafeAsync(player, "video-params/w");
+                    string hStr = await GetPropertySafeAsync(player, "video-params/h");
 
-                    if (width > 0 && height > 0)
+                    if (long.TryParse(wStr, out long width) && long.TryParse(hStr, out long height) && width > 0 && height > 0)
                     {
                         string res = $"{width}x{height}";
-                        string fpsStr = await player.GetPropertyAsync("estimated-fps");
+                        string fpsStr = await GetPropertySafeAsync(player, "estimated-fps");
                         double.TryParse(fpsStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double fpsVal);
                         string fps = $"{fpsVal:F2}";
                         
-                        string codec = (await player.GetPropertyAsync("video-codec"))?.ToUpper() ?? "Unknown";
-                        long bitrate = await player.GetPropertyLongAsync("video-bitrate");
-                        if (bitrate <= 0) bitrate = await player.GetPropertyLongAsync("bitrate");
+                        string codec = (await GetPropertySafeAsync(player, "video-codec"))?.ToUpper() ?? "Unknown";
+                        string brStr = await GetPropertySafeAsync(player, "video-bitrate");
+                        if (string.IsNullOrEmpty(brStr)) brStr = await GetPropertySafeAsync(player, "bitrate");
+                        long.TryParse(brStr, out long bitrate);
  
                         // HDR Detection
-                        string primaries = await player.GetPropertyAsync("video-params/primaries");
-                        string trc = await player.GetPropertyAsync("video-params/trc");
+                        string primaries = await GetPropertySafeAsync(player, "video-params/primaries");
+                        string trc = await GetPropertySafeAsync(player, "video-params/trc");
                         bool isHdr = (primaries == "bt.2020") || (trc == "pq" || trc == "hlg");
  
                         return (res, fps, codec, bitrate, true, isHdr);
@@ -313,6 +315,33 @@ namespace ModernIPTVPlayer.Services
             }
 
             return (null, null, null, 0, false, false);
+        }
+
+        private static async Task<string> GetPropertySafeAsync(MpvWinUI.MpvPlayer player, string name)
+        {
+            try { return await player.GetPropertyAsync(name); }
+            catch (Exception ex)
+            {
+                if (ex.Message.Contains("PropertyUnavailable")) return null;
+                Debug.WriteLine($"[StreamProberService] SafeGet (UI) failed for {name}: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static async Task<string> GetPropertySafeAsync(MpvClientNative client, string name)
+        {
+            // MpvClient from Mpv.Core typically uses synchronous string access or Task-wrapped
+            // We use Task.Run for the synchronous call to keep the API consistent
+            return await Task.Run(() =>
+            {
+                try { return client.GetPropertyToString(name); }
+                catch (Exception ex)
+                {
+                    if (ex.Message.Contains("PropertyUnavailable")) return null;
+                    // Debug.WriteLine($"[StreamProberService] SafeGet (Core) failed for {name}: {ex.Message}");
+                    return null;
+                }
+            });
         }
 
         private static string ExtractCookiesForProber(string url)

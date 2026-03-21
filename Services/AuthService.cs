@@ -56,6 +56,7 @@ namespace ModernIPTVPlayer.Services
                 App.CurrentLogin = new LoginParams 
                 { 
                     PlaylistUrl = p.Url,
+                    PlaylistName = p.Name,
                     MaxConnections = 1 // Default
                 };
                 AppSettings.LastPlaylistId = p.Id;
@@ -97,6 +98,7 @@ namespace ModernIPTVPlayer.Services
                         App.CurrentLogin = new LoginParams 
                         { 
                             PlaylistUrl = playlistUrl,
+                            PlaylistName = p.Name,
                             Host = cleanHost,
                             Username = p.Username,
                             Password = p.Password,

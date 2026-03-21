@@ -123,7 +123,21 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string BadgeText => "";
         public bool ShowBadge => false;
 
-        public bool IsAvailableOnIptv { get; set; }
+        private bool _isAvailableOnIptv;
+        public bool IsAvailableOnIptv 
+        { 
+            get => _isAvailableOnIptv; 
+            set 
+            {
+                if (_isAvailableOnIptv != value)
+                {
+                    _isAvailableOnIptv = value;
+                    OnPropertyChanged();
+                    OnPropertyChanged(nameof(ShowSourceBadge));
+                    OnPropertyChanged(nameof(SourceBadgeText));
+                }
+            }
+        }
         public string SourceBadgeText => IsAvailableOnIptv ? "IPTV" : "";
         public bool ShowSourceBadge => IsAvailableOnIptv;
 

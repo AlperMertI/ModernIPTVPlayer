@@ -69,7 +69,7 @@
                 
                 <!-- IPTV Badge -->
                 <Border x:Name="IptvBadge" 
-                        Visibility="{x:Bind IsAvailableOnIptv, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                        Visibility="Collapsed" 
                         Background="#E50914" 
                         HorizontalAlignment="Right" 
                         VerticalAlignment="Top" 
@@ -123,14 +123,32 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Progress Bar -->
-                <ProgressBar VerticalAlignment="Bottom" Height="3" 
-                             Value="{x:Bind ProgressValue, Mode=OneWay}" 
-                             Maximum="100"
-                             Foreground="{ThemeResource SystemAccentColor}"
-                             Background="Transparent"
-                             BorderThickness="0"
-                             Visibility="{x:Bind ShowProgress, Mode=OneWay}"/>
+                <!-- Premium Progress Indicator (Modern Glow Style) -->
+                <Grid x:Name="ProgressIndicator" 
+                      VerticalAlignment="Bottom" 
+                      Height="3" 
+                      Margin="16,0,16,16" 
+                      Background="Transparent"
+                      Visibility="{x:Bind ShowProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                    
+                    <!-- Ultra-subtle track -->
+                    <Border Background="#15FFFFFF" CornerRadius="1.5"/>
+                    
+                    <Border x:Name="ProgressBarFill" 
+                            HorizontalAlignment="Stretch" 
+                            CornerRadius="1.5"
+                            RenderTransformOrigin="0,0.5">
+                        <Border.Background>
+                            <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                                <GradientStop Color="#E50914" Offset="0.0"/>
+                                <GradientStop Color="#FF3D47" Offset="1.0"/>
+                            </LinearGradientBrush>
+                        </Border.Background>
+                        <Border.RenderTransform>
+                            <CompositeTransform ScaleX="{x:Bind GetProgressScale(ProgressValue), Mode=OneWay}"/>
+                        </Border.RenderTransform>
+                    </Border>
+                </Grid>
                 
                 <!-- Status Badge (Top Right) -->
                 <Border HorizontalAlignment="Right" VerticalAlignment="Top" 

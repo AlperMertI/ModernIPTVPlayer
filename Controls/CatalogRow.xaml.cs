@@ -323,5 +323,11 @@ namespace ModernIPTVPlayer.Controls
         {
             VisualStateManager.GoToState(this, "Normal", true);
         }
+        private void Button_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            // When mouse enters a navigation button, we want to suppress any pending expanded card triggers 
+            // from the posters that might be behind it.
+            HoverEnded?.Invoke(this, null);
+        }
     }
 }

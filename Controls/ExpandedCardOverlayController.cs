@@ -47,6 +47,7 @@ namespace ModernIPTVPlayer.Controls
 
         public bool IsInCinemaMode => _isInCinemaMode;
         public bool IsCardVisible => _expandedCard.Visibility == Visibility.Visible;
+        public bool IsManipulationInProgress { get; set; }
         public ExpandedCard ActiveExpandedCard => _expandedCard;
 
         public ExpandedCardOverlayController(
@@ -88,6 +89,20 @@ namespace ModernIPTVPlayer.Controls
             _expandedCard.Height = CardHeight;
             _hostElement.SizeChanged += HostElement_SizeChanged;
 
+            // CENTRALIZED SCROLL MANIPULATION HANDLING
+            if (_scrollLockTarget != null)
+            {
+                _scrollLockTarget.DirectManipulationStarted += (s, args) => 
+                {
+                    IsManipulationInProgress = true;
+                    CancelPendingShow();
+                };
+                _scrollLockTarget.DirectManipulationCompleted += (s, args) => 
+                {
+                    IsManipulationInProgress = false;
+                };
+            }
+
             // CENTRALIZED LIFECYCLE MANAGEMENT
             // Auto-clean on unload to prevent card persistence or audio leaks.
             // In WinUI Page, Unloaded fires when navigating away even if cached.
@@ -105,7 +120,7 @@ namespace ModernIPTVPlayer.Controls
 
         public void OnHoverStarted(FrameworkElement card)
         {
-            if (_isInCinemaMode) return;
+            if (_isInCinemaMode || IsCardVisible || IsManipulationInProgress) return;
 
             try 
             {

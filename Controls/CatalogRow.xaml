@@ -124,6 +124,9 @@
                     HorizontalContentAlignment="Center"
                     VerticalContentAlignment="Center"
                     Canvas.ZIndex="100"
+                    IsHitTestVisible="True"
+                    Background="#01FFFFFF"
+                    PointerEntered="Button_PointerEntered"
                     Visibility="Collapsed">
                 <FontIcon Glyph="&#xE761;" FontSize="18"/>
             </Button>
@@ -139,6 +142,9 @@
                     HorizontalContentAlignment="Center"
                     VerticalContentAlignment="Center"
                     Canvas.ZIndex="100"
+                    IsHitTestVisible="True"
+                    Background="#01FFFFFF"
+                    PointerEntered="Button_PointerEntered"
                     Visibility="Collapsed">
                 <FontIcon Glyph="&#xE760;" FontSize="18"/>
             </Button>

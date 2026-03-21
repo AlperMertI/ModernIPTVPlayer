@@ -990,7 +990,7 @@
                              <Border.Background>
                                  <SolidColorBrush Color="Black" Opacity="0.5"/>
                              </Border.Background>
-                              <Grid>
+                               <Grid x:Name="SourcesPanelInnerContent">
                                  <Grid.RowDefinitions>
                                      <RowDefinition Height="Auto"/>
                                      <RowDefinition Height="Auto"/>
@@ -1008,8 +1008,8 @@
                                          <FontIcon Glyph="&#xE72B;" FontSize="14"/>
                                      </Button>
                                      <TextBlock Grid.Column="1" Text="Kaynaklar" FontSize="22" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
-                                     <Button Grid.Column="2" x:Name="BtnCloseSources" Click="BtnCloseSources_Click" Style="{StaticResource GlassButtonStyle}" Width="36" Height="36" Padding="0" CornerRadius="18">
-                                         <FontIcon Glyph="&#xE711;" FontSize="14"/>
+                                     <Button Grid.Column="2" x:Name="BtnHideSources" Click="BtnHideSources_Click" Style="{StaticResource GlassButtonStyle}" Width="36" Height="36" Padding="0" CornerRadius="18">
+                                         <FontIcon Glyph="&#xE76C;" FontSize="14"/>
                                      </Button>
                                  </Grid>
 
@@ -1078,19 +1078,25 @@
                                           <DataTemplate>
                                               <Grid CornerRadius="10">
                                                <Grid Padding="8,10" Background="#1AFFFFFF" CornerRadius="10" BorderThickness="1" BorderBrush="#10FFFFFF">
-                                                  <Grid.ColumnDefinitions>
-                                                      <ColumnDefinition Width="70"/>
-                                                      <ColumnDefinition Width="*"/>
-                                                  </Grid.ColumnDefinitions>
-                                                  
-                                                  <!-- Provider Badge -->
-                                                  <Border Grid.Column="0" BorderBrush="{StaticResource GoldGradient}" BorderThickness="0,0,1,0" Margin="0,0,8,0" VerticalAlignment="Stretch">
-                                                      <TextBlock Text="{Binding ProviderText}" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}" 
-                                                                 HorizontalAlignment="Center" VerticalAlignment="Center" 
-                                                                 TextAlignment="Center" TextWrapping="Wrap" LineHeight="14"/>
-                                                  </Border>
+                                                   <Grid.ColumnDefinitions>
+                                                       <ColumnDefinition Width="65"/>
+                                                       <ColumnDefinition Width="Auto"/>
+                                                       <ColumnDefinition Width="*"/>
+                                                   </Grid.ColumnDefinitions>
+                                                   
+                                                   <!-- Provider Name Column -->
+                                                   <Grid Grid.Column="0" VerticalAlignment="Center">
+                                                       <TextBlock Text="{Binding ProviderText}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" 
+                                                                  HorizontalAlignment="Center" VerticalAlignment="Center" 
+                                                                  TextAlignment="Center" TextWrapping="Wrap" LineHeight="12" Opacity="0.9"
+                                                                  MaxLines="3" TextTrimming="CharacterEllipsis" Margin="4,0"/>
+                                                   </Grid>
 
-                                                  <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="6">
+                                                   <!-- Vertical Divider Column -->
+                                                   <Rectangle Grid.Column="1" Width="1" Fill="#E6FFD700" 
+                                                              VerticalAlignment="Stretch" Margin="0,8,10,8" Opacity="0.8"/>
+
+                                                   <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="6">
                                                       <!-- File Name -->
                                                       <TextBlock Text="{Binding Title}" ToolTipService.ToolTip="{Binding Title}" FontWeight="Bold" FontSize="15" Foreground="White" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
                                                       
@@ -1102,6 +1108,14 @@
                                                           <!-- Size -->
                                                           <Border Background="#1AFFFFFF" CornerRadius="4" Padding="6,2" Visibility="{Binding HasSize, Converter={StaticResource BoolToVis}}">
                                                               <TextBlock Text="{Binding Size}" FontSize="10" FontWeight="Bold" Foreground="#AAA"/>
+                                                          </Border>
+                                                          <!-- HDR Badge -->
+                                                          <Border Background="#26FF0000" CornerRadius="4" Padding="6,2" Visibility="{Binding IsHdr, Converter={StaticResource BoolToVis}}" BorderBrush="#33FF0000" BorderThickness="1">
+                                                              <TextBlock Text="HDR" FontSize="10" FontWeight="Bold" Foreground="#FFFF5555"/>
+                                                          </Border>
+                                                          <!-- Codec Badge -->
+                                                          <Border Background="#1AFFFFFF" CornerRadius="4" Padding="6,2" Visibility="{Binding HasCodec, Converter={StaticResource BoolToVis}}">
+                                                              <TextBlock Text="{Binding Codec}" FontSize="10" FontWeight="Bold" Foreground="#AAA"/>
                                                           </Border>
                                                           <!-- Cached Badge -->
                                                           <Border Background="#1A00FF88" CornerRadius="4" Padding="6,2" Visibility="{Binding IsCached, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
@@ -1121,7 +1135,7 @@
                                           </DataTemplate>
                                       </ListView.ItemTemplate>
                                   </ListView>
-
+                                  
                                   <!-- Sources List Shimmer (Nested) -->
                                  <Grid x:Name="SourcesShimmerPanel" Grid.Row="2" Visibility="Collapsed" Padding="16,0,16,20" VerticalAlignment="Center">
                                      <StackPanel Spacing="8">
@@ -1181,6 +1195,8 @@
                              </Grid>
                          </Border>
                     </Grid>
+
+
 
                 
                 <!-- NARROW SPECIFIC SECTIONS (Cast, Director, etc) -->
@@ -1252,6 +1268,21 @@
         </Grid>
 
         </Grid> <!-- End of MainContentWrapper -->
+
+        <!-- Sources Show Handle (Global positioning to stay at screen edge) -->
+        <Grid x:Name="SourcesShowHandle" Grid.RowSpan="99" Grid.ColumnSpan="99" 
+              HorizontalAlignment="Right" VerticalAlignment="Center"
+              Width="30" Height="100" Canvas.ZIndex="5000"
+              Background="Transparent" Visibility="Collapsed"
+              Tapped="SourcesShowHandle_Tapped"
+              ManipulationMode="TranslateX"
+              ManipulationStarted="SourcesShowHandle_ManipulationStarted"
+              ManipulationDelta="SourcesShowHandle_ManipulationDelta"
+              ManipulationCompleted="SourcesShowHandle_ManipulationCompleted">
+            <Border x:Name="SourcesShowHandleBorder" Background="#99000000" CornerRadius="15,0,0,15" BorderBrush="#33FFFFFF" BorderThickness="1,1,0,1">
+                <FontIcon Glyph="&#xE76B;" FontSize="16" Foreground="White" Opacity="0.9" Margin="0,0,4,0"/>
+            </Border>
+        </Grid>
 
 
         <!-- 5. FEEDBACK & NOTIFICATIONS -->

@@ -102,12 +102,21 @@ namespace ModernIPTVPlayer.Controls
         }
 
         public static readonly DependencyProperty IsAvailableOnIptvProperty =
-            DependencyProperty.Register("IsAvailableOnIptv", typeof(bool), typeof(PosterCard), new PropertyMetadata(false));
+            DependencyProperty.Register("IsAvailableOnIptv", typeof(bool), typeof(PosterCard), new PropertyMetadata(false, OnIPTVStateChanged));
 
         public bool IsAvailableOnIptv
         {
             get { return (bool)GetValue(IsAvailableOnIptvProperty); }
             set { SetValue(IsAvailableOnIptvProperty, value); }
+        }
+
+        public static readonly DependencyProperty ShowIptvBadgeProperty =
+            DependencyProperty.Register("ShowIptvBadge", typeof(bool), typeof(PosterCard), new PropertyMetadata(true, OnIPTVStateChanged));
+
+        public bool ShowIptvBadge
+        {
+            get { return (bool)GetValue(ShowIptvBadgeProperty); }
+            set { SetValue(ShowIptvBadgeProperty, value); }
         }
 
         public static readonly DependencyProperty ShowBadgeProperty =
@@ -142,6 +151,7 @@ namespace ModernIPTVPlayer.Controls
         public PosterCard()
         {
             this.InitializeComponent();
+            this.DataContextChanged += (s, e) => UpdateIPTVBadgeVisibility();
         }
 
 
@@ -174,14 +184,29 @@ namespace ModernIPTVPlayer.Controls
 
                 PosterShimmer.Visibility = Visibility.Collapsed;
 
-                // [IPTV Integration] Show badge if available
-                var stream = DataContext as StremioMediaStream;
-                if (stream != null)
-                {
-                    if (IptvBadge != null)
-                        IptvBadge.Visibility = (stream.IsAvailableOnIptv || stream.IsIptv) ? Visibility.Visible : Visibility.Collapsed;
-                }
+                UpdateIPTVBadgeVisibility();
             }
+        }
+
+        private static void OnIPTVStateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is PosterCard card)
+            {
+                card.UpdateIPTVBadgeVisibility();
+            }
+        }
+
+        private void UpdateIPTVBadgeVisibility()
+        {
+            if (IptvBadge == null) return;
+            
+            bool isIptvSource = false;
+            if (DataContext is StremioMediaStream stream)
+            {
+                isIptvSource = stream.IsAvailableOnIptv || stream.IsIptv;
+            }
+
+            IptvBadge.Visibility = (ShowIptvBadge && (IsAvailableOnIptv || isIptvSource)) ? Visibility.Visible : Visibility.Collapsed;
         }
 
 
@@ -302,6 +327,11 @@ namespace ModernIPTVPlayer.Controls
                 TiltProjection.RotationX = yDiff / 25.0;
             }
         }
+        public double GetProgressScale(double progress)
+        {
+            return Math.Clamp(progress / 100.0, 0, 1.0);
+        }
+
         public void PrepareConnectedAnimation()
         {
             ConnectedAnimationService.GetForCurrentView()

@@ -13,7 +13,10 @@ namespace ModernIPTVPlayer
     {
         // IMediaStream Implementation
         public int Id => StreamId;
-        public string? IMDbId => null; // VODs usually don't have IMDB ID directly unless parsed
+        
+        [JsonPropertyName("imdb_id")]
+        public string? ImdbId { get; set; }
+        public string? IMDbId => ImdbId;
         public string Title => Name;
         public string? Description => null;
         public string PosterUrl => IconUrl;

@@ -218,6 +218,12 @@
                                         <TextBlock Text="{Binding SourceBadgeText}" Foreground="White" FontSize="10" FontWeight="Bold"/>
                                     </Border>
 
+                                    <Border Background="#CC00D2FF" 
+                                            CornerRadius="4" Padding="6,2" 
+                                            Visibility="{Binding IsAvailableOnIptv, Converter={StaticResource BoolToVisibilityConverter}}">
+                                        <TextBlock Text="IPTV" Foreground="White" FontSize="10" FontWeight="Bold"/>
+                                    </Border>
+
                                     <Border Background="#22FFFFFF" CornerRadius="4" Padding="8,2">
                                         <TextBlock Text="{Binding Type}" Foreground="#AAFFFFFF" FontSize="11" FontWeight="Bold" CharacterSpacing="50"/>
                                     </Border>

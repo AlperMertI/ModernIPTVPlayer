@@ -210,10 +210,10 @@
                     </Grid>
 
                     <!-- MEDIA CONTENT AREA -->
-                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="1" Margin="0" Visibility="Visible" Background="Transparent" />
+                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="1" Margin="0" Visibility="Visible" Background="Transparent" ShowIptvBadge="False" />
 
                     <!-- STREMIO HOME (Hero + Rows) -->
-                    <controls:StremioDiscoveryControl x:Name="StremioControl" Grid.Row="0" Grid.RowSpan="2" Visibility="Collapsed" Canvas.ZIndex="0" Background="Transparent"/>
+                    <controls:StremioDiscoveryControl x:Name="StremioControl" Grid.Row="0" Grid.RowSpan="2" Visibility="Collapsed" Canvas.ZIndex="0" Background="Transparent" ShowIptvBadge="False"/>
                     
                     <!-- Overlays -->
                     <Canvas x:Name="OverlayCanvas" Grid.Row="0" Grid.RowSpan="2">

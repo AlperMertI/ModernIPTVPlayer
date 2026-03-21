@@ -188,13 +188,11 @@ namespace ModernIPTVPlayer.Services.Stremio
                         string url = $"{baseUrl.TrimEnd('/')}/stream/{type}/{id}.json";
                         System.Diagnostics.Debug.WriteLine($"[StremioService] Fetching Streams: {url}");
                         string json = await _client.GetStringAsync(url);
-                        // System.Diagnostics.Debug.WriteLine($"[StremioService] FULL RAW JSON from {baseUrl}: {json}");
                         var response = JsonSerializer.Deserialize<StremioStreamResponse>(json, _jsonOptions);
                         if (response?.Streams != null)
                         {
                             foreach (var s in response.Streams)
                             {
-                                // Tag the stream with source logic
                                 s.AddonUrl = baseUrl;
                                 if (string.IsNullOrEmpty(s.Name)) s.Name = "Addon";
                             }
@@ -203,12 +201,86 @@ namespace ModernIPTVPlayer.Services.Stremio
                     }
                     catch (Exception ex)
                     {
-                        // Barebones penalty: Log the error and return an empty list for this addon
                         System.Diagnostics.Debug.WriteLine($"[StremioService] Error fetching streams from {baseUrl}: {ex.Message}");
                     }
                     return new List<StremioStream>();
                 }));
             }
+
+            // [IPTV INTEGRATION] Inject IPTV source if available
+            tasks.Add(Task.Run(async () =>
+            {
+                var playlistId = App.CurrentLogin?.PlaylistUrl ?? "default";
+                try
+                {
+                    if (type == "movie")
+                    {
+                        var vods = await ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "vod_streams");
+                        var match = vods?.FirstOrDefault(v => v.IMDbId == id);
+                        
+                        // [NEW] Title Fallback if ID match fails
+                        if (match == null && vods != null)
+                        {
+                            var metas = GetGlobalMetaCache(id);
+                            string? targetTitle = metas.FirstOrDefault()?.Title;
+                            if (!string.IsNullOrEmpty(targetTitle))
+                            {
+                                string normTarget = NormalizeTitle(targetTitle);
+                                match = vods.FirstOrDefault(v => NormalizeTitle(v.Title) == normTarget);
+                            }
+                        }
+
+                        if (match != null)
+                        {
+                            return new List<StremioStream>
+                            {
+                                new StremioStream
+                                {
+                                    Name = "IPTV (VOD)",
+                                    Title = match.Title,
+                                    Url = match.StreamUrl,
+                                    AddonUrl = "iptv://internal"
+                                }
+                            };
+                        }
+                    }
+                    else if (type == "series")
+                    {
+                        var series = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series_streams");
+                        // Format for series is often tt123456:1:1, so we take the part before the first colon
+                        string seriesId = id.Split(':')[0];
+                        var match = series?.FirstOrDefault(s => s.IMDbId == seriesId);
+
+                        // [NEW] Title Fallback if ID match fails
+                        if (match == null && series != null)
+                        {
+                            var metas = GetGlobalMetaCache(seriesId);
+                            string? targetTitle = metas.FirstOrDefault()?.Title;
+                            if (!string.IsNullOrEmpty(targetTitle))
+                            {
+                                string normTarget = NormalizeTitle(targetTitle);
+                                match = series.FirstOrDefault(s => NormalizeTitle(s.Name) == normTarget);
+                            }
+                        }
+
+                        if (match != null)
+                        {
+                            return new List<StremioStream>
+                            {
+                                new StremioStream
+                                {
+                                    Name = "IPTV",
+                                    Title = match.Title,
+                                    Url = match.StreamUrl, 
+                                    AddonUrl = "iptv://internal"
+                                }
+                            };
+                        }
+                    }
+                }
+                catch { }
+                return new List<StremioStream>();
+            }));
 
             var results = await Task.WhenAll(tasks);
             
