@@ -19,10 +19,13 @@ namespace ModernIPTVPlayer.Controls
 
         private DispatcherTimer _debounceTimer;
         private string _lastQuery;
+        private System.Collections.ObjectModel.ObservableCollection<IMediaStream> _resultsCollection = new();
+        private System.Threading.CancellationTokenSource _searchCts;
 
         public SpotlightSearchControl()
         {
             this.InitializeComponent();
+            ResultsList.ItemsSource = _resultsCollection;
 
             _debounceTimer = new DispatcherTimer();
             _debounceTimer.Interval = TimeSpan.FromMilliseconds(400); // 400ms debounce
@@ -39,6 +42,7 @@ namespace ModernIPTVPlayer.Controls
 
         public async void Hide()
         {
+            _searchCts?.Cancel();
             CloseAnimation.Begin();
             await Task.Delay(250); // Wait for animation (Open is 250ms, Close should be similar)
             this.Visibility = Visibility.Collapsed;
@@ -55,7 +59,8 @@ namespace ModernIPTVPlayer.Controls
             
             if (string.IsNullOrWhiteSpace(SearchBox.Text))
             {
-                ResultsList.ItemsSource = null;
+                _lastQuery = null; // [FIX] Reset last query to allow re-typing same term
+                _resultsCollection.Clear();
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
                 ShimmerPanel.Visibility = Visibility.Collapsed;
                 SeeAllButton.Visibility = Visibility.Collapsed;
@@ -110,22 +115,77 @@ namespace ModernIPTVPlayer.Controls
             SeeAllText.Text = $"Tüm sonuçları gör: '{query}'";
             SeeAllButton.Visibility = Visibility.Visible;
 
+            _searchCts?.Cancel();
+            _searchCts = new System.Threading.CancellationTokenSource();
+            var token = _searchCts.Token;
+
             // Perform Unified Search (Service now handles IPTV + Ranking)
-            await StremioService.Instance.SearchAsync(query, (partialResults) =>
+            try
             {
-                this.DispatcherQueue.TryEnqueue(() =>
+                await StremioService.Instance.SearchAsync(query, (partialResults) =>
                 {
-                    // partialResults already includes ranked IPTV + Addon results
-                    ResultsList.ItemsSource = partialResults.Take(8).ToList();
-                    ResultsList.Visibility = ResultsList.Items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-                    ShimmerPanel.Visibility = Visibility.Collapsed;
-                    
-                    if (ResultsList.Items.Count == 0 && !string.IsNullOrEmpty(query)) 
-                        EmptyStatePanel.Visibility = Visibility.Visible;
-                    else
-                        EmptyStatePanel.Visibility = Visibility.Collapsed;
-                });
-            });
+                    if (token.IsCancellationRequested) return;
+
+                    this.DispatcherQueue.TryEnqueue(() =>
+                    {
+                        if (token.IsCancellationRequested) return;
+
+                        var topItems = partialResults.Take(8).ToList();
+                        
+                        // [NEW] Trigger Lazy IPTV Matching for the visible top 8 items
+                        _ = StremioService.Instance.MatchVisibleIptvAsync(topItems, query);
+
+                        // [SMOOTH SYNC] Avoid clearing the list to prevent catastrophic flicker.
+                        // Replace existing matching spots natively retaining container refs, and trim tails.
+                        for (int i = 0; i < topItems.Count; i++)
+                        {
+                            var target = topItems[i];
+                            int existingIndex = -1;
+                            for (int j = i; j < _resultsCollection.Count; j++)
+                            {
+                                if (_resultsCollection[j].Id == target.Id) { existingIndex = j; break; }
+                            }
+
+                            if (existingIndex == -1)
+                            {
+                                _resultsCollection.Insert(i, target);
+                            }
+                            else if (existingIndex != i)
+                            {
+                                _resultsCollection.Move(existingIndex, i);
+                                // Only replace if it's a completely different object (which shouldn't happen, but safe)
+                                if (!ReferenceEquals(_resultsCollection[i], target))
+                                {
+                                    _resultsCollection[i] = target;
+                                }
+                            }
+                            else
+                            {
+                                // Already in the correct position.
+                                if (!ReferenceEquals(_resultsCollection[i], target))
+                                {
+                                    _resultsCollection[i] = target;
+                                }
+                            }
+                        }
+
+                        // Remove leftover ghost items
+                        for (int i = _resultsCollection.Count - 1; i >= topItems.Count; i--)
+                        {
+                            _resultsCollection.RemoveAt(i);
+                        }
+
+                        ResultsList.Visibility = _resultsCollection.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+                        ShimmerPanel.Visibility = Visibility.Collapsed;
+                        
+                        if (ResultsList.Items.Count == 0 && !string.IsNullOrEmpty(query)) 
+                            EmptyStatePanel.Visibility = Visibility.Visible;
+                        else
+                            EmptyStatePanel.Visibility = Visibility.Collapsed;
+                    });
+                }, token);
+            }
+            catch (OperationCanceledException) { /* Ignored */ }
         }
 
         private void ResultsList_ItemClick(object sender, ItemClickEventArgs e)

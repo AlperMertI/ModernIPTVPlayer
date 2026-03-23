@@ -14,6 +14,7 @@ using ModernIPTVPlayer.Models.Metadata;
 using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Metadata;
 using ModernIPTVPlayer.Services.Stremio;
+using ModernIPTVPlayer.Services.Iptv;
 using ModernIPTVPlayer.Models; // Ensure Models namespace is included
 using ModernIPTVPlayer.Services;
 using System;
@@ -928,20 +929,40 @@ namespace ModernIPTVPlayer
             
             // 1. Exact ID match (IMDb, TMDB, or internal)
             string id1 = item1.IMDbId ?? item1.Id.ToString();
-            string id2 = item2.IMDbId ?? item2.Id.ToString();
+            string id2 = item2.Id.ToString(); // Use raw ID as secondary fallback
+            if (!string.IsNullOrEmpty(item1.IMDbId)) id1 = item1.IMDbId;
             
-            // [STABILITY] Strip prefixes like "imdb_id:" vs "tt" to help matching
-            if (id1 != null && id2 != null)
+            string rawId1 = item1.IMDbId;
+            string rawId2 = item2.IMDbId;
+
+            bool hasStableId1 = !string.IsNullOrEmpty(rawId1) && (rawId1.StartsWith("tt") || rawId1.StartsWith("tmdb:"));
+            bool hasStableId2 = !string.IsNullOrEmpty(rawId2) && (rawId2.StartsWith("tt") || rawId2.StartsWith("tmdb:"));
+
+            // [CRITICAL] If both have stable IDs and they differ -> Definitely different items.
+            if (hasStableId1 && hasStableId2 && rawId1 != rawId2) 
             {
-                string clean1 = id1.Replace("imdb_id:", "").Replace("tmdb:", "");
-                string clean2 = id2.Replace("imdb_id:", "").Replace("tmdb:", "");
-                if (clean1 == clean2) return true;
+                return false;
             }
 
-            // 2. Title match (Safety fallback for same context metadata enrichment)
+            // 2. ID Equality check (including non-stable IDs or cases where one is missing)
+            if (!string.IsNullOrEmpty(rawId1) && !string.IsNullOrEmpty(rawId2) && rawId1 == rawId2) return true;
+
+            // 3. Robust Fallback: Title + Year + Type
+            // This handles cases where one item (usually IPTV) lacks a stable ID.
             if (!string.IsNullOrEmpty(item1.Title) && !string.IsNullOrEmpty(item2.Title))
             {
-                if (item1.Title.Trim().Equals(item2.Title.Trim(), StringComparison.OrdinalIgnoreCase))
+                bool titleMatch = item1.Title.Trim().Equals(item2.Title.Trim(), StringComparison.OrdinalIgnoreCase);
+                
+                string y1 = StremioService.GetYearDigits(item1.Year);
+                string y2 = StremioService.GetYearDigits(item2.Year);
+                bool yearMatch = (string.IsNullOrEmpty(y1) || string.IsNullOrEmpty(y2)) || (y1 == y2);
+                
+                // Content Type check (Movie vs Series)
+                string t1 = item1.Type?.ToLowerInvariant() ?? "";
+                string t2 = item2.Type?.ToLowerInvariant() ?? "";
+                bool typeMatch = (string.IsNullOrEmpty(t1) || string.IsNullOrEmpty(t2)) || (t1 == t2 || (t1 == "tv" && t2 == "series") || (t1 == "series" && t2 == "tv"));
+
+                if (titleMatch && yearMatch && typeMatch)
                 {
                     return true;
                 }
@@ -1669,7 +1690,7 @@ namespace ModernIPTVPlayer
             }
 
             // [FIX] Pre-emptively set sources fetch state for movies to keep shimmer visible during reveal animation
-            if (item is Models.Stremio.StremioMediaStream strmItem && strmItem.Meta.Type == "movie")
+            if (isSwitchingItem && item is Models.Stremio.StremioMediaStream strmItem && strmItem.Meta.Type == "movie")
             {
                 _isSourcesFetchInProgress = true;
                 _areSourcesVisible = true;
@@ -3918,7 +3939,13 @@ namespace ModernIPTVPlayer
                             ImageUrl = !string.IsNullOrEmpty(e.ThumbnailUrl) ? e.ThumbnailUrl : (unified.PosterUrl ?? ""),
                             ReleaseDate = e.AirDate,
                             IsReleased = e.AirDate.HasValue ? e.AirDate.Value <= DateTime.Now : true,
-                            StreamUrl = e.StreamUrl
+                            StreamUrl = e.StreamUrl,
+                            Resolution = e.Resolution,
+                            VideoCodec = e.VideoCodec,
+                            Bitrate = e.Bitrate,
+                            IsHdr = e.IsHdr,
+                            IptvSeriesId = e.IptvSeriesId,
+                            IptvSourceTitle = e.IptvSourceTitle
                         };
                         epItem.RefreshHistoryState();
                         epList.Add(epItem);
@@ -4152,9 +4179,14 @@ namespace ModernIPTVPlayer
                                  Overview = e.Overview,
                                  ImageUrl = !string.IsNullOrEmpty(e.ThumbnailUrl) ? e.ThumbnailUrl : (_item?.PosterUrl ?? ""),
                                  StreamUrl = e.StreamUrl,
-                                 ReleaseDate = e.AirDate,
                                  IsReleased = (e.AirDate ?? DateTime.MinValue) <= DateTime.Now,
-                                 DurationFormatted = (!string.IsNullOrEmpty(e.RuntimeFormatted)) ? e.RuntimeFormatted : ""
+                                 DurationFormatted = (!string.IsNullOrEmpty(e.RuntimeFormatted)) ? e.RuntimeFormatted : "",
+                                 Resolution = e.Resolution,
+                                 VideoCodec = e.VideoCodec,
+                                 Bitrate = e.Bitrate,
+                                 IsHdr = e.IsHdr,
+                                 IptvSeriesId = e.IptvSeriesId,
+                                 IptvSourceTitle = e.IptvSourceTitle
                              };
                              epItem.RefreshHistoryState();
                              newEpList.Add(epItem);
@@ -5765,6 +5797,10 @@ namespace ModernIPTVPlayer
                     SyncAddonSelectionToActive();
                     ShowSourcesPanel(true);
                     ScrollToActiveSource();
+                    
+                    // [FIX] Reset fetch state and refresh layout on early return to hide shimmers
+                    _isSourcesFetchInProgress = !_isCurrentSourcesComplete; 
+                    UpdateLayoutState(ActualWidth >= LayoutAdaptiveThreshold);
                     return;
                 }
             }
@@ -5852,48 +5888,108 @@ namespace ModernIPTVPlayer
                     lastStreamUrl = HistoryManager.Instance.GetProgress(resolvedVideoId)?.StreamUrl;
                 }
 
-                // 1. ADD IPTV SOURCE IMMEDIATELY
                 StremioAddonViewModel iptvAddonToSelect = null;
-                if (_item.IsAvailableOnIptv || (_unifiedMetadata != null && _unifiedMetadata.IsAvailableOnIptv))
+                
+                // [DEBUG] IPTV Match Logic
+                AppLogger.Warn($"[IPTV_UI_MATCH] START: ItemTitle={_item?.Title}, UnifiedTitle={_unifiedMetadata?.Title}, Year={_unifiedMetadata?.Year}, IMDb={(_item as StremioMediaStream)?.IMDbId}");
+
+                var iptvMatches = (_item is StremioMediaStream stremioItem) 
+                    ? IptvMatchService.Instance.MatchStremioItemAll(stremioItem) 
+                    : new List<IMediaStream>();
+
+                AppLogger.Warn($"[IPTV_UI_MATCH] MatchStremioItemAll count: {iptvMatches?.Count ?? 0}");
+
+                if ((iptvMatches == null || !iptvMatches.Any()) && _unifiedMetadata != null)
+                {
+                    AppLogger.Warn($"[IPTV_UI_MATCH] Falling back to FindAllMatches with Title: {_unifiedMetadata.Title}, Original: {_unifiedMetadata.OriginalTitle}, Sub: {_unifiedMetadata.SubTitle}");
+                    iptvMatches = IptvMatchService.Instance.FindAllMatches(_unifiedMetadata.Title, _unifiedMetadata.OriginalTitle, _unifiedMetadata.SubTitle, _unifiedMetadata.Year, null, type == "series");
+                    AppLogger.Warn($"[IPTV_UI_MATCH] FindAllMatches result count: {iptvMatches?.Count ?? 0}");
+                }
+
+                if (iptvMatches != null && iptvMatches.Any())
                 {
                     try
                     {
-                        string iptvUrl = null;
-                        string iptvTitle = _item.Title;
-
-                        if (type == "movie")
+                        var iptvStreams = new List<StremioStreamViewModel>();
+                        foreach (var match in iptvMatches)
                         {
-                            iptvUrl = _item.StreamUrl ?? _unifiedMetadata?.StreamUrl;
-                            if (string.IsNullOrEmpty(iptvUrl)) iptvUrl = _unifiedMetadata?.MetadataId;
-                        }
-                        else if (type == "series" && _selectedEpisode != null)
-                        {
-                            iptvUrl = _selectedEpisode.StreamUrl ?? _unifiedMetadata?.StreamUrl;
-                            iptvTitle = $"{_selectedEpisode.SeasonNumber}x{_selectedEpisode.EpisodeNumber} - {_selectedEpisode.Title}";
-                        }
+                            string iptvUrl = match.StreamUrl;
+                            string displayTitle = match.Title;
 
-                        if (!string.IsNullOrEmpty(iptvUrl))
-                        {
-                            if (!iptvUrl.Contains("://") && !iptvUrl.StartsWith("/")) iptvUrl = $"iptv://{iptvUrl}";
-
-                            var iptvStream = new StremioStreamViewModel
+                            // [NEW] Resolve series match to specific episode if it's the current one
+                            if (match is SeriesStream sMatch && _selectedEpisode != null && sMatch.SeriesId == _selectedEpisode.IptvSeriesId)
                             {
-                                Title = iptvTitle,
+                                iptvUrl = _selectedEpisode.StreamUrl;
+                                if (!string.IsNullOrEmpty(_selectedEpisode.IptvSourceTitle))
+                                    displayTitle = _selectedEpisode.IptvSourceTitle;
+                            }
+
+                            if (string.IsNullOrEmpty(iptvUrl) && App.CurrentLogin != null)
+                            {
+                                string host = App.CurrentLogin.Host?.TrimEnd('/') ?? "";
+                                string user = App.CurrentLogin.Username ?? "";
+                                string pass = App.CurrentLogin.Password ?? "";
+
+                                if (match is VodStream vod)
+                                {
+                                    string ext = vod.ContainerExtension ?? "mp4";
+                                    iptvUrl = $"{host}/movie/{user}/{pass}/{vod.StreamId}.{ext}";
+                                }
+                                else if (match is SeriesStream series)
+                                {
+                                    iptvUrl = $"iptv://series/{series.SeriesId}";
+                                }
+                                else
+                                {
+                                    iptvUrl = match.Id.ToString();
+                                }
+                            }
+
+                            if (!string.IsNullOrEmpty(iptvUrl) && !iptvUrl.Contains("://") && !iptvUrl.StartsWith("/")) 
+                                iptvUrl = $"iptv://{iptvUrl}";
+
+                            if (iptvStreams.Any(s => s.Url == iptvUrl)) continue;
+
+                            iptvStreams.Add(new StremioStreamViewModel
+                            {
+                                Title = displayTitle,
                                 ProviderText = App.CurrentLogin?.PlaylistName?.ToUpperInvariant() ?? "IPTV",
                                 AddonName = "IPTV",
                                 Url = iptvUrl,
                                 IsCached = true,
-                                Quality = null, // Set to null to allow probe to update with real info
+                                Quality = !string.IsNullOrEmpty(match.Resolution) ? match.Resolution : "VOD",
                                 IsActive = !string.IsNullOrEmpty(lastStreamUrl) && iptvUrl == lastStreamUrl
-                            };
+                            });
+                        }
 
-                            var iptvAddon = new StremioAddonViewModel 
-                            { 
-                                Name = "IPTV", 
+                        // [ADD] Explicitly add selected episode's IPTV stream if it exists but wasn't in list above (Cross-check by URL)
+                        if (_selectedEpisode != null && !string.IsNullOrEmpty(_selectedEpisode.StreamUrl) && _selectedEpisode.StreamUrl.Contains("/series/"))
+                        {
+                            bool alreadyIn = iptvStreams.Any(s => s.Url == _selectedEpisode.StreamUrl);
+                            if (!alreadyIn)
+                            {
+                                iptvStreams.Insert(0, new StremioStreamViewModel
+                                {
+                                    Title = !string.IsNullOrEmpty(_selectedEpisode.IptvSourceTitle) ? _selectedEpisode.IptvSourceTitle : _selectedEpisode.Title,
+                                    ProviderText = App.CurrentLogin?.PlaylistName?.ToUpperInvariant() ?? "IPTV",
+                                    AddonName = "IPTV",
+                                    Url = _selectedEpisode.StreamUrl,
+                                    IsCached = true,
+                                    Quality = _selectedEpisode.Resolution,
+                                    IsActive = !string.IsNullOrEmpty(lastStreamUrl) && _selectedEpisode.StreamUrl == lastStreamUrl
+                                });
+                            }
+                        }
+
+                        if (iptvStreams.Any())
+                        {
+                            var iptvAddon = new StremioAddonViewModel
+                            {
+                                Name = "IPTV",
                                 AddonUrl = "iptv://internal",
-                                Streams = new List<StremioStreamViewModel> { iptvStream }, 
-                                IsLoading = false, 
-                                SortIndex = -1 
+                                Streams = iptvStreams,
+                                IsLoading = false,
+                                SortIndex = -1
                             };
 
                             _addonResults.Add(iptvAddon);
@@ -5957,7 +6053,7 @@ namespace ModernIPTVPlayer
                             }
 
                             string addonDisplayName = NormalizeAddonText(manifest.Name ?? baseUrl.Replace("https://", "").Replace("http://", "").Split('/')[0]);
-                            var streams = await Services.Stremio.StremioService.Instance.GetStreamsAsync(new List<string> { baseUrl }, type, resolvedVideoId);
+                            var streams = await Services.Stremio.StremioService.Instance.GetStreamsAsync(new List<string> { baseUrl }, type, resolvedVideoId, includeIptv: false);
                             
                             if (streams != null && streams.Count > 0)
                             {
@@ -6499,7 +6595,37 @@ namespace ModernIPTVPlayer
                     }
                 }
 
-                _streamUrl = vm.Url;
+                string playUrl = vm.Url;
+
+                // [NEW] Resolve internal IPTV series references to actual stream URLs
+                if (playUrl.StartsWith("iptv://series/") && App.CurrentLogin != null && _selectedEpisode != null)
+                {
+                    string seriesIdStr = playUrl.Replace("iptv://series/", "");
+                    if (int.TryParse(seriesIdStr, out int seriesId))
+                    {
+                        try
+                        {
+                            var info = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(seriesId, App.CurrentLogin);
+                            if (info != null && info.Episodes != null)
+                            {
+                                string seasonKey = _selectedEpisode.SeasonNumber.ToString();
+                                if (info.Episodes.TryGetValue(seasonKey, out var eps))
+                                {
+                                    var epMatch = eps.FirstOrDefault(e => e.EpisodeNum?.ToString() == _selectedEpisode.EpisodeNumber.ToString());
+                                    if (epMatch != null)
+                                    {
+                                        string host = App.CurrentLogin.Host?.TrimEnd('/') ?? "";
+                                        playUrl = $"{host}/series/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{epMatch.Id}.{epMatch.ContainerExtension ?? "mp4"}";
+                                        AppLogger.Info($"[IPTV_PLAY] Resolved {vm.Url} to {playUrl} for Season {_selectedEpisode.SeasonNumber} Episode {_selectedEpisode.EpisodeNumber}");
+                                    }
+                                }
+                            }
+                        }
+                        catch (Exception ex) { AppLogger.Error($"[IPTV_PLAY] Series resolution failed: {ex.Message}"); }
+                    }
+                }
+
+                _streamUrl = playUrl;
                 if (!string.IsNullOrEmpty(_streamUrl))
                 {
                     _ = UpdateTechnicalBadgesAsync(_streamUrl);
@@ -6544,18 +6670,18 @@ namespace ModernIPTVPlayer
                     bool isSameSource = hasExistingPlayer 
                         && !string.IsNullOrEmpty(currentPlayerPath) 
                         && currentPlayerPath != "N/A"
-                        && currentPlayerPath == vm.Url;
+                        && currentPlayerPath == playUrl;
 
                     if (isSameSource)
                     {
                         // CASE 1: Same source — use prebuffered player via handoff
                         Debug.WriteLine($"[SourceSelect] Same source selected — using prebuffered player via handoff.");
-                        await PerformHandoverAndNavigate(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType);
+                        await PerformHandoverAndNavigate(playUrl, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType);
                     }
                     else if (hasExistingPlayer && !string.IsNullOrEmpty(currentPlayerPath) && currentPlayerPath != "N/A")
                     {
                         // CASE 2: Different source — reuse existing player, just switch URL
-                        Debug.WriteLine($"[SourceSelect] Different source selected — switching URL in existing player: {vm.Url}");
+                        Debug.WriteLine($"[SourceSelect] Different source selected — switching URL in existing player: {playUrl}");
 
                         try
                         {
@@ -6573,11 +6699,11 @@ namespace ModernIPTVPlayer
                             }
 
                             // Configure for new URL (cookies/headers may differ)
-                            await MpvSetupHelper.ConfigurePlayerAsync(MediaInfoPlayer, vm.Url, isSecondary: true);
+                            await MpvSetupHelper.ConfigurePlayerAsync(MediaInfoPlayer, playUrl, isSecondary: true);
 
                             // Switch to new source
                             await MediaInfoPlayer.SetPropertyAsync("pause", "yes");
-                            await MediaInfoPlayer.OpenAsync(vm.Url);
+                            await MediaInfoPlayer.OpenAsync(playUrl);
                             await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
 
                             Debug.WriteLine($"[SourceSelect] URL switched successfully. Performing handoff.");
@@ -6587,19 +6713,19 @@ namespace ModernIPTVPlayer
                             Debug.WriteLine($"[SourceSelect] URL switch failed: {ex.Message}. Falling back to direct navigate.");
                             // Fallback: direct navigation
                             _sourceAddonUrl = vm.AddonUrl;
-                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop(), GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
+                            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(playUrl, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop(), GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
                             return;
                         }
 
                         _sourceAddonUrl = vm.AddonUrl;
-                        await PerformHandoverAndNavigate(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop());
+                        await PerformHandoverAndNavigate(playUrl, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop());
                     }
                     else
                     {
                         // CASE 3: No active player — direct navigation (fresh start)
                         Debug.WriteLine($"[SourceSelect] No active player — direct navigate for fresh start.");
                         _sourceAddonUrl = vm.AddonUrl;
-                        Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(vm.Url, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop(), GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
+                        Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(playUrl, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop(), GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
                     }
                 }
                 else if (!string.IsNullOrEmpty(vm.ExternalUrl))
@@ -7007,6 +7133,46 @@ namespace ModernIPTVPlayer
 
             try
             {
+                // 0. CHECK IPTV METADATA FIRST (USER REQUEST) - Avoid Probing if possible
+                string metadataRes = null;
+                string metadataCodec = null;
+                long metadataBitrate = 0;
+                bool? metadataHdr = null;
+
+                if (_selectedEpisode != null)
+                {
+                    metadataRes = _selectedEpisode.Resolution;
+                    metadataCodec = _selectedEpisode.VideoCodec;
+                    metadataBitrate = _selectedEpisode.Bitrate;
+                    metadataHdr = _selectedEpisode.IsHdr;
+                }
+                else if (_unifiedMetadata != null)
+                {
+                    metadataRes = _unifiedMetadata.Resolution;
+                    metadataCodec = _unifiedMetadata.VideoCodec;
+                    metadataBitrate = _unifiedMetadata.Bitrate;
+                    metadataHdr = _unifiedMetadata.IsHdr;
+                }
+
+                if (!string.IsNullOrEmpty(metadataRes) || !string.IsNullOrEmpty(metadataCodec))
+                {
+                    Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "IPTV METADATA: Skipping probe, using provided info", url);
+                    var probeData = new Services.ProbeData
+                    {
+                        Resolution = metadataRes,
+                        Codec = metadataCodec,
+                        Bitrate = metadataBitrate,
+                        IsHdr = metadataHdr ?? false
+                    };
+                    DispatcherQueue.TryEnqueue(() => 
+                    {
+                        TechBadgesContent.Visibility = Visibility.Visible;
+                        ApplyMetadataToUi(probeData);
+                        SetBadgeLoadingState(false);
+                    });
+                    return;
+                }
+
                 // UI Reset for new probe
                 Badge4K.Visibility = Visibility.Collapsed;
                 BadgeRes.Visibility = Visibility.Collapsed;
@@ -7194,6 +7360,23 @@ namespace ModernIPTVPlayer
                 BadgeBitrate.Visibility = Visibility.Collapsed;
             }
 
+            // Age Rating & Country (from UnifiedMetadata)
+            if (_unifiedMetadata != null)
+            {
+                if (BadgeAge != null)
+                {
+                    bool hasAge = !string.IsNullOrEmpty(_unifiedMetadata.AgeRating);
+                    BadgeAge.Visibility = hasAge ? Visibility.Visible : Visibility.Collapsed;
+                    if (hasAge && BadgeAgeText != null) BadgeAgeText.Text = _unifiedMetadata.AgeRating;
+                }
+                if (BadgeCountry != null)
+                {
+                    bool hasCountry = !string.IsNullOrEmpty(_unifiedMetadata.Country);
+                    BadgeCountry.Visibility = hasCountry ? Visibility.Visible : Visibility.Collapsed;
+                    if (hasCountry && BadgeCountryText != null) BadgeCountryText.Text = _unifiedMetadata.Country;
+                }
+            }
+
             UpdateTechnicalSectionVisibility(HasVisibleBadges());
         }
 
@@ -7201,6 +7384,8 @@ namespace ModernIPTVPlayer
         /// Returns true if any technical badge (4K, Resolution, HDR, SDR, Codec) is currently visible.
         /// </summary>
         private bool HasVisibleBadges() =>
+            (BadgeAge != null && BadgeAge.Visibility == Visibility.Visible) ||
+            (BadgeCountry != null && BadgeCountry.Visibility == Visibility.Visible) ||
             Badge4K.Visibility == Visibility.Visible ||
             BadgeRes.Visibility == Visibility.Visible ||
             BadgeHDR.Visibility == Visibility.Visible ||
@@ -7999,6 +8184,15 @@ namespace ModernIPTVPlayer
         public int SeasonNumber { get; set; }
 
         public int EpisodeNumber { get; set; }
+        
+        public int IptvSeriesId { get; set; }
+        public string IptvSourceTitle { get; set; }
+        
+        // Technical Metadata
+        public string Resolution { get; set; }
+        public string VideoCodec { get; set; }
+        public long Bitrate { get; set; }
+        public bool IsHdr { get; set; }
         
         // Formatted Metadata
         public string EpisodeNumberFormatted => $"{EpisodeNumber}. Bölüm";

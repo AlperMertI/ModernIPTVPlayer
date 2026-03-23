@@ -8,8 +8,10 @@ using System.Text.RegularExpressions;
 using ModernIPTVPlayer.Models.Metadata;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services.Stremio;
+using ModernIPTVPlayer.Services.Iptv;
 using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Services.Metadata
 {
@@ -741,12 +743,13 @@ namespace ModernIPTVPlayer.Services.Metadata
                     if (metadata.IsSeries)
                     {
                         var seriesStream = sourceStream as SeriesStream;
-                        await EnrichWithIptvAsync(metadata, seriesStream ?? new SeriesStream { Name = metadata.Title });
+                        await EnrichWithIptvAsync(metadata, seriesStream ?? new SeriesStream { Name = metadata.Title }, trace);
                     }
                     else
                     {
                         var movieStream = sourceStream as VodStream;
-                        await EnrichWithIptvMovieAsync(metadata, movieStream ?? new VodStream { Name = metadata.Title });
+                        // If it's another IPTV type (e.g. LiveStream), we still want to pass its Name for matching if ID is not known
+                        await EnrichWithIptvMovieAsync(metadata, movieStream ?? new VodStream { Name = metadata.Title, StreamId = (sourceStream?.Id ?? 0) }, trace);
                     }
                 }
             }
@@ -1181,10 +1184,10 @@ namespace ModernIPTVPlayer.Services.Metadata
             return true;
         }
 
-        private async Task EnrichWithIptvMovieAsync(UnifiedMetadata metadata, Models.IMediaStream vod)
+        private async Task EnrichWithIptvMovieAsync(UnifiedMetadata metadata, Models.IMediaStream vod, MetadataTrace? trace = null)
         {
             if (App.CurrentLogin == null) return;
-            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Enriching IPTV Movie: {vod.Title} (ID: {vod.Id}) type: {vod.GetType().Name}");
+            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Enriching IPTV Movie: {vod.Title} (ID: {vod.Id}, ProviderImdb: {vod.IMDbId}) type: {vod.GetType().Name}");
 
             try
             {
@@ -1193,94 +1196,189 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // [FIX] If navigating from search (Stremio item), we need to find the matching IPTV item by IMDb ID or Title
                 if (streamId <= 0)
                 {
-                    var allVod = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(App.CurrentLogin.PlaylistUrl, "vod");
+                    string playlistId = App.CurrentLogin?.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
+                    trace?.Log("IPTV", $"Enriching IPTV Movie: {metadata.Title} | CacheId: {playlistId}");
+                    
+                    var allVod = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod");
                     if (allVod != null)
                     {
-                        // 1. Try IMDb ID Match
-                        var match = IsImdbId(metadata.ImdbId) ? allVod.FirstOrDefault(v => v.IMDbId == metadata.ImdbId) : null;
-                        
-                        // 2. Try Exact Title Match
-                        if (match == null) match = allVod.FirstOrDefault(v => string.Equals(v.Name, metadata.Title, StringComparison.OrdinalIgnoreCase));
-                        
-                        // 3. Try Clean Title Match (removing year etc.)
+                        // Use Centralized IptvMatchService
+                        var match = IptvMatchService.Instance.FindMatchById(metadata.ImdbId, false) as VodStream;
                         if (match == null)
                         {
-                            string cleanTitle = CleanTitleForMatch(metadata.Title);
-                            match = allVod.FirstOrDefault(v => CleanTitleForMatch(v.Name) == cleanTitle);
+                            match = IptvMatchService.Instance.FindMatch(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, metadata.Year, null, false) as VodStream;
                         }
 
-                        if (match != null) streamId = match.StreamId;
+                        if (match != null)
+                        {
+                            trace?.Log("IPTV", $"Match Success: {match.Name}");
+                        }
+                        else
+                        {
+                            trace?.Log("IPTV", $"Match Failed for: {metadata.Title}");
+                        }
+
+                        if (match != null) 
+                        {
+                            // [NEW] Learn and Persist this match if it was found via Title
+                            if (string.IsNullOrEmpty(match.ImdbId) || match.ImdbId != metadata.ImdbId)
+                            {
+                                IptvMatchService.Instance.RegisterMatch(match, metadata.ImdbId);
+                            }
+
+                            System.Diagnostics.Debug.WriteLine($"[IPTV_MATCH] Match Details: Title='{match.Name}', ProviderImdb='{match.IMDbId}', InternalId={match.StreamId}");
+                            streamId = match.StreamId;
+                            metadata.IsAvailableOnIptv = true;
+                            
+                            // Seed basic info from the match early
+                            if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = match.Name;
+                            if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.IconUrl;
+                            if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.Year;
+                            if (metadata.Rating == 0 && double.TryParse(match.Rating, out double r)) metadata.Rating = r;
+                        }
+                        else
+                        {
+                            trace?.Log("IPTV", $"Match Failed for: {metadata.Title}");
+                        }
                     }
+                    else
+                    {
+                        trace?.Log("IPTV", $"VOD Cache is empty or not found for CacheId: {playlistId}");
+                    }
+                }
+                else if (vod is VodStream vs)
+                {
+                    // If we already have a VodStream from the library, set availability immediately
+                    metadata.IsAvailableOnIptv = true;
+                    if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = vs.Name;
+                    if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = vs.IconUrl;
+                    if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = vs.Year;
                 }
 
                 if (streamId <= 0) return;
 
-                var result = await ContentCacheService.Instance.GetMovieInfoAsync(streamId, App.CurrentLogin);
-                if (result?.Info != null)
+                // [FIX] Pre-set basic stream URL in case GetMovieInfoAsync returns empty info/movie_data
+                if (metadata.IsAvailableOnIptv && string.IsNullOrEmpty(metadata.StreamUrl))
                 {
-                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] IPTV Movie Info Found: {result.Info.Name}");
-                    
-                    // Prefer IPTV data if Stremio/TMDB is missing or incomplete
-                    if (string.IsNullOrEmpty(metadata.Overview) || metadata.Overview == "Açıklama mevcut değil.") 
-                        metadata.Overview = result.Info.Plot;
-                    
-                    if (string.IsNullOrEmpty(metadata.Genres)) 
-                        metadata.Genres = result.Info.Genre;
-                    
-                    if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") 
-                        metadata.Title = result.Info.Name;
-                    
-                    if (string.IsNullOrEmpty(metadata.BackdropUrl)) 
-                        metadata.BackdropUrl = result.Info.MovieImage;
+                    var login = App.CurrentLogin;
+                    string ext = (vod as VodStream)?.ContainerExtension ?? "mkv";
+                    if (!ext.StartsWith(".")) ext = "." + ext;
+                    metadata.StreamUrl = $"{login.Host}/movie/{login.Username}/{login.Password}/{streamId}{ext}";
+                    metadata.MetadataId = streamId.ToString();
+                }
 
-                    if (string.IsNullOrEmpty(metadata.PosterUrl))
-                        metadata.PosterUrl = result.Info.MovieImage;
-
-                    // [LOGO FALLBACK] Use IPTV logo if we don't have one from Stremio/TMDB
-                    if (string.IsNullOrEmpty(metadata.LogoUrl))
-                        metadata.LogoUrl = result.Info.MovieImage;
-
-                    if (metadata.Rating == 0)
+                var result = await ContentCacheService.Instance.GetMovieInfoAsync(streamId, App.CurrentLogin);
+                if (result != null)
+                {
+                    if (result.Info != null)
                     {
-                        if (double.TryParse(result.Info.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double ratingValue))
+                        AppLogger.Info($"[Enrich-Iptv] IPTV Movie Details Found: {result.Info.Name}");
+                        
+                        // 1. Basic Metadata (Priority to Stremio/TMDB, but fill if empty)
+                        if (string.IsNullOrEmpty(metadata.Overview) || metadata.Overview == "Açıklama mevcut değil.") 
+                            metadata.Overview = result.Info.Plot;
+                        
+                        if (string.IsNullOrEmpty(metadata.Genres)) 
+                            metadata.Genres = result.Info.Genre;
+                        
+                        if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") 
+                            metadata.Title = result.Info.Name;
+                        
+                        // 2. Visuals
+                        if (string.IsNullOrEmpty(metadata.BackdropUrl)) 
+                            metadata.BackdropUrl = result.Info.MovieImage;
+
+                        if (result.Info.BackdropPath != null && result.Info.BackdropPath.Length > 0)
                         {
-                            metadata.Rating = ratingValue;
+                            foreach (var path in result.Info.BackdropPath)
+                            {
+                                if (!metadata.BackdropUrls.Contains(path)) metadata.BackdropUrls.Add(path);
+                            }
+                            if (string.IsNullOrEmpty(metadata.BackdropUrl)) metadata.BackdropUrl = result.Info.BackdropPath[0];
+                        }
+
+                        if (string.IsNullOrEmpty(metadata.PosterUrl))
+                            metadata.PosterUrl = result.Info.MovieImage ?? result.Info.CoverBig;
+
+                        if (string.IsNullOrEmpty(metadata.LogoUrl))
+                            metadata.LogoUrl = result.Info.MovieImage;
+
+                        // 3. Classification
+                        if (string.IsNullOrEmpty(metadata.AgeRating))
+                            metadata.AgeRating = !string.IsNullOrEmpty(result.Info.MpaaRating) ? result.Info.MpaaRating : result.Info.Age;
+                        
+                        if (string.IsNullOrEmpty(metadata.Country))
+                            metadata.Country = result.Info.Country;
+
+                        // 4. Trailer
+                        if (string.IsNullOrEmpty(metadata.TrailerUrl) && !string.IsNullOrEmpty(result.Info.YoutubeTrailer))
+                        {
+                            metadata.TrailerUrl = result.Info.YoutubeTrailer.StartsWith("http") 
+                                ? result.Info.YoutubeTrailer 
+                                : $"https://www.youtube.com/watch?v={result.Info.YoutubeTrailer}";
+                        }
+
+                        // 5. Technical Info (Used to skip probing)
+                        if (string.IsNullOrEmpty(metadata.Runtime))
+                            metadata.Runtime = result.Info.Duration;
+
+                        if (result.Info.Video != null)
+                        {
+                            metadata.Resolution = $"{result.Info.Video.Width}x{result.Info.Video.Height}";
+                            metadata.VideoCodec = result.Info.Video.CodecName;
+                        }
+                        if (result.Info.Audio != null)
+                        {
+                            metadata.AudioCodec = result.Info.Audio.CodecName;
+                        }
+                        if (result.Info.Bitrate != null)
+                        {
+                            if (long.TryParse(result.Info.Bitrate.ToString(), out long br)) metadata.Bitrate = br;
+                        }
+
+                        // 6. Rating
+                        if (metadata.Rating == 0)
+                        {
+                            if (double.TryParse(result.Info.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double ratingValue))
+                            {
+                                metadata.Rating = ratingValue;
+                            }
+                        }
+
+                        // 7. Year
+                        if (string.IsNullOrEmpty(metadata.Year))
+                            metadata.Year = result.Info.ReleaseDate;
+
+                        // 8. Cast & Crew
+                        if (result.Info.Director != null && (metadata.Directors == null || metadata.Directors.Count == 0))
+                        {
+                            metadata.Directors = result.Info.Director.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                                              .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
+                        }
+
+                        if (result.Info.Cast != null && (metadata.Cast == null || metadata.Cast.Count == 0))
+                        {
+                            metadata.Cast = result.Info.Cast.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                                          .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim() }).ToList();
                         }
                     }
 
-                    if (string.IsNullOrEmpty(metadata.Year))
-                        metadata.Year = result.Info.ReleaseDate;
-
-                    metadata.DataSource += (string.IsNullOrEmpty(metadata.DataSource) ? "" : " + ") + "IPTV";
-                    if (result.Info.Director != null && (metadata.Directors == null || metadata.Directors.Count == 0))
-                    {
-                        metadata.Directors = result.Info.Director.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                                                          .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
-                    }
-
-                    if (result.Info.Cast != null && (metadata.Cast == null || metadata.Cast.Count == 0))
-                    {
-                        metadata.Cast = result.Info.Cast.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                                                      .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim() }).ToList();
-                    }
-
-                    // Update Stream URL if container extension is available
+                    // [CRITICAL] Update Stream URL
                     if (result.MovieData != null)
                     {
                         string ext = result.MovieData.ContainerExtension;
-                        if (string.IsNullOrEmpty(ext)) ext = "mkv";
+                        if (string.IsNullOrEmpty(ext)) ext = (vod as VodStream)?.ContainerExtension ?? "mkv";
                         if (!ext.StartsWith(".")) ext = "." + ext;
                         
                         string streamUrl = $"{App.CurrentLogin.Host}/movie/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{result.MovieData.StreamId}{ext}";
                         vod.StreamUrl = streamUrl;
                         metadata.StreamUrl = streamUrl;
                         metadata.IsAvailableOnIptv = true;
-
-                        // However, for consistency with episodes:
                         metadata.MetadataId = result.MovieData.StreamId.ToString();
+                        
+                        if (string.IsNullOrEmpty(metadata.DataSource) || !metadata.DataSource.Contains("IPTV"))
+                            metadata.DataSource += (string.IsNullOrEmpty(metadata.DataSource) ? "" : " + ") + "IPTV";
                     }
-
-                    metadata.DataSource += " + IPTV";
                 }
             }
             catch (Exception ex)
@@ -1289,85 +1387,159 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
         }
 
-        private async Task EnrichWithIptvAsync(UnifiedMetadata metadata, SeriesStream series)
+        private async Task EnrichWithIptvAsync(UnifiedMetadata metadata, SeriesStream series, MetadataTrace? trace = null)
         {
             if (App.CurrentLogin == null) return;
-            
-            try 
+            AppLogger.Info($"[Enrich-Iptv] Starting enrichment for: {metadata.Title} (IMDb: {metadata.ImdbId})");
+
+            try
             {
                 int seriesId = series.SeriesId;
 
                 // [FIX] If seriesId is 0 (or we are in a Stremio context), try to find by IMDbId or Title
                 if (seriesId <= 0)
                 {
-                    var allSeries = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(App.CurrentLogin.PlaylistUrl, "series");
+                    string playlistId = App.CurrentLogin?.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
+                    trace?.Log("IPTV", $"Enriching IPTV Series: {metadata.Title} | CacheId: {playlistId}");
+                    var allSeries = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
                     if (allSeries != null)
                     {
-                        // 1. Try IMDb ID Match
-                        var match = IsImdbId(metadata.ImdbId) ? allSeries.FirstOrDefault(s => s.IMDbId == metadata.ImdbId) : null;
-                        
-                        // 2. Try Title Match
-                        if (match == null) match = allSeries.FirstOrDefault(s => string.Equals(s.Name, metadata.Title, StringComparison.OrdinalIgnoreCase));
-                        
+                        // Use Centralized IptvMatchService
+                        var match = IptvMatchService.Instance.FindAllMatchesById(metadata.ImdbId, true).FirstOrDefault() as SeriesStream;
                         if (match == null)
                         {
-                            string cleanTitle = CleanTitleForMatch(metadata.Title);
-                            match = allSeries.FirstOrDefault(s => CleanTitleForMatch(s.Name) == cleanTitle);
+                            match = IptvMatchService.Instance.FindAllMatches(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, metadata.Year, null, true).FirstOrDefault() as SeriesStream;
                         }
 
-                        if (match != null) seriesId = match.SeriesId;
+                        if (match == null && !string.IsNullOrEmpty(metadata.ImdbId))
+                        {
+                            string? mappedId = IdMappingService.Instance.GetTmdbForImdb(metadata.ImdbId);
+                            if (!string.IsNullOrEmpty(mappedId))
+                            {
+                                trace?.Log("IPTV", $"ID conversion (Service): {metadata.ImdbId} -> {mappedId}");
+                                match = IptvMatchService.Instance.FindAllMatchesById(mappedId, true).FirstOrDefault() as SeriesStream;
+                            }
+                            
+                            if (match == null)
+                            {
+                                AppLogger.Info($"[Enrich-Iptv] No direct IMDb match for '{metadata.Title}'. Trying TMDB network conversion...");
+                                var tmdbSearch = await TmdbHelper.GetTvByExternalIdAsync(metadata.ImdbId);
+                                if (tmdbSearch != null)
+                                {
+                                    string tmdbIdStr = tmdbSearch.Id.ToString();
+                                    IdMappingService.Instance.RegisterMapping(metadata.ImdbId, tmdbIdStr);
+                                    AppLogger.Info($"[Enrich-Iptv] Converted {metadata.ImdbId} -> TMDB ID {tmdbIdStr}. Searching IPTV again...");
+                                    match = IptvMatchService.Instance.FindAllMatchesById(tmdbIdStr, true).FirstOrDefault() as SeriesStream;
+                                }
+                            }
+                        }
+
+                        if (match != null)
+                        {
+                            // [NEW] Learn and Persist this match if it was found via Title or ID conversion
+                            if (string.IsNullOrEmpty(match.ImdbId) || match.ImdbId != metadata.ImdbId)
+                            {
+                                IptvMatchService.Instance.RegisterMatch(match, metadata.ImdbId);
+                            }
+
+                            AppLogger.Info($"[Enrich-Iptv] Match SUCCESS: '{match.Name}' (ID: {match.SeriesId}, IMDb: {match.IMDbId})");
+                            seriesId = match.SeriesId;
+                            metadata.IsAvailableOnIptv = true;
+
+                            // Seed basic info from match
+                            if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = match.Name;
+                            if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.Cover;
+                            if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.ReleaseDate;
+                            if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = match.Plot;
+                        }
+                        else
+                        {
+                            AppLogger.Warn($"[Enrich-Iptv] Match FAILED for: '{metadata.Title}' (IMDb: {metadata.ImdbId})");
+                        }
                     }
+                    else
+                    {
+                        AppLogger.Warn($"[Enrich-Iptv] Series Cache is empty for: {playlistId}");
+                    }
+                }
+                else
+                {
+                    AppLogger.Info($"[Enrich-Iptv] Using existing series stream: {series.Name} (ID: {series.SeriesId})");
+                    metadata.IsAvailableOnIptv = true;
+                    if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = series.Name;
+                    if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = series.Cover;
+                    if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = series.ReleaseDate;
+                    if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = series.Plot;
                 }
 
                 if (seriesId <= 0) return;
 
+                AppLogger.Info($"[Enrich-Iptv] Fetching full series info for ID: {seriesId}");
                 var info = await ContentCacheService.Instance.GetSeriesInfoAsync(seriesId, App.CurrentLogin);
-                if (info?.Info != null)
+                if (info != null)
                 {
-                    // Map Basic Info
-                    if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = info.Info.Plot;
-                    if (string.IsNullOrEmpty(metadata.Genres)) metadata.Genres = info.Info.Genre;
-                    if (string.IsNullOrEmpty(metadata.Title)) metadata.Title = info.Info.Name;
-                    if (string.IsNullOrEmpty(metadata.BackdropUrl)) metadata.BackdropUrl = info.Info.Cover;
-                    if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = info.Info.Cover;
+                    // 1. Series Level Metadata
+                    if (info.Info != null)
+                    {
+                        AppLogger.Info($"[Enrich-Iptv] Received series info (Name: {info.Info.Name}, Rating: {info.Info.Rating}, Release: {info.Info.ReleaseDate})");
+                        
+                        // Map Basic Info
+                        if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = info.Info.Plot;
+                        if (string.IsNullOrEmpty(metadata.Genres)) metadata.Genres = info.Info.Genre;
+                        if (string.IsNullOrEmpty(metadata.Title)) metadata.Title = info.Info.Name;
+                        if (string.IsNullOrEmpty(metadata.BackdropUrl)) metadata.BackdropUrl = info.Info.Cover;
+                        if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = info.Info.Cover;
 
-                    // [LOGO FALLBACK] Use IPTV logo if we don't have one from Stremio/TMDB
-                    if (string.IsNullOrEmpty(metadata.LogoUrl))
-                        metadata.LogoUrl = info.Info.Cover;
-                    
-                    // Map Rating & Year
-                    string ratingStr = !string.IsNullOrEmpty(info.Info.Rating) ? info.Info.Rating : series.Rating;
-                    if (double.TryParse(ratingStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
-                    {
-                        metadata.Rating = r;
-                    }
-                    if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = info.Info.ReleaseDate;
-                    
-                    if (info.Info.Cast != null && (metadata.Cast == null || metadata.Cast.Count == 0))
-                    {
-                        metadata.Cast = info.Info.Cast.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                                                      .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim() }).ToList();
+                        if (string.IsNullOrEmpty(metadata.LogoUrl))
+                            metadata.LogoUrl = info.Info.Cover;
+
+                        // Map Rating & Year
+                        string ratingStr = !string.IsNullOrEmpty(info.Info.Rating) ? info.Info.Rating : series.Rating;
+                        if (double.TryParse(ratingStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+                        {
+                            metadata.Rating = r;
+                        }
+                        if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = info.Info.ReleaseDate;
+
+                        // Classification
+                        if (string.IsNullOrEmpty(metadata.AgeRating))
+                            metadata.AgeRating = info.Info.Age;
+
+                        if (string.IsNullOrEmpty(metadata.Country))
+                            metadata.Country = info.Info.Country;
+
+                        if (info.Info.Cast != null && (metadata.Cast == null || metadata.Cast.Count == 0))
+                        {
+                            metadata.Cast = info.Info.Cast.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                                          .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim() }).ToList();
+                        }
+
+                        if (info.Info.Director != null && (metadata.Directors == null || metadata.Directors.Count == 0))
+                        {
+                            metadata.Directors = info.Info.Director.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                                            .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
+                        }
+
+                        if (string.IsNullOrEmpty(metadata.DataSource) || !metadata.DataSource.Contains("IPTV"))
+                            metadata.DataSource += (string.IsNullOrEmpty(metadata.DataSource) ? "" : " + ") + "IPTV";
                     }
 
-                    if (info.Info.Director != null && (metadata.Directors == null || metadata.Directors.Count == 0))
-                    {
-                        metadata.Directors = info.Info.Director.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                                                        .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
-                    }
-                    
                     // Map Seasons/Episodes if missing
                     if (metadata.Seasons.Count == 0 && info.Episodes != null)
                     {
+                        int totalEpisodes = info.Episodes.Sum(kvp => kvp.Value.Count);
+                        AppLogger.Info($"[Enrich-Iptv] Mapping {info.Episodes.Count} seasons ({totalEpisodes} episodes) from IPTV.");
+                        
                         foreach (var kvp in info.Episodes)
                         {
                             if (int.TryParse(kvp.Key, out int seasonNum))
                             {
-                                var season = new UnifiedSeason
+                                var seasonDef = new UnifiedSeason
                                 {
                                     SeasonNumber = seasonNum,
                                     Name = seasonNum == 0 ? "Özel Bölümler" : $"{seasonNum}. Sezon"
                                 };
-                                
+
                                 foreach (var ep in kvp.Value)
                                 {
                                     int.TryParse(ep.EpisodeNum?.ToString(), out int epNum);
@@ -1377,32 +1549,95 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                                     string streamUrl = $"{App.CurrentLogin.Host}/series/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{ep.Id}{extension}";
 
-                                    season.Episodes.Add(new UnifiedEpisode
+                                    seasonDef.Episodes.Add(new UnifiedEpisode
                                     {
                                         Id = ep.Id,
                                         Title = ep.Title,
+                                        IptvSourceTitle = ep.Title, // [NEW] Keep literal IPTV name for source panel
+                                        IptvSeriesId = seriesId, // [NEW] Store series ID for deduplication
                                         Overview = ep.Info?.Plot, // Episode specific plot (rare but possible)
                                         ThumbnailUrl = ep.Info?.MovieImage,
                                         SeasonNumber = seasonNum,
                                         EpisodeNumber = epNum,
-                                        StreamUrl = streamUrl, 
+                                        StreamUrl = streamUrl,
                                         RuntimeFormatted = ep.Info?.Duration
                                     });
                                 }
-                                metadata.Seasons.Add(season);
+                                metadata.Seasons.Add(seasonDef);
                             }
                         }
-                          metadata.Seasons = metadata.Seasons
+                        metadata.Seasons = metadata.Seasons
                              .OrderBy(s => s.SeasonNumber == 0 ? int.MaxValue : s.SeasonNumber)
                              .ToList();
                     }
-                    
-                    metadata.DataSource += " + IPTV";
+                    else if (metadata.Seasons.Count > 0 && info.Episodes != null)
+                    {
+                         AppLogger.Info($"[Enrich-Iptv] Metadata already has {metadata.Seasons.Count} seasons. Merging IPTV stream URLs and technical details.");
+                         int mergeCount = 0;
+                         foreach (var kvp in info.Episodes)
+                         {
+                             if (int.TryParse(kvp.Key, out int seasonNum))
+                             {
+                                 var existingSeason = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == seasonNum);
+                                 if (existingSeason != null)
+                                 {
+                                     foreach (var ep in kvp.Value)
+                                     {
+                                         int.TryParse(ep.EpisodeNum?.ToString(), out int epNum);
+                                         var existingEp = existingSeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == epNum);
+                                         
+                                         string extension = ep.ContainerExtension;
+                                         if (string.IsNullOrEmpty(extension)) extension = "mkv"; 
+                                         if (!extension.StartsWith(".")) extension = "." + extension;
+                                         string streamUrl = $"{App.CurrentLogin.Host}/series/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{ep.Id}{extension}";
+
+                                         if (existingEp != null)
+                                         {
+                                             // Update existing episode
+                                             existingEp.StreamUrl = streamUrl;
+                                             existingEp.IptvSourceTitle = ep.Title; // [NEW] Keep literal IPTV name for source panel
+                                             existingEp.IptvSeriesId = seriesId; // [NEW] Store series ID for deduplication
+                                             if (string.IsNullOrEmpty(existingEp.Id)) existingEp.Id = ep.Id;
+                                             if (string.IsNullOrEmpty(existingEp.Overview)) existingEp.Overview = ep.Info?.Plot;
+                                             if (string.IsNullOrEmpty(existingEp.RuntimeFormatted)) existingEp.RuntimeFormatted = ep.Info?.Duration;
+                                             mergeCount++;
+                                         }
+                                         else
+                                         {
+                                             // Add as new episode if it doesn't exist (e.g. IPTV has more episodes than Stremio)
+                                             existingSeason.Episodes.Add(new UnifiedEpisode
+                                             {
+                                                 Id = ep.Id,
+                                                 Title = ep.Title,
+                                                 IptvSourceTitle = ep.Title, // [NEW] Keep literal IPTV name for source panel
+                                                 IptvSeriesId = seriesId, // [NEW] Store series ID for deduplication
+                                                 Overview = ep.Info?.Plot,
+                                                 ThumbnailUrl = ep.Info?.MovieImage,
+                                                 SeasonNumber = seasonNum,
+                                                 EpisodeNumber = epNum,
+                                                 StreamUrl = streamUrl,
+                                                 RuntimeFormatted = ep.Info?.Duration
+                                             });
+                                             mergeCount++;
+                                         }
+                                     }
+                                     existingSeason.Episodes = existingSeason.Episodes.OrderBy(e => e.EpisodeNumber).ToList();
+                                 }
+                             }
+                         }
+                         AppLogger.Info($"[Enrich-Iptv] Successfully merged {mergeCount} IPTV episode sources.");
+                    }
                 }
+                else
+                {
+                    AppLogger.Warn($"[Enrich-Iptv] No info returned from GetSeriesInfoAsync for ID: {seriesId}");
+                }
+
+                metadata.IsAvailableOnIptv = true;
             }
             catch (Exception ex)
             {
-                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] IPTV Enrich Error: {ex.Message}");
+                AppLogger.Error($"[Enrich-Iptv] IPTV Enrich Error", ex);
             }
         }
 
@@ -1880,9 +2115,6 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
             else
             {
-                // [DEBUG] Log movie lookup details
-                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Title=\"{metadata.Title}\", ImdbId=\"{metadata.ImdbId}\", Year=\"{metadata.Year}\"");
-                
                 if (metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
                 {
                     int.TryParse(metadata.ImdbId.Replace("tmdb:", ""), out int movieId);
@@ -1970,134 +2202,146 @@ namespace ModernIPTVPlayer.Services.Metadata
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Fetching season details for {tmdb.Seasons.Count} TMDB seasons (Context: {context})...");
                     
-                    foreach (var tmdbSeason in tmdb.Seasons)
+                    var validSeasons = tmdb.Seasons.Where(s => s.SeasonNumber > 0).ToList();
+                    var seasonTasks = validSeasons.Select(async tmdbSeason => 
                     {
-                        // Skip special seasons (season 0) which are typically specials
-                        if (tmdbSeason.SeasonNumber <= 0) continue;
-                        
-                        // Check if this season already exists
-                        var existingSeason = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == tmdbSeason.SeasonNumber);
-                        bool hasExistingEpisodes = existingSeason?.Episodes != null && existingSeason.Episodes.Count > 0;
+                        try {
                             var seasonDetails = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, tmdbSeason.SeasonNumber);
-                        if (seasonDetails?.Episodes != null && seasonDetails.Episodes.Count > 0)
-                        {
-                            // [FIX] Check for generic titles OR missing descriptions in localized response
-                            bool areTitlesGeneric = seasonDetails.Episodes.Count > 0 && seasonDetails.Episodes.Any(e => IsGenericEpisodeTitle(e.Name, metadata.Title));
-                            bool areOverviewsMissing = seasonDetails.Episodes.Count > 0 && seasonDetails.Episodes.Any(e => string.IsNullOrEmpty(e.Overview));
-                            
-                            TmdbSeasonDetails? enSeasonDetails = null;
-                            if (areTitlesGeneric || areOverviewsMissing)
+                            if (seasonDetails?.Episodes != null && seasonDetails.Episodes.Count > 0)
                             {
-                                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] EnrichWithTmdb Season {tmdbSeason.SeasonNumber}: Missing details (TitlesGeneric={areTitlesGeneric}, OverviewsMissing={areOverviewsMissing}, Lang={AppSettings.TmdbLanguage}). Fetching English fallback...");
-                                enSeasonDetails = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, tmdbSeason.SeasonNumber, "en-US");
-                            }
-
-                            // Create the season if it doesn't exist
-                            if (existingSeason == null)
-                            {
-                                existingSeason = new UnifiedSeason { SeasonNumber = tmdbSeason.SeasonNumber };
-                                metadata.Seasons.Add(existingSeason);
-                            }
-                            
-                            // If addon already has episodes, merge: use TMDB titles/descriptions but keep addon stream URLs
-                            if (hasExistingEpisodes)
-                            {
-                                System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Merging {seasonDetails.Episodes.Count} TMDB episodes with {existingSeason.Episodes.Count} addon episodes");
+                                bool areTitlesGeneric = seasonDetails.Episodes.Any(e => IsGenericEpisodeTitle(e.Name, metadata.Title));
+                                bool areOverviewsMissing = seasonDetails.Episodes.Any(e => string.IsNullOrEmpty(e.Overview));
                                 
-                                // For each TMDB episode, update title/overview but keep addon stream URL if available
-                                foreach (var tmdbEp in seasonDetails.Episodes)
+                                TmdbSeasonDetails? enSeasonDetails = null;
+                                if (areTitlesGeneric || areOverviewsMissing)
                                 {
-                                    var existingEp = existingSeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
-                                    
-                                    // [FIX] Pick the best title and overview
-                                    string? bestName = tmdbEp.Name;
-                                    string? bestOverview = tmdbEp.Overview;
+                                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Missing details (TitlesGeneric={areTitlesGeneric}, OverviewsMissing={areOverviewsMissing}). Fetching English fallback...");
+                                    enSeasonDetails = await TmdbHelper.GetSeasonDetailsAsync(tmdb.Id, tmdbSeason.SeasonNumber, "en-US");
+                                }
+                                return new { tmdbSeason, seasonDetails, enSeasonDetails };
+                            }
+                        } catch (Exception ex) {
+                            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Error fetching season {tmdbSeason.SeasonNumber}: {ex.Message}");
+                        }
+                        return null;
+                    }).ToList();
 
-                                    if (IsGenericEpisodeTitle(bestName, metadata.Title) || string.IsNullOrEmpty(bestOverview))
+                    var seasonResults = (await Task.WhenAll(seasonTasks)).Where(r => r != null).ToList();
+
+                    foreach (var res in seasonResults)
+                    {
+                        var tmdbSeason = res.tmdbSeason;
+                        var seasonDetails = res.seasonDetails;
+                        var enSeasonDetails = res.enSeasonDetails;
+
+                        var existingSeason = metadata.Seasons.FirstOrDefault(s => s.SeasonNumber == tmdbSeason.SeasonNumber);
+                        if (existingSeason == null)
+                        {
+                            existingSeason = new UnifiedSeason { SeasonNumber = tmdbSeason.SeasonNumber };
+                            metadata.Seasons.Add(existingSeason);
+                        }
+
+                        // If addon already has episodes, merge: use TMDB titles/descriptions but keep addon stream URLs
+                        bool hasExistingEpisodes = existingSeason.Episodes != null && existingSeason.Episodes.Count > 0;
+
+                        if (hasExistingEpisodes)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Merging {seasonDetails.Episodes.Count} TMDB episodes with {existingSeason.Episodes.Count} addon episodes");
+                            // For each TMDB episode, update title/overview but keep addon stream URL if available
+                            foreach (var tmdbEp in seasonDetails.Episodes)
+                            {
+                                var existingEp = existingSeason.Episodes.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
+                                
+                                // [FIX] Pick the best title and overview (localized with English fallback)
+                                string? bestName = tmdbEp.Name;
+                                string? bestOverview = tmdbEp.Overview;
+
+                                if (IsGenericEpisodeTitle(bestName, metadata.Title) || string.IsNullOrEmpty(bestOverview))
+                                {
+                                    var enEp = enSeasonDetails?.Episodes?.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
+                                    if (enEp != null)
                                     {
-                                        var enEp = enSeasonDetails?.Episodes?.FirstOrDefault(e => e.EpisodeNumber == tmdbEp.EpisodeNumber);
-                                        if (enEp != null)
-                                        {
-                                            if (IsGenericEpisodeTitle(bestName, metadata.Title) && !IsGenericEpisodeTitle(enEp.Name, metadata.Title))
-                                                bestName = enEp.Name;
-                                            if (string.IsNullOrEmpty(bestOverview))
-                                                bestOverview = enEp.Overview;
-                                        }
-                                    }
-
-                                    if (existingEp != null)
-                                    {
-                                        // [FIX] Guard: Only overwrite if the new name is NOT generic or the old one IS generic
-                                        bool isNewNameGeneric = IsGenericEpisodeTitle(bestName, metadata.Title);
-                                        bool isExistingNameGeneric = IsGenericEpisodeTitle(existingEp.Title, metadata.Title);
-
-                                        if (!string.IsNullOrEmpty(bestName) && (isExistingNameGeneric || !isNewNameGeneric))
-                                            existingEp.Title = bestName;
-
-                                        if (!string.IsNullOrEmpty(bestOverview))
-                                            existingEp.Overview = bestOverview;
-                                        if (!string.IsNullOrEmpty(tmdbEp.StillUrl))
-                                            existingEp.ThumbnailUrl = tmdbEp.StillUrl;
-                                    }
-                                    else
-                                    {
-                                        // New episode from TMDB - add it
-                                        string episodeId = !string.IsNullOrEmpty(tmdb.ImdbId) 
-                                            ? $"{tmdb.ImdbId}:{tmdbSeason.SeasonNumber}:{tmdbEp.EpisodeNumber}" 
-                                            : $"tmdb:{tmdb.Id}:{tmdbSeason.SeasonNumber}:{tmdbEp.EpisodeNumber}";
-                                        
-                                        existingSeason.Episodes.Add(new UnifiedEpisode
-                                        {
-                                            Id = episodeId,
-                                            SeasonNumber = tmdbSeason.SeasonNumber,
-                                            EpisodeNumber = tmdbEp.EpisodeNumber,
-                                            Title = bestName ?? $"Episode {tmdbEp.EpisodeNumber}",
-                                            Overview = bestOverview,
-                                            ThumbnailUrl = tmdbEp.StillUrl
-                                        });
+                                        if (IsGenericEpisodeTitle(bestName, metadata.Title) && !IsGenericEpisodeTitle(enEp.Name, metadata.Title))
+                                            bestName = enEp.Name;
+                                        if (string.IsNullOrEmpty(bestOverview))
+                                            bestOverview = enEp.Overview;
                                     }
                                 }
-                            }
-                            else
-                            {
-                                // No existing episodes - add all from TMDB
-                                existingSeason.Episodes.Clear();
-                                foreach (var ep in seasonDetails.Episodes)
+
+                                if (existingEp != null)
                                 {
-                                    string episodeId = !string.IsNullOrEmpty(tmdb.ImdbId) 
-                                        ? $"{tmdb.ImdbId}:{tmdbSeason.SeasonNumber}:{ep.EpisodeNumber}" 
-                                        : $"tmdb:{tmdb.Id}:{tmdbSeason.SeasonNumber}:{ep.EpisodeNumber}";
-                                    
-                                    // [FIX] Best name and overview for new episodes too
-                                    string? bestName = ep.Name;
-                                    string? bestOverview = ep.Overview;
+                                    // Update existing episode metadata while preserving stream URLs
+                                    bool isNewNameGeneric = IsGenericEpisodeTitle(bestName, metadata.Title);
+                                    bool isExistingNameGeneric = IsGenericEpisodeTitle(existingEp.Title, metadata.Title);
 
-                                    if (IsGenericEpisodeTitle(bestName, metadata.Title) || string.IsNullOrEmpty(bestOverview))
-                                    {
-                                        var enEp = enSeasonDetails?.Episodes?.FirstOrDefault(e => e.EpisodeNumber == ep.EpisodeNumber);
-                                        if (enEp != null)
-                                        {
-                                            if (IsGenericEpisodeTitle(bestName, metadata.Title) && !IsGenericEpisodeTitle(enEp.Name, metadata.Title))
-                                                bestName = enEp.Name;
-                                            if (string.IsNullOrEmpty(bestOverview))
-                                                bestOverview = enEp.Overview;
-                                        }
-                                    }
+                                    if (!string.IsNullOrEmpty(bestName) && (isExistingNameGeneric || !isNewNameGeneric))
+                                        existingEp.Title = bestName;
 
-                                    existingSeason.Episodes.Add(new UnifiedEpisode
+                                    if (!string.IsNullOrEmpty(bestOverview))
+                                        existingEp.Overview = bestOverview;
+
+                                    if (!string.IsNullOrEmpty(tmdbEp.StillPath))
+                                        existingEp.ThumbnailUrl = $"https://image.tmdb.org/t/p/w300{tmdbEp.StillPath}";
+                                }
+                                else
+                                {
+                                    // Create and add new episode metadata
+                                    string episodeId = !string.IsNullOrEmpty(metadata.ImdbId) 
+                                        ? $"{metadata.ImdbId}:{tmdbSeason.SeasonNumber}:{tmdbEp.EpisodeNumber}" 
+                                        : $"tmdb:{tmdb.Id}:{tmdbSeason.SeasonNumber}:{tmdbEp.EpisodeNumber}";
+
+                                    existingSeason.Episodes.Add(new UnifiedEpisode // Changed from EpisodeItem to UnifiedEpisode
                                     {
                                         Id = episodeId,
                                         SeasonNumber = tmdbSeason.SeasonNumber,
-                                        EpisodeNumber = ep.EpisodeNumber,
-                                        Title = bestName ?? (ep.Name ?? $"{ep.EpisodeNumber}. Bölüm"),
+                                        EpisodeNumber = tmdbEp.EpisodeNumber,
+                                        Title = bestName ?? $"Episode {tmdbEp.EpisodeNumber}",
                                         Overview = bestOverview,
-                                        ThumbnailUrl = ep.StillUrl
+                                        ThumbnailUrl = !string.IsNullOrEmpty(tmdbEp.StillPath) ? $"https://image.tmdb.org/t/p/w300{tmdbEp.StillPath}" : null,
+                                        AirDate = tmdbEp.AirDateDateTime
                                     });
                                 }
                             }
-                          
-                            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Added {seasonDetails.Episodes.Count} episodes from TMDB");
                         }
+                        else
+                        {
+                            // No existing episodes - add all from TMDB
+                            existingSeason.Episodes.Clear();
+                            foreach (var ep in seasonDetails.Episodes)
+                            {
+                                string episodeId = !string.IsNullOrEmpty(tmdb.ImdbId) 
+                                    ? $"{tmdb.ImdbId}:{tmdbSeason.SeasonNumber}:{ep.EpisodeNumber}" 
+                                    : $"tmdb:{tmdb.Id}:{tmdbSeason.SeasonNumber}:{ep.EpisodeNumber}";
+                                
+                                // [FIX] Best name and overview for new episodes too
+                                string? bestName = ep.Name;
+                                string? bestOverview = ep.Overview;
+
+                                if (IsGenericEpisodeTitle(bestName, metadata.Title) || string.IsNullOrEmpty(bestOverview))
+                                {
+                                    var enEp = enSeasonDetails?.Episodes?.FirstOrDefault(e => e.EpisodeNumber == ep.EpisodeNumber);
+                                    if (enEp != null)
+                                    {
+                                        if (IsGenericEpisodeTitle(bestName, metadata.Title) && !IsGenericEpisodeTitle(enEp.Name, metadata.Title))
+                                            bestName = enEp.Name;
+                                        if (string.IsNullOrEmpty(bestOverview))
+                                            bestOverview = enEp.Overview;
+                                    }
+                                }
+
+                                existingSeason.Episodes.Add(new UnifiedEpisode
+                                {
+                                    Id = episodeId,
+                                    SeasonNumber = tmdbSeason.SeasonNumber,
+                                    EpisodeNumber = ep.EpisodeNumber,
+                                    Title = bestName ?? (ep.Name ?? $"{ep.EpisodeNumber}. Bölüm"),
+                                    Overview = bestOverview,
+                                    ThumbnailUrl = !string.IsNullOrEmpty(ep.StillPath) ? $"https://image.tmdb.org/t/p/w300{ep.StillPath}" : null,
+                                    AirDate = ep.AirDateDateTime
+                                });
+                            }
+                        }
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Season {tmdbSeason.SeasonNumber}: Processed {seasonDetails.Episodes.Count} episodes");
                     }
                 }
 
@@ -2463,27 +2707,6 @@ namespace ModernIPTVPlayer.Services.Metadata
             return Regex.IsMatch(id, @"^tt\d+$", RegexOptions.IgnoreCase);
         }
 
-        private string CleanTitleForMatch(string? title)
-        {
-            if (string.IsNullOrEmpty(title)) return "";
-            
-            // Remove Year (e.g. "Movie (2024)" -> "Movie")
-            string cleaned = Regex.Replace(title, @"\(\d{4}\)", "").Trim();
-            
-            // [NEW] Remove common IPTV tags/prefixes
-            cleaned = Regex.Replace(cleaned, @"^\[.*?\]", ""); // [TR], [ENG] etc.
-            cleaned = Regex.Replace(cleaned, @"^4K-TOP\s*-\s*", "", RegexOptions.IgnoreCase);
-            cleaned = Regex.Replace(cleaned, @"^4K\s*-\s*", "", RegexOptions.IgnoreCase);
-            cleaned = Regex.Replace(cleaned, @"^FHD\s*-\s*", "", RegexOptions.IgnoreCase);
-            cleaned = Regex.Replace(cleaned, @"^HD\s*-\s*", "", RegexOptions.IgnoreCase);
-            cleaned = Regex.Replace(cleaned, @"\s+4K$", "", RegexOptions.IgnoreCase);
-            cleaned = Regex.Replace(cleaned, @"\s+FHD$", "", RegexOptions.IgnoreCase);
-            
-            // Remove non-alphanumeric characters for fuzzy matching
-            cleaned = Regex.Replace(cleaned, @"[^a-zA-Z0-9]", "").ToLowerInvariant();
-            
-            return cleaned;
-        }
 
         public static bool IsCanonicalId(string? id)
         {

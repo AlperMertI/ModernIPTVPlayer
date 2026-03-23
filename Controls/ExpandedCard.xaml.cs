@@ -1011,6 +1011,24 @@ namespace ModernIPTVPlayer.Controls
                 return;
             }
 
+            // 0. CHECK IPTV METADATA FIRST (USER REQUEST) - Avoid Probing if possible
+            if (stream != null && (!string.IsNullOrEmpty(stream.Resolution) || !string.IsNullOrEmpty(stream.Codec)))
+            {
+                Services.CacheLogger.Info(Services.CacheLogger.Category.Probe, "IPTV METADATA: Skipping probe, using provided info (ExpandedCard)", url);
+                var data = new Services.ProbeData
+                {
+                    Resolution = stream.Resolution,
+                    Codec = stream.Codec,
+                    Bitrate = stream.Bitrate,
+                    IsHdr = stream.IsHdr
+                };
+                DispatcherQueue.TryEnqueue(() => {
+                    BadgeSkeleton.Visibility = Visibility.Collapsed;
+                    ApplyProbeResult(stream, data, loadNonce);
+                });
+                return;
+            }
+
             try
             {
                 // 1. Check Cache
@@ -1122,9 +1140,9 @@ namespace ModernIPTVPlayer.Controls
                 else
                     history = HistoryManager.Instance.GetProgress(stremio.IMDbId);
 
-                bool isFinishedSeries = (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv") && history != null && history.IsFinished;
+                bool isFinishedSeries = stream.Type == "series" && history != null && history.IsFinished;
 
-                if (history == null || string.IsNullOrEmpty(history.StreamUrl) || isFinishedSeries)
+                if ((history == null || string.IsNullOrEmpty(history.StreamUrl) || isFinishedSeries) && !stream.IsAvailableOnIptv)
                 {
                     TechBadgesPanel.Visibility = Visibility.Collapsed;
                     // Only collapse skeleton if we aren't currently probing (shimmer active)
@@ -1469,6 +1487,20 @@ namespace ModernIPTVPlayer.Controls
 
             RatingText.Text = unified.Rating > 0 ? $"\u2605 {unified.Rating:F1}" : "";
             YearText.Text = unified.Year;
+
+            // Age Rating & Country
+            if (BadgeAge != null)
+            {
+                bool hasAge = !string.IsNullOrEmpty(unified.AgeRating);
+                BadgeAge.Visibility = hasAge ? Visibility.Visible : Visibility.Collapsed;
+                if (hasAge && BadgeAgeText != null) BadgeAgeText.Text = unified.AgeRating;
+            }
+            if (BadgeCountry != null)
+            {
+                bool hasCountry = !string.IsNullOrEmpty(unified.Country);
+                BadgeCountry.Visibility = hasCountry ? Visibility.Visible : Visibility.Collapsed;
+                if (hasCountry && BadgeCountryText != null) BadgeCountryText.Text = unified.Country;
+            }
             
             // Hide skeleton and reveal description with staggered reveal
             MainSkeleton.Visibility = Visibility.Collapsed;

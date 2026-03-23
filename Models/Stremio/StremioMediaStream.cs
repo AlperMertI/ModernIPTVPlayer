@@ -48,16 +48,24 @@ namespace ModernIPTVPlayer.Models.Stremio
         public int SourceIndex { get; set; } = 999; // Default to low priority position
 
         // IMediaStream Implementation
-        public int Id => Meta.Id.GetHashCode(); // Temporary Int ID for interface
-        public string IMDbId => Meta.Id; // Real ID
+        public int Id 
+        { 
+            get 
+            {
+                if (!string.IsNullOrEmpty(Meta?.Id)) return Meta.Id.GetHashCode();
+                if (!string.IsNullOrEmpty(Meta?.Name)) return Meta.Name.GetHashCode();
+                return 0;
+            } 
+        }
+        public string IMDbId => Meta?.Id ?? ""; // Real ID
 
-        public string Title { get => Meta.Name; set => Meta.Name = value; }
+        public string Title { get => Meta?.Name ?? "Loading..."; set { if (Meta != null) Meta.Name = value; } }
 
         // PosterUrl: uses override (set by async enrichment) if available, else Meta.Poster
         private string _overridePosterUrl;
         public string PosterUrl
         {
-            get => _overridePosterUrl ?? Meta.Poster;
+            get => _overridePosterUrl ?? Meta?.Poster;
             set
             {
                 if (_overridePosterUrl != value)
@@ -82,7 +90,7 @@ namespace ModernIPTVPlayer.Models.Stremio
             }
         }
 
-        public string Rating => string.IsNullOrEmpty(Meta.ImdbRating) || Meta.ImdbRating == "N/A" || Meta.ImdbRating == "Unknown" ? "" : Meta.ImdbRating;
+        public string Rating => string.IsNullOrEmpty(Meta?.ImdbRating) || Meta?.ImdbRating == "N/A" || Meta?.ImdbRating == "Unknown" ? "" : Meta.ImdbRating;
         public string StreamUrl { get; set; } = "";
         public string? BackdropUrl => Banner;
         
@@ -91,8 +99,8 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         public bool IsContinueWatching { get; set; }
         public bool IsNotContinueWatching => !IsContinueWatching;
-        public bool IsMovie => Meta.Type?.ToLower() == "movie";
-        public bool IsSeries => Meta.Type?.ToLower() == "series" || Meta.Type?.ToLower() == "tv";
+        public bool IsMovie => Meta?.Type?.ToLower() == "movie";
+        public bool IsSeries => Meta?.Type?.ToLower() == "series" || Meta?.Type?.ToLower() == "tv";
 
         public void UpdateBackground(string url)
         {
@@ -139,7 +147,8 @@ namespace ModernIPTVPlayer.Models.Stremio
             }
         }
         public string SourceBadgeText => IsAvailableOnIptv ? "IPTV" : "";
-        public bool ShowSourceBadge => IsAvailableOnIptv;
+        public bool IsIptvChecked { get; set; } = false;
+        public bool ShowSourceBadge => IsAvailableOnIptv || IsIptv;
 
         public TmdbMovieResult TmdbInfo { get; set; } // Can populate later if needed
 
@@ -154,10 +163,10 @@ namespace ModernIPTVPlayer.Models.Stremio
         public bool IsHdr { get; set; }
 
         // Properties for UI Binding
-        public string Type { get => Meta.Type; set => Meta.Type = value; }
-        public string Year => Meta.ReleaseInfo;
-        public string Banner => Meta.Background;
-        public string Description => Meta.Description;
+        public string Type { get => Meta?.Type ?? "movie"; set { if (Meta != null) Meta.Type = value; } }
+        public string Year { get => Meta?.ReleaseInfo ?? ""; set { if (Meta != null) Meta.ReleaseInfo = value; } }
+        public string Banner => Meta?.Background ?? "";
+        public string Description => Meta?.Description ?? "";
         public string? EpisodeSubtext { get; set; }
 
         public string Genres => (Meta.Genres != null && Meta.Genres.Count > 0) ? string.Join(", ", Meta.Genres) : "";
@@ -188,7 +197,38 @@ namespace ModernIPTVPlayer.Models.Stremio
         public event PropertyChangedEventHandler? PropertyChanged;
         public void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            var queue = App.MainWindow?.DispatcherQueue;
+            if (queue == null)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+                return;
+            }
+
+            if (queue.HasThreadAccess)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            }
+            else
+            {
+                queue.TryEnqueue(() =>
+                {
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+                });
+            }
+        }
+
+        public void NotifyMetadataUpdated()
+        {
+            OnPropertyChanged(nameof(Title));
+            OnPropertyChanged(nameof(Year));
+            OnPropertyChanged(nameof(PosterUrl));
+            OnPropertyChanged(nameof(HasPoster));
+            OnPropertyChanged(nameof(HasNoPoster));
+            OnPropertyChanged(nameof(LandscapeImageUrl));
+            OnPropertyChanged(nameof(Banner));
+            OnPropertyChanged(nameof(BackdropUrl));
+            OnPropertyChanged(nameof(Description));
+            OnPropertyChanged(nameof(Rating));
         }
     }
 }

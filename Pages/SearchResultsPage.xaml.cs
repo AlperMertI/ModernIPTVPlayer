@@ -6,6 +6,7 @@ using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Stremio;
+using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Controls;
 using System;
 using System.Collections.Generic;
@@ -41,9 +42,13 @@ namespace ModernIPTVPlayer.Pages
         private string _sortOrder = "relevance";
         
         private readonly ExpandedCardOverlayController _expandedCardController;
+        private System.Threading.CancellationTokenSource _pageSearchCts;
+        private DateTime _lastUpdate = DateTime.MinValue;
+        private const int UPDATE_THROTTLE_MS = 400; // Optimal for human perception stability
         
         public ObservableCollection<int> ShimmerItems { get; } = 
             new ObservableCollection<int>(Enumerable.Range(0, 15));
+
 
         public SearchResultsPage()
         {
@@ -95,28 +100,38 @@ namespace ModernIPTVPlayer.Pages
                     {
                         PageTitle.Text = $"'{_args.Query}'";
                         GenreFilterButton.Visibility = Visibility.Collapsed;
-                        
                         UpdateBreadcrumbs(_args.Type, "Arama");
                     }
-
 
                     await PerformSearchAsync();
                 }
             }
             else if (e.Parameter is string query)
             {
+                // [FIX] If we are navigating BACK, and we already have results for this query, DO NOT re-trigger search.
+                if (e.NavigationMode == NavigationMode.Back && _args != null && _args.Query == query && _stremioCollection.Count > 0)
+                {
+                    return;
+                }
+
                 // Fallback for string query
                 _args = new SearchArgs { Query = query, PreferredSource = "Stremio" };
                 PageTitle.Text = $"'{_args.Query}'";
                 GenreFilterButton.Visibility = Visibility.Collapsed;
+
                 await PerformSearchAsync();
             }
         }
 
         private async Task PerformSearchAsync()
         {
+            _pageSearchCts?.Cancel();
+            _pageSearchCts = new System.Threading.CancellationTokenSource();
+            var token = _pageSearchCts.Token;
+
             try
             {
+                EmptyPanel.Visibility = Visibility.Collapsed;
                 GlobalShimmer.Visibility = Visibility.Visible;
                 StremioSection.Visibility = Visibility.Collapsed;
                 // Header Reset
@@ -184,25 +199,39 @@ namespace ModernIPTVPlayer.Pages
                     return;
                 }
 
-                // SEARCH MODE
-                await StremioService.Instance.SearchAsync(_args.Query, (partialResults) => 
+                // REGULAR SEARCH MODE
+                if (!string.IsNullOrEmpty(_args.Query))
                 {
-                    this.DispatcherQueue.TryEnqueue(() => 
+                    // [SESSION HANDOFF] StremioService now manages sessions.
+                    // SearchAsync will return instant results if session exists, and we subscribe for more.
+                    await StremioService.Instance.SearchAsync(_args.Query, (partialResults) =>
                     {
-                        // Update raw results and year list
-                        _allRawResults = partialResults.Cast<IMediaStream>().ToList();
-                        UpdateYearList();
+                        if (token.IsCancellationRequested) return;
 
-                        // Use filtered/sorted results for the UI sync
-                        ApplyFiltersAndSort();
+                        this.DispatcherQueue.TryEnqueue(() =>
+                        {
+                            _allRawResults = partialResults.Cast<IMediaStream>().ToList();
+                            
+                            // [THROTTLE] Only update UI smoothly
+                            var now = DateTime.Now;
+                            if ((now - _lastUpdate).TotalMilliseconds > UPDATE_THROTTLE_MS || partialResults.Count < 10 || _stremioCollection.Count == 0)
+                            {
+                                _lastUpdate = now;
+                                ApplyFiltersAndSort();
+                                
+                                GlobalShimmer.Visibility = Visibility.Collapsed;
+                                StremioCountBadge.Visibility = Visibility.Visible;
+                                StremioSection.Visibility = Visibility.Visible;
+                                StremioSectionTitle.Text = "Arama Sonuçları";
+                                StremioSectionTitle.Visibility = Visibility.Visible;
+                                EmptyPanel.Visibility = Visibility.Collapsed;
 
-                        TxtStremioCount.Text = _stremioCollection.Count.ToString();
-                        StremioCountBadge.Visibility = Visibility.Visible;
-                        StremioSection.Visibility = Visibility.Visible;
-                        StremioSectionTitle.Text = "Arama Sonuçları";
-                        GlobalShimmer.Visibility = Visibility.Collapsed;
-                    });
-                });
+                                // Trigger Lazy Match for visible results
+                                _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(15).Cast<StremioMediaStream>(), _args.Query);
+                            }
+                        });
+                    }, token);
+                }
 
                 if (_stremioCollection.Count == 0)
                 {
@@ -218,6 +247,26 @@ namespace ModernIPTVPlayer.Pages
                 GlobalShimmer.Visibility = Visibility.Collapsed;
                 ShowEmptyStateWithSuggestions();
             }
+        }
+
+        private bool IsEquivalent(IMediaStream a, IMediaStream b)
+        {
+            if (a == null || b == null) return false;
+            
+            bool aIsSeries = a is SeriesStream || (a is StremioMediaStream sa && sa.IsSeries) || a.Type == "series" || a.Type == "tv";
+            bool bIsSeries = b is SeriesStream || (b is StremioMediaStream sb && sb.IsSeries) || b.Type == "series" || b.Type == "tv";
+            
+            if (aIsSeries != bIsSeries) return false;
+
+            bool aHasId = !string.IsNullOrEmpty(a.IMDbId) && a.IMDbId.StartsWith("tt");
+            bool bHasId = !string.IsNullOrEmpty(b.IMDbId) && b.IMDbId.StartsWith("tt");
+
+            if (aHasId && bHasId && a.IMDbId == b.IMDbId)
+            {
+                return true;
+            }
+
+            return TitleHelper.IsMatch(a.Title, b.Title, a.Year, b.Year);
         }
 
         private void ShowEmptyStateWithSuggestions()
@@ -255,29 +304,8 @@ namespace ModernIPTVPlayer.Pages
             }
         }
 
-        private async Task<List<IMediaStream>> SearchIptvAsync(string query)
-        {
-            var results = new List<IMediaStream>();
-            var login = App.CurrentLogin;
-            if (login == null) return results;
 
-            string playlistId = login.PlaylistUrl ?? "default";
 
-            // We can search VOD and Series
-            var movies = await ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "vod_streams");
-            if (movies != null)
-            {
-                results.AddRange(movies.Where(m => m.Name.Contains(query, StringComparison.OrdinalIgnoreCase)));
-            }
-
-            var series = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series_streams");
-            if (series != null)
-            {
-                results.AddRange(series.Where(s => s.Name.Contains(query, StringComparison.OrdinalIgnoreCase)));
-            }
-
-            return results;
-        }
 
         private void ResultsGrid_ItemClick(object sender, ItemClickEventArgs e)
         {
@@ -342,7 +370,7 @@ namespace ModernIPTVPlayer.Pages
                 {
                     foreach (var item in newResults)
                     {
-                        if (!_allRawResults.Any(x => x.Id == item.Id))
+                        if (!_allRawResults.Any(x => IsEquivalent(x, item)))
                         {
                             _allRawResults.Add(item);
                         }
@@ -473,32 +501,45 @@ namespace ModernIPTVPlayer.Pages
 
             var processedList = items.ToList();
 
-            // Synchronize _stremioCollection with processedList
-            for (int i = 0; i < processedList.Count; i++)
+            // Synchronize _stremioCollection with processedList securely
+            // Pass 1: Remove ghosts and do in-place replacements for updated items
+            for (int i = _stremioCollection.Count - 1; i >= 0; i--)
             {
-                var target = processedList[i];
-                var existingIndex = -1;
-                for (int j = i; j < _stremioCollection.Count; j++)
+                var existingItem = _stremioCollection[i];
+                if (!processedList.Contains(existingItem))
                 {
-                    if (_stremioCollection[j].Id == target.Id) { existingIndex = j; break; }
-                }
-
-                if (existingIndex == -1)
-                {
-                    var anyIndex = -1;
-                    for (int k = 0; k < _stremioCollection.Count; k++) if (_stremioCollection[k].Id == target.Id) { anyIndex = k; break; }
-                    if (anyIndex != -1) _stremioCollection.Move(anyIndex, i);
-                    else _stremioCollection.Insert(i, target);
-                }
-                else if (existingIndex != i)
-                {
-                    _stremioCollection.Move(existingIndex, i);
+                    var replacement = processedList.FirstOrDefault(x => IsEquivalent(x, existingItem));
+                    if (replacement != null && !_stremioCollection.Contains(replacement))
+                    {
+                        _stremioCollection[i] = replacement;
+                    }
+                    else
+                    {
+                        _stremioCollection.RemoveAt(i);
+                    }
                 }
             }
 
-            while (_stremioCollection.Count > processedList.Count)
+            // Pass 2: Insert new items and correct the sort order
+            for (int i = 0; i < processedList.Count; i++)
             {
-                _stremioCollection.RemoveAt(_stremioCollection.Count - 1);
+                var target = processedList[i];
+                var currentIndex = _stremioCollection.IndexOf(target);
+                
+                if (currentIndex == -1)
+                {
+                    _stremioCollection.Insert(i, target);
+                }
+                else if (currentIndex != i)
+                {
+                    _stremioCollection.Move(currentIndex, i);
+                }
+            }
+            
+            // [NEW] Trigger Lazy IPTV Matching for the currently filtered/sorted top items
+            if (_args != null && !string.IsNullOrEmpty(_args.Query))
+            {
+                _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(25).Cast<StremioMediaStream>(), _args.Query);
             }
         }
 

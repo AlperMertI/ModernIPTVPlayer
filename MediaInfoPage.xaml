@@ -521,6 +521,12 @@
                        <!-- 1. Technical Section Group (Content + Shimmer in one slot) -->
                        <Grid x:Name="TechBadgesGroup" VerticalAlignment="Center">
                            <StackPanel x:Name="TechBadgesContent" Orientation="Horizontal" Spacing="8" Opacity="0" Visibility="Collapsed">
+                               <Border x:Name="BadgeAge" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                   <TextBlock x:Name="BadgeAgeText" FontSize="11" Foreground="#CCC" VerticalAlignment="Center"/>
+                               </Border>
+                               <Border x:Name="BadgeCountry" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
+                                   <TextBlock x:Name="BadgeCountryText" FontSize="11" Foreground="#CCC" VerticalAlignment="Center"/>
+                               </Border>
                                <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
                                    <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
                                </Border>

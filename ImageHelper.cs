@@ -63,15 +63,17 @@ namespace ModernIPTVPlayer
 
             try
             {
-                // FALLBACK: If we must use URL, we now use HttpHelper for better headers
                 var colors = await ExtractDominantColorsAsync(imageUrl);
+                // Cache even if it's the fallback color from ExtractDominantColorsAsync
                 _colorCache.TryAdd(imageUrl, colors);
                 return colors;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                System.Diagnostics.Debug.WriteLine($"COLOR ERROR: {ex.Message}");
-                return null;
+                // Cache a default dark color to prevent retries
+                var fallback = (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
+                _colorCache.TryAdd(imageUrl, fallback);
+                return fallback;
             }
         }
 
@@ -145,11 +147,9 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                string hResult = string.Format("0x{0:X}", ex.HResult);
-                System.Diagnostics.Debug.WriteLine($"[ImageHelper] !!! COLOR EXTRACTION FAILED for {imageUrl}");
-                System.Diagnostics.Debug.WriteLine($"[ImageHelper] Type: {ex.GetType().Name}, HResult: {hResult}");
-                System.Diagnostics.Debug.WriteLine($"[ImageHelper] Message: {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"[ImageHelper] StackTrace: {ex.StackTrace}");
+                // [SILENCED] Broken links are common in IPTV providers (404/403). 
+                // We handle this gracefully without flooding the logs.
+                // System.Diagnostics.Debug.WriteLine($"[ImageHelper] Extraction Failed for {imageUrl}: {ex.Message}");
                 
                 return (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
             }

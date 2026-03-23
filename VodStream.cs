@@ -24,6 +24,12 @@ namespace ModernIPTVPlayer
         public string? Type => "movie";
         public string StreamUrl { get; set; } = "";
 
+        [JsonPropertyName("rating")]
+        public object? RatingRaw { get; set; }
+
+        [JsonIgnore]
+        public string Rating => RatingRaw?.ToString() ?? "";
+
         // UI Binding Implementation
         public double ProgressValue => 0;
         public bool ShowProgress => false;
@@ -35,7 +41,6 @@ namespace ModernIPTVPlayer
         public bool IsAvailableOnIptv { get; set; } = true;
         
         // Custom
-        public string Year { get; set; } 
         
         [JsonIgnore]
         public TmdbMovieResult TmdbInfo { get; set; }
@@ -62,13 +67,32 @@ namespace ModernIPTVPlayer
 
         [JsonPropertyName("category_id")]
         public string? CategoryId { get; set; }
-
-        [JsonPropertyName("rating")]
-        public string? Rating { get; set; }
         
         [JsonPropertyName("added")]
         public string? DateAdded { get; set; }
 
+        [JsonPropertyName("air_date")]
+        public string? AirDate { get; set; }
+
+        [JsonPropertyName("releasedate")]
+        public string? ReleaseDate { get; set; }
+
+        [JsonPropertyName("released")]
+        public string? Released { get; set; }
+
+        public string Year 
+        { 
+            get 
+            {
+                if (!string.IsNullOrEmpty(_year)) return _year;
+                string? dateYear = Helpers.TitleHelper.ExtractYear(ReleaseDate ?? AirDate ?? Released);
+                if (!string.IsNullOrEmpty(dateYear)) return dateYear;
+                // Fallback to title extraction for bulk list items
+                return Helpers.TitleHelper.ExtractYear(Name) ?? "";
+            }
+            set => _year = value; 
+        }
+        private string? _year;
         
         public bool IsFavorite { get; set; } // Local state
 
@@ -106,7 +130,7 @@ namespace ModernIPTVPlayer
 
         private bool _isProbing = false;
         public bool IsProbing
-        {
+        { 
             get => _isProbing;
             set { _isProbing = value; OnPropertyChanged(); }
         }

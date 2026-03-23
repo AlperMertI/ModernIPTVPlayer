@@ -88,16 +88,26 @@ namespace ModernIPTVPlayer
         private const string LastVodKey = "LastVodCacheTime";
         private const string LastSeriesKey = "LastSeriesCacheTime";
 
+        public static event Action CacheSettingsChanged;
+
         public static int CacheIntervalMinutes
         {
             get => (Settings.Values[CacheIntervalKey] as int?) ?? 1440; // Default 24 Hours
-            set => Settings.Values[CacheIntervalKey] = value;
+            set 
+            { 
+                Settings.Values[CacheIntervalKey] = value;
+                CacheSettingsChanged?.Invoke();
+            }
         }
 
         public static bool IsAutoCacheEnabled
         {
             get => (Settings.Values[AutoCacheKey] as bool?) ?? true;
-            set => Settings.Values[AutoCacheKey] = value;
+            set 
+            { 
+                Settings.Values[AutoCacheKey] = value;
+                CacheSettingsChanged?.Invoke();
+            }
         }
 
         public static DateTime LastLiveCacheTime

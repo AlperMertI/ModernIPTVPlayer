@@ -41,14 +41,33 @@ namespace ModernIPTVPlayer
 
         [JsonPropertyName("imdb_id")]
         public string? ImdbId { get; set; }
-        public string? IMDbId => ImdbId;
+
+        [JsonPropertyName("tmdb")]
+        public string? TmdbIdRaw { get; set; }
+
+        [JsonPropertyName("tmdb_id")]
+        public string? TmdbIdAlt { get; set; }
+
+        public string? IMDbId => !string.IsNullOrEmpty(ImdbId) ? ImdbId : (!string.IsNullOrEmpty(TmdbIdRaw) ? TmdbIdRaw : TmdbIdAlt);
         
         public string Title => Name;
         public string? Description => Plot;
         public string PosterUrl => Cover;
         public string? BackdropUrl => null; // IPTV Series usually don't have backdrops in catalog
         public string? Type => "series";
-        public string Year => ReleaseDate ?? "";
+        public string Year 
+        { 
+            get 
+            {
+                if (!string.IsNullOrEmpty(_year)) return _year;
+                string? dateYear = Helpers.TitleHelper.ExtractYear(ReleaseDate ?? AirDate);
+                if (!string.IsNullOrEmpty(dateYear)) return dateYear;
+                // Fallback to title extraction for bulk list items
+                return Helpers.TitleHelper.ExtractYear(Name) ?? "";
+            }
+            set => _year = value; 
+        }
+        private string? _year;
         public string StreamUrl { get; set; } = "";
         
         // IMediaStream.Rating implementation - return empty string instead of null to avoid XAML issues
@@ -94,11 +113,17 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("releaseDate")]
         public string? ReleaseDate { get; set; }
 
+        [JsonPropertyName("air_date")]
+        public string? AirDate { get; set; }
+
         [JsonPropertyName("last_modified")]
         public string? LastModified { get; set; }
 
-        [JsonPropertyName("rating")]
-        public string? Rating { get; set; } // Can be "5", "5.0", etc.
+        [System.Text.Json.Serialization.JsonPropertyName("rating")]
+        public object? RatingRaw { get; set; }
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string Rating => RatingRaw?.ToString() ?? "";
 
         [JsonPropertyName("rating_5based")]
         public object Rating5Based { get; set; }
@@ -116,19 +141,13 @@ namespace ModernIPTVPlayer
         public string? CategoryId { get; set; }
 
         // Helper for UI binding
+        [JsonIgnore]
         public BitmapImage? CoverImage
         {
             get
             {
                 if (string.IsNullOrEmpty(Cover)) return null;
-                try
-                {
-                    return new BitmapImage(new Uri(Cover));
-                }
-                catch
-                {
-                    return null;
-                }
+                return null; // SAFE: Always return null on background, or use a Converter for UI. 
             }
         }
     }

@@ -56,6 +56,7 @@ namespace ModernIPTVPlayer.Services
                 App.CurrentLogin = new LoginParams 
                 { 
                     PlaylistUrl = p.Url,
+                    PlaylistId = p.Id.ToString(),
                     PlaylistName = p.Name,
                     MaxConnections = 1 // Default
                 };
@@ -98,6 +99,7 @@ namespace ModernIPTVPlayer.Services
                         App.CurrentLogin = new LoginParams 
                         { 
                             PlaylistUrl = playlistUrl,
+                            PlaylistId = p.Id.ToString(),
                             PlaylistName = p.Name,
                             Host = cleanHost,
                             Username = p.Username,
@@ -105,11 +107,13 @@ namespace ModernIPTVPlayer.Services
                             MaxConnections = maxCons
                         };
                         AppSettings.LastPlaylistId = p.Id;
+                        AppLogger.Info($"[AuthService] Login Successful for {p.Name}. ID: {p.Id}");
                         return true;
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    AppLogger.Error($"[AuthService] Login Failed for {p.Name}", ex);
                     return false;
                 }
             }

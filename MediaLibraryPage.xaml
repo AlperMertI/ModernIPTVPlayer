@@ -186,18 +186,28 @@
                         </Button>
                         
                         <!-- Center: Source Switcher -->
-                        <StackPanel x:Name="SourceSwitcherPanel" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" 
-                                    Background="#15FFFFFF" Padding="4" CornerRadius="20" VerticalAlignment="Center">
-                            
-                            <RadioButton x:Name="SourceIPTV" Content="Kütüphanem" 
-                                         Style="{StaticResource PillRadioButtonStyle}" 
-                                         IsChecked="False" 
-                                         Checked="Source_Checked" Tag="IPTV"/>
-                            
-                            <RadioButton x:Name="SourceStremio" Content="Stremio" 
-                                         Style="{StaticResource PillRadioButtonStyle}" 
-                                         IsChecked="True"
-                                         Checked="Source_Checked" Tag="Stremio"/>
+                        <StackPanel x:Name="HeaderSwitcherContainer" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="0">
+                            <StackPanel x:Name="SourceSwitcherPanel" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="8" 
+                                        Background="#15FFFFFF" Padding="4" CornerRadius="20" VerticalAlignment="Center">
+                                
+                                <RadioButton x:Name="SourceIPTV" Content="Kütüphanem" 
+                                             Style="{StaticResource PillRadioButtonStyle}" 
+                                             IsChecked="False" 
+                                             Checked="Source_Checked" Tag="IPTV"/>
+                                
+                                <RadioButton x:Name="SourceStremio" Content="Stremio" 
+                                             Style="{StaticResource PillRadioButtonStyle}" 
+                                             IsChecked="True"
+                                             Checked="Source_Checked" Tag="Stremio"/>
+                            </StackPanel>
+
+                            <!-- Indexing Progress Pill -->
+                            <Grid x:Name="IndexingProgressPill" Width="0" Opacity="0" Visibility="Collapsed" Background="#15FFFFFF" CornerRadius="20" Padding="8,4,12,4" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <ProgressRing IsActive="True" Width="18" Height="18" Foreground="{ThemeResource SystemAccentColor}"/>
+                                    <TextBlock Text="İndeksleniyor..." FontSize="12" FontWeight="Medium" VerticalAlignment="Center" Foreground="White" Opacity="0.8"/>
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
 
                         <!-- Right Actions -->

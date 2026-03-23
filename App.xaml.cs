@@ -30,7 +30,22 @@ namespace ModernIPTVPlayer
     public partial class App : Application
     {
         public static Window? MainWindow { get; private set; }
-        public static LoginParams? CurrentLogin { get; set; }
+        public static event Action<LoginParams?> LoginChanged;
+        
+        private static LoginParams? _currentLogin;
+        public static LoginParams? CurrentLogin 
+        { 
+            get => _currentLogin; 
+            set 
+            {
+                if (_currentLogin != value)
+                {
+                    _currentLogin = value;
+                    AppLogger.Info($"[App] CurrentLogin changed to: {value?.PlaylistName ?? "null"}");
+                    LoginChanged?.Invoke(value);
+                }
+            }
+        }
         public static MpvWinUI.MpvPlayer? HandoffPlayer = null;
         public static Dictionary<string, object>? LastPlayerIntent { get; set; }
 

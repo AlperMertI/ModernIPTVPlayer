@@ -21,7 +21,18 @@ namespace ModernIPTVPlayer.Models.Metadata
         public double Rating { get; set; }
         public string Year { get; set; }
         public string Runtime { get; set; }
+        public string AgeRating { get; set; } // [NEW] Age rating (MPAA, etc.)
+        public string Country { get; set; } // [NEW] Production country
         public string Genres { get; set; }
+
+        // [NEW] Technical Metadata from Source
+        public string Resolution { get; set; }
+        public string VideoCodec { get; set; }
+        public string AudioCodec { get; set; }
+        public long Bitrate { get; set; }
+        public bool IsHdr { get; set; }
+        public bool? IsOnline { get; set; }
+
         public List<UnifiedCast> Cast { get; set; } = new List<UnifiedCast>();
         public List<UnifiedCast> Directors { get; set; } = new List<UnifiedCast>();
         public string TrailerUrl { get; set; }
@@ -76,6 +87,15 @@ namespace ModernIPTVPlayer.Models.Metadata
         public string StreamUrl { get; set; } // For virtual episodes, this might be null until resolved
         
         public string RuntimeFormatted { get; set; } 
+        
+        // [NEW] Technical Metadata
+        public string Resolution { get; set; }
+        public string VideoCodec { get; set; }
+        public string AudioCodec { get; set; }
+        public long Bitrate { get; set; }
+        public bool IsHdr { get; set; }
+        public string IptvSourceTitle { get; set; } // [NEW] Store the IPTV-specific title for source panel naming
+        public int IptvSeriesId { get; set; } // [NEW] Store the IPTV series ID for deduplication
     }
 
     public class UnifiedCast

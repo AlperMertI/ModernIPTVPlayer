@@ -28,6 +28,7 @@ namespace ModernIPTVPlayer
 
         private LoginParams? _loginInfo;
         private HttpClient _httpClient;
+        private DateTime _indexingStartTime;
         
         // Data Store
         private List<LiveCategory> _iptvCategories = new();
@@ -103,6 +104,15 @@ namespace ModernIPTVPlayer
             // Spotlight Search
             SpotlightSearch.ItemClicked += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
             SpotlightSearch.SeeAllClicked += (s, query) => Frame.Navigate(typeof(SearchResultsPage), query);
+
+            // Indexing Status
+            ContentCacheService.Instance.IndexingStatusChanged += (s, isIndexing) => 
+            {
+                DispatcherQueue.TryEnqueue(() => UpdateIndexingProgressUI(isIndexing));
+            };
+            
+            // Initial check
+            if (ContentCacheService.Instance.IsIndexing) UpdateIndexingProgressUI(true);
         }
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
@@ -228,6 +238,7 @@ namespace ModernIPTVPlayer
         {
             AppLogger.Info($"[MediaLibraryPage] Loading IPTV Data ({_mediaType})");
             MediaGrid.IsLoading = true;
+            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
             try
             {
                 if (_iptvCategories.Count > 0)
@@ -240,29 +251,56 @@ namespace ModernIPTVPlayer
                 string typeKey = _mediaType == MediaType.Movie ? "vod" : "series";
 
                 // 1. Categories
-                _iptvCategories = await ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, $"{typeKey}_cats") ?? new();
+                _iptvCategories = await ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, $"{typeKey}_categories") ?? new();
                 if (_iptvCategories.Count == 0)
                 {
                     string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_{typeKey}_categories";
                     string json = await _httpClient.GetStringAsync(api);
                     _iptvCategories = JsonSerializer.Deserialize<List<LiveCategory>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
-                    _ = ContentCacheService.Instance.SaveCacheAsync(playlistId, $"{typeKey}_cats", _iptvCategories);
+                    _ = ContentCacheService.Instance.SaveCacheAsync(playlistId, $"{typeKey}_categories", _iptvCategories);
                 }
 
                 // 2. Streams
-                var cachedStreams = await ContentCacheService.Instance.LoadCacheAsync<JsonElement>(playlistId, $"{typeKey}_streams");
-                if (cachedStreams != null && cachedStreams.Count > 0)
+                if (_mediaType == MediaType.Movie)
                 {
-                    _allIptvItems = ParseIptvStreams(cachedStreams[0]);
+                    var cached = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod");
+                    if (cached != null && cached.Count > 0)
+                    {
+                        foreach(var m in cached)
+                        {
+                            if (string.IsNullOrEmpty(m.StreamUrl))
+                                m.StreamUrl = $"{_loginInfo.Host}/movie/{_loginInfo.Username}/{_loginInfo.Password}/{m.StreamId}.{(string.IsNullOrEmpty(m.ContainerExtension) ? "mp4" : m.ContainerExtension)}";
+                        }
+                        _allIptvItems = cached.Cast<IMediaStream>().ToList();
+                    }
+                    else
+                    {
+                        string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams";
+                        string json = await _httpClient.GetStringAsync(api);
+                        var movies = JsonSerializer.Deserialize<List<VodStream>>(json, options) ?? new();
+                        foreach(var m in movies) 
+                            m.StreamUrl = $"{_loginInfo.Host}/movie/{_loginInfo.Username}/{_loginInfo.Password}/{m.StreamId}.{(string.IsNullOrEmpty(m.ContainerExtension) ? "mp4" : m.ContainerExtension)}";
+                        
+                        _allIptvItems = movies.Cast<IMediaStream>().ToList();
+                        _ = ContentCacheService.Instance.SaveCacheAsync(playlistId, "vod", movies);
+                    }
                 }
                 else
                 {
-                    string action = _mediaType == MediaType.Movie ? "get_vod_streams" : "get_series";
-                    string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action={action}";
-                    string json = await _httpClient.GetStringAsync(api);
-                    var doc = JsonDocument.Parse(json);
-                    _allIptvItems = ParseIptvStreams(doc.RootElement);
-                    _ = ContentCacheService.Instance.SaveCacheAsync<JsonElement>(playlistId, $"{typeKey}_streams", new List<JsonElement> { doc.RootElement });
+                    var cached = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
+                    if (cached != null && cached.Count > 0)
+                    {
+                        _allIptvItems = cached.Cast<IMediaStream>().ToList();
+                    }
+                    else
+                    {
+                        string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series";
+                        string json = await _httpClient.GetStringAsync(api);
+                        var series = JsonSerializer.Deserialize<List<SeriesStream>>(json, options) ?? new();
+                        _allIptvItems = series.Cast<IMediaStream>().ToList();
+                        await ContentCacheService.Instance.SaveCacheAsync(playlistId, "series", series);
+                        _ = ContentCacheService.Instance.RefreshIptvMatchIndexAsync(playlistId);
+                    }
                 }
 
                 AppLogger.Info($"[MediaLibraryPage] IPTV Load Done. Cats: {_iptvCategories.Count}, Items: {_allIptvItems.Count}");
@@ -278,29 +316,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private List<IMediaStream> ParseIptvStreams(JsonElement root)
-        {
-            var list = new List<IMediaStream>();
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
-            
-            if (_mediaType == MediaType.Movie)
-            {
-                var movies = JsonSerializer.Deserialize<List<LiveStream>>(root.GetRawText(), options);
-                if (movies != null)
-                {
-                    foreach(var m in movies) {
-                         m.StreamUrl = $"{_loginInfo.Host}/movie/{_loginInfo.Username}/{_loginInfo.Password}/{m.StreamId}.{(string.IsNullOrEmpty(m.ContainerExtension) ? "mp4" : m.ContainerExtension)}";
-                         list.Add(m);
-                    }
-                }
-            }
-            else
-            {
-                var series = JsonSerializer.Deserialize<List<SeriesStream>>(root.GetRawText(), options);
-                if (series != null) list.AddRange(series);
-            }
-            return list;
-        }
+
 
         private void DisplayCategories(List<LiveCategory> categories)
         {
@@ -321,7 +337,13 @@ namespace ModernIPTVPlayer
             MediaGrid.IsLoading = true;
             try
             {
-                var filtered = await Task.Run(() => _allIptvItems.Where(i => i is LiveStream ls ? ls.CategoryId == category.CategoryId : (i as SeriesStream)?.CategoryId == category.CategoryId).ToList());
+                var filtered = await Task.Run(() => _allIptvItems.Where(i => 
+                {
+                    if (i is LiveStream ls) return ls.CategoryId == category.CategoryId;
+                    if (i is SeriesStream ss) return ss.CategoryId == category.CategoryId;
+                    if (i is VodStream vs) return vs.CategoryId == category.CategoryId;
+                    return false;
+                }).ToList());
                 
                 // STABILITY FIX: Single assignment to avoid GridView virtualization storms
                 MediaGrid.ItemsSource = filtered;
@@ -399,5 +421,69 @@ namespace ModernIPTVPlayer
         }
 
         private void GenreFilterButton_Click(object sender, RoutedEventArgs e) => GenreOverlay.Show(_mediaType == MediaType.Movie ? "movie" : "series");
+
+        private void UpdateIndexingProgressUI(bool isIndexing)
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[MediaLibrary] Updating Indexing UI: {isIndexing}");
+                if (IndexingProgressPill == null || HeaderSwitcherContainer == null) return;
+
+                if (isIndexing) 
+                {
+                    _indexingStartTime = DateTime.Now;
+                    IndexingProgressPill.Visibility = Visibility.Visible;
+                    HeaderSwitcherContainer.Spacing = 12;
+                }
+                else
+                {
+                    var elapsed = DateTime.Now - _indexingStartTime;
+                    if (elapsed.TotalSeconds < 2)
+                    {
+                        // Ensure at least 2 seconds visibility
+                        _ = Task.Delay(2000 - (int)elapsed.TotalMilliseconds).ContinueWith(_ => 
+                        {
+                            DispatcherQueue?.TryEnqueue(() => UpdateIndexingProgressUI(false));
+                        });
+                        return;
+                    }
+                }
+
+                var storyboard = new Storyboard();
+                
+                var widthAnim = new DoubleAnimation
+                {
+                    To = isIndexing ? 140 : 0,
+                    Duration = TimeSpan.FromMilliseconds(400),
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
+                };
+                Storyboard.SetTarget(widthAnim, IndexingProgressPill);
+                Storyboard.SetTargetProperty(widthAnim, "Width");
+
+                var opacityAnim = new DoubleAnimation
+                {
+                    To = isIndexing ? 1 : 0,
+                    Duration = TimeSpan.FromMilliseconds(300),
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
+                };
+                Storyboard.SetTarget(opacityAnim, IndexingProgressPill);
+                Storyboard.SetTargetProperty(opacityAnim, "Opacity");
+
+                storyboard.Children.Add(widthAnim);
+                storyboard.Children.Add(opacityAnim);
+
+                if (!isIndexing)
+                {
+                    storyboard.Completed += (s, e) => 
+                    {
+                        IndexingProgressPill.Visibility = Visibility.Collapsed;
+                        HeaderSwitcherContainer.Spacing = 0;
+                    };
+                }
+
+                storyboard.Begin();
+            }
+            catch { /* Ignore if UI elements not ready */ }
+        }
     }
 }

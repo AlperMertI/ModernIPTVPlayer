@@ -49,7 +49,7 @@ namespace ModernIPTVPlayer.Services
             if (level < MinLevel) return;
 
             // Performance: Extremely aggressive truncation for Info logs to save console/memory
-            int limit = level >= LogLevel.Warn ? 2048 : 512;
+            int limit = level >= LogLevel.Warn ? 262144 : 4096;
             if (message.Length > limit)
             {
                 message = string.Concat(message.AsSpan(0, limit), "... [TRUNCATED]");
