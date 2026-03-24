@@ -1665,7 +1665,8 @@ namespace ModernIPTVPlayer
 
                      try
                     {
-                        ShowOsd("Bağlantı Kontrol Ediliyor...");
+                        // OSD removal: "Bağlantı Kontrol Ediliyor" is redundant as we have a loading logo.
+                        // ShowOsd("Bağlantı Kontrol Ediliyor...");
                         
                         // [OPTIMIZATION] Skip probe for known fast providers to save ~1-2s
                         bool isTrusted = _streamUrl.Contains("torbox") || _streamUrl.Contains("real-debrid") || _streamUrl.Contains("alldebrid") || _streamUrl.Contains("premiumize");
@@ -3476,6 +3477,21 @@ namespace ModernIPTVPlayer
                 string imdbId = null;
                 string type = "movie";
                 string extra = "";
+                try
+                {
+                    if (!string.IsNullOrEmpty(_streamUrl))
+                    {
+                        var uri = new Uri(_streamUrl);
+                        string fileName = System.IO.Path.GetFileName(uri.LocalPath);
+                        if (!string.IsNullOrEmpty(fileName) && fileName.Contains("."))
+                        {
+                            // Some addons (OpenSubtitles) perform much better with filename
+                            extra = $"filename={Uri.EscapeDataString(fileName)}";
+                            Debug.WriteLine($"[FetchAddonSubtitles] Using filename metadata: {fileName}");
+                        }
+                    }
+                }
+                catch { }
                 
                 // Use _navArgs for all metadata since _item is not available in PlayerPage
                 if (_navArgs != null && !string.IsNullOrEmpty(_navArgs.Id))
@@ -3586,9 +3602,17 @@ namespace ModernIPTVPlayer
             {
                 if (_navArgs == null || _mpvPlayer == null) return;
 
-                // 1. Wait for MPV to fully load the video and have tracks available
+                // 1. Wait for MPV to fully load the video and have duration available
+                // This indicates the player is ready to accept track commands (sub-add).
                 Debug.WriteLine("[AutoSubRestore] Waiting for player to stabilize...");
-                await Task.Delay(3000);
+                int subRestoreRetry = 0;
+                while (_mpvPlayer != null && _mpvPlayer.Duration.TotalSeconds <= 0 && subRestoreRetry < 20)
+                {
+                    await Task.Delay(500); // 500ms x 20 = 10s max wait
+                    subRestoreRetry++;
+                    if (!_isPageLoaded) return;
+                }
+                
                 if (_mpvPlayer == null || !_isPageLoaded) return;
 
                 // 2. Load the track list (populates _currentSubtitleTracks with embedded tracks)
@@ -3827,41 +3851,42 @@ namespace ModernIPTVPlayer
                 // but some servers hate Range. Let's try standard request headers only first.
                 
                 var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(25));
-                HttpResponseMessage response;
 
                 try 
                 {
-                    // Use ResponseHeadersRead to avoid downloading the whole file
-                    response = await HttpHelper.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
+                    // Use ResponseHeadersRead to avoid downloading the whole file.
+                    // We wrap this in a using block to ensure the HttpResponseMessage is disposed 
+                    // BEFORE MPV starts its own connection. This prevents connection leaks.
+                    using var response = await HttpHelper.Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
+
+                    var contentType = response.Content.Headers.ContentType?.MediaType;
+                    
+                    // 1. Check for Server Errors
+                    if (!response.IsSuccessStatusCode)
+                    {
+                         // Specifically handle 458 or 403
+                         if ((int)response.StatusCode == 458 || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                             return (false, finalUrl, "Erişim Reddedildi veya Bağlantı Sınırı Aşıldı (458/403).");
+                         
+                         if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                             return (false, finalUrl, "Dosya Bulunamadı (404).");
+    
+                         return (false, finalUrl, $"Sunucu Hatası: {(int)response.StatusCode} {response.ReasonPhrase}");
+                    }
+    
+                    // 2. Check for "Webpage instead of Video" (The main issue)
+                    if (contentType != null && contentType.StartsWith("text/") && !contentType.Contains("mpegurl") && !contentType.Contains("xml"))
+                    {
+                         return (false, finalUrl, "Yayın kaynağı geçerli bir video dosyası değil (Web Sayfası döndü). Link kırık veya süresi dolmuş olabilir.");
+                    }
+                    
+                    // Success
+                    return (true, finalUrl, string.Empty);
                 }
                 catch (Exception ex)
                 {
                     return (false, finalUrl, $"Sunucuya bağlanılamadı: {ex.Message}");
                 }
-
-                var contentType = response.Content.Headers.ContentType?.MediaType;
-                
-                // 1. Check for Server Errors
-                if (!response.IsSuccessStatusCode)
-                {
-                     // Specifically handle 458 or 403
-                     if ((int)response.StatusCode == 458 || response.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                         return (false, finalUrl, "Erişim Reddedildi veya Bağlantı Sınırı Aşıldı (458/403).");
-                     
-                     if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
-                         return (false, finalUrl, "Dosya Bulunamadı (404).");
-
-                     return (false, finalUrl, $"Sunucu Hatası: {(int)response.StatusCode} {response.ReasonPhrase}");
-                }
-
-                // 2. Check for "Webpage instead of Video" (The main issue)
-                if (contentType != null && contentType.StartsWith("text/") && !contentType.Contains("mpegurl") && !contentType.Contains("xml"))
-                {
-                     return (false, finalUrl, "Yayın kaynağı geçerli bir video dosyası değil (Web Sayfası döndü). Link kırık veya süresi dolmuş olabilir.");
-                }
-                
-                // Success
-                return (true, finalUrl, string.Empty);
             }
             catch (Exception ex)
             {

@@ -1206,7 +1206,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         var match = IptvMatchService.Instance.FindMatchById(metadata.ImdbId, false) as VodStream;
                         if (match == null && !string.IsNullOrEmpty(metadata.Title) && metadata.Title != "Unknown" && metadata.Title != "Loading...")
                         {
-                            match = IptvMatchService.Instance.FindMatch(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, metadata.Year, null, false) as VodStream;
+                            match = IptvMatchService.Instance.FindMatch(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, null, metadata.Year, null, false) as VodStream;
                         }
 
                         if (match != null)
@@ -1411,7 +1411,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         var match = IptvMatchService.Instance.FindAllMatchesById(metadata.ImdbId, true).FirstOrDefault() as SeriesStream;
                         if (match == null && !string.IsNullOrEmpty(metadata.Title) && metadata.Title != "Unknown" && metadata.Title != "Loading...")
                         {
-                            match = IptvMatchService.Instance.FindAllMatches(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, metadata.Year, null, true).FirstOrDefault() as SeriesStream;
+                            match = IptvMatchService.Instance.FindAllMatches(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, null, metadata.Year, null, true).FirstOrDefault() as SeriesStream;
                         }
 
                         if (match == null && !string.IsNullOrEmpty(metadata.ImdbId))

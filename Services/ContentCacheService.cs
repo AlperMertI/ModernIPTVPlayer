@@ -684,6 +684,7 @@ namespace ModernIPTVPlayer.Services
              string fileName = $"cache_{safeId}_{key}.json.gz";
              try
              {
+                 await _diskSemaphore.WaitAsync();
                  var folder = ApplicationData.Current.LocalFolder;
                  using var ms = new MemoryStream();
                  var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
@@ -695,6 +696,10 @@ namespace ModernIPTVPlayer.Services
                  await ms.CopyToAsync(gzip);
              }
              catch { }
+             finally
+             {
+                 _diskSemaphore.Release();
+             }
         }
 
         // VOD INFO CACHING

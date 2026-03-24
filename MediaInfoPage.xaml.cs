@@ -5903,7 +5903,7 @@ namespace ModernIPTVPlayer
                 AppLogger.Warn($"[IPTV_UI_MATCH] START: ItemTitle={_item?.Title}, UnifiedTitle={_unifiedMetadata?.Title}, Year={_unifiedMetadata?.Year}, IMDb={(_item as StremioMediaStream)?.IMDbId}");
 
                 var iptvMatches = (_item is StremioMediaStream stremioItem) 
-                    ? IptvMatchService.Instance.MatchStremioItemAll(stremioItem, null, _unifiedMetadata?.OriginalTitle, _unifiedMetadata?.SubTitle, _unifiedMetadata?.Year) 
+                    ? IptvMatchService.Instance.MatchStremioItemAll(stremioItem, null, _unifiedMetadata?.OriginalTitle, _unifiedMetadata?.SubTitle, _unifiedMetadata?.Title, _unifiedMetadata?.Year) 
                     : new List<IMediaStream>();
 
                 AppLogger.Warn($"[IPTV_UI_MATCH] MatchStremioItemAll count: {iptvMatches?.Count ?? 0}");

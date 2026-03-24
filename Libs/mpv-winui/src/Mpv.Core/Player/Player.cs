@@ -1,4 +1,4 @@
-﻿// Copyright (c) Bili Copilot. All rights reserved.
+// Copyright (c) Bili Copilot. All rights reserved.
 
 using Mpv.Core.Args;
 using Mpv.Core.Interop;
@@ -216,7 +216,7 @@ public sealed partial class Player
         Marshal.WriteIntPtr(dxgiParamsPtr + 8, context);
 
         var advControlPtr = Marshal.AllocHGlobal(sizeof(int));
-        Marshal.WriteInt32(advControlPtr, 1);
+        Marshal.WriteInt32(advControlPtr, 0); // 0 = Let MPV handle internal locking/sync
         
         var d3d11DevPtr = Marshal.AllocHGlobal(IntPtr.Size);
         Marshal.WriteIntPtr(d3d11DevPtr, device);

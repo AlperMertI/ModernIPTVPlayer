@@ -83,10 +83,11 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
                 else
                 {
-                    // Default: Cinemeta (Official Catalog)
+                    // Default: Cinemeta (Official Catalog) + OpenSubtitles v3
                     _addonUrls = new List<string>
                     {
-                        "https://v3-cinemeta.strem.io"
+                        "https://v3-cinemeta.strem.io",
+                        "https://opensubtitles-v3.strem.io"
                     };
                     SaveAddons();
                 }

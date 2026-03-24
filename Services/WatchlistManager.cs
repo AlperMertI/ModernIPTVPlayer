@@ -19,6 +19,7 @@ namespace ModernIPTVPlayer.Services
         private const string FILENAME = "watchlist.json";
         private bool _loaded = false;
         private readonly object _lock = new();
+        private readonly System.Threading.SemaphoreSlim _fileLock = new(1, 1);
 
         public event EventHandler WatchlistChanged;
 
@@ -29,6 +30,7 @@ namespace ModernIPTVPlayer.Services
             if (_loaded) return;
             try
             {
+                await _fileLock.WaitAsync();
                 var folder = ApplicationData.Current.LocalFolder;
                 var item = await folder.TryGetItemAsync(FILENAME);
                 if (item != null)
@@ -48,12 +50,17 @@ namespace ModernIPTVPlayer.Services
             {
                 System.Diagnostics.Debug.WriteLine($"[WatchlistManager] Load Error: {ex.Message}");
             }
+            finally
+            {
+                _fileLock.Release();
+            }
         }
 
         private async Task SaveAsync()
         {
             try
             {
+                await _fileLock.WaitAsync();
                 string json;
                 lock (_lock)
                 {
@@ -69,6 +76,10 @@ namespace ModernIPTVPlayer.Services
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[WatchlistManager] Save Error: {ex.Message}");
+            }
+            finally
+            {
+                _fileLock.Release();
             }
         }
 

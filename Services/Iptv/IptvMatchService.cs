@@ -74,19 +74,19 @@ namespace ModernIPTVPlayer.Services.Iptv
 
         public bool InstanceInitializeCheck() => _isInitialized;
 
-        public IMediaStream? FindMatch(string? title, string? originalTitle, string? subTitle, string? year, string? query, bool isSeries, System.Threading.CancellationToken ct = default)
+        public IMediaStream? FindMatch(string? title, string? originalTitle, string? subTitle, string? localizedTitle, string? year, string? query, bool isSeries, System.Threading.CancellationToken ct = default)
         {
-            return FindAllMatches(title, originalTitle, subTitle, year, query, isSeries, false, ct).FirstOrDefault();
+            return FindAllMatches(title, originalTitle, subTitle, localizedTitle, year, query, isSeries, false, ct).FirstOrDefault();
         }
 
-        public List<IMediaStream> FindAllMatches(string? title, string? originalTitle, string? subTitle, string? year, string? query, bool isSeries, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
+        public List<IMediaStream> FindAllMatches(string? title, string? originalTitle, string? subTitle, string? localizedTitle, string? year, string? query, bool isSeries, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
         {
             if (ct.IsCancellationRequested) {
                 System.Diagnostics.Debug.WriteLine($"[IptvMatch] CANCELLED before start for Query: {query ?? title}");
                 ct.ThrowIfCancellationRequested();
             }
 
-            var searchTitles = new[] { title, originalTitle, subTitle, query }
+            var searchTitles = new[] { title, originalTitle, subTitle, localizedTitle, query }
                 .Where(t => !string.IsNullOrEmpty(t))
                 .Distinct()
                 .ToList();
@@ -245,6 +245,11 @@ namespace ModernIPTVPlayer.Services.Iptv
             if (!string.IsNullOrEmpty(title) && title != originalTitle) {
                 var tokens = TitleHelper.GetSignificantTokens(title);
                 searchScoringSets.Add((title, tokens, "Localized", 1.0));
+                foreach(var t in tokens) queryTokens.Add(t);
+            }
+            if (!string.IsNullOrEmpty(localizedTitle) && localizedTitle != title && localizedTitle != originalTitle) {
+                var tokens = TitleHelper.GetSignificantTokens(localizedTitle);
+                searchScoringSets.Add((localizedTitle, tokens, "Localized", 1.1)); // 10% boost for explicit localized name
                 foreach(var t in tokens) queryTokens.Add(t);
             }
             if (!string.IsNullOrEmpty(subTitle)) {
@@ -411,7 +416,7 @@ namespace ModernIPTVPlayer.Services.Iptv
             _ = ContentCacheService.Instance.TriggerThrottledSaveAsync(item is SeriesStream ? "series" : "vod");
         }
 
-        public List<IMediaStream> MatchStremioItemAll(StremioMediaStream item, string? query = null, string? originalTitle = null, string? subTitle = null, string? yearOverride = null, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
+        public List<IMediaStream> MatchStremioItemAll(StremioMediaStream item, string? query = null, string? originalTitle = null, string? subTitle = null, string? localizedTitle = null, string? yearOverride = null, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
         {
             if (item == null) return new List<IMediaStream>();
             ct.ThrowIfCancellationRequested();
@@ -458,6 +463,7 @@ namespace ModernIPTVPlayer.Services.Iptv
                 item.Title, 
                 originalTitle ?? item.Meta?.OriginalName, 
                 subTitle, 
+                localizedTitle,
                 yearOverride ?? item.Year, 
                 safeQuery, 
                 isSeries,
@@ -496,9 +502,9 @@ namespace ModernIPTVPlayer.Services.Iptv
             return results;
         }
 
-        public IMediaStream? MatchStremioItem(StremioMediaStream item, string? query = null, string? originalTitle = null, string? subTitle = null, string? yearOverride = null, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
+        public IMediaStream? MatchStremioItem(StremioMediaStream item, string? query = null, string? originalTitle = null, string? subTitle = null, string? localizedTitle = null, string? yearOverride = null, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
         {
-            return MatchStremioItemAll(item, query, originalTitle, subTitle, yearOverride, stopOnHighConfidence, ct).FirstOrDefault();
+            return MatchStremioItemAll(item, query, originalTitle, subTitle, localizedTitle, yearOverride, stopOnHighConfidence, ct).FirstOrDefault();
         }
         public List<IMediaStream> SearchFast(string query, string type = "all", System.Threading.CancellationToken ct = default)
         {

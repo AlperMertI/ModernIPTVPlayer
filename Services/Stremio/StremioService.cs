@@ -219,7 +219,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                             var meta = metas.FirstOrDefault();
                             if (meta != null)
                             {
-                                matches = IptvMatchService.Instance.FindAllMatches(meta.Title, null, null, meta.Year, null, isSeries);
+                                matches = IptvMatchService.Instance.FindAllMatches(meta.Title, null, null, null, meta.Year, null, isSeries);
                             }
                         }
 
@@ -335,9 +335,9 @@ namespace ModernIPTVPlayer.Services.Stremio
                 else
                 {
                     // STANDARD SEARCH: Fuzzy/Normalized for "All" scope
-                    var movieMatches = (type == "all" || type == "movie") ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, query, false, false, cancellationToken) : new List<IMediaStream>();
+                    var movieMatches = (type == "all" || type == "movie") ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, null, query, false, false, cancellationToken) : new List<IMediaStream>();
                     cancellationToken.ThrowIfCancellationRequested();
-                    var seriesMatches = (type == "all" || type == "series") ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, query, true, false, cancellationToken) : new List<IMediaStream>();
+                    var seriesMatches = (type == "all" || type == "series") ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, null, query, true, false, cancellationToken) : new List<IMediaStream>();
                     
                     foreach (var m in movieMatches.Concat(seriesMatches))
                     {

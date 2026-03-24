@@ -27,6 +27,11 @@ namespace ModernIPTVPlayer
                 // 1. Initialize Core
                 if (player == null) return;
                 await player.InitializePlayerAsync();
+                
+                // [OPTIMIZATION] Disable yt-dlp probing globally. 
+                // We use WebView2 for trailers and direct streams for IPTV/VOD.
+                // This saves ~2-10 seconds of metadata probing on every playback start.
+                await player.SetPropertyAsync("ytdl", "no");
 
                 // 2. Network & Headers
                 string headers = ""; // Scope Fix for Logging at line 87
