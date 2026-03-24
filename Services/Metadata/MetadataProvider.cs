@@ -389,7 +389,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 ImdbId = id,
                 IsSeries = isSeriesType,
                 MetadataId = id,
-                Title = sourceStream?.Title ?? id
+                Title = sourceStream != null && !string.IsNullOrEmpty(sourceStream.Title) && sourceStream.Title != "Loading..." ? sourceStream.Title : (id ?? "Unknown")
             };
 
             // [FIX] Ensure IsSeries is correctly synced if we are using a seed (cached result)
@@ -1204,7 +1204,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     {
                         // Use Centralized IptvMatchService
                         var match = IptvMatchService.Instance.FindMatchById(metadata.ImdbId, false) as VodStream;
-                        if (match == null)
+                        if (match == null && !string.IsNullOrEmpty(metadata.Title) && metadata.Title != "Unknown" && metadata.Title != "Loading...")
                         {
                             match = IptvMatchService.Instance.FindMatch(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, metadata.Year, null, false) as VodStream;
                         }
@@ -1270,6 +1270,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 var result = await ContentCacheService.Instance.GetMovieInfoAsync(streamId, App.CurrentLogin);
                 if (result != null)
                 {
+                    metadata.IsAvailableOnIptv = true;
+                    if (string.IsNullOrEmpty(metadata.MetadataId)) metadata.MetadataId = streamId.ToString();
+
                     if (result.Info != null)
                     {
                         AppLogger.Info($"[Enrich-Iptv] IPTV Movie Details Found: {result.Info.Name}");
@@ -1300,8 +1303,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                         if (string.IsNullOrEmpty(metadata.PosterUrl))
                             metadata.PosterUrl = result.Info.MovieImage ?? result.Info.CoverBig;
 
-                        if (string.IsNullOrEmpty(metadata.LogoUrl))
-                            metadata.LogoUrl = result.Info.MovieImage;
+                        // MovieImage from IPTV is nearly always a poster, not a logo.
+                        // We rely on TMDB to provide a real logo.
 
                         // 3. Classification
                         if (string.IsNullOrEmpty(metadata.AgeRating))
@@ -1406,7 +1409,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     {
                         // Use Centralized IptvMatchService
                         var match = IptvMatchService.Instance.FindAllMatchesById(metadata.ImdbId, true).FirstOrDefault() as SeriesStream;
-                        if (match == null)
+                        if (match == null && !string.IsNullOrEmpty(metadata.Title) && metadata.Title != "Unknown" && metadata.Title != "Loading...")
                         {
                             match = IptvMatchService.Instance.FindAllMatches(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, metadata.Year, null, true).FirstOrDefault() as SeriesStream;
                         }
@@ -1478,6 +1481,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 var info = await ContentCacheService.Instance.GetSeriesInfoAsync(seriesId, App.CurrentLogin);
                 if (info != null)
                 {
+                    metadata.IsAvailableOnIptv = true;
+                    if (string.IsNullOrEmpty(metadata.MetadataId)) metadata.MetadataId = seriesId.ToString();
+
                     // 1. Series Level Metadata
                     if (info.Info != null)
                     {
@@ -1490,8 +1496,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         if (string.IsNullOrEmpty(metadata.BackdropUrl)) metadata.BackdropUrl = info.Info.Cover;
                         if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = info.Info.Cover;
 
-                        if (string.IsNullOrEmpty(metadata.LogoUrl))
-                            metadata.LogoUrl = info.Info.Cover;
+                        // info.Info.Cover is a poster, not a logo. Rely on TMDB for real logos.
 
                         // Map Rating & Year
                         string ratingStr = !string.IsNullOrEmpty(info.Info.Rating) ? info.Info.Rating : series.Rating;
@@ -2093,7 +2098,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (tmdb == null)
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying title search = \"{metadata.Title}\", year = \"{metadata.Year}\"");
-                    var titleSearch = await TmdbHelper.SearchTvAsync(metadata.Title, metadata.Year?.Split('–')[0]);
+                    var titleSearch = await TmdbHelper.SearchTvAsync(metadata.Title, TitleHelper.ExtractYear(metadata.Year));
                     if (titleSearch != null)
                     {
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Title search found ID = {titleSearch.Id}, fetching full details...");
@@ -2125,7 +2130,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 if (tmdb == null)
                 {
-                    var searchResult = await TmdbHelper.SearchMovieAsync(metadata.Title, metadata.Year?.Split('–')[0]);
+                    var searchResult = await TmdbHelper.SearchMovieAsync(metadata.Title, TitleHelper.ExtractYear(metadata.Year));
                     if (searchResult != null)
                     {
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Search found ID = {searchResult.Id}, fetching full details...");

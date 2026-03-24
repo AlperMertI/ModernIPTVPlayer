@@ -1849,7 +1849,9 @@ namespace ModernIPTVPlayer
                 {
                     // [FIX] Trigger source fetch for any item with a canonical ID (IMDb or TMDB)
                     string probeId = unified.ImdbId ?? (item as Models.Stremio.StremioMediaStream)?.Meta?.Id ?? item.IMDbId;
-                    if (!string.IsNullOrEmpty(probeId) && MetadataProvider.IsCanonicalId(probeId))
+                    bool isIptvOnly = unified.IsAvailableOnIptv && !MetadataProvider.IsCanonicalId(probeId);
+                    
+                    if (!string.IsNullOrEmpty(probeId) && (MetadataProvider.IsCanonicalId(probeId) || isIptvOnly))
                     {
                          _ = PlayStremioContent(probeId, showGlobalLoading: false);
                     }
@@ -1868,16 +1870,23 @@ namespace ModernIPTVPlayer
 
         private async Task PopulateMetadataUI(UnifiedMetadata unified, IMediaStream item)
         {
+            var sms = item as Models.Stremio.StremioMediaStream;
             string metadataId = unified.MetadataId;
             string metadataType = unified.IsSeries ? "series" : "movie";
             string navSeedTitle = item?.Title?.Trim() ?? "";
 
-            // Seed missing urls from item
+            // Seed missing urls and state from item
             if (string.IsNullOrWhiteSpace(unified.PosterUrl)) unified.PosterUrl = item.PosterUrl;
-            if (string.IsNullOrWhiteSpace(unified.BackdropUrl)) unified.BackdropUrl = (item as Models.Stremio.StremioMediaStream)?.Meta?.Background ?? item.BackdropUrl;
+            if (string.IsNullOrWhiteSpace(unified.BackdropUrl)) unified.BackdropUrl = sms?.Meta?.Background ?? item.BackdropUrl;
+            
+            // [FIX] Ensure item's IPTV availability is synced with unified result early
+            if (unified.IsAvailableOnIptv && sms != null)
+            {
+                sms.IsAvailableOnIptv = true;
+            }
 
-            TitleText.Text = unified.Title;
-            StickyTitle.Text = unified.Title;
+            TitleText.Text = string.IsNullOrEmpty(unified.Title) || unified.Title == "Unknown" ? (string.IsNullOrEmpty(navSeedTitle) ? "Unknown Content" : navSeedTitle) : unified.Title;
+            StickyTitle.Text = TitleText.Text;
 
             // [IDENTITY LOGO VS TITLE] Consolidated at the start to stabilize measurement
             bool hasLogo = !string.IsNullOrWhiteSpace(unified.LogoUrl);
@@ -1915,7 +1924,7 @@ namespace ModernIPTVPlayer
             }
 
             // [SUPER TITLE LOGIC] - Must run BEFORE TitlePanel.UpdateLayout()
-            if (string.IsNullOrWhiteSpace(unified.SubTitle) && item is Models.Stremio.StremioMediaStream sms && !string.IsNullOrWhiteSpace(sms.Meta?.OriginalName) && !string.Equals(sms.Meta.OriginalName, unified.Title, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(unified.SubTitle) && sms != null && !string.IsNullOrWhiteSpace(sms.Meta?.OriginalName) && !string.Equals(sms.Meta.OriginalName, unified.Title, StringComparison.OrdinalIgnoreCase))
                 unified.SubTitle = sms.Meta.OriginalName;
             if (string.IsNullOrWhiteSpace(unified.SubTitle) && !string.IsNullOrWhiteSpace(navSeedTitle) && !string.Equals(navSeedTitle, unified.Title, StringComparison.OrdinalIgnoreCase))
                 unified.SubTitle = navSeedTitle;
@@ -5894,17 +5903,10 @@ namespace ModernIPTVPlayer
                 AppLogger.Warn($"[IPTV_UI_MATCH] START: ItemTitle={_item?.Title}, UnifiedTitle={_unifiedMetadata?.Title}, Year={_unifiedMetadata?.Year}, IMDb={(_item as StremioMediaStream)?.IMDbId}");
 
                 var iptvMatches = (_item is StremioMediaStream stremioItem) 
-                    ? IptvMatchService.Instance.MatchStremioItemAll(stremioItem) 
+                    ? IptvMatchService.Instance.MatchStremioItemAll(stremioItem, null, _unifiedMetadata?.OriginalTitle, _unifiedMetadata?.SubTitle, _unifiedMetadata?.Year) 
                     : new List<IMediaStream>();
 
                 AppLogger.Warn($"[IPTV_UI_MATCH] MatchStremioItemAll count: {iptvMatches?.Count ?? 0}");
-
-                if ((iptvMatches == null || !iptvMatches.Any()) && _unifiedMetadata != null)
-                {
-                    AppLogger.Warn($"[IPTV_UI_MATCH] Falling back to FindAllMatches with Title: {_unifiedMetadata.Title}, Original: {_unifiedMetadata.OriginalTitle}, Sub: {_unifiedMetadata.SubTitle}");
-                    iptvMatches = IptvMatchService.Instance.FindAllMatches(_unifiedMetadata.Title, _unifiedMetadata.OriginalTitle, _unifiedMetadata.SubTitle, _unifiedMetadata.Year, null, type == "series");
-                    AppLogger.Warn($"[IPTV_UI_MATCH] FindAllMatches result count: {iptvMatches?.Count ?? 0}");
-                }
 
                 if (iptvMatches != null && iptvMatches.Any())
                 {

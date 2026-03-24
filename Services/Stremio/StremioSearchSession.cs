@@ -63,8 +63,8 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         public void Cancel()
         {
-            _cts.Cancel();
-            _cts.Dispose();
+            System.Diagnostics.Debug.WriteLine($"[SearchSession] Cancelling session: {Query}");
+            try { _cts.Cancel(); } catch { }
         }
 
         private void OnPartialResults(List<StremioMediaStream> ranked)

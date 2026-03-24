@@ -103,7 +103,7 @@ namespace ModernIPTVPlayer
 
             // Spotlight Search
             SpotlightSearch.ItemClicked += (s, item) => NavigationService.NavigateToDetailsDirect(Frame, item);
-            SpotlightSearch.SeeAllClicked += (s, query) => Frame.Navigate(typeof(SearchResultsPage), query);
+            SpotlightSearch.SeeAllClicked += (s, args) => Frame.Navigate(typeof(SearchResultsPage), args);
 
             // Indexing Status
             ContentCacheService.Instance.IndexingStatusChanged += (s, isIndexing) => 

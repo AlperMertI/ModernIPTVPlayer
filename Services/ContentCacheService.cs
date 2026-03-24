@@ -935,9 +935,11 @@ namespace ModernIPTVPlayer.Services
         public string AirDate { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("video")]
+        [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<TechnicalVideoInfo>))]
         public TechnicalVideoInfo Video { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("audio")]
+        [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<TechnicalAudioInfo>))]
         public TechnicalAudioInfo Audio { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("bitrate")]
@@ -1039,9 +1041,11 @@ namespace ModernIPTVPlayer.Services
         public string Duration { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("video")]
+        [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<TechnicalVideoInfo>))]
         public TechnicalVideoInfo Video { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("audio")]
+        [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<TechnicalAudioInfo>))]
         public TechnicalAudioInfo Audio { get; set; }
 
         [System.Text.Json.Serialization.JsonPropertyName("bitrate")]

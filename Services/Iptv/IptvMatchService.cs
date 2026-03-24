@@ -37,6 +37,7 @@ namespace ModernIPTVPlayer.Services.Iptv
                 _tokenIndex = tokenIndex ?? new Dictionary<string, List<IMediaStream>>(StringComparer.OrdinalIgnoreCase);
                 
                 _isInitialized = true;
+                TitleHelper.ClearCaches();
                 AppLogger.Info($"[IptvMatchService] Indices updated. VODs: {_vods.Count}, Series: {_series.Count}, Imdb/Tmdb Index: {_imdbIndex.Count}, Tokens: {_tokenIndex.Count}");
             }
         }
@@ -73,14 +74,17 @@ namespace ModernIPTVPlayer.Services.Iptv
 
         public bool InstanceInitializeCheck() => _isInitialized;
 
-        public IMediaStream? FindMatch(string? title, string? originalTitle, string? subTitle, string? year, string? query, bool isSeries)
+        public IMediaStream? FindMatch(string? title, string? originalTitle, string? subTitle, string? year, string? query, bool isSeries, System.Threading.CancellationToken ct = default)
         {
-            return FindAllMatches(title, originalTitle, subTitle, year, query, isSeries).FirstOrDefault();
+            return FindAllMatches(title, originalTitle, subTitle, year, query, isSeries, false, ct).FirstOrDefault();
         }
 
-        public List<IMediaStream> FindAllMatches(string? title, string? originalTitle, string? subTitle, string? year, string? query, bool isSeries, bool stopOnHighConfidence = false)
+        public List<IMediaStream> FindAllMatches(string? title, string? originalTitle, string? subTitle, string? year, string? query, bool isSeries, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
         {
-            if (!_isInitialized || string.IsNullOrEmpty(title)) return new List<IMediaStream>();
+            if (ct.IsCancellationRequested) {
+                System.Diagnostics.Debug.WriteLine($"[IptvMatch] CANCELLED before start for Query: {query ?? title}");
+                ct.ThrowIfCancellationRequested();
+            }
 
             var searchTitles = new[] { title, originalTitle, subTitle, query }
                 .Where(t => !string.IsNullOrEmpty(t))
@@ -119,11 +123,13 @@ namespace ModernIPTVPlayer.Services.Iptv
                 var titleLevelMatches = new Dictionary<IMediaStream, int>();
                 foreach (var token in set.Tokens)
                 {
+                    ct.ThrowIfCancellationRequested();
                     if (token.Length < 2 && !char.IsDigit(token[0])) continue;
                     if (_tokenIndex.TryGetValue(token, out var matches))
                     {
                         foreach (var m in matches)
                         {
+                            ct.ThrowIfCancellationRequested();
                             if (m.Type != (isSeries ? "series" : "movie")) continue;
                             if (titleLevelMatches.ContainsKey(m)) titleLevelMatches[m]++;
                             else titleLevelMatches[m] = 1;
@@ -134,9 +140,13 @@ namespace ModernIPTVPlayer.Services.Iptv
                 // Evaluation for this Title Set
                 foreach (var kvp in titleLevelMatches)
                 {
+                    ct.ThrowIfCancellationRequested();
                     var item = kvp.Key;
                     int matchCount = kvp.Value;
                     int targetCount = set.Tokens.Count;
+
+                    // [PERFORMANCE] Cap candidates at 300 to prevent runaway fuzzy matching for short queries
+                    if (candidates.Count >= 300) break;
 
                     bool isStrictMatch = matchCount == targetCount;
                     bool isYearMatch = false;
@@ -187,10 +197,13 @@ namespace ModernIPTVPlayer.Services.Iptv
 
                     foreach (var kvp in titleLevelMatches)
                     {
+                        ct.ThrowIfCancellationRequested();
                         var item = kvp.Key;
                         int matchCount = kvp.Value;
                         int targetCount = set.Tokens.Count;
                         
+                        if (candidates.Count >= 200) break;
+
                         bool isStrictMatch = matchCount == targetCount;
                         bool isYearMatch = false;
                         if (!isStrictMatch && !string.IsNullOrEmpty(targetYearStr))
@@ -249,6 +262,11 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             foreach (var c in candidateDatas)
             {
+                if (ct.IsCancellationRequested) {
+                    System.Diagnostics.Debug.WriteLine($"[IptvMatch] CANCELLED during loop for Query: {query ?? title}");
+                    ct.ThrowIfCancellationRequested();
+                }
+
                 // Match against all possible search titles, pick the best weighted score
                 var matchResults = searchScoringSets.Select(s => {
                     bool isMatch = TitleHelper.IsMatch(c.Tokens, s.Tokens, c.Item.Title, s.Title, c.Item.Year, year);
@@ -393,9 +411,10 @@ namespace ModernIPTVPlayer.Services.Iptv
             _ = ContentCacheService.Instance.TriggerThrottledSaveAsync(item is SeriesStream ? "series" : "vod");
         }
 
-        public List<IMediaStream> MatchStremioItemAll(StremioMediaStream item, string? query = null, bool stopOnHighConfidence = false)
+        public List<IMediaStream> MatchStremioItemAll(StremioMediaStream item, string? query = null, string? originalTitle = null, string? subTitle = null, string? yearOverride = null, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
         {
             if (item == null) return new List<IMediaStream>();
+            ct.ThrowIfCancellationRequested();
 
             bool isSeries = item.IsSeries;
             string? imdbId = item.IMDbId;
@@ -413,7 +432,8 @@ namespace ModernIPTVPlayer.Services.Iptv
                 foreach (var m in idMatches)
                 {
                     results.Add(m);
-                    matchedStreamIds.Add((m as VodStream)?.StreamId ?? (m as SeriesStream)?.SeriesId ?? 0);
+                    int sid = (m as VodStream)?.StreamId ?? (m as SeriesStream)?.SeriesId ?? 0;
+                    if (sid != 0) matchedStreamIds.Add(sid);
                 }
             }
 
@@ -436,12 +456,13 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             var titleMatches = FindAllMatches(
                 item.Title, 
-                item.Meta?.OriginalName, 
-                null, 
-                item.Year, 
+                originalTitle ?? item.Meta?.OriginalName, 
+                subTitle, 
+                yearOverride ?? item.Year, 
                 safeQuery, 
                 isSeries,
-                stopOnHighConfidence
+                stopOnHighConfidence,
+                ct
             );
 
             if (titleMatches.Any())
@@ -450,10 +471,16 @@ namespace ModernIPTVPlayer.Services.Iptv
                 foreach (var m in titleMatches)
                 {
                     int sid = (m as VodStream)?.StreamId ?? (m as SeriesStream)?.SeriesId ?? 0;
-                    if (!matchedStreamIds.Contains(sid))
+                    if (sid != 0 && !matchedStreamIds.Contains(sid))
                     {
                         results.Add(m);
                         matchedStreamIds.Add(sid);
+                        newCount++;
+                    }
+                    else if (sid == 0)
+                    {
+                        // Fallback for types that don't have StreamId/SeriesId (unlikely for VOD/Series)
+                        results.Add(m);
                         newCount++;
                     }
                 }
@@ -469,9 +496,41 @@ namespace ModernIPTVPlayer.Services.Iptv
             return results;
         }
 
-        public IMediaStream? MatchStremioItem(StremioMediaStream item, string? query = null, bool stopOnHighConfidence = false)
+        public IMediaStream? MatchStremioItem(StremioMediaStream item, string? query = null, string? originalTitle = null, string? subTitle = null, string? yearOverride = null, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
         {
-            return MatchStremioItemAll(item, query, stopOnHighConfidence).FirstOrDefault();
+            return MatchStremioItemAll(item, query, originalTitle, subTitle, yearOverride, stopOnHighConfidence, ct).FirstOrDefault();
+        }
+        public List<IMediaStream> SearchFast(string query, string type = "all", System.Threading.CancellationToken ct = default)
+        {
+            var results = new List<IMediaStream>();
+            if (string.IsNullOrEmpty(query)) return results;
+            
+            string q = query.ToLowerInvariant();
+            
+            if (type == "all" || type == "movie")
+            {
+                foreach (var v in _vods)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (v.Title != null && v.Title.Contains(q, StringComparison.OrdinalIgnoreCase))
+                        results.Add(v);
+                    
+                    if (results.Count > 100) break;
+                }
+            }
+
+            if (results.Count < 100 && (type == "all" || type == "series"))
+            {
+                foreach (var s in _series)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (s.Title != null && s.Title.Contains(q, StringComparison.OrdinalIgnoreCase))
+                        results.Add(s);
+                    
+                    if (results.Count > 150) break;
+                }
+            }
+            return results;
         }
     }
 }

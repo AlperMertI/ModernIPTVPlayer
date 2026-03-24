@@ -514,7 +514,7 @@ namespace ModernIPTVPlayer
 
             // 1. Remove common IPTV prefixes/brackets like "[TR]", "[DE]", "[Dual]", "VIP |", "(4K)"
             clean = System.Text.RegularExpressions.Regex.Replace(clean, @"(?i)\[.*?\]|\(.*?\)", "");
-            clean = System.Text.RegularExpressions.Regex.Replace(clean, @"(?i)(tr|ger|eng|dual|vip|top|fhd|hd|sd|uhd|4k|hevc|x265|x264|web-dl|bluray)\b", "");
+            clean = System.Text.RegularExpressions.Regex.Replace(clean, @"(?i)\b(tr|ger|eng|en|de|fr|it|es|dual|vip|top|fhd|hd|sd|uhd|4k|hevc|x265|x264|web-dl|bluray)\b", "");
 
             // 2. Remove common IPTV separators and noise
             clean = System.Text.RegularExpressions.Regex.Replace(clean, @"\s*[:|/-]\s*", " ");

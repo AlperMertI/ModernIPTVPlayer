@@ -9,18 +9,22 @@ using ModernIPTVPlayer.Services.Stremio;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using ModernIPTVPlayer.Pages;
 
 namespace ModernIPTVPlayer.Controls
 {
     public sealed partial class SpotlightSearchControl : UserControl
     {
         public event EventHandler<IMediaStream> ItemClicked;
-        public event EventHandler<string> SeeAllClicked;
+        public event EventHandler<SearchArgs> SeeAllClicked;
 
         private DispatcherTimer _debounceTimer;
         private string _lastQuery;
         private System.Collections.ObjectModel.ObservableCollection<IMediaStream> _resultsCollection = new();
         private System.Threading.CancellationTokenSource _searchCts;
+        
+        private string _searchType = "all"; // all, movie, series
+        private string _searchScope = "all"; // all, iptv
 
         public SpotlightSearchControl()
         {
@@ -74,16 +78,7 @@ namespace ModernIPTVPlayer.Controls
         {
             if (e.Key == Windows.System.VirtualKey.Enter)
             {
-                if (ResultsList.Items.Count > 0)
-                {
-                   var first = ResultsList.Items[0] as IMediaStream;
-                   ItemClicked?.Invoke(this, first);
-                   Hide();
-                }
-                else
-                {
-                      SeeAllButton_Click(null, null);
-                }
+                SeeAllButton_Click(null, null);
             }
             else if (e.Key == Windows.System.VirtualKey.Escape)
             {
@@ -102,10 +97,18 @@ namespace ModernIPTVPlayer.Controls
         private async void DebounceTimer_Tick(object sender, object e)
         {
             _debounceTimer.Stop();
+            await RunSearchAsync();
+        }
+
+        private async Task RunSearchAsync(bool force = false)
+        {
             string query = SearchBox.Text.Trim();
+            if (string.IsNullOrEmpty(query)) return;
             
-            if (string.IsNullOrEmpty(query) || query == _lastQuery) return;
-            _lastQuery = query;
+            // Check if we need to re-run
+            string currentSearchKey = $"{query}|{_searchType}|{_searchScope}";
+            if (!force && currentSearchKey == _lastQuery) return;
+            _lastQuery = currentSearchKey;
 
             // Update UI State -> Loading
             ResultsList.Visibility = Visibility.Collapsed;
@@ -119,10 +122,10 @@ namespace ModernIPTVPlayer.Controls
             _searchCts = new System.Threading.CancellationTokenSource();
             var token = _searchCts.Token;
 
-            // Perform Unified Search (Service now handles IPTV + Ranking)
+            // Perform Unified Search (Service now handles IPTV + Type/Scope Filtering)
             try
             {
-                await StremioService.Instance.SearchAsync(query, (partialResults) =>
+                await StremioService.Instance.SearchAsync(query, _searchType, _searchScope, (partialResults) =>
                 {
                     if (token.IsCancellationRequested) return;
 
@@ -202,8 +205,72 @@ namespace ModernIPTVPlayer.Controls
             string query = SearchBox.Text.Trim();
             if(!string.IsNullOrEmpty(query))
             {
-                SeeAllClicked?.Invoke(this, query);
+                var args = new SearchArgs 
+                { 
+                    Query = query, 
+                    Type = _searchType, 
+                    PreferredSource = _searchScope == "iptv" ? "IPTV" : "Stremio" 
+                };
+                SeeAllClicked?.Invoke(this, args);
                 Hide();
+            }
+        }
+
+        private async void TypeFilterBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_searchType == "all") _searchType = "movie";
+            else if (_searchType == "movie") _searchType = "series";
+            else _searchType = "all";
+            
+            UpdateFilterUI();
+            SearchBox.Focus(FocusState.Programmatic);
+            await RunSearchAsync(true);
+        }
+
+        private async void ScopeFilterBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_searchScope == "all") _searchScope = "iptv";
+            else if (_searchScope == "iptv") _searchScope = "library";
+            else _searchScope = "all";
+            UpdateFilterUI();
+            SearchBox.Focus(FocusState.Programmatic);
+            await RunSearchAsync(true);
+        }
+
+        private void UpdateFilterUI()
+        {
+            // Update Type Button
+            switch (_searchType)
+            {
+                case "movie":
+                    TypeIcon.Glyph = "\uE8B2"; // Movie icon
+                    TypeText.Text = "FİLM";
+                    break;
+                case "series":
+                    TypeIcon.Glyph = "\uE7C8"; // TV icon
+                    TypeText.Text = "DİZİ";
+                    break;
+                default:
+                    TypeIcon.Glyph = "\uE71D"; // All/Search icon
+                    TypeText.Text = "HEPSİ";
+                    break;
+            }
+
+            // Update Scope Button
+            if (_searchScope == "iptv")
+            {
+                ScopeIcon.Glyph = "\uE753"; // World icon
+                ScopeText.Text = "IPTV";
+            }
+            else if (_searchScope == "library")
+            {
+                ScopeIcon.Glyph = "\uE8B1"; // Library icon
+                ScopeText.Text = "KÜTÜPHANE";
+            }
+            else
+            {
+                ScopeIcon.Glyph = "\uE753"; 
+                ScopeText.Text = "HEPSİ";
             }
         }
     }

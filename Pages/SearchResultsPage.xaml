@@ -9,6 +9,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:converters="using:ModernIPTVPlayer.Converters"
+    xmlns:root="using:ModernIPTVPlayer"
     mc:Ignorable="d"
     Background="Black">
 
@@ -54,12 +55,72 @@
         
         <!-- Header -->
         <Grid x:Name="HeaderContainer" Padding="48,64,48,24" VerticalAlignment="Top" Canvas.ZIndex="2000">
+            <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup>
+                    <VisualState x:Name="WideState">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="1300"/>
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="TypeFilterAll.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="TypeFilterMovies.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="TypeFilterSeries.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="SourceFilterAll.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="SourceFilterStremio.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="SourceFilterIptv.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="SourceFilterLibrary.(root:NavProperties.IsCompact)" Value="False"/>
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="MediumState">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="950"/>
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="TypeFilterAll.(root:NavProperties.IsCompact)" Value="True"/>
+                            <Setter Target="TypeFilterMovies.(root:NavProperties.IsCompact)" Value="True"/>
+                            <Setter Target="TypeFilterSeries.(root:NavProperties.IsCompact)" Value="True"/>
+                            <Setter Target="SourceFilterAll.(root:NavProperties.IsCompact)" Value="True"/>
+                            <Setter Target="SourceFilterStremio.(root:NavProperties.IsCompact)" Value="True"/>
+                            <Setter Target="SourceFilterIptv.(root:NavProperties.IsCompact)" Value="True"/>
+                            <Setter Target="SourceFilterLibrary.(root:NavProperties.IsCompact)" Value="True"/>
+                            <Setter Target="HeaderContainer.Padding" Value="48,48,48,24"/>
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="NarrowState">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="0"/>
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="HeaderContainer.Padding" Value="48,48,48,16"/>
+                            <Setter Target="SearchContentActions.Grid.Row" Value="1"/>
+                            <Setter Target="SearchContentActions.Grid.Column" Value="0"/>
+                            <Setter Target="SearchContentActions.Grid.ColumnSpan" Value="2"/>
+                            <Setter Target="SearchContentActions.HorizontalAlignment" Value="Left"/>
+                            <Setter Target="SearchContentActions.Margin" Value="0,16,0,0"/>
+                            <Setter Target="HeaderStack.Grid.ColumnSpan" Value="2"/>
+                            <Setter Target="HeaderStack.Margin" Value="0,0,0,0"/>
+                            <Setter Target="TypeFilterAll.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="TypeFilterMovies.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="TypeFilterSeries.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="SourceFilterAll.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="SourceFilterStremio.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="SourceFilterIptv.(root:NavProperties.IsCompact)" Value="False"/>
+                            <Setter Target="SourceFilterLibrary.(root:NavProperties.IsCompact)" Value="False"/>
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
+
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <StackPanel Orientation="Horizontal" Spacing="24">
+            <StackPanel x:Name="HeaderStack" Orientation="Horizontal" Spacing="24">
                 <!-- Back Button (Using HyperlinkButton for native Hand cursor) -->
                 <HyperlinkButton x:Name="BackButton" Click="BackButton_Click" 
                                  Width="44" Height="44" Padding="0" 
@@ -70,7 +131,7 @@
                 <StackPanel VerticalAlignment="Center">
                     <!-- Breadcrumbs -->
                     <StackPanel x:Name="BreadcrumbPanel" Orientation="Horizontal" Spacing="8" Opacity="0.5" Margin="0,0,0,4">
-                        <HyperlinkButton x:Name="RootBreadcrumb" Content="Stremio" Padding="0" FontSize="11" FontWeight="SemiBold" Click="RootBreadcrumb_Click"/>
+                        <HyperlinkButton x:Name="RootBreadcrumb" Content="Arama" Padding="0" FontSize="11" FontWeight="SemiBold" Click="RootBreadcrumb_Click"/>
                         <TextBlock Text="/" FontSize="10" VerticalAlignment="Center" Opacity="0.5"/>
                         <HyperlinkButton x:Name="TypeBreadcrumb" Content="Filmler" Padding="0" FontSize="11" FontWeight="SemiBold" Click="TypeBreadcrumb_Click"/>
                         <StackPanel x:Name="CategoryBreadcrumbArea" Orientation="Horizontal" Visibility="Collapsed" Spacing="8">
@@ -99,7 +160,7 @@
                         <Border x:Name="StremioCountBadge" Visibility="Collapsed" Background="#15FFFFFF" BorderBrush="#15FFFFFF" BorderThickness="1" CornerRadius="8" Padding="10,4" VerticalAlignment="Center" Margin="0,4,0,0">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <TextBlock x:Name="TxtStremioCount" Text="0" FontSize="14" FontWeight="Bold" Foreground="White"/>
-                                <TextBlock Text="Stremio" FontSize="11" Opacity="0.5" VerticalAlignment="Center" Foreground="White"/>
+                                <TextBlock x:Name="TxtContentLabel" Text="İçerik" FontSize="11" Opacity="0.5" VerticalAlignment="Center" Foreground="White"/>
                             </StackPanel>
                         </Border>
 
@@ -116,11 +177,32 @@
                 <!-- Type Filters -->
                 <StackPanel Orientation="Horizontal" Spacing="2">
                     <RadioButton x:Name="TypeFilterAll" Content="Tümü" IsChecked="True" 
-                                 Style="{StaticResource PillRadioButtonStyle}" Checked="TypeFilter_Checked" Tag="all" MinWidth="54"/>
+                                 root:NavProperties.Icon="&#xE71D;"
+                                 Style="{StaticResource ResponsiveFilterButtonStyle}" Checked="TypeFilter_Checked" Tag="all"/>
                     <RadioButton x:Name="TypeFilterMovies" Content="Filmler" 
-                                 Style="{StaticResource PillRadioButtonStyle}" Checked="TypeFilter_Checked" Tag="movie" MinWidth="60"/>
+                                 root:NavProperties.Icon="&#xE8B2;"
+                                 Style="{StaticResource ResponsiveFilterButtonStyle}" Checked="TypeFilter_Checked" Tag="movie"/>
                     <RadioButton x:Name="TypeFilterSeries" Content="Diziler" 
-                                 Style="{StaticResource PillRadioButtonStyle}" Checked="TypeFilter_Checked" Tag="series" MinWidth="60"/>
+                                 root:NavProperties.Icon="&#xE7C8;"
+                                 Style="{StaticResource ResponsiveFilterButtonStyle}" Checked="TypeFilter_Checked" Tag="series"/>
+                </StackPanel>
+
+                <!-- Divider -->
+                <Rectangle Width="1" Height="20" Fill="#33FFFFFF" Margin="8,0"/>
+
+                <StackPanel Orientation="Horizontal" Spacing="2">
+                    <RadioButton x:Name="SourceFilterAll" Content="Hepsi" IsChecked="True" 
+                                 root:NavProperties.Icon="&#xE71D;"
+                                 Style="{StaticResource ResponsiveFilterButtonStyle}" Checked="SourceFilter_Checked" Tag="all"/>
+                    <RadioButton x:Name="SourceFilterStremio" Content="Eklentiler" 
+                                 root:NavProperties.Icon="&#xE710;"
+                                 Style="{StaticResource ResponsiveFilterButtonStyle}" Checked="SourceFilter_Checked" Tag="stremio"/>
+                    <RadioButton x:Name="SourceFilterIptv" Content="IPTV" 
+                                 root:NavProperties.Icon="&#xE753;"
+                                 Style="{StaticResource ResponsiveFilterButtonStyle}" Checked="SourceFilter_Checked" Tag="iptv"/>
+                    <RadioButton x:Name="SourceFilterLibrary" Content="Kütüphane" 
+                                 root:NavProperties.Icon="&#xE8B1;"
+                                 Style="{StaticResource ResponsiveFilterButtonStyle}" Checked="SourceFilter_Checked" Tag="library"/>
                 </StackPanel>
 
                 <!-- Divider -->
@@ -198,7 +280,7 @@
                 
                 <!-- Section 1: Stremio Results -->
                 <StackPanel x:Name="StremioSection" Spacing="12" Visibility="Collapsed">
-                    <TextBlock x:Name="StremioSectionTitle" Text="Stremio Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9" Visibility="Collapsed"/>
+                    <TextBlock x:Name="StremioSectionTitle" Text="Arama Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9" Visibility="Collapsed"/>
                     
                     <GridView x:Name="StremioGrid" 
                               SelectionMode="None" IsItemClickEnabled="True" 

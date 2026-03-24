@@ -14,6 +14,18 @@ namespace ModernIPTVPlayer.Helpers
         private static readonly ConcurrentDictionary<string, string> NormalizeCache = new();
         private static readonly ConcurrentDictionary<string, HashSet<string>> TokenCache = new();
         private static readonly ConcurrentDictionary<string, HashSet<string>> BaseTokenCache = new();
+        private static readonly object _cacheLock = new();
+
+        public static void ClearCaches()
+        {
+            lock (_cacheLock)
+            {
+                NormalizeCache.Clear();
+                TokenCache.Clear();
+                BaseTokenCache.Clear();
+            }
+            AppLogger.Info("[TitleHelper] Caches cleared.");
+        }
 
         private static readonly string[] Articles = { 
             "the", "a", "an", "der", "die", "das", "le", "la", "les", "el", "la", "los", "las", 
@@ -67,18 +79,18 @@ namespace ModernIPTVPlayer.Helpers
 
             // [NEW] Ambiguity Protection: For very short/generic titles, require exact year match if years are available.
             // This prevents "Spider-Man" (no year) from matching "Spider-Man" (2017) if it's potentially a different version.
-            if (!hasYearMatch && oneSideHasYear && GetBaseTokens(rawTitle1 ?? "").Count <= 2)
+            if (!hasYearMatch && oneSideHasYear && (GetBaseTokens(rawTitle1 ?? "").Count <= 1 || GetBaseTokens(rawTitle2 ?? "").Count <= 1))
             {
-                AppLogger.Warn($"[TitleMatch] Ambiguity REJECT: '{rawTitle1}' vs '{rawTitle2}'. Generic title requires exact year match.");
+                AppLogger.Warn($"[TitleMatch] Ambiguity REJECT: '{rawTitle1}' vs '{rawTitle2}'. Generic/Short title requires exact year match.");
                 return false;
             }
 
-            // 2. Strict Digit/Sequel Check - Compare numbers (e.g. Spider-Man 2 vs 3)
-            var digits1 = tokens1.Where(t => t.Any(char.IsDigit) && (!int.TryParse(t, out int n) || n < 50)).ToList();
-            var digits2 = tokens2.Where(t => t.Any(char.IsDigit) && (!int.TryParse(t, out int n) || n < 50)).ToList();
-            if (digits1.Count != digits2.Count || !digits1.All(d => digits2.Contains(d))) 
+            // 2. Strict Digit/Sequel Check - Compare numbers and Roman Numerals (e.g. Spider-Man 2 vs 3, Watchmen I vs II)
+            var numeric1 = tokens1.Where(t => (t.Any(char.IsDigit) && (!int.TryParse(t, out int n) || n < 50)) || IsRomanNumeral(t)).ToList();
+            var numeric2 = tokens2.Where(t => (t.Any(char.IsDigit) && (!int.TryParse(t, out int n) || n < 50)) || IsRomanNumeral(t)).ToList();
+            if (numeric1.Count != numeric2.Count || !numeric1.All(d => numeric2.Contains(d))) 
             {
-                AppLogger.Warn($"[TitleMatch] Digit REJECT: '{rawTitle1}' vs '{rawTitle2}'. Digits: [{string.Join(", ", digits1)}] vs [{string.Join(", ", digits2)}]");
+                AppLogger.Warn($"[TitleMatch] Numeric/Sequel REJECT: '{rawTitle1}' vs '{rawTitle2}'. Numerics: [{string.Join(", ", numeric1)}] vs [{string.Join(", ", numeric2)}]");
                 return false;
             }
             // 3. Similarity Check
@@ -95,10 +107,15 @@ namespace ModernIPTVPlayer.Helpers
                 var unique1 = tokens1.Except(tokens2).Where(t => t.Length > 3).ToList();
                 var unique2 = tokens2.Except(tokens1).Where(t => t.Length > 3).ToList();
                 
-                if (!hasYearMatch && (unique1.Any() || unique2.Any()) && similarity < 0.95)
+                if (!hasYearMatch && (unique1.Any() || unique2.Any()))
                 {
-                    AppLogger.Warn($"[TitleMatch] Unique Word REJECT: '{rawTitle1}' vs '{rawTitle2}'. Similarity {similarity:F2} >= {threshold:F2}, but unique words: [{string.Join(", ", unique1)}] | [{string.Join(", ", unique2)}]");
-                    return false;
+                    // [REFINEMENT] If we don't have a year match, and one title has extra significant words, it's a mismatch
+                    // unless the similarity is absolute (100%) or we have a high-confidence subset match (0.98+)
+                    if (similarity < 0.98)
+                    {
+                        AppLogger.Warn($"[TitleMatch] Unique Word REJECT: '{rawTitle1}' vs '{rawTitle2}'. Similarity {similarity:F2} >= {threshold:F2}, but unique words (no year): [{string.Join(", ", unique1)}] | [{string.Join(", ", unique2)}]");
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -160,6 +177,10 @@ namespace ModernIPTVPlayer.Helpers
             string langPattern = @"\b(TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR|NF|IR|GR|EN|US|UK|CA|AU)\b";
             cleaned = Regex.Replace(cleaned, langPattern, " ", RegexOptions.IgnoreCase);
 
+            // [NEW] Strip Adult Content Tags
+            string adultPattern = @"\b(XXX|ADULT|PORN|PURN|MATURE|NSFW|HENTAI|JAV|PVR|EROTIC|SEX|SEKS)\b";
+            cleaned = Regex.Replace(cleaned, adultPattern, " ", RegexOptions.IgnoreCase);
+
             // 4. Strip Technical Tags
             string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|REPACK|EXTENDED|DIRECTORS)\b";
             cleaned = Regex.Replace(cleaned, techPattern, " ", RegexOptions.IgnoreCase);
@@ -215,7 +236,7 @@ namespace ModernIPTVPlayer.Helpers
             string langPattern = @"\b(IL|TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR)\b\s*[:\-\|]?\s*";
             cleaned = Regex.Replace(cleaned, langPattern, " ", RegexOptions.IgnoreCase);
 
-            string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT)\b";
+            string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|XXX|ADULT|PORN)\b";
             cleaned = Regex.Replace(cleaned, techPattern, " ", RegexOptions.IgnoreCase);
 
             // 2. Unicode decomposition to handle accents
@@ -233,7 +254,7 @@ namespace ModernIPTVPlayer.Helpers
             var words = sb.ToString().Replace("İ", "i").Replace("I", "i").ToLowerInvariant()
                           .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
-            var tokens = words.Where(w => !Articles.Contains(w) && !YearRegex.IsMatch(w) && (w.Length > 1 || (w.Length == 1 && char.IsDigit(w[0]))))
+            var tokens = words.Where(w => !Articles.Contains(w) && !YearRegex.IsMatch(w) && (w.Length > 1 || (w.Length == 1 && (char.IsDigit(w[0]) || IsRomanNumeral(w)))))
                         .ToHashSet();
 
             if (includeComposite && tokens.Count > 1 && tokens.Count <= 3)
@@ -246,6 +267,15 @@ namespace ModernIPTVPlayer.Helpers
         }
 
         private static bool IsComposite(string token) => token.StartsWith("comp_");
+
+        private static bool IsRomanNumeral(string? t)
+        {
+            if (string.IsNullOrEmpty(t)) return false;
+            string val = t.ToLowerInvariant();
+            // Common Roman Numerals used in titles (1-10)
+            return val == "i" || val == "ii" || val == "iii" || val == "iv" || val == "v" || 
+                   val == "vi" || val == "vii" || val == "viii" || val == "ix" || val == "x";
+        }
 
         public static double CalculateSimilarity(string title1, string title2)
         {

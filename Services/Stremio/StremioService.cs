@@ -171,7 +171,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         // ==========================================
         // 4. STREAMS (Playback)
         // ==========================================
-        public async Task<List<StremioStream>> GetStreamsAsync(List<string> addonUrls, string type, string id, bool includeIptv = true)
+        public async Task<List<StremioStream>> GetStreamsAsync(List<string> addonUrls, string type, string id, bool includeIptv = true, System.Threading.CancellationToken cancellationToken = default)
         {
             var tasks = new List<Task<List<StremioStream>>>();
             
@@ -243,6 +243,8 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
 
             var results = await Task.WhenAll(tasks);
+            if (cancellationToken.IsCancellationRequested) return new List<StremioStream>();
+            
             var allStreams = new List<StremioStream>();
             foreach (var list in results) allStreams.AddRange(list);
             return allStreams;
@@ -267,89 +269,135 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
         }
 
-        // ==========================================
         // 5. SEARCH (Multi-Addon - Reactive & Parallel)
         // ==========================================
-        public async Task<List<StremioMediaStream>> SearchAsync(string query, Action<List<StremioMediaStream>>? onResultsFound = null, System.Threading.CancellationToken cancellationToken = default)
+        public async Task<List<StremioMediaStream>> SearchAsync(string query, string type = "all", string scope = "all", Action<List<StremioMediaStream>>? onResultsFound = null, System.Threading.CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(query)) return new List<StremioMediaStream>();
 
-            // [SESSION SHARING] Check for existing running or completed session for the same query
-            if (_activeSession != null && _activeSession.Query == query)
+            // [SESSION SHARING] Check for existing running or completed session for the same query + filters
+            string sessionKey = $"{query}|{type}|{scope}";
+            if (_activeSession != null && _activeSession.Query == sessionKey)
             {
                 if (onResultsFound != null) _activeSession.Subscribe(onResultsFound);
-                // Return even if not finished, the subscriber will get updates
                 return _activeSession.RankedResults;
             }
 
             // Create new session
             _activeSession?.Cancel();
-            _activeSession = new StremioSearchSession(query, SearchInternalAsync);
+            _activeSession = new StremioSearchSession(sessionKey, (q, callback, ct) => SearchInternalAsync(query, type, scope, callback, ct));
             if (onResultsFound != null) _activeSession.Subscribe(onResultsFound);
 
-            // For the initial caller, we wait for the first "Meaningful" batch or completion
-            // Or just return the starting RankedResults (empty) and let callbacks handle UI
             return await Task.Run(async () => 
             {
-                // Wait up to 1s for initial results for the primary caller
                 int timeout = 1000;
                 while (timeout > 0 && _activeSession.RankedResults.Count == 0 && !_activeSession.IsCompleted)
                 {
-                    await Task.Delay(100);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await Task.Delay(100, cancellationToken);
                     timeout -= 100;
                 }
                 return _activeSession.RankedResults;
             }, cancellationToken);
         }
 
-        private async Task<List<StremioMediaStream>> SearchInternalAsync(string query, Action<List<StremioMediaStream>>? onResultsFound = null, System.Threading.CancellationToken cancellationToken = default)
+        private async Task<List<StremioMediaStream>> SearchInternalAsync(string query, string type, string scope, Action<List<StremioMediaStream>>? onResultsFound = null, System.Threading.CancellationToken cancellationToken = default)
         {
             var enabledAddons = StremioAddonManager.Instance.GetAddonsWithManifests();
             var allResults = new List<StremioMediaStream>();
             DateTime lastRankingTime = DateTime.MinValue;
+
+            bool includeIptv = scope == "all" || scope == "iptv";
+            bool includeLibrary = scope == "all" || scope == "library";
+            bool includeAddons = scope == "all";
             
-            // [ADVANCED] Start both IPTV and Addon searches in parallel immediately
-            var iptvTask = Task.Run(async () => {
-                var movieMatches = IptvMatchService.Instance.FindAllMatches(null, null, null, null, query, false);
-                var seriesMatches = IptvMatchService.Instance.FindAllMatches(null, null, null, null, query, true);
-                
+            // 1. IPTV Task (Proactive or Fast)
+            var iptvTask = includeIptv ? Task.Run(async () => {
+                cancellationToken.ThrowIfCancellationRequested();
                 var iptvResults = new List<StremioMediaStream>();
-                foreach (var m in movieMatches.Concat(seriesMatches))
+                
+                if (scope == "iptv" || query.Length < 3)
                 {
-                    iptvResults.Add(new StremioMediaStream(null) { 
-                        IsIptv = true, 
-                        Title = m.Title, 
-                        Year = m.Year, 
-                        IMDbIdRaw = m.IMDbId,
-                        Meta = new StremioMeta 
-                        { 
-                            Id = m.Id.ToString(),
-                            Type = m.Type ?? (movieMatches.Contains(m) ? "movie" : "series"),
-                            Name = m.Title,
-                            Poster = m.PosterUrl
-                        }
-                    });
+                    // FAST SEARCH: Substring contains, no normalization, direct from library
+                    // [OPTIMIZATION] For very short queries, we ALWAYS use Fast Search to avoid fuzzy overhead
+                    var matches = IptvMatchService.Instance.SearchFast(query, type, cancellationToken);
+                    foreach (var m in matches)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var meta = new StremioMeta { Id = m.Id.ToString(), Type = m.Type ?? (type == "series" ? "series" : "movie"), Name = m.Title, Poster = m.PosterUrl };
+                        iptvResults.Add(new StremioMediaStream(meta) { 
+                            IsIptv = true, 
+                            Title = m.Title, 
+                            Year = m.Year
+                        });
+                    }
+                }
+                else
+                {
+                    // STANDARD SEARCH: Fuzzy/Normalized for "All" scope
+                    var movieMatches = (type == "all" || type == "movie") ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, query, false, false, cancellationToken) : new List<IMediaStream>();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var seriesMatches = (type == "all" || type == "series") ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, query, true, false, cancellationToken) : new List<IMediaStream>();
+                    
+                    foreach (var m in movieMatches.Concat(seriesMatches))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        var mType = m.Type ?? (movieMatches.Contains(m) ? "movie" : "series");
+                        var meta = new StremioMeta { Id = m.Id.ToString(), Type = mType, Name = m.Title, Poster = m.PosterUrl };
+                        iptvResults.Add(new StremioMediaStream(meta) { 
+                            IsIptv = true, 
+                            Title = m.Title, 
+                            Year = m.Year
+                        });
+                    }
                 }
                 return iptvResults;
-            }, cancellationToken);
+            }, cancellationToken) : Task.FromResult(new List<StremioMediaStream>());
 
-            var addonTasks = enabledAddons.Select(a => SearchAddonAsync(a.BaseUrl, a.Manifest, query, "movie")).ToList(); 
-            var allPendingTasks = new List<Task<List<StremioMediaStream>>>(addonTasks) { iptvTask };
+            var libraryTask = includeLibrary ? Task.Run(() => {
+                cancellationToken.ThrowIfCancellationRequested();
+                var libraryItems = WatchlistManager.Instance.GetWatchlistAsMediaStreams();
+                var q = query.ToLowerInvariant();
+                var matches = libraryItems.Where(x => 
+                    x.Title.Contains(q, StringComparison.OrdinalIgnoreCase) && 
+                    (type == "all" || x.Type == type)).ToList();
+                
+                return matches.Select(m => {
+                    if (m is StremioMediaStream s) return s;
+                    // Convert generic IMediaStream to StremioMediaStream if needed, but WatchlistManager already does this
+                    return m as StremioMediaStream;
+                }).Where(x => x != null).ToList();
+            }, cancellationToken) : Task.FromResult(new List<StremioMediaStream>());
+
+            var addonTasks = new List<Task<List<StremioMediaStream>>>();
+            if (includeAddons)
+            {
+                foreach (var (baseUrl, manifest) in enabledAddons)
+                {
+                    if (type == "all" || type == "movie") addonTasks.Add(SearchAddonAsync(baseUrl, manifest, query, "movie", cancellationToken));
+                    if (type == "all" || type == "series") addonTasks.Add(SearchAddonAsync(baseUrl, manifest, query, "series", cancellationToken));
+                }
+            }
+
+            var allPendingTasks = new List<Task<List<StremioMediaStream>>>(addonTasks) { iptvTask, libraryTask };
 
             while (allPendingTasks.Count > 0 && !cancellationToken.IsCancellationRequested)
             {
                 try
                 {
                     var completedTask = await Task.WhenAny(allPendingTasks);
+                    cancellationToken.ThrowIfCancellationRequested(); // Add cancellation check
                     allPendingTasks.Remove(completedTask);
 
                     var results = await completedTask;
+                    cancellationToken.ThrowIfCancellationRequested(); // Add cancellation check
                     if (results != null && results.Count > 0)
                     {
                         lock (allResults)
                         {
                             foreach (var item in results)
                             {
+                                cancellationToken.ThrowIfCancellationRequested();
                                 string normTitle = NormalizeTitle(item.Title);
                                 var existing = allResults.FirstOrDefault(x => IsMatch(x, item, normTitle, query));
                                 if (existing != null)
@@ -376,7 +424,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                             if (elapsed >= RANKING_THROTTLE_MS || allPendingTasks.Count == 0 || allResults.Count < 10)
                             {
                                 lastRankingTime = DateTime.Now;
-                                var ranked = DeduplicateAndRank(allResults, query);
+                                var ranked = DeduplicateAndRank(allResults, query, cancellationToken);
                                 onResultsFound(ranked);
                             }
                         }
@@ -385,16 +433,19 @@ namespace ModernIPTVPlayer.Services.Stremio
                 catch (Exception ex) { AppLogger.Error("Error processing search result task", ex); }
             }
 
-            return DeduplicateAndRank(allResults, query);
+            return DeduplicateAndRank(allResults, query, cancellationToken);
         }
 
-        private async Task<List<StremioMediaStream>> SearchAddonAsync(string addonUrl, StremioManifest manifest, string query, string type)
+        private async Task<List<StremioMediaStream>> SearchAddonAsync(string addonUrl, StremioManifest manifest, string query, string type, System.Threading.CancellationToken ct = default)
         {
+            if (ct.IsCancellationRequested) return new List<StremioMediaStream>();
             var results = new List<StremioMediaStream>();
             if (manifest?.Catalogs == null) return results;
 
             var encodedQuery = Uri.EscapeDataString(query);
-            var searchCatalogs = manifest.Catalogs.Where(c => (c.Type == "movie" || c.Type == "series") && c.Extra != null && c.Extra.Any(e => e.Name == "search")).ToList();
+            // [FIX] Strictly respect the requested type (movie/series). 
+            // Previously it was searching ALL movie/series catalogs regardless of the 'type' param.
+            var searchCatalogs = manifest.Catalogs.Where(c => c.Type == type && c.Extra != null && c.Extra.Any(e => e.Name == "search")).ToList();
 
             foreach (var catalog in searchCatalogs)
             {
@@ -485,16 +536,17 @@ namespace ModernIPTVPlayer.Services.Stremio
             return await JsonSerializer.DeserializeAsync<StremioCatalogRoot>(stream, _jsonOptions, cancellationToken);
         }
 
-        private List<StremioMediaStream> DeduplicateAndRank(List<StremioMediaStream> raw, string query)
+        private List<StremioMediaStream> DeduplicateAndRank(List<StremioMediaStream> results, string query, System.Threading.CancellationToken ct = default)
         {
             var uniqueItems = new List<StremioMediaStream>();
-            var orderedRaw = raw.OrderByDescending(x => !string.IsNullOrEmpty(x.IMDbId) && x.IMDbId.StartsWith("tt")).ThenByDescending(x => !string.IsNullOrEmpty(x.Year)).ThenBy(x => x.SourceIndex).ToList();
+            var orderedRaw = results.OrderByDescending(x => !string.IsNullOrEmpty(x.IMDbId) && x.IMDbId.StartsWith("tt")).ThenByDescending(x => !string.IsNullOrEmpty(x.Year)).ThenBy(x => x.SourceIndex).ToList();
 
             // [OPTIMIZATION] IPTV Matching is now "Lazy". 
             // We only match for items that are actually being displayed to the user.
             // This loop now only handles metadata deduplication.
             foreach (var item in orderedRaw)
             {
+                ct.ThrowIfCancellationRequested();
                 string normTitle = NormalizeTitle(item.Title);
                 var existing = uniqueItems.FirstOrDefault(x => IsMatch(x, item, normTitle, query));
                 if (existing != null) MergeItems(existing, item);

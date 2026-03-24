@@ -79,6 +79,41 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="SearchFilterButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#1AFFFFFF"/>
+            <Setter Property="BorderBrush" Value="#30FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#CCFFFFFF"/>
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="CornerRadius" Value="16"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid x:Name="RootGrid" Background="{TemplateBinding Background}" CornerRadius="{TemplateBinding CornerRadius}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal"/>
+                                    <VisualState x:Name="PointerOver">
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#2AFFFFFF" Duration="0:0:0.1"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <Storyboard>
+                                            <ColorAnimation Storyboard.TargetName="RootGrid" Storyboard.TargetProperty="(Grid.Background).(SolidColorBrush.Color)" To="#3AFFFFFF" Duration="0:0:0.1"/>
+                                        </Storyboard>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="{TemplateBinding Padding}"/>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <converters:StringToVisibleConverter x:Key="StringToVisibleConverter" xmlns:converters="using:ModernIPTVPlayer.Converters"/>
     </UserControl.Resources>
 
     <Grid>
@@ -153,10 +188,33 @@
                          TextChanged="SearchBox_TextChanged"
                          KeyDown="SearchBox_KeyDown"/>
                 
+                <!-- Filter Buttons -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
+                    <!-- Scope Filter -->
+                    <Button x:Name="ScopeFilterBtn" Click="ScopeFilterBtn_Click"
+                            Style="{StaticResource SearchFilterButtonStyle}"
+                            Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <FontIcon x:Name="ScopeIcon" Glyph="&#xE753;" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock x:Name="ScopeText" Text="HEPSİ" FontSize="12" FontWeight="Bold"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Type Filter -->
+                    <Button x:Name="TypeFilterBtn" Click="TypeFilterBtn_Click"
+                            Style="{StaticResource SearchFilterButtonStyle}">
+                        <StackPanel Orientation="Horizontal">
+                            <FontIcon x:Name="TypeIcon" Glyph="&#xE71D;" FontSize="14" Margin="0,0,6,0"/>
+                            <TextBlock x:Name="TypeText" Text="HEPSİ" FontSize="12" FontWeight="Bold"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
                 <!-- Loading Spinner (Fallback/Subtle) -->
                 <ProgressRing x:Name="SearchSpinner" Grid.Column="2" 
                               Width="24" Height="24" Margin="0,0,24,0" 
-                              IsActive="False" Visibility="Collapsed"/>
+                              IsActive="False" Visibility="Collapsed"
+                              Opacity="0.5" HorizontalAlignment="Right"/>
             </Grid>
 
             <!-- 2. Results Area -->
@@ -204,9 +262,11 @@
                                     <TextBlock Text="{Binding Title}" Foreground="White" FontSize="16" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                                     <StackPanel Orientation="Horizontal" Spacing="6" Opacity="0.7">
                                         <TextBlock Text="{Binding Year}" Foreground="#CCCCCC" FontSize="13"/>
-                                        <TextBlock Text="•" Foreground="#66FFFFFF"/>
-                                        <FontIcon Glyph="&#xE735;" FontSize="11" Foreground="#FFD700" VerticalAlignment="Center"/>
-                                        <TextBlock Text="{Binding Rating}" Foreground="#FFD700" FontSize="13"/>
+                                        <StackPanel Orientation="Horizontal" Spacing="6" Visibility="{Binding Rating, Converter={StaticResource StringToVisibleConverter}}">
+                                            <TextBlock Text="•" Foreground="#66FFFFFF"/>
+                                            <FontIcon Glyph="&#xE735;" FontSize="11" Foreground="#FFD700" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding Rating}" Foreground="#FFD700" FontSize="13"/>
+                                        </StackPanel>
                                     </StackPanel>
                                 </StackPanel>
                                 

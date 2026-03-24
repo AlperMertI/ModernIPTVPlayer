@@ -22,6 +22,7 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         private void TryPreEnrichFromCache()
         {
+            if (Meta == null) return;
             if (string.IsNullOrEmpty(Meta.Background) && !string.IsNullOrEmpty(Meta.Id))
             {
                 try
@@ -52,6 +53,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         { 
             get 
             {
+                if (int.TryParse(Meta?.Id, out var id)) return id;
                 if (!string.IsNullOrEmpty(Meta?.Id)) return Meta.Id.GetHashCode();
                 if (!string.IsNullOrEmpty(Meta?.Name)) return Meta.Name.GetHashCode();
                 return 0;
@@ -146,7 +148,7 @@ namespace ModernIPTVPlayer.Models.Stremio
                 }
             }
         }
-        public string SourceBadgeText => IsAvailableOnIptv ? "IPTV" : "";
+        public string SourceBadgeText => (IsAvailableOnIptv || IsIptv) ? "IPTV" : "";
         public bool IsIptvChecked { get; set; } = false;
         public bool ShowSourceBadge => IsAvailableOnIptv || IsIptv;
 

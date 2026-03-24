@@ -38,6 +38,7 @@ namespace ModernIPTVPlayer.Pages
         private List<IMediaStream> _allRawResults = new();
         private List<string> _availableYears = new() { "Tüm Yıllar" };
         private string _filterType = "all";
+        private string _filterSource = "all";
         private string _filterYear = "Tüm Yıllar";
         private string _sortOrder = "relevance";
         
@@ -202,9 +203,14 @@ namespace ModernIPTVPlayer.Pages
                 // REGULAR SEARCH MODE
                 if (!string.IsNullOrEmpty(_args.Query))
                 {
+                    string searchType = _args.Type ?? "all";
+                    string searchScope = "all";
+                    if (_args.PreferredSource?.Equals("IPTV", StringComparison.OrdinalIgnoreCase) == true) searchScope = "iptv";
+                    else if (_args.PreferredSource?.Equals("Library", StringComparison.OrdinalIgnoreCase) == true) searchScope = "library";
+
                     // [SESSION HANDOFF] StremioService now manages sessions.
                     // SearchAsync will return instant results if session exists, and we subscribe for more.
-                    await StremioService.Instance.SearchAsync(_args.Query, (partialResults) =>
+                    await StremioService.Instance.SearchAsync(_args.Query, searchType, searchScope, (partialResults) =>
                     {
                         if (token.IsCancellationRequested) return;
 
@@ -220,9 +226,10 @@ namespace ModernIPTVPlayer.Pages
                                 ApplyFiltersAndSort();
                                 
                                 GlobalShimmer.Visibility = Visibility.Collapsed;
+                                TxtStremioCount.Text = _stremioCollection.Count.ToString();
                                 StremioCountBadge.Visibility = Visibility.Visible;
                                 StremioSection.Visibility = Visibility.Visible;
-                                StremioSectionTitle.Text = "Arama Sonuçları";
+                                StremioSectionTitle.Text = searchScope == "library" ? "Kütüphane" : (searchScope == "iptv" ? "IPTV Sonuçları" : "Arama Sonuçları");
                                 StremioSectionTitle.Visibility = Visibility.Visible;
                                 EmptyPanel.Visibility = Visibility.Collapsed;
 
@@ -271,6 +278,7 @@ namespace ModernIPTVPlayer.Pages
 
         private void ShowEmptyStateWithSuggestions()
         {
+            GlobalShimmer.Visibility = Visibility.Collapsed;
             EmptyPanel.Visibility = Visibility.Visible;
             
             // Generate some nice suggestions based on current type
@@ -425,6 +433,15 @@ namespace ModernIPTVPlayer.Pages
             }
         }
 
+        private void SourceFilter_Checked(object sender, RoutedEventArgs e)
+        {
+            if (sender is RadioButton rb)
+            {
+                _filterSource = rb.Tag?.ToString() ?? "all";
+                ApplyFiltersAndSort();
+            }
+        }
+
         private void YearListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
             if (YearListView.SelectedItem is string year)
@@ -490,6 +507,18 @@ namespace ModernIPTVPlayer.Pages
                 items = items.Where(x => GetYearDigits(x.Year) == _filterYear);
             }
 
+            // 2.5 Filter by Source
+            if (_filterSource != "all")
+            {
+                if (_filterSource == "iptv") items = items.Where(x => x is StremioMediaStream s && (s.IsIptv || s.IsAvailableOnIptv));
+                else if (_filterSource == "library") items = items.Where(x => 
+                {
+                    if (x is StremioMediaStream s) return WatchlistManager.Instance.IsOnWatchlist(s.IMDbId) || WatchlistManager.Instance.IsOnWatchlist(s.Id.ToString());
+                    return WatchlistManager.Instance.IsOnWatchlist(x.IMDbId);
+                });
+                else if (_filterSource == "stremio") items = items.Where(x => x is StremioMediaStream s && !s.IsIptv);
+            }
+
             // 3. Sort
             items = _sortOrder switch
             {
@@ -541,6 +570,8 @@ namespace ModernIPTVPlayer.Pages
             {
                 _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(25).Cast<StremioMediaStream>(), _args.Query);
             }
+
+            TxtStremioCount.Text = _stremioCollection.Count.ToString();
         }
 
         private string GetYearDigits(string year)
@@ -564,7 +595,13 @@ namespace ModernIPTVPlayer.Pages
         {
             System.Diagnostics.Debug.WriteLine($"[SearchResults] UpdateBreadcrumbs: type={type}, parentContext={_args.ParentContext}, genre={_args.Genre}");
 
-            RootBreadcrumb.Content = "Stremio";
+            if (_args.PreferredSource?.Equals("Library", StringComparison.OrdinalIgnoreCase) == true)
+                RootBreadcrumb.Content = "Kütüphane";
+            else if (_args.PreferredSource?.Equals("IPTV", StringComparison.OrdinalIgnoreCase) == true)
+                RootBreadcrumb.Content = "IPTV";
+            else
+                RootBreadcrumb.Content = "Arama";
+
             TypeBreadcrumb.Content = type == "movie" ? "Filmler" : (type == "series" ? "Diziler" : "Tümü");
             
             if (_args.GenreArgs != null)
@@ -674,7 +711,17 @@ namespace ModernIPTVPlayer.Pages
 
         private void ClearGenre_Click(object sender, RoutedEventArgs e)
         {
-            CategoryBreadcrumb_Click(null, null);
+            if (_args != null && _args.GenreArgs == null && !string.IsNullOrEmpty(_args.Query))
+            {
+                // It's a regular search keyword breadcrumb being cleared
+                _args.Query = "";
+                _args.PreferredSource = "Stremio"; // Reset to All/Stremio
+                _ = PerformSearchAsync();
+            }
+            else
+            {
+                CategoryBreadcrumb_Click(null, null);
+            }
         }
 
         private void CategoryBreadcrumb_Click(object sender, RoutedEventArgs e)
