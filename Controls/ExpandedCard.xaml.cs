@@ -329,7 +329,7 @@ namespace ModernIPTVPlayer.Controls
                 player = new YT.Player('player', {
                 height: '100%',
                 width: '100%',
-                host: 'https://www.youtube-nocookie.com',
+                host: 'https://www.youtube.com',
                 playerVars: {
                     autoplay: 0,
                     mute: 1,
@@ -384,6 +384,9 @@ namespace ModernIPTVPlayer.Controls
         
         // Called from C# to load a video
         function loadVideo(videoId) {
+            // [MODERN] Reset Smart Crop state for new video
+            if (window.resetSmartCrop) resetSmartCrop();
+
             if (!isReady) {
                 pendingVideoId = videoId;
                 return;

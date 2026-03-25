@@ -4815,6 +4815,9 @@ namespace ModernIPTVPlayer
                 await TrailerWebView.EnsureCoreWebView2Async(await WebView2Service.GetSharedEnvironmentAsync());
                 System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] CoreWebView2 Initialized.");
 
+                // [FIX] Apply 100% Clean UI Script (Hides Title Flash, Logos, More Videos)
+                await WebView2Service.ApplyYouTubeCleanUISettingsAsync(TrailerWebView.CoreWebView2);
+
                 TrailerWebView.CoreWebView2.WebMessageReceived -= TrailerWebView_WebMessageReceived;
                 TrailerWebView.CoreWebView2.WebMessageReceived += TrailerWebView_WebMessageReceived;
 
@@ -4895,6 +4898,13 @@ namespace ModernIPTVPlayer
                 }
 
                 System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] WebMessageReceived: {message}");
+
+                if (message == "RESET_SMART_CROP")
+                {
+                    // Relay to all frames
+                    if (TrailerWebView?.CoreWebView2 != null) TrailerWebView.CoreWebView2.PostWebMessageAsString("RESET_SMART_CROP");
+                    return;
+                }
                 
                 if (message == "VIDEO_PLAYING")
                 {
@@ -5044,7 +5054,7 @@ namespace ModernIPTVPlayer
                 player = new YT.Player('player', {
                 height: '100%',
                 width: '100%',
-                host: 'https://www.youtube-nocookie.com',
+                host: 'https://www.youtube.com',
                 playerVars: {
                     autoplay: 0,
                     mute: 1,
@@ -5127,6 +5137,15 @@ namespace ModernIPTVPlayer
         // Called from C# to load a video
         function loadVideo(videoId) {
             log('loadVideo JS called for: ' + videoId + ' (isReady: ' + isReady + ')');
+            
+            // [MODERN] Reset Smart Crop state for new video (Broadcast to all frames)
+            try {{ 
+                log('Broadcasting RESET_SMART_CROP...'); 
+                window.chrome.webview.postMessage('RESET_SMART_CROP'); 
+            }} catch(e) {{
+                 if (window.resetSmartCrop) window.resetSmartCrop();
+            }}
+
             if (!isReady) {
                 pendingVideoId = videoId;
                 log('Player not ready, queuing video.');

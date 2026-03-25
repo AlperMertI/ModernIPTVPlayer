@@ -293,7 +293,10 @@ namespace ModernIPTVPlayer.Controls
                         AnimateInfoIn(true);
                         UpdateNavigationVisibility();
                         
-                        await TryLoadTrailerAsync();
+                        // [FIX] 15GB RAM: NEVER trigger a trailer load on DataContextChanged.
+                        // Wait for viewport/scroll to settle. The EffectiveViewportChanged handler 
+                        // will fire when it's actually visible and trigger InitializeWebView.
+                        _pendingTrailerId = _items[_currentIndex].TrailerUrl; 
                     }
                 }
                 else
@@ -867,6 +870,9 @@ namespace ModernIPTVPlayer.Controls
                 await _webView.EnsureCoreWebView2Async(env);
                 if (_webView == null || _webView.CoreWebView2 == null) return;
 
+                // [FIX] Apply 100% Clean UI Script (Hides Title Flash, Logos, More Videos)
+                await WebView2Service.ApplyYouTubeCleanUISettingsAsync(_webView.CoreWebView2);
+
                 // Apply composition clip immediately after UI tree changes
                 UpdateClips();
                 
@@ -901,12 +907,11 @@ namespace ModernIPTVPlayer.Controls
             player = new YT.Player('player', {{
                 height: '100%', width: '100%',
                 videoId: '{ytId}', 
-                host: 'https://www.youtube-nocookie.com',
+                host: 'https://www.youtube.com',
                 playerVars: {{
                     autoplay: 1, mute: 1, controls: 0, disablekb: 1,
                     fs: 0, rel: 0, modestbranding: 1, showinfo: 0,
-                    iv_load_policy: 3, playsinline: 1, loop: 1, playlist: '{ytId}',
-                    origin: 'https://{virtualHost}'
+                    iv_load_policy: 3, playsinline: 1, loop: 1, playlist: '{ytId}'
                 }},
                 events: {{
                     'onReady': function(e) {{ 

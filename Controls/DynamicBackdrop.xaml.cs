@@ -140,9 +140,10 @@ namespace ModernIPTVPlayer.Controls
 
                 _backdropAnimationTimer?.Stop();
 
-                // Fallback for pure black/placeholder
+                // Fallback for placeholders, but ALLOW PURE BLACK (0,0,0) for trailers
                 if (targetLeft.R < 5 && targetLeft.G < 5 && targetLeft.B < 5 && 
-                    targetRight.R < 5 && targetRight.G < 5 && targetRight.B < 5)
+                    targetRight.R < 5 && targetRight.G < 5 && targetRight.B < 5 &&
+                    (targetLeft.R != 0 || targetLeft.G != 0 || targetLeft.B != 0))
                 {
                      targetLeft = Color.FromArgb(255, 30, 34, 40);
                      targetRight = Color.FromArgb(255, 20, 24, 28);

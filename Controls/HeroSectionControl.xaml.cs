@@ -4,11 +4,14 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Hosting;
+using Microsoft.Web.WebView2.Core;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using System.Threading.Tasks;
+using System.IO;
+using System.Runtime.InteropServices.WindowsRuntime;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services;
@@ -45,9 +48,18 @@ namespace ModernIPTVPlayer.Controls
         private Dictionary<string, Microsoft.UI.Xaml.Media.LoadedImageSurface> _heroLogoSurfaces = new();
         private System.Threading.CancellationTokenSource? _heroCts;
 
+        // Trailer state
+        private Microsoft.UI.Xaml.Controls.WebView2? _webView;
+        private bool _isTrailerPlaying = false;
+        private string _instanceId = Guid.NewGuid().ToString("N");
+        private string? _pendingTrailerId = null;
+
         public HeroSectionControl()
         {
             this.InitializeComponent();
+
+            // Pre-initialize WebView2 for fast trailer playback on load
+            this.Loaded += (s, e) => _ = PreInitializeWebViewAsync();
 
             // Setup composition-based hero image with true alpha mask
             HeroImageHost.Loaded += (s, e) =>
@@ -78,6 +90,7 @@ namespace ModernIPTVPlayer.Controls
             _heroCts?.Cancel();
             _heroCts = null;
             StopAutoRotation();
+            CleanupWebView();
             if (_lastSubscribedItem != null)
             {
                 _lastSubscribedItem.PropertyChanged -= Item_PropertyChanged;
@@ -129,7 +142,15 @@ namespace ModernIPTVPlayer.Controls
             // 3. Initial Reveal: Update immediately so content is ready before shimmer is hidden
             UpdateHeroSection(_heroItems[0]);
 
+            UpdateNavigationVisibility();
             StartHeroAutoRotation();
+        }
+
+        private void UpdateNavigationVisibility()
+        {
+            var vis = (_heroItems.Count > 1 && !_isTrailerPlaying) ? Visibility.Visible : Visibility.Collapsed;
+            HeroPrevButton.Visibility = vis;
+            HeroNextButton.Visibility = vis;
         }
 
         private void ClearSurfaces()
@@ -257,17 +278,26 @@ namespace ModernIPTVPlayer.Controls
 
         public void StopAutoRotation()
         {
-            _heroAutoTimer?.Stop();
+            AppLogger.Info("[HeroControl] StopAutoRotation called");
+            if (_heroAutoTimer != null)
+            {
+                _heroAutoTimer.Stop();
+                _heroAutoTimer = null; // [FIX] Forcefully neutralize to prevent any rogue ticks
+                
+                // [FIX] Only cleanup if a trailer was actually active to prevent log spam during auto-rotation
+                if (_isTrailerPlaying || _pendingTrailerId != null) CleanupWebView();
+            }
         }
 
         public void StartHeroAutoRotation()
         {
-            _heroAutoTimer?.Stop();
+            StopAutoRotation(); // [FIX] Ensure old one is truly GC'd before starting new
             _heroAutoTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
             _heroAutoTimer.Tick += (s, e) =>
             {
                 // [FIX] Global Visibility Check: Stop rotation if the control is collapsed (IPTV mode)
-                if (this.Visibility != Visibility.Visible || this.ActualWidth <= 0 || this.XamlRoot == null)
+                // [NEW] Skip rotation if a trailer is playing or loading
+                if (this.Visibility != Visibility.Visible || this.ActualWidth <= 0 || this.XamlRoot == null || _isTrailerPlaying || _pendingTrailerId != null)
                     return;
 
                 if (_heroItems.Count > 1 && !_heroTransitioning)
@@ -380,6 +410,9 @@ namespace ModernIPTVPlayer.Controls
 
             _currentHeroId = itemId;
 
+            // [NEW] Cleanup trailer when content changes
+            if (_isTrailerPlaying || _pendingTrailerId != null) CleanupWebView();
+
             _heroCts?.Cancel();
             _heroCts = new System.Threading.CancellationTokenSource();
             var token = _heroCts.Token;
@@ -475,7 +508,7 @@ namespace ModernIPTVPlayer.Controls
             // The previous implementation used RenderAsync inside a DispatcherQueue.TryEnqueue(async),
             // which could execute AFTER StremioControl was Collapsed, causing uncaught COMException.
             var token = _heroCts?.Token ?? default;
-            if (token.IsCancellationRequested || !this.IsLoaded) return;
+            if (token.IsCancellationRequested || !this.IsLoaded || _isTrailerPlaying) return;
             
             string cacheKey = (ColorExtractionImage.Source as BitmapImage)?.UriSource?.ToString();
             if (string.IsNullOrEmpty(cacheKey)) return;
@@ -582,6 +615,14 @@ namespace ModernIPTVPlayer.Controls
                 HeroTitle.Visibility = Visibility.Visible;
                 HeroTitle.Text = item.Title;
             }
+
+            // [NEW] Update Trailer Button visibility
+            bool hasTrailer = !string.IsNullOrEmpty(item.TrailerUrl) || (item.Meta?.Trailers != null && item.Meta.Trailers.Any(t => !string.IsNullOrEmpty(t.Source)));
+            HeroTrailerButton.Visibility = hasTrailer ? Visibility.Visible : Visibility.Collapsed;
+            
+            // Reset trailer button state to "closed"
+            HeroTrailerIcon.Glyph = "\uE714"; // Search/Trailer icon
+            HeroTrailerText.Text = "Fragmanı İzle";
 
             HeroOverview.Text = !string.IsNullOrEmpty(item.Description) ? item.Description : "Sinematik bir serüven sizi bekliyor.";
             HeroYear.Text = item.Year ?? "";
@@ -692,6 +733,494 @@ namespace ModernIPTVPlayer.Controls
             if (_currentHeroIndex < 0) _currentHeroIndex = _heroItems.Count - 1;
             UpdateHeroSection(_heroItems[_currentHeroIndex], animate: true);
             ResetHeroAutoTimer();
+        }
+
+        private async void HeroTrailerButton_Click(object sender, RoutedEventArgs e)
+        {
+            AppLogger.Info("[HeroTrailer] Click detected");
+            if (_heroItems.Count <= _currentHeroIndex) 
+            {
+                AppLogger.Warn("[HeroTrailer] Index out of range");
+                return;
+            }
+            var item = _heroItems[_currentHeroIndex];
+            AppLogger.Info($"[HeroTrailer] Item: {item.Title}, TrailerUrl: {item.TrailerUrl}");
+
+            if (_isTrailerPlaying)
+            {
+                AppLogger.Info("[HeroTrailer] Trailer already playing, cleaning up");
+                CleanupWebView();
+                return;
+            }
+
+            string? trailerUrl = item.TrailerUrl;
+
+            // [NEW] Fetch metadata if trailer is missing
+            if (string.IsNullOrEmpty(trailerUrl))
+            {
+                AppLogger.Info("[HeroTrailer] TrailerUrl missing, fetching metadata...");
+                HeroTrailerText.Text = "Yükleniyor...";
+                try
+                {
+                    var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(item, Models.Metadata.MetadataContext.Spotlight);
+                    if (unified != null && !string.IsNullOrEmpty(unified.TrailerUrl))
+                    {
+                        trailerUrl = unified.TrailerUrl;
+                        AppLogger.Info($"[HeroTrailer] Fetched TrailerUrl: {trailerUrl}");
+                        if (item.Meta.Trailers == null) item.Meta.Trailers = new System.Collections.Generic.List<StremioMetaTrailer>();
+                        if (!item.Meta.Trailers.Any(t => t.Source == trailerUrl))
+                        {
+                            item.Meta.Trailers.Add(new StremioMetaTrailer { Source = trailerUrl });
+                        }
+                    }
+                    else
+                    {
+                        AppLogger.Warn("[HeroTrailer] Metadata fetch returned no trailer");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.Error("[HeroTrailer] Metadata fetch error", ex);
+                }
+            }
+
+            string? ytId = ExtractYouTubeId(trailerUrl);
+            AppLogger.Info($"[HeroTrailer] Extracted YT ID: {ytId}");
+
+            if (string.IsNullOrEmpty(ytId))
+            {
+                AppLogger.Warn("[HeroTrailer] No valid YouTube ID found");
+                HeroTrailerText.Text = "Fragman Yok";
+                await Task.Delay(1500);
+                HeroTrailerText.Text = "Fragmanı İzle";
+                return;
+            }
+
+            // Visual feedback
+            HeroTrailerText.Text = "Hazırlanıyor...";
+
+            // [FIX] Prepare container EARLY to avoid blocking autoplay
+            VideoContainer.Visibility = Visibility.Visible;
+            VideoContainer.Opacity = 0;
+            VideoContainer.IsHitTestVisible = false;
+
+            // [NEW] Stop auto-rotation immediately to avoid switching while loading
+            StopAutoRotation();
+
+            _pendingTrailerId = ytId;
+            AppLogger.Info("[HeroTrailer] Calling InitializeWebView");
+            InitializeWebView(ytId);
+        }
+
+        private string? ExtractYouTubeId(string? source)
+        {
+            if (string.IsNullOrEmpty(source)) return null;
+
+            // Simple check: if it's already an 11-char ID and doesn't look like a URL
+            if (source.Length == 11 && !source.Contains("/") && !source.Contains(".")) 
+                return source;
+
+            try
+            {
+                // Robust Regex for all common YouTube formats
+                var regex = new System.Text.RegularExpressions.Regex(
+                    @"(?:v=|\/be\/|\/embed\/|youtu\.be\/|\/live\/|\/shorts\/)([^#\&\?\/]{11})", 
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                
+                var match = regex.Match(source);
+                if (match.Success) return match.Groups[1].Value;
+            }
+            catch { }
+
+            // Last resort: manual splits for legacy formats if regex missed something
+            if (source.Contains("v="))
+            {
+                var split = source.Split("v=");
+                if (split.Length > 1) return split[1].Split('&', '?', '#')[0];
+            }
+
+            return null; // Return null if not a valid YouTube ID/URL
+        }
+
+        private async Task PreInitializeWebViewAsync()
+        {
+            try
+            {
+                var env = await WebView2Service.GetSharedEnvironmentAsync();
+                if (_webView != null) return;
+
+                _webView = new Microsoft.UI.Xaml.Controls.WebView2();
+                _webView.HorizontalAlignment = HorizontalAlignment.Stretch;
+                _webView.VerticalAlignment = VerticalAlignment.Stretch;
+                _webView.IsHitTestVisible = false;
+                _webView.Opacity = 0;
+                _webView.Visibility = Visibility.Collapsed;
+                VideoContainer.Children.Insert(0, _webView);
+
+                await _webView.EnsureCoreWebView2Async(env);
+                if (_webView?.CoreWebView2 == null) return;
+
+                // Harden for non-interactive playback
+                _webView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+                _webView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                _webView.CoreWebView2.Settings.IsZoomControlEnabled = false;
+                _webView.CoreWebView2.Settings.IsWebMessageEnabled = true; // Required for resets
+                _webView.CoreWebView2.Settings.IsGeneralAutofillEnabled = false;
+                _webView.CoreWebView2.NewWindowRequested += (s, ev) => { ev.Handled = true; };
+
+                // [FIX] Apply 100% Clean UI Script (Hides Title Flash, Logos, More Videos)
+                await WebView2Service.ApplyYouTubeCleanUISettingsAsync(_webView.CoreWebView2);
+                
+                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+
+                // [OPTIMIZATION] Switch to WebResourceRequested Filter (Memory-only, no disk I/O)
+                string virtualHost = $"hero-trailer-{_instanceId}.moderniptv.local";
+                string baseUri = $"https://{virtualHost}/";
+                
+                _webView.CoreWebView2.AddWebResourceRequestedFilter(baseUri + "*", CoreWebView2WebResourceContext.All);
+                _webView.CoreWebView2.WebResourceRequested += (s, args) =>
+                {
+                    if (args.Request.Uri.EndsWith("index.html"))
+                    {
+                        string html = GetHtmlContent(_pendingTrailerId ?? "");
+                        var ms = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(html));
+                        var stream = ms.AsRandomAccessStream();
+                        args.Response = _webView.CoreWebView2.Environment.CreateWebResourceResponse(
+                            stream, 200, "OK", "Content-Type: text/html; charset=utf-8");
+                    }
+                };
+
+                _webView.Source = new Uri(baseUri + "index.html");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[HeroTrailer] Pre-init Error", ex);
+            }
+        }
+
+        private string GetHtmlContent(string ytId)
+        {
+            string virtualHost = $"hero-trailer-{_instanceId}.moderniptv.local";
+            return $@"<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='UTF-8'>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        html, body {{ width: 100%; height: 100%; background: #000; overflow: hidden; }}
+        #player {{ position: absolute; top: 0; left: 0; width: 100%; height: 100%; }}
+    </style>
+</head>
+<body>
+    <div id='player'></div>
+    <script>
+        window.addEventListener('message', function(e) {{
+            if (e.data && e.data.type === 'LOG_FORWARD') {{
+                try {{ window.chrome.webview.postMessage(e.data.msg); }} catch(ex) {{}}
+            }}
+        }});
+
+        function log(msg) {{ try {{ window.chrome.webview.postMessage('LOG:' + msg); }} catch(ex) {{}} }}
+        
+        var tag = document.createElement('script');
+        tag.src = 'https://www.youtube.com/iframe_api';
+        var firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        var player;
+        var isReady = false;
+        var pendingVideoId = null;
+        
+        function log(msg) {{ try {{ window.chrome.webview.postMessage('LOG:' + msg); }} catch(ex) {{}} }}
+
+        window.loadVideo = function(id) {{
+            log('loadVideo called for ' + id);
+            if (!id) return;
+
+            // [MODERN] Reset Smart Crop state for new video (Broadcast to all frames)
+            try {{ 
+                log('Broadcasting RESET_SMART_CROP...'); 
+                window.chrome.webview.postMessage('RESET_SMART_CROP'); 
+                
+                // [NEW] Forward to YouTube iframe via standard postMessage
+                var iframe = document.querySelector('iframe');
+                if (iframe && iframe.contentWindow) {{
+                    iframe.contentWindow.postMessage('RESET_SMART_CROP', '*');
+                }}
+            }} catch(e) {{
+                 log('Manual transform reset fallback: ' + e);
+                 var video = document.querySelector('video');
+                 if (video) video.style.transform = 'scale(1)';
+            }}
+            
+            if (isReady && player && player.loadVideoById) {{
+                try {{
+                    player.loadVideoById({{ videoId: id, startSeconds: 0 }});
+                    player.playVideo();
+                    log('loadVideoById triggered');
+                }} catch(ex) {{
+                    log('loadVideoById failed: ' + ex);
+                }}
+            }} else {{
+                log('Player not ready, caching ID: ' + id);
+                pendingVideoId = id;
+            }}
+        }};
+
+        function onYouTubeIframeAPIReady() {{
+            log('onYouTubeIframeAPIReady');
+            player = new YT.Player('player', {{
+                height: '100%', width: '100%',
+                host: 'https://www.youtube.com',
+                playerVars: {{
+                    autoplay: 0, mute: 1, controls: 0, disablekb: 1,
+                    fs: 0, rel: 0, modestbranding: 1, showinfo: 0,
+                    iv_load_policy: 3, playsinline: 1, loop: 1
+                }},
+                events: {{
+                    'onReady': onPlayerReady,
+                    'onStateChange': onPlayerStateChange,
+                    'onError': onPlayerError
+                }}
+            }});
+        }}
+
+        function onPlayerReady(event) {{
+            log('onPlayerReady');
+            isReady = true;
+            try {{ player.mute(); }} catch (e) {{}}
+            window.chrome.webview.postMessage('PLAYER_READY');
+            
+            if (pendingVideoId) {{
+                log('Processing pending video: ' + pendingVideoId);
+                loadVideo(pendingVideoId);
+                pendingVideoId = null;
+            }} else if ('{ytId}') {{
+                log('Processing initial video: {ytId}');
+                loadVideo('{ytId}');
+            }}
+        }}
+
+        function onPlayerStateChange(event) {{
+            log('onStateChange: ' + event.data);
+            
+            // [MODERN] Handle ENDED (0) to auto-return to backdrop
+            if (event.data === 0) {{
+                 log('Video ENDED, signaling auto-stop');
+                 try {{ window.chrome.webview.postMessage('ENDED'); }} catch(ex) {{}}
+            }}
+
+            // [FIX] Signal READY on Playing (1) OR Buffering (3)
+            if (event.data === 1 || event.data === 3) {{ 
+                 log('Video reached ACTIVE state (Playing/Buffering)');
+                 if (event.data === 1) event.target.unMute(); 
+                 try {{ window.chrome.webview.postMessage('READY'); }} catch(ex) {{}}
+            }}
+        }}
+
+        function onPlayerError(event) {{
+            log('onError: ' + event.data);
+            try {{ window.chrome.webview.postMessage('ERROR'); }} catch(ex) {{}}
+        }}
+    </script>
+</body>
+</html>";
+        }
+
+        private async void InitializeWebView(string ytId)
+        {
+            AppLogger.Info($"[HeroTrailer] InitializeWebView called for {ytId}");
+            if (_isTrailerPlaying) 
+            {
+                AppLogger.Info("[HeroTrailer] Already playing, ignoring init");
+                return;
+            }
+
+            try
+            {
+                if (_webView == null || _webView.CoreWebView2 == null)
+                {
+                    AppLogger.Info("[HeroTrailer] WebView or CoreWebView2 is null, calling Pre-init");
+                    await PreInitializeWebViewAsync();
+                }
+
+                if (_webView == null || _webView.CoreWebView2 == null)
+                {
+                    AppLogger.Warn("[HeroTrailer] Pre-init failed or timed out");
+                    return;
+                }
+
+                string virtualHost = $"hero-trailer-{_instanceId}.moderniptv.local";
+                string currentSource = _webView.Source?.ToString() ?? "";
+                
+                if (currentSource.Contains(virtualHost))
+                {
+                    AppLogger.Info("[HeroTrailer] Persistent player found, sending loadVideo message");
+                    string result = await _webView.CoreWebView2.ExecuteScriptAsync($@"
+                        if (window.loadVideo) {{
+                            window.loadVideo('{ytId}');
+                            'OK';
+                        }} else {{
+                            'WAIT';
+                        }}");
+
+                    if (result == "\"OK\"") return;
+                }
+
+                // Fallback: Full page load via memory-only filter
+                _pendingTrailerId = ytId;
+                _webView.Source = new Uri($"https://{virtualHost}/index.html");
+                AppLogger.Info("[HeroTrailer] Source set to bootstrap URL (Memory Filter)");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[HeroTrailer] Init Error", ex);
+            }
+        }
+
+        private void CoreWebView2_WebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
+        {
+            try
+            {
+                string msg = args.TryGetWebMessageAsString();
+                
+                if (msg.StartsWith("LOG:"))
+                {
+                    AppLogger.Info($"[HeroTrailer] JS: {msg.Substring(4)}");
+                    return;
+                }
+
+                AppLogger.Info($"[HeroTrailer] Web Message Received: {msg}");
+                
+                if (msg == "RESET_SMART_CROP")
+                {
+                    // [BRIDGE] Relay the reset signal to ALL frames (including the YT iframe)
+                    if (sender != null) sender.PostWebMessageAsString("RESET_SMART_CROP");
+                    return;
+                }
+
+                if (msg == "PLAYER_READY")
+                {
+                    AppLogger.Info("[HeroTrailer] JS Player Ready");
+                }
+                else if (msg == "READY")
+                {
+                    if (_isTrailerPlaying) return;
+                    _isTrailerPlaying = true;
+                    AppLogger.Info("[HeroTrailer] Video READY, showing container");
+                    
+                    // 1. Show WebView and Container
+                    if (_webView != null)
+                    {
+                        _webView.Visibility = Visibility.Visible;
+                        _webView.Opacity = 1;
+                    }
+
+                    VideoContainer.Visibility = Visibility.Visible;
+                    VideoContainer.IsHitTestVisible = false; 
+
+                    // 2. Cinematic Fade-In for Trailer Container
+                    var sb = new Storyboard();
+                    var trailerFade = new DoubleAnimation { To = 1, Duration = TimeSpan.FromMilliseconds(800), EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
+                    Storyboard.SetTarget(trailerFade, VideoContainer);
+                    Storyboard.SetTargetProperty(trailerFade, "Opacity");
+                    sb.Children.Add(trailerFade);
+                    sb.Begin();
+
+                    // 3. Fade out the static background image
+                    if (_heroVisual != null)
+                    {
+                        var compositor = _heroVisual.Compositor;
+                        var fadeOut = compositor.CreateScalarKeyFrameAnimation();
+                        fadeOut.InsertKeyFrame(1f, 0f);
+                        fadeOut.Duration = TimeSpan.FromMilliseconds(500);
+                        _heroVisual.StartAnimation("Opacity", fadeOut);
+                    }
+
+                    // 4. Update UI Controls
+                    UpdateNavigationVisibility();
+                    HeroTrailerIcon.Glyph = "\uE71A"; // Stop icon
+                    HeroTrailerText.Text = "Durdur";
+
+                    // 5. Inform parent about color (Solid Black during trailer)
+                    ColorExtracted?.Invoke(this, (Windows.UI.Color.FromArgb(255, 0, 0, 0), Windows.UI.Color.FromArgb(255, 0, 0, 0)));
+                }
+                else if (msg == "ERROR" || msg == "ENDED")
+                {
+                    AppLogger.Info($"[HeroTrailer] Video {msg} received from JS, cleaning up");
+                    CleanupWebView();
+                    
+                    if (msg == "ERROR")
+                    {
+                        // Show error on button temporarily
+                        HeroTrailerText.Text = "Fragman Kullanılamıyor";
+                        _ = Task.Delay(3000).ContinueWith(_ => DispatcherQueue.TryEnqueue(() => {
+                            if (!_isTrailerPlaying) HeroTrailerText.Text = "Fragmanı İzle";
+                        }));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[HeroTrailer] WebMessage Error", ex);
+            }
+        }
+
+        private async void CleanupWebView()
+        {
+            if (!_isTrailerPlaying && _webView == null) return;
+
+            try
+            {
+                _isTrailerPlaying = false;
+                _pendingTrailerId = null;
+
+                if (_webView != null)
+                {
+                        // [FIX] Pause AND Reset Smart Crop state across ALL frames
+                        await _webView.CoreWebView2.ExecuteScriptAsync("if(window.player && player.pauseVideo) player.pauseVideo();");
+                        _webView.CoreWebView2.PostWebMessageAsString("RESET_SMART_CROP");
+                    _webView.Opacity = 0;
+                    _webView.Visibility = Visibility.Collapsed;
+                }
+
+                // UI Reset
+                VideoContainer.Opacity = 0;
+                VideoContainer.IsHitTestVisible = false;
+                VideoContainer.Visibility = Visibility.Collapsed;
+
+                UpdateNavigationVisibility(); // [NEW] Restore arrows if needed
+                StartHeroAutoRotation(); // [NEW] Resume rotation
+
+                HeroTrailerIcon.Glyph = "\uE714"; // Search/Trailer icon
+                HeroTrailerText.Text = "Fragmanı İzle";
+
+                // Restore Backdrop
+                if (_heroVisual != null)
+                {
+                    var compositor = _heroVisual.Compositor;
+                    var fadeIn = compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(1f, 1f);
+                    fadeIn.Duration = TimeSpan.FromMilliseconds(500);
+                    _heroVisual.StartAnimation("Opacity", fadeIn);
+                }
+
+                // Restore dynamic color (Manually re-triggering since content hasn't changed)
+                if (!string.IsNullOrEmpty(_currentHeroId) && _heroItems.Count > _currentHeroIndex)
+                {
+                    var item = _heroItems[_currentHeroIndex];
+                    string imgUrl = item.Meta?.Background ?? item.PosterUrl;
+                    if (!string.IsNullOrEmpty(imgUrl))
+                    {
+                        var bitmap = new BitmapImage();
+                        bitmap.DecodePixelWidth = 50;
+                        bitmap.UriSource = new Uri(imgUrl);
+                        ColorExtractionImage.Source = bitmap;
+                        // AppLogger.Info("[HeroTrailer] Manually triggered color restoration");
+                    }
+                }
+            }
+            catch { }
         }
     }
 }

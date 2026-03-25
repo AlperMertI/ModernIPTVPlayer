@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
 
+using System.Linq;
 using System.Runtime.CompilerServices;
 using Microsoft.UI.Xaml.Media.Imaging;
 using ModernIPTVPlayer.Models;
@@ -170,6 +171,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Banner => Meta?.Background ?? "";
         public string Description => Meta?.Description ?? "";
         public string? EpisodeSubtext { get; set; }
+        public string? TrailerUrl => Meta?.Trailers?.FirstOrDefault(t => !string.IsNullOrEmpty(t.Source))?.Source;
 
         public string Genres => (Meta.Genres != null && Meta.Genres.Count > 0) ? string.Join(", ", Meta.Genres) : "";
         

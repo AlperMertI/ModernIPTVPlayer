@@ -738,7 +738,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     ReconcileTmdbSeasons(metadata, metadata.TmdbInfo);
                 }
 
-                if (App.CurrentLogin != null)
+                if (App.CurrentLogin != null && context != MetadataContext.Discovery && context != MetadataContext.Spotlight)
                 {
                     if (metadata.IsSeries)
                     {

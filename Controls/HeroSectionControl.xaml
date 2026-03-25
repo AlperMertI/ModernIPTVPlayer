@@ -75,6 +75,20 @@
                     </RadialGradientBrush>
                 </Rectangle.Fill>
             </Rectangle>
+
+            <!-- WebView for Trailer -->
+            <Grid x:Name="VideoContainer" Background="Black" Opacity="0" IsHitTestVisible="False">
+                <!-- Bottom Scrim/Gradient for Trailer Blending (Smooth 3-stop) -->
+                <Rectangle VerticalAlignment="Bottom" Height="60" IsHitTestVisible="False">
+                    <Rectangle.Fill>
+                        <LinearGradientBrush StartPoint="0,1" EndPoint="0,0">
+                            <GradientStop Color="#FF000000" Offset="0"/>
+                            <GradientStop Color="#77000000" Offset="0.5"/>
+                            <GradientStop Color="#00000000" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Rectangle.Fill>
+                </Rectangle>
+            </Grid>
         </Grid>
 
         <!-- Navigation Arrows -->
@@ -110,7 +124,15 @@
                                 <TextBlock Text="Hemen İzle" FontWeight="Bold" FontSize="16"/>
                             </StackPanel>
                         </Button>
-                            <Button x:Name="HeroDetailsButton" Click="HeroDetailsButton_Click" Background="#33FFFFFF" Foreground="White" CornerRadius="28" Height="56" Padding="24,0" BorderThickness="1" BorderBrush="#55FFFFFF">
+                        
+                        <Button x:Name="HeroTrailerButton" Click="HeroTrailerButton_Click" Background="#33FFFFFF" Foreground="White" CornerRadius="28" Height="56" Padding="24,0" BorderThickness="1" BorderBrush="#55FFFFFF">
+                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                <FontIcon x:Name="HeroTrailerIcon" Glyph="&#xE714;" FontSize="18"/>
+                                <TextBlock x:Name="HeroTrailerText" Text="Fragmanı İzle" FontWeight="SemiBold" FontSize="16"/>
+                            </StackPanel>
+                        </Button>
+
+                        <Button x:Name="HeroDetailsButton" Click="HeroDetailsButton_Click" Background="#33FFFFFF" Foreground="White" CornerRadius="28" Height="56" Padding="24,0" BorderThickness="1" BorderBrush="#55FFFFFF">
                                 <StackPanel Orientation="Horizontal" Spacing="12">
                                     <FontIcon Glyph="&#xE946;" FontSize="18"/>
                                     <TextBlock Text="Detaylar" FontWeight="SemiBold" FontSize="16"/>
