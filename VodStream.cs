@@ -17,10 +17,15 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("imdb_id")]
         public string? ImdbId { get; set; }
         public string? IMDbId => ImdbId;
-        public string Title => Name;
-        public string? Description => null;
-        public string PosterUrl => IconUrl;
-        public string? BackdropUrl => null;
+        public string Title { get => Name; set { if (Name != value) { Name = value; OnPropertyChanged(); OnPropertyChanged(nameof(Name)); } } }
+
+        private string? _description;
+        public string? Description { get => _description; set { if (_description != value) { _description = value; OnPropertyChanged(); } } }
+
+        public string PosterUrl { get => IconUrl; set { if (IconUrl != value) { IconUrl = value; OnPropertyChanged(); OnPropertyChanged(nameof(IconUrl)); } } }
+
+        private string? _backdropUrl;
+        public string? BackdropUrl { get => _backdropUrl; set { if (_backdropUrl != value) { _backdropUrl = value; OnPropertyChanged(); } } }
         public string? Type => "movie";
         public string StreamUrl { get; set; } = "";
 
@@ -28,7 +33,7 @@ namespace ModernIPTVPlayer
         public object? RatingRaw { get; set; }
 
         [JsonIgnore]
-        public string Rating => RatingRaw?.ToString() ?? "";
+        public string Rating { get => RatingRaw?.ToString() ?? ""; set { if (RatingRaw != value) { RatingRaw = value; OnPropertyChanged(); } } }
 
         // UI Binding Implementation
         public double ProgressValue => 0;
@@ -163,5 +168,10 @@ namespace ModernIPTVPlayer
                                    Resolution != "Error";
 
         public bool ShowTechnicalBadges => HasMetadata;
+
+        public void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
+        {
+            Models.Metadata.MetadataSync.Sync(this, unified);
+        }
     }
 }

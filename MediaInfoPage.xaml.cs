@@ -1782,35 +1782,13 @@ namespace ModernIPTVPlayer
                     DispatcherQueue.TryEnqueue(() => AddBackdropToSlideshow(url));
                 });
                 _lastUsedTmdbLanguage = AppSettings.TmdbLanguage;
+
+                // [CONSOLIDATION] Synchronize the underlying stream with full Detail-level metadata
+                if (item != null && _unifiedMetadata != null) item.UpdateFromUnified(_unifiedMetadata);
             }
             else if (!isCached && _unifiedMetadata?.BackdropUrls != null && _unifiedMetadata.BackdropUrls.Count > 0)
             {
                 StartBackgroundSlideshow(_unifiedMetadata.BackdropUrls);
-            }
-
-            // 5. Fallback Protection
-            var unified = _unifiedMetadata;
-            if (unified == null)
-            {
-                System.Diagnostics.Debug.WriteLine("[MediaInfoPage] MetadataProvider returned null. Creating fallback.");
-                bool isSeriesItem = item is SeriesStream || (item is Models.Stremio.StremioMediaStream sms && (sms.Meta.Type == "series" || sms.Meta.Type == "tv"));
-                var stremioItem = item as Models.Stremio.StremioMediaStream;
-
-                unified = new UnifiedMetadata
-                {
-                    Title = item.Title ?? "",
-                    Overview = stremioItem?.Meta?.Description ?? "",
-                    PosterUrl = item.PosterUrl,
-                    BackdropUrl = item.BackdropUrl ?? stremioItem?.Meta?.Background,
-                    Year = stremioItem?.Meta?.ReleaseInfo ?? "",
-                    Genres = stremioItem?.Genres ?? "",
-                    Runtime = stremioItem?.Meta?.Runtime ?? "",
-                    IsSeries = isSeriesItem,
-                    ImdbId = item.IMDbId,
-                    MetadataId = item.IMDbId ?? item.Id.ToString(),
-                    DataSource = "Fallback"
-                };
-                _unifiedMetadata = unified;
             }
 
             // [FIX] Update _cachedTmdb with newly fetched info to enable episode enrichment
@@ -1821,7 +1799,7 @@ namespace ModernIPTVPlayer
             }
 
             // 6. UI Population
-            await PopulateMetadataUI(unified, item);
+            await PopulateMetadataUI(_unifiedMetadata, item);
 
             // 7. Reveal & Branching
             if (!isCached)
@@ -1837,19 +1815,19 @@ namespace ModernIPTVPlayer
             try
             {
                 bool isWide = ActualWidth >= LayoutAdaptiveThreshold;
-                if (unified.IsSeries)
+                if (_unifiedMetadata.IsSeries)
                 {
                     _areSourcesVisible = false; // Ensure sources are hidden for series until selection
 
                     
                     UpdateLayoutState(isWide);
-                    await LoadSeriesDataAsync(unified);
+                    await LoadSeriesDataAsync(_unifiedMetadata);
                 }
                 else
                 {
                     // [FIX] Trigger source fetch for any item with a canonical ID (IMDb or TMDB)
-                    string probeId = unified.ImdbId ?? (item as Models.Stremio.StremioMediaStream)?.Meta?.Id ?? item.IMDbId;
-                    bool isIptvOnly = unified.IsAvailableOnIptv && !MetadataProvider.IsCanonicalId(probeId);
+                    string probeId = _unifiedMetadata.ImdbId ?? (item as Models.Stremio.StremioMediaStream)?.Meta?.Id ?? item.IMDbId;
+                    bool isIptvOnly = _unifiedMetadata.IsAvailableOnIptv && !MetadataProvider.IsCanonicalId(probeId);
                     
                     if (!string.IsNullOrEmpty(probeId) && (MetadataProvider.IsCanonicalId(probeId) || isIptvOnly))
                     {
@@ -2372,6 +2350,7 @@ namespace ModernIPTVPlayer
             _isFirstImageApplied = false; // [FIX] Move reset here so it's ready for the NEXT nav, but doesn't break CURRENT pre-load/meta sync.
                     _lastAmbienceUrl = null; // Important: Allow fresh extraction on new navigation
                     _lastAmbienceSignature = null;
+                    _currentLogoUrl = null; // [FIX] Reset logo URL so it can be re-loaded on subsequent visits
                     _lastAreaColor = default; // Allow ambience to be reapplied after a full page reset
                     if (_themeTintBrush != null) _themeTintBrush.Color = Windows.UI.Color.FromArgb(37, 255, 255, 255);
                     // [REM] Legacy state reset removed

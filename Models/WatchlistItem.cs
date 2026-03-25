@@ -16,7 +16,7 @@ namespace ModernIPTVPlayer.Models
 
         public string PosterUrl { get; set; }
         public string BackgroundUrl { get; set; }
-        public string? BackdropUrl => BackgroundUrl;
+        public string? BackdropUrl { get => BackgroundUrl; set { BackgroundUrl = value; } }
         public string Description { get; set; }
         public string StreamUrl { get; set; }
         
@@ -24,7 +24,7 @@ namespace ModernIPTVPlayer.Models
         public double Rating { get; set; }
 
         [JsonIgnore]
-        string IMediaStream.Rating => Rating > 0 ? Rating.ToString("0.0") : "";
+        string IMediaStream.Rating { get => Rating > 0 ? Rating.ToString("0.0") : ""; set { if (double.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r)) Rating = r; } }
 
         public string Type { get; set; }
         public DateTime DateAdded { get; set; } = DateTime.Now;
@@ -129,6 +129,10 @@ namespace ModernIPTVPlayer.Models
                 return new StremioMediaStream(StremioMeta);
             }
             return null;
+        }
+        public void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
+        {
+            Models.Metadata.MetadataSync.Sync(this, unified);
         }
     }
 }

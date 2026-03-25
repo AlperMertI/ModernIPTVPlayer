@@ -202,8 +202,21 @@ namespace ModernIPTVPlayer.Services.Metadata
             
             string addonHash = GetAddonOrderHash();
             string tmdbLang = AppSettings.TmdbLanguage;
-            string cacheKey = $"{id ?? stream.Title}_{normalizedType}_{addonHash}_{tmdbLang}";
-            if (context == MetadataContext.Discovery) cacheKey += "_discovery";
+            string baseCacheKey = $"{id ?? stream.Title}_{normalizedType}_{addonHash}_{tmdbLang}";
+            string cacheKey = baseCacheKey;
+            
+            if (context == MetadataContext.Discovery)
+            {
+                // Prefer full version if it exists in cache
+                if (_resultCache.ContainsKey(baseCacheKey))
+                {
+                    cacheKey = baseCacheKey;
+                }
+                else
+                {
+                    cacheKey += "_discovery";
+                }
+            }
 
             // 1. Check Result Cache
             if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
@@ -432,6 +445,11 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // Discovery (main grid) is excluded to prevent throttling/bans.
                 bool tmdbAllowed = context == MetadataContext.Detail || context == MetadataContext.ExpandedCard || context == MetadataContext.Spotlight;
                 bool tmdbEnabled = tmdbAllowed && AppSettings.IsTmdbEnabled && !string.IsNullOrWhiteSpace(AppSettings.TmdbApiKey);
+                
+                if (context == MetadataContext.Spotlight)
+                {
+                    trace.Log("Spotlight-Check", $"TMDB Allowed={tmdbAllowed}, Enabled={tmdbEnabled}, Missing={missing}");
+                }
                 
                 if (tmdbEnabled)
                 {
@@ -2066,18 +2084,9 @@ namespace ModernIPTVPlayer.Services.Metadata
             System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] {(metadata.IsSeries ? "SERIES" : "MOVIE")}: Title=\"{metadata.Title}\", ImdbId=\"{metadata.ImdbId}\", Year=\"{metadata.Year}\", CW={isContinueWatching}");
             
             // Search TMDB
+            // Step 1: Try External ID (IMDb) FIRST - Most reliable and avoids "Untitled..." title mismatches
             if (metadata.IsSeries)
             {
-                // Step 1: Try tmdb: prefix ID
-                if (metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
-                {
-                    int.TryParse(metadata.ImdbId.Replace("tmdb:", ""), out int tvId);
-                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying tmdb: ID = {tvId}");
-                    if (tvId > 0) tmdb = await TmdbHelper.GetTvByIdAsync(tvId);
-                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: tmdb: ID result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
-                }
-                
-                // Step 2: Try external ID (IMDb)
                 if (tmdb == null && !string.IsNullOrEmpty(metadata.ImdbId) && metadata.ImdbId.StartsWith("tt"))
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying IMDb ID = {metadata.ImdbId}");
@@ -2085,16 +2094,19 @@ namespace ModernIPTVPlayer.Services.Metadata
                     if (searchResult != null)
                     {
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: IMDb lookup found ID = {searchResult.Id}, fetching full details...");
-                        // [FIX] External lookup returns search-level result. Must fetch FULL details for seasons.
                         tmdb = await TmdbHelper.GetTvByIdAsync(searchResult.Id);
                     }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: IMDb ID lookup returned NULL");
-                    }
+                }
+
+                // Step 2: Try tmdb: prefix ID
+                if (tmdb == null && metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
+                {
+                    int.TryParse(metadata.ImdbId.Replace("tmdb:", ""), out int tvId);
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying tmdb: ID = {tvId}");
+                    if (tvId > 0) tmdb = await TmdbHelper.GetTvByIdAsync(tvId);
                 }
                 
-                // Step 3: Try title search (like movies do)
+                // Step 3: Try Title Search with Year
                 if (tmdb == null)
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying title search = \"{metadata.Title}\", year = \"{metadata.Year}\"");
@@ -2106,7 +2118,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     }
                 }
 
-                // Step 4: Try title search WITHOUT YEAR (sometimes Stremio year doesn't match TMDB first_air_date)
+                // Step 4: Try Title Search WITHOUT Year
                 if (tmdb == null)
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying title search WITHOUT YEAR = \"{metadata.Title}\"");
@@ -2118,14 +2130,25 @@ namespace ModernIPTVPlayer.Services.Metadata
                     }
                 }
             }
-            else
+            else // MOVIE
             {
-                if (metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
+                // Try IMDb ID first
+                if (tmdb == null && metadata.ImdbId != null && metadata.ImdbId.StartsWith("tt"))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Trying IMDb ID = {metadata.ImdbId}");
+                    var extResult = await TmdbHelper.GetMovieByExternalIdAsync(metadata.ImdbId);
+                    if (extResult != null)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: IMDb lookup found ID = {extResult.Id}, fetching full details...");
+                        tmdb = await TmdbHelper.GetMovieByIdAsync(extResult.Id);
+                    }
+                }
+
+                if (tmdb == null && metadata.ImdbId != null && metadata.ImdbId.StartsWith("tmdb:"))
                 {
                     int.TryParse(metadata.ImdbId.Replace("tmdb:", ""), out int movieId);
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Trying tmdb: ID = {movieId}");
                     if (movieId > 0) tmdb = await TmdbHelper.GetMovieByIdAsync(movieId);
-                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: tmdb: ID result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
                 }
 
                 if (tmdb == null)
@@ -2135,19 +2158,6 @@ namespace ModernIPTVPlayer.Services.Metadata
                     {
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Search found ID = {searchResult.Id}, fetching full details...");
                         tmdb = await TmdbHelper.GetMovieByIdAsync(searchResult.Id);
-                    }
-                    System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Search result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
-                    
-                    if (tmdb == null && metadata.ImdbId != null && metadata.ImdbId.StartsWith("tt"))
-                    {
-                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Trying IMDb ID fallback = {metadata.ImdbId}");
-                         var extResult = await TmdbHelper.GetMovieByExternalIdAsync(metadata.ImdbId);
-                        if (extResult != null)
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: IMDb lookup found ID = {extResult.Id}, fetching full details...");
-                            tmdb = await TmdbHelper.GetMovieByIdAsync(extResult.Id);
-                        }
-                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: IMDb fallback result = {(tmdb != null ? tmdb.DisplayTitle : "NULL")}");
                     }
                 }
             }
@@ -2201,8 +2211,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 metadata.TmdbInfo = tmdb;
 
                 // [NEW] For series, fetch season details from TMDB to get episodes
-                // [OPTIMIZATION] Only fetch season details for high-detail views (MediaInfo page) OR ExpandedCard for CW items
-                bool shouldFetchSeasons = context == MetadataContext.Detail || (context == MetadataContext.ExpandedCard && isContinueWatching);
+                // [OPTIMIZATION] Only fetch seasons for Detail view OR for ExpandedCard IF user has already started watching (history exists)
+                bool hasHistory = !string.IsNullOrEmpty(metadata.ImdbId) && HistoryManager.Instance.GetLastWatchedEpisode(metadata.ImdbId) != null;
+                bool shouldFetchSeasons = context == MetadataContext.Detail || (context == MetadataContext.ExpandedCard && (isContinueWatching || hasHistory));
                 if (metadata.IsSeries && shouldFetchSeasons && tmdb != null && tmdb.Seasons != null && tmdb.Seasons.Count > 0)
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Fetching season details for {tmdb.Seasons.Count} TMDB seasons (Context: {context})...");
@@ -2531,7 +2542,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             return isGeneric;
         }
 
-        private bool IsPlaceholderOverview(string? overview)
+        public bool IsPlaceholderOverview(string? overview)
         {
             if (string.IsNullOrWhiteSpace(overview)) return true;
             if (overview == "Açıklama mevcut değil.") return true;

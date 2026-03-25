@@ -50,10 +50,12 @@ namespace ModernIPTVPlayer
 
         public string? IMDbId => !string.IsNullOrEmpty(ImdbId) ? ImdbId : (!string.IsNullOrEmpty(TmdbIdRaw) ? TmdbIdRaw : TmdbIdAlt);
         
-        public string Title => Name;
-        public string? Description => Plot;
-        public string PosterUrl => Cover;
-        public string? BackdropUrl => null; // IPTV Series usually don't have backdrops in catalog
+        public string Title { get => Name; set { if (Name != value) { Name = value; OnPropertyChanged(); OnPropertyChanged(nameof(Name)); } } }
+        public string? Description { get => Plot; set { if (Plot != value) { Plot = value; OnPropertyChanged(); OnPropertyChanged(nameof(Plot)); } } }
+        public string PosterUrl { get => Cover; set { if (Cover != value) { Cover = value; OnPropertyChanged(); OnPropertyChanged(nameof(Cover)); } } }
+        
+        private string? _backdropUrl;
+        public string? BackdropUrl { get => _backdropUrl; set { if (_backdropUrl != value) { _backdropUrl = value; OnPropertyChanged(); } } }
         public string? Type => "series";
         public string Year 
         { 
@@ -70,8 +72,9 @@ namespace ModernIPTVPlayer
         private string? _year;
         public string StreamUrl { get; set; } = "";
         
-        // IMediaStream.Rating implementation - return empty string instead of null to avoid XAML issues
-        string IMediaStream.Rating => string.IsNullOrEmpty(Rating) || Rating == "N/A" || Rating == "Unknown" ? "" : Rating;
+        // IMediaStream.Rating implementation
+        [JsonIgnore]
+        public string Rating { get => string.IsNullOrEmpty(RatingRaw?.ToString()) || RatingRaw?.ToString() == "N/A" || RatingRaw?.ToString() == "Unknown" ? "" : RatingRaw?.ToString(); set { if (RatingRaw != value) { RatingRaw = value; OnPropertyChanged(); } } }
 
         // UI Binding Implementation
         public double ProgressValue => 0;
@@ -119,11 +122,8 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("last_modified")]
         public string? LastModified { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("rating")]
+        [JsonPropertyName("rating")]
         public object? RatingRaw { get; set; }
-
-        [System.Text.Json.Serialization.JsonIgnore]
-        public string Rating => RatingRaw?.ToString() ?? "";
 
         [JsonPropertyName("rating_5based")]
         public object Rating5Based { get; set; }
@@ -149,6 +149,10 @@ namespace ModernIPTVPlayer
                 if (string.IsNullOrEmpty(Cover)) return null;
                 return null; // SAFE: Always return null on background, or use a Converter for UI. 
             }
+        }
+        public void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
+        {
+            Models.Metadata.MetadataSync.Sync(this, unified);
         }
     }
 }

@@ -659,6 +659,7 @@ namespace ModernIPTVPlayer.Controls
                 // Reset tech badges
                 BadgeSkeleton.Visibility = Visibility.Collapsed;
                 TechBadgesPanel.Visibility = Visibility.Collapsed;
+                StaticMetadataPanel.Visibility = Visibility.Collapsed; // [FIX] Reset static metadata panel visibility
 
                 // Reset mood tag
                 MoodTag.Visibility = Visibility.Collapsed;
@@ -772,7 +773,6 @@ namespace ModernIPTVPlayer.Controls
                 if (unified != null)
                 {
                     _tmdbInfo = unified.TmdbInfo; // Keep for DetailsClicked compatibility
-                    if (stream != null) stream.TmdbInfo = unified.TmdbInfo;
 
                     string displayTitle = unified.Title;
                     string displaySubtitle = unified.Genres;
@@ -866,14 +866,21 @@ namespace ModernIPTVPlayer.Controls
                     // NOW Fetch Trailer (Provider might have pre-filled this from TMDB if enabled)
                     string trailerKey = unified.TrailerUrl;
                     
-                    // If provider didn't find one but we have TMDB info, try a quick lookup fallback?
-                    // Usually MetadataProvider handles this, but for ExpandedCard we want speed.
                     if (string.IsNullOrEmpty(trailerKey) && unified.TmdbInfo != null)
                     {
                          trailerKey = await TmdbHelper.GetTrailerKeyAsync(unified.TmdbInfo.Id, unified.IsSeries);
+                         if (!string.IsNullOrEmpty(trailerKey))
+                         {
+                             unified.TrailerUrl = trailerKey;
+                         }
                     }
 
                     if (loadNonce != _loadNonce) return;
+
+                    // [CONSOLIDATION] Synchronize the underlying stream with high-quality metadata 
+                    // (Done after trailer potential update for completeness)
+                    if (stream != null) stream.UpdateFromUnified(unified);
+
                     if (!string.IsNullOrEmpty(trailerKey))
                     {
                          await PlayTrailer(videoKey: trailerKey);
@@ -1492,17 +1499,24 @@ namespace ModernIPTVPlayer.Controls
             YearText.Text = unified.Year;
 
             // Age Rating & Country
+            bool hasAge = !string.IsNullOrEmpty(unified.AgeRating);
+            bool hasCountry = !string.IsNullOrEmpty(unified.Country);
+
             if (BadgeAge != null)
             {
-                bool hasAge = !string.IsNullOrEmpty(unified.AgeRating);
                 BadgeAge.Visibility = hasAge ? Visibility.Visible : Visibility.Collapsed;
                 if (hasAge && BadgeAgeText != null) BadgeAgeText.Text = unified.AgeRating;
             }
             if (BadgeCountry != null)
             {
-                bool hasCountry = !string.IsNullOrEmpty(unified.Country);
                 BadgeCountry.Visibility = hasCountry ? Visibility.Visible : Visibility.Collapsed;
                 if (hasCountry && BadgeCountryText != null) BadgeCountryText.Text = unified.Country;
+            }
+
+            // [FIX] Collapse the whole panel if no static metadata exists to remove whitespace
+            if (StaticMetadataPanel != null)
+            {
+                StaticMetadataPanel.Visibility = (hasAge || hasCountry) ? Visibility.Visible : Visibility.Collapsed;
             }
             
             // Hide skeleton and reveal description with staggered reveal

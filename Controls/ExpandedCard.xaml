@@ -108,7 +108,7 @@
                         <StackPanel x:Name="TechBadgesPanel" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center" Visibility="Collapsed"/>
                         
                         <!-- Static Metadata (Age, Country) -->
-                        <StackPanel x:Name="StaticMetadataPanel" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center" Margin="0,0,0,0">
+                        <StackPanel x:Name="StaticMetadataPanel" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center" Margin="0,0,0,0" Visibility="Collapsed">
                              <Border x:Name="BadgeAge" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="5,1">
                                  <TextBlock x:Name="BadgeAgeText" FontSize="10" Foreground="#CCC" VerticalAlignment="Center"/>
                              </Border>

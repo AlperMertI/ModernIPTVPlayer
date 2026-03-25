@@ -22,10 +22,15 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("imdb_id")]
         public string? ImdbId { get; set; }
         public string? IMDbId => ImdbId;
-        public string Title => Name;
-        public string? Description => null;
-        public string PosterUrl => IconUrl;
-        public string? BackdropUrl => null; // Live streams don't typically have backdrops
+        public string Title { get => Name; set { if (Name != value) { Name = value; OnPropertyChanged(); OnPropertyChanged(nameof(Name)); } } }
+
+        private string? _description;
+        public string? Description { get => _description; set { if (_description != value) { _description = value; OnPropertyChanged(); } } }
+
+        public string PosterUrl { get => IconUrl; set { if (IconUrl != value) { IconUrl = value; OnPropertyChanged(); OnPropertyChanged(nameof(IconUrl)); } } }
+
+        private string? _backdropUrl;
+        public string? BackdropUrl { get => _backdropUrl; set { if (_backdropUrl != value) { _backdropUrl = value; OnPropertyChanged(); } } }
         public string? Type => "live";
         
         // Custom
@@ -64,7 +69,7 @@ namespace ModernIPTVPlayer
         public string? CategoryId { get; set; }
 
         [JsonPropertyName("rating")]
-        public string? Rating { get; set; }
+        public string Rating { get; set; } = "";
 
         // Bu alan JSON'dan gelmez, biz oluşturacağız
         public string StreamUrl { get; set; } = "";
@@ -208,6 +213,11 @@ namespace ModernIPTVPlayer
                 }
                 return "Durum Bilinmiyor (Analiz Bekleniyor)";
             }
+        }
+
+        public void UpdateFromUnified(Models.Metadata.UnifiedMetadata unified)
+        {
+            Models.Metadata.MetadataSync.Sync(this, unified);
         }
     }
 }

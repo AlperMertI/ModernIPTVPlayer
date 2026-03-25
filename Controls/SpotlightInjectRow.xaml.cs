@@ -725,85 +725,25 @@ namespace ModernIPTVPlayer.Controls
             _currentImageCandidateIndex++;
             TrySetCurrentImageCandidate();
         }
-
         private void ApplyUnifiedToSpotlightItem(StremioMediaStream item, Models.Metadata.UnifiedMetadata unified)
         {
             if (item?.Meta == null || unified == null) return;
 
-            bool changed = false;
-
+            // Preserve original catalog title for dual-title use in detail page if TMDB is about to change it
             if (!string.IsNullOrWhiteSpace(unified.Title) && item.Meta.Name != unified.Title)
             {
-                // Preserve original catalog title for dual-title use in detail page.
                 if (string.IsNullOrWhiteSpace(item.Meta.OriginalName) &&
                     !string.IsNullOrWhiteSpace(item.Meta.Name) &&
                     !string.Equals(item.Meta.Name, unified.Title, StringComparison.OrdinalIgnoreCase))
                 {
                     item.Meta.OriginalName = item.Meta.Name;
                 }
-
-                item.Meta.Name = unified.Title;
-                changed = true;
             }
 
-            if (!string.IsNullOrWhiteSpace(unified.Overview) && item.Meta.Description != unified.Overview)
-            {
-                item.Meta.Description = unified.Overview;
-                changed = true;
-            }
+            item.UpdateFromUnified(unified);
 
-            if (!string.IsNullOrWhiteSpace(unified.Year) && item.Meta.ReleaseInfo != unified.Year)
+            if (item == _items[_currentIndex])
             {
-                item.Meta.ReleaseInfo = unified.Year;
-                changed = true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(unified.Genres))
-            {
-                var genres = unified.Genres.Split(", ").ToList();
-                if (item.Meta.Genres == null || item.Meta.Genres.Count != genres.Count || !item.Meta.Genres.SequenceEqual(genres))
-                {
-                    item.Meta.Genres = genres;
-                    changed = true;
-                }
-            }
-
-            if (unified.Rating > 0)
-            {
-                string rating = unified.Rating.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
-                if (item.Meta.ImdbRating?.ToString() != rating)
-                {
-                    item.Meta.ImdbRating = rating;
-                    changed = true;
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(unified.BackdropUrl) && item.Meta.Background != unified.BackdropUrl)
-            {
-                item.UpdateBackground(unified.BackdropUrl);
-                changed = true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(unified.PosterUrl) && item.PosterUrl != unified.PosterUrl)
-            {
-                item.PosterUrl = unified.PosterUrl;
-                changed = true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(unified.LogoUrl) && item.LogoUrl != unified.LogoUrl)
-            {
-                item.LogoUrl = unified.LogoUrl;
-                changed = true;
-            }
-
-            if (changed && item == _items[_currentIndex])
-            {
-                item.OnPropertyChanged(nameof(item.Title));
-                item.OnPropertyChanged(nameof(item.Description));
-                item.OnPropertyChanged(nameof(item.Year));
-                item.OnPropertyChanged(nameof(item.Genres));
-                item.OnPropertyChanged(nameof(item.Rating));
-                item.OnPropertyChanged(nameof(item.PosterUrl));
                 item.OnPropertyChanged(nameof(item.LandscapeImageUrl));
                 UpdateUI();
             }

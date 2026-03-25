@@ -3,6 +3,7 @@ using System.ComponentModel;
 
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json.Serialization;
 using Microsoft.UI.Xaml.Media.Imaging;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
@@ -93,9 +94,9 @@ namespace ModernIPTVPlayer.Models.Stremio
             }
         }
 
-        public string Rating => string.IsNullOrEmpty(Meta?.ImdbRating) || Meta?.ImdbRating == "N/A" || Meta?.ImdbRating == "Unknown" ? "" : Meta.ImdbRating;
+        public string Rating { get => string.IsNullOrEmpty(Meta?.ImdbRating) || Meta?.ImdbRating == "N/A" || Meta?.ImdbRating == "Unknown" ? "" : Meta.ImdbRating; set { if (Meta != null) { Meta.ImdbRating = value; OnPropertyChanged(); } } }
         public string StreamUrl { get; set; } = "";
-        public string? BackdropUrl => Banner;
+        public string? BackdropUrl { get => Banner; set { if (Meta != null) { Meta.Background = value; OnPropertyChanged(nameof(Banner)); OnPropertyChanged(nameof(BackdropUrl)); OnPropertyChanged(nameof(LandscapeImageUrl)); } } }
         
         // Use Backdrop/Banner for Landscape cards if available, else fallback to Poster.
         public string LandscapeImageUrl => !string.IsNullOrEmpty(Banner) ? Banner : PosterUrl;
@@ -169,7 +170,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Type { get => Meta?.Type ?? "movie"; set { if (Meta != null) Meta.Type = value; } }
         public string Year { get => Meta?.ReleaseInfo ?? ""; set { if (Meta != null) Meta.ReleaseInfo = value; } }
         public string Banner => Meta?.Background ?? "";
-        public string Description => Meta?.Description ?? "";
+        public string Description { get => Meta?.Description ?? ""; set { if (Meta != null) { Meta.Description = value; OnPropertyChanged(); } } }
         public string? EpisodeSubtext { get; set; }
         public string? TrailerUrl => Meta?.Trailers?.FirstOrDefault(t => !string.IsNullOrEmpty(t.Source))?.Source;
 
@@ -218,6 +219,28 @@ namespace ModernIPTVPlayer.Models.Stremio
                 {
                     PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
                 });
+            }
+        }
+
+        [JsonIgnore]
+        public Models.Metadata.MetadataContext CurrentEnrichmentLevel { get; set; } = Models.Metadata.MetadataContext.Discovery;
+
+        public void UpdateFromUnified(Models.Metadata.UnifiedMetadata? meta)
+        {
+            if (meta == null) return;
+
+            // [SAFEGUARD] If we already have high-quality metadata (Spotlight/Detail)
+            // and we receive a shallow update (Discovery), we only "backfill" missing data.
+            bool isDowngrade = meta.MaxEnrichmentContext < this.CurrentEnrichmentLevel;
+
+            // Use centralized sync logic (handles Title, Year, Desc, Rating, TmdbInfo, Posters, etc.)
+            Models.Metadata.MetadataSync.Sync(this, meta, isDowngrade);
+
+            // High-priority IPTV fields (if specialized)
+            if (meta.IsAvailableOnIptv)
+            {
+                this.IsAvailableOnIptv = true;
+                if (string.IsNullOrEmpty(this.StreamUrl)) this.StreamUrl = meta.StreamUrl;
             }
         }
 

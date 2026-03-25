@@ -120,7 +120,8 @@ namespace ModernIPTVPlayer.Controls
 
         public void OnHoverStarted(FrameworkElement card)
         {
-            if (_isInCinemaMode || IsCardVisible || IsManipulationInProgress) return;
+            if (_isInCinemaMode || IsManipulationInProgress) return;
+            if (IsCardVisible && _activeSourceCard == card) return;
 
             try 
             {

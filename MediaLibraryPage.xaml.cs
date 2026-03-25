@@ -73,6 +73,7 @@ namespace ModernIPTVPlayer
 
             // Stremio Control Events
             StremioControl.ItemClicked += (s, e) => NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream, preloadedImage: (e.SourceElement is PosterCard pc) ? pc.ImageElement.Source : null, preloadedLogo: e.PreloadedLogo), e.SourceElement);
+            StremioControl.PlayAction += (s, stream) => NavigationService.NavigateToDetailsDirect(Frame, stream);
             StremioControl.BackdropColorChanged += (s, colors) => 
             {
                 _heroColors = colors;
@@ -98,6 +99,9 @@ namespace ModernIPTVPlayer
 
             // Overlay Controller
             _stremioExpandedCardOverlay = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, StremioControl.MainScrollViewer);
+            _stremioExpandedCardOverlay.PlayRequested += (s, stream) => NavigationService.NavigateToDetailsDirect(Frame, stream);
+            _stremioExpandedCardOverlay.DetailsRequested += (s, e) => NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream, preloadedImage: ActiveExpandedCard.BannerImage.Source, tmdbInfo: e.Tmdb), null);
+            
             StremioControl.CardHoverStarted += (s, card) => _stremioExpandedCardOverlay.OnHoverStarted(card);
             StremioControl.CardHoverEnded += async (s, card) => await _stremioExpandedCardOverlay.CloseExpandedCardAsync(card);
 

@@ -66,7 +66,6 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement, Microsoft.UI.Xaml.Media.ImageSource PreloadedLogo)> ItemClicked;
         public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> TrailerExpandRequested;
         public event EventHandler<IMediaStream> PlayAction;
-        public event EventHandler<IMediaStream> DetailsAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> BackdropColorChanged;
         public event EventHandler<ScrollViewerViewChangedEventArgs> ViewChanged;
         public event EventHandler<CatalogRowViewModel> HeaderClicked;
@@ -114,7 +113,6 @@ namespace ModernIPTVPlayer.Controls
             
             // Hero Events
             HeroControl.PlayAction += (s, e) => PlayAction?.Invoke(this, e);
-            HeroControl.DetailsAction += (s, e) => DetailsAction?.Invoke(this, e);
             HeroControl.ColorExtracted += (s, c) => BackdropColorChanged?.Invoke(this, c);
 
             DiscoveryRows.ItemsSource = _discoveryRows;
@@ -250,37 +248,12 @@ namespace ModernIPTVPlayer.Controls
             // Asynchronously enrich items that have no poster
             _ = EnrichItemsBatchAsync(cwItems);
         }
-
         private void ApplyMetadataToStream(StremioMediaStream stream, UnifiedMetadata meta)
         {
             if (stream == null || meta == null) return;
-
-            // Only update if the new metadata is actually richer 
-            if (!string.IsNullOrEmpty(meta.PosterUrl)) stream.PosterUrl = meta.PosterUrl;
-            if (!string.IsNullOrEmpty(meta.BackdropUrl)) stream.UpdateBackground(meta.BackdropUrl);
-            if (!string.IsNullOrEmpty(meta.LogoUrl)) stream.LogoUrl = meta.LogoUrl;
-
-            // Update StremioMeta fields directly for UI bindings to pick up
-            if (stream.Meta != null)
-            {
-                if (!string.IsNullOrEmpty(meta.Title)) stream.Meta.Name = meta.Title;
-                if (!string.IsNullOrEmpty(meta.Year)) stream.Meta.ReleaseInfo = meta.Year;
-                if (!string.IsNullOrEmpty(meta.Genres))
-                {
-                    stream.Meta.Genres = meta.Genres.Split(", ").ToList();
-                }
-                if (!string.IsNullOrEmpty(meta.Overview)) stream.Meta.Description = meta.Overview;
-                if (meta.Rating > 0) stream.Meta.ImdbRating = meta.Rating.ToString("F1");
-            }
-
-            // Trigger property changes for the stream wrapper
-            stream.OnPropertyChanged(nameof(stream.Year));
-            stream.OnPropertyChanged(nameof(stream.Genres));
-            stream.OnPropertyChanged(nameof(stream.Title));
-            stream.OnPropertyChanged(nameof(stream.Description));
-            stream.OnPropertyChanged(nameof(stream.Rating));
-            stream.OnPropertyChanged(nameof(stream.LogoUrl));
+            stream.UpdateFromUnified(meta);
         }
+
 
         private async Task EnrichItemsBatchAsync(IEnumerable<StremioMediaStream> items, MetadataContext context = MetadataContext.Discovery)
         {
@@ -330,7 +303,7 @@ namespace ModernIPTVPlayer.Controls
                 string.IsNullOrEmpty(stream.Banner) || 
                 string.IsNullOrEmpty(stream.Year) || 
                 string.IsNullOrEmpty(stream.Genres) ||
-                string.IsNullOrEmpty(stream.Description) ||
+                MetadataProvider.Instance.IsPlaceholderOverview(stream.Description) ||
                 string.IsNullOrEmpty(stream.Rating) ||
                 stream.Rating == "0.0" || stream.Rating == "0").ToList();
 

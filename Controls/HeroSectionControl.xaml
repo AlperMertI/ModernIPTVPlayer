@@ -131,13 +131,6 @@
                                 <TextBlock x:Name="HeroTrailerText" Text="Fragmanı İzle" FontWeight="SemiBold" FontSize="16"/>
                             </StackPanel>
                         </Button>
-
-                        <Button x:Name="HeroDetailsButton" Click="HeroDetailsButton_Click" Background="#33FFFFFF" Foreground="White" CornerRadius="28" Height="56" Padding="24,0" BorderThickness="1" BorderBrush="#55FFFFFF">
-                                <StackPanel Orientation="Horizontal" Spacing="12">
-                                    <FontIcon Glyph="&#xE946;" FontSize="18"/>
-                                    <TextBlock Text="Detaylar" FontWeight="SemiBold" FontSize="16"/>
-                                </StackPanel>
-                            </Button>
                     </StackPanel>
                 </StackPanel>
 

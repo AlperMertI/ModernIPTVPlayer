@@ -23,7 +23,6 @@ namespace ModernIPTVPlayer.Controls
     {
         // Events
         public event EventHandler<IMediaStream> PlayAction;
-        public event EventHandler<IMediaStream> DetailsAction;
         public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> ColorExtracted;
 
         // Use a private field to store the BitmapImage for navigation since LoadedImageSurface is not an ImageSource
@@ -710,13 +709,6 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void HeroDetailsButton_Click(object sender, RoutedEventArgs e)
-        {
-            if (_heroItems.Count > _currentHeroIndex)
-            {
-                DetailsAction?.Invoke(this, _heroItems[_currentHeroIndex]);
-            }
-        }
 
         private void HeroNext_Click(object sender, RoutedEventArgs e)
         {
@@ -763,14 +755,15 @@ namespace ModernIPTVPlayer.Controls
                 try
                 {
                     var unified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(item, Models.Metadata.MetadataContext.Spotlight);
-                    if (unified != null && !string.IsNullOrEmpty(unified.TrailerUrl))
+                    if (unified != null)
                     {
-                        trailerUrl = unified.TrailerUrl;
-                        AppLogger.Info($"[HeroTrailer] Fetched TrailerUrl: {trailerUrl}");
-                        if (item.Meta.Trailers == null) item.Meta.Trailers = new System.Collections.Generic.List<StremioMetaTrailer>();
-                        if (!item.Meta.Trailers.Any(t => t.Source == trailerUrl))
+                        // [CONSOLIDATION] Synchronize the underlying stream with high-quality metadata
+                        if (item != null) item.UpdateFromUnified(unified);
+
+                        if (!string.IsNullOrEmpty(unified.TrailerUrl))
                         {
-                            item.Meta.Trailers.Add(new StremioMetaTrailer { Source = trailerUrl });
+                            trailerUrl = unified.TrailerUrl;
+                            AppLogger.Info($"[HeroTrailer] Fetched TrailerUrl: {trailerUrl}");
                         }
                     }
                     else

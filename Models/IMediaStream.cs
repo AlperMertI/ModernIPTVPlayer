@@ -7,13 +7,13 @@ namespace ModernIPTVPlayer.Models
         int Id { get; }
         string? IMDbId { get; }
         bool IsAvailableOnIptv { get; set; }
-        string Title { get; }
-        string? Description { get; }
-        string PosterUrl { get; }
-        string? BackdropUrl { get; }
-        string Rating { get; }
+        string Title { get; set; }
+        string? Description { get; set; }
+        string PosterUrl { get; set; }
+        string? BackdropUrl { get; set; }
+        string Rating { get; set; }
         string? Type { get; }
-        string Year { get; }
+        string Year { get; set; }
         string StreamUrl { get; set; }
         TmdbMovieResult TmdbInfo { get; set; }
 
@@ -36,7 +36,11 @@ namespace ModernIPTVPlayer.Models
         bool IsProbing { get; set; }
         bool? IsOnline { get; set; }
         bool HasMetadata { get; }
-        // We can add more common properties as needed for the Details Page
+        
+        /// <summary>
+        /// Synchronizes the stream properties with the provided unified metadata.
+        /// </summary>
+        void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified);
     }
 
     public class MediaNavigationArgs
