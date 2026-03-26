@@ -330,12 +330,12 @@ namespace ModernIPTVPlayer
                 {
                     string api = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_live_categories";
                     string json = await _httpClient.GetStringAsync(api);
-                    var categories = JsonSerializer.Deserialize<List<LiveCategory>>(json) ?? new List<LiveCategory>();
+                    var categories = HttpHelper.TryDeserializeList<LiveCategory>(json);
 
                     // Channel Fetch
                     string streamApi = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_live_streams";
                     string streamJson = await _httpClient.GetStringAsync(streamApi);
-                    var streams = JsonSerializer.Deserialize<List<LiveStream>>(streamJson);
+                    var streams = HttpHelper.TryDeserializeList<LiveStream>(streamJson);
 
                     if (streams != null)
                     {

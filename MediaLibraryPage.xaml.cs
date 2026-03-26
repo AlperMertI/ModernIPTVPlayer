@@ -268,7 +268,7 @@ namespace ModernIPTVPlayer
                 {
                     string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_{typeKey}_categories";
                     string json = await _httpClient.GetStringAsync(api);
-                    _iptvCategories = JsonSerializer.Deserialize<List<LiveCategory>>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+                    _iptvCategories = HttpHelper.TryDeserializeList<LiveCategory>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     _ = ContentCacheService.Instance.SaveCacheAsync(playlistId, $"{typeKey}_categories", _iptvCategories);
                 }
 
@@ -289,7 +289,7 @@ namespace ModernIPTVPlayer
                     {
                         string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams";
                         string json = await _httpClient.GetStringAsync(api);
-                        var movies = JsonSerializer.Deserialize<List<VodStream>>(json, options) ?? new();
+                        var movies = HttpHelper.TryDeserializeList<VodStream>(json, options);
                         foreach(var m in movies) 
                             m.StreamUrl = $"{_loginInfo.Host}/movie/{_loginInfo.Username}/{_loginInfo.Password}/{m.StreamId}.{(string.IsNullOrEmpty(m.ContainerExtension) ? "mp4" : m.ContainerExtension)}";
                         
@@ -308,7 +308,7 @@ namespace ModernIPTVPlayer
                     {
                         string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series";
                         string json = await _httpClient.GetStringAsync(api);
-                        var series = JsonSerializer.Deserialize<List<SeriesStream>>(json, options) ?? new();
+                        var series = HttpHelper.TryDeserializeList<SeriesStream>(json, options);
                         _allIptvItems = series.Cast<IMediaStream>().ToList();
                         await ContentCacheService.Instance.SaveCacheAsync(playlistId, "series", series);
                         _ = ContentCacheService.Instance.RefreshIptvMatchIndexAsync(playlistId);
