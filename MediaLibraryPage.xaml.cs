@@ -125,15 +125,22 @@ namespace ModernIPTVPlayer
             
             try
             {
+                MediaType targetType = PageStateProvider.LastMediaType;
+
                 if (e.Parameter is MediaLibraryArgs args)
                 {
-                    if (_mediaType != args.Type)
-                    {
-                        _mediaType = args.Type;
-                        ClearData();
-                        SidebarTitle.Text = _mediaType == MediaType.Movie ? "FİLMLER" : "DİZİLER";
-                    }
+                    targetType = args.Type;
                 }
+                
+                if (_mediaType != targetType)
+                {
+                    _mediaType = targetType;
+                    ClearData();
+                    SidebarTitle.Text = _mediaType == MediaType.Movie ? "FİLMLER" : "DİZİLER";
+                }
+                
+                // Sync back to state provider
+                PageStateProvider.LastMediaType = _mediaType;
 
                 _loginInfo = App.CurrentLogin;
                 UpdateLayoutForMode();
@@ -159,6 +166,7 @@ namespace ModernIPTVPlayer
             
             AppLogger.Info($"[MediaLibraryPage] Switching MediaType to {newType}");
             _mediaType = newType;
+            PageStateProvider.LastMediaType = newType;
             
             ClearData();
             SidebarTitle.Text = _mediaType == MediaType.Movie ? "FİLMLER" : "DİZİLER";

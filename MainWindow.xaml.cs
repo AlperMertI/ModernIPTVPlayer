@@ -45,10 +45,10 @@ namespace ModernIPTVPlayer
             Type startupPageType = GetPageTypeFromTag(startupPageTag);
 
             // Perform auto-login then navigate
-            _ = InitializeStartupAsync(startupPageType);
+            _ = InitializeStartupAsync(startupPageType, startupPageTag);
         }
 
-        private async Task InitializeStartupAsync(Type startupPageType)
+        private async Task InitializeStartupAsync(Type startupPageType, string startupPageTag)
         {
             // Attempt auto-login if not already logged in
             if (App.CurrentLogin == null)
@@ -57,11 +57,19 @@ namespace ModernIPTVPlayer
             }
 
             // Navigate initial
-            ContentFrame.Navigate(startupPageType, App.CurrentLogin);
+            if (startupPageType == typeof(MediaLibraryPage))
+            {
+                var targetType = startupPageTag == "SeriesPage" ? MediaType.Series : MediaType.Movie;
+                ContentFrame.Navigate(startupPageType, new MediaLibraryArgs { Type = targetType });
+            }
+            else
+            {
+                ContentFrame.Navigate(startupPageType, App.CurrentLogin);
+            }
 
             // Sync initial nav button selection to match the startup page
             var initialBtn = NavButtonsStack.Children.OfType<RadioButton>()
-                .FirstOrDefault(b => b.Tag != null && GetPageTypeFromTag(b.Tag.ToString()) == startupPageType);
+                .FirstOrDefault(b => b.Tag != null && b.Tag.ToString() == startupPageTag);
             if (initialBtn != null)
             {
                 initialBtn.IsChecked = true;
@@ -292,22 +300,11 @@ namespace ModernIPTVPlayer
                     {
                         var targetType = tag == "MoviesPage" ? MediaType.Movie : MediaType.Series;
                         
-                        // If we're already on a MediaLibraryPage, just switch the type for fast loading
-                        if (ContentFrame.Content is MediaLibraryPage mlp)
-                        {
-                            if (mlp.MediaType != targetType)
-                            {
-                                mlp.SwitchMediaType(targetType);
-                            }
-                            // Important: We return here as we've handled the "navigation" internally
-                            UpdatePillPosition(btn);
-                            return;
-                        }
-                        else
-                        {
-                            var args = new MediaLibraryArgs { Type = targetType };
-                            ContentFrame.Navigate(pageType, args);
-                        }
+                        // DISCOVERY: We should ALWAYS use Navigate for Movies/Series switching to ensure 
+                        // the Frame's back stack contains correct parameters when returning from Detail pages.
+                        // The internal SwitchMediaType optimization broke back-navigation context.
+                        var args = new MediaLibraryArgs { Type = targetType };
+                        ContentFrame.Navigate(pageType, args);
                     }
                     else if (ContentFrame.CurrentSourcePageType != pageType)
                     {

@@ -4293,10 +4293,10 @@ namespace ModernIPTVPlayer
  
                      System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Episode selected: S{ep.SeasonNumber}E{ep.EpisodeNumber}, Title='{ep.Title}', Overview='{ep.Overview?.Substring(0, Math.Min(50, ep.Overview?.Length ?? 0))}...'");
 
-                     // [Fix] Restore StreamUrl from history if missing (Stremio Series Resume)
+                     // [Fix] Restore StreamUrl from history (Prioritize last used source/addon over default IPTV stream)
                      string resolvedEpId = ResolveBestContentId(ep.Id);
                      var history = HistoryManager.Instance.GetProgress(resolvedEpId);
-                     if (string.IsNullOrEmpty(_streamUrl) && history != null && !string.IsNullOrEmpty(history.StreamUrl))
+                     if (history != null && !string.IsNullOrEmpty(history.StreamUrl))
                      {
                           _streamUrl = history.StreamUrl;
                           System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored StreamUrl from history ({resolvedEpId}): {_streamUrl}");
@@ -6689,9 +6689,12 @@ namespace ModernIPTVPlayer
 
                 if (!string.IsNullOrEmpty(vm.Url))
                 {
+                    // [FIX] Persist choice immediately so it's remembered even if user navigates away without playing
+                    var history = HistoryManager.Instance.GetProgress(videoId);
+                    HistoryManager.Instance.UpdateProgress(videoId, title, _streamUrl, history?.Position ?? 0, history?.Duration ?? 0);
+
                     // Check history for resume position
                     double resumeSeconds = -1;
-                    var history = HistoryManager.Instance.GetProgress(videoId);
                     if (history != null && !history.IsFinished && history.Position > 0)
                     {
                         resumeSeconds = history.Position;
