@@ -74,6 +74,7 @@ namespace ModernIPTVPlayer
         private List<SubtitleTrackViewModel> _currentSubtitleTracks = new();
         private List<SubtitleTrackViewModel> _cachedAddonSubtitles = new(); // Cache for fetched addon subs
         private string _lastAddonFetchId = null; // Track which ID we cached for
+        private bool _isFetchingAddonSubs = false;
 
         public class SubtitleLanguageViewModel
         {
@@ -3201,7 +3202,8 @@ namespace ModernIPTVPlayer
                 if (_isPageLoaded)
                 {
                     UpdateLanguageList(isLoading: true);
-                    _ = FetchAddonSubtitles();
+                    // [FIX] Removed _ = FetchAddonSubtitles() from here as it's triggered by AutoFetchAndRestoreAddonSubtitleAsync
+                    // This prevents double logs and redundant network traffic on start.
                 }
                 
                 System.Diagnostics.Debug.WriteLine("[LoadTracksAsync] Completed Successfully.");
@@ -3471,27 +3473,14 @@ namespace ModernIPTVPlayer
 
         private async Task FetchAddonSubtitles()
         {
+            if (_isFetchingAddonSubs) return;
+            _isFetchingAddonSubs = true;
             try
             {
                 // 1. Identify Content
                 string imdbId = null;
                 string type = "movie";
                 string extra = "";
-                try
-                {
-                    if (!string.IsNullOrEmpty(_streamUrl))
-                    {
-                        var uri = new Uri(_streamUrl);
-                        string fileName = System.IO.Path.GetFileName(uri.LocalPath);
-                        if (!string.IsNullOrEmpty(fileName) && fileName.Contains("."))
-                        {
-                            // Some addons (OpenSubtitles) perform much better with filename
-                            extra = $"filename={Uri.EscapeDataString(fileName)}";
-                            Debug.WriteLine($"[FetchAddonSubtitles] Using filename metadata: {fileName}");
-                        }
-                    }
-                }
-                catch { }
                 
                 // Use _navArgs for all metadata since _item is not available in PlayerPage
                 if (_navArgs != null && !string.IsNullOrEmpty(_navArgs.Id))
@@ -3508,19 +3497,71 @@ namespace ModernIPTVPlayer
                     return;
                 }
 
-                // Format ID for series: tt1234567:1:5
+                // [FIX] Improved Filename metadata logic
+                // Using the raw stream ID from URL (e.g. 1594905.mkv) is useless for subtitle matching.
+                // We construct a "virtual" filename based on the show's title for better accuracy.
+                string displayTitle = _navArgs?.Title ?? (_navArgs?.SeriesName ?? "Video");
+                string virtualFileName = displayTitle.Replace(":", "").Replace("/", "").Replace("\\", "");
+                if (_navArgs?.Season > 0) virtualFileName += $".S{_navArgs.Season:D2}E{_navArgs.Episode:D2}";
+                virtualFileName += ".mkv";
+                extra = $"filename={Uri.EscapeDataString(virtualFileName)}";
+                Debug.WriteLine($"[FetchAddonSubtitles] Using virtual filename for matching: {virtualFileName}");
+
+                // 2. ID Resolution & Normalization (Crucial for subtitle addons)
                 string queryId = imdbId;
-                if (type == "series" || type == "episode")
+                
+                // [FIX] Resolve TMDB to IMDb if possible (Subtitle addons are IMDb-centric)
+                if (imdbId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
                 {
-                    int s = 1, e = 1;
-                    if (_navArgs != null && _navArgs.Season > 0) 
-                    { 
-                        s = _navArgs.Season; 
-                        e = _navArgs.Episode; 
+                    var parts = imdbId.Split(':');
+                    if (parts.Length > 1)
+                    {
+                        string tmdbIdOnly = parts[1];
+                        string resolved = ModernIPTVPlayer.Services.Metadata.IdMappingService.Instance.GetImdbForTmdb(tmdbIdOnly);
+                        if (!string.IsNullOrEmpty(resolved))
+                        {
+                            Debug.WriteLine($"[FetchAddonSubtitles] Resolved {imdbId} -> {resolved} via IdMappingService");
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[FetchAddonSubtitles] IdMappingService MISS for TMDB:{tmdbIdOnly}");
+                            // [NEW] Fallback: Check MetadataProvider's Cache directly (very likely to hit if arrived from MediaInfoPage)
+                            var cached = ModernIPTVPlayer.Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(new ModernIPTVPlayer.Models.Stremio.StremioMediaStream { Meta = new StremioMeta { Id = imdbId, Type = type } });
+                            if (cached != null)
+                            {
+                                if (!string.IsNullOrEmpty(cached.ImdbId) && cached.ImdbId.StartsWith("tt"))
+                                {
+                                    resolved = cached.ImdbId;
+                                    System.Diagnostics.Debug.WriteLine($"[FetchAddonSubtitles] Resolved {imdbId} -> {resolved} via MetadataProvider Cache");
+                                }
+                            }
+                            else
+                            {
+                                AppLogger.Info($"[FetchAddonSubtitles] Cache PEEK MISS for {imdbId} (Type: {type})");
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(resolved))
+                        {
+                            imdbId = resolved;
+                            queryId = resolved;
+                        }
                     }
-                    
+                }
+
+                // [FIX] Suffix Handling: Avoid redundant :s:e if already present in ID
+                if ((type == "series" || type == "episode") && !imdbId.Contains(":", StringComparison.Ordinal))
+                {
+                    int s = _navArgs?.Season > 0 ? _navArgs.Season : 1;
+                    int e = _navArgs?.Episode > 0 ? _navArgs.Episode : 1;
                     queryId = $"{imdbId}:{s}:{e}";
-                    type = "series"; // Ensure type is series for subtitle query
+                    type = "series"; 
+                }
+                else if (type == "series" || type == "episode")
+                {
+                    // Already has colons (e.g. tt1234567:1:1 or tmdb:79788:1:1), use as is
+                    queryId = imdbId;
+                    type = "series";
                 }
 
                 // ID looks like "tt1234567" or "tt1234567:1:5"
@@ -3588,6 +3629,10 @@ namespace ModernIPTVPlayer
             {
                 System.Diagnostics.Debug.WriteLine($"[FetchAddonSubtitles] Error: {ex.Message}");
                 DispatcherQueue.TryEnqueue(() => UpdateLanguageList(isLoading: false));
+            }
+            finally
+            {
+                _isFetchingAddonSubs = false;
             }
         }
 

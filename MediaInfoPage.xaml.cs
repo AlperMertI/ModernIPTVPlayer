@@ -89,6 +89,53 @@ namespace ModernIPTVPlayer
         private const double TrailerDefaultHeight = 562;
         private CancellationTokenSource _trailerCts;
 
+        private string ResolveBestContentId(string? rawId)
+        {
+            if (string.IsNullOrEmpty(rawId)) return rawId;
+
+            // 1. If we have a resolved IMDb ID for the parent show, use it to reconstruct the ID
+            if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.ImdbId) && _unifiedMetadata.ImdbId.StartsWith("tt"))
+            {
+                // If the rawId is a TMDB episode ID (e.g. tmdb:79788:1:1)
+                if (rawId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase) && rawId.Contains(":"))
+                {
+                    var parts = rawId.Split(':');
+                    if (parts.Length >= 3) // tmdb:id:s:e
+                    {
+                        var resolved = $"{_unifiedMetadata.ImdbId}:{parts[parts.Length - 2]}:{parts[parts.Length - 1]}";
+                        return resolved;
+                    }
+                }
+                
+                // If it's just the show ID
+                if (rawId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase) && !rawId.Contains(":"))
+                {
+                    return _unifiedMetadata.ImdbId;
+                }
+            }
+
+            // 2. Fallback to IdMappingService for persistent cross-references
+            if (rawId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = rawId.Split(':');
+                if (parts.Length > 1)
+                {
+                    string tmdbIdOnly = parts[1];
+                    string resolved = ModernIPTVPlayer.Services.Metadata.IdMappingService.Instance.GetImdbForTmdb(tmdbIdOnly);
+                    if (!string.IsNullOrEmpty(resolved))
+                    {
+                        if (rawId.Contains(":") && parts.Length >= 3)
+                        {
+                            return $"{resolved}:{parts[parts.Length-2]}:{parts[parts.Length-1]}";
+                        }
+                        return resolved;
+                    }
+                }
+            }
+
+            return rawId;
+        }
+
         // Page State Machine for Layout-Aware Loading
         private enum PageLoadState
         {
@@ -4247,11 +4294,12 @@ namespace ModernIPTVPlayer
                      System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Episode selected: S{ep.SeasonNumber}E{ep.EpisodeNumber}, Title='{ep.Title}', Overview='{ep.Overview?.Substring(0, Math.Min(50, ep.Overview?.Length ?? 0))}...'");
 
                      // [Fix] Restore StreamUrl from history if missing (Stremio Series Resume)
-                     var history = HistoryManager.Instance.GetProgress(ep.Id);
+                     string resolvedEpId = ResolveBestContentId(ep.Id);
+                     var history = HistoryManager.Instance.GetProgress(resolvedEpId);
                      if (string.IsNullOrEmpty(_streamUrl) && history != null && !string.IsNullOrEmpty(history.StreamUrl))
                      {
                           _streamUrl = history.StreamUrl;
-                          System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored StreamUrl from history: {_streamUrl}");
+                          System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored StreamUrl from history ({resolvedEpId}): {_streamUrl}");
                      }
                                // Sync narrow list
 
@@ -5654,21 +5702,26 @@ namespace ModernIPTVPlayer
 
             if (!string.IsNullOrEmpty(_streamUrl))
             {
+                // [FIX] Prioritize resolved IMDb ID from unified metadata if available for more accurate subtitle matching in PlayerPage
+                string idToPass = ResolveBestContentId(_selectedEpisode?.Id ?? (_item?.IMDbId ?? _item?.Id.ToString()));
+                
+                AppLogger.Info($"[MediaInfo:Play] Base ID: {idToPass} | URL: {(_streamUrl?.Length > 30 ? _streamUrl.Substring(0, 30) + "..." : _streamUrl)}");
+
                 // Series Episode
                 if (_selectedEpisode != null)
                 {
                      string parentId = _item is SeriesStream ss ? ss.SeriesId.ToString() : null;
-                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, _selectedEpisode.Id, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, -1, _item.PosterUrl, "series", GetCurrentBackdrop());
+                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, idToPass, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, -1, _item.PosterUrl, "series", GetCurrentBackdrop());
                 }
                 else if (_item is LiveStream live)
                 {
                     // Movie / Live
-                    await PerformHandoverAndNavigate(_streamUrl, live.Title, live.StreamId.ToString(), null, null, 0, 0, -1, live.PosterUrl, "iptv", GetCurrentBackdrop());
+                    await PerformHandoverAndNavigate(_streamUrl, live.Title, idToPass, null, null, 0, 0, -1, live.PosterUrl, "iptv", GetCurrentBackdrop());
                 }
                 else
                 {
                     // Fallback
-                    await PerformHandoverAndNavigate(_streamUrl, TitleText.Text, backdropUrl: GetCurrentBackdrop());
+                    await PerformHandoverAndNavigate(_streamUrl, TitleText.Text, idToPass, backdropUrl: GetCurrentBackdrop());
                 }
             }
         }
@@ -6632,7 +6685,7 @@ namespace ModernIPTVPlayer
                 }
 
                 string title = _selectedEpisode?.Title ?? _item.Title;
-                string videoId = _selectedEpisode?.Id ?? (_item as Models.Stremio.StremioMediaStream).Meta.Id;
+                string videoId = ResolveBestContentId(_selectedEpisode?.Id ?? (_item as Models.Stremio.StremioMediaStream).Meta.Id);
 
                 if (!string.IsNullOrEmpty(vm.Url))
                 {

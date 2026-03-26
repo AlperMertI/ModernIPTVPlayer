@@ -102,11 +102,34 @@ namespace ModernIPTVPlayer.Services.Metadata
                 string cacheKey = $"{id ?? stream.Title}_{type}_{addonHash}_{tmdbLang}";
                 if (context == MetadataContext.Discovery) cacheKey += "_discovery";
 
+                // AppLogger.Info($"[MetadataProvider] TryPeekMetadata Key: {cacheKey}");
+
                 // 1. Check Primary Cache
                 if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
                 {
                     return cached.Data;
                 }
+
+                // [FIX] Aliased Lookup: If tmdb:ID lookup failed, try looking up via IMDb ID alias
+                if (id != null && id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
+                {
+                    string tmdbIdOnly = id.Replace("tmdb:", "", StringComparison.OrdinalIgnoreCase);
+                    string mappedImdb = IdMappingService.Instance.GetImdbForTmdb(tmdbIdOnly);
+                    if (!string.IsNullOrEmpty(mappedImdb))
+                    {
+                        string fallbackKey = $"{mappedImdb}_{type}_{addonHash}_{tmdbLang}";
+                        if (context == MetadataContext.Discovery) fallbackKey += "_discovery";
+                        
+                        if (_resultCache.TryGetValue(fallbackKey, out var fallbackCached) && DateTime.Now < fallbackCached.Expiry)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Alias HIT for {id} -> {mappedImdb}");
+                            return fallbackCached.Data;
+                        }
+                    }
+                }
+                
+                // If not found, log it for deep diagnosis (Debug only)
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Cache Peek MISS for key: {cacheKey}");
 
                 // 2. Check Detail-from-Discovery promotion
                 if (context == MetadataContext.Detail)
@@ -370,6 +393,17 @@ namespace ModernIPTVPlayer.Services.Metadata
                     if (!string.IsNullOrWhiteSpace(rawSourceId) && !IsCanonicalId(rawSourceId) && IsCanonicalId(result.ImdbId))
                     {
                         _rawToCanonicalIdCache[rawSourceId] = result.ImdbId;
+                        
+                        // [NEW] Also register in persistent IdMappingService for external lookups (like subtitle fetching)
+                        if (rawSourceId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            var rParts = rawSourceId.Split(':');
+                            if (rParts.Length > 1)
+                            {
+                                string tmdbIdOnly = rParts[1];
+                                IdMappingService.Instance.RegisterMapping(result.ImdbId, tmdbIdOnly);
+                            }
+                        }
                     }
                     
                     // If the ID changed (e.g. tmdb -> imdb), cache under the new ID as well

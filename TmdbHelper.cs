@@ -422,15 +422,25 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
                 var cacheKey = $"movie_id_{movieId}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
+                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) 
+                {
+                    // [NEW] Persist mapping even on cache hits
+                    if (!string.IsNullOrEmpty(cached.ResolvedImdbId))
+                        IdMappingService.Instance.RegisterMapping(cached.ResolvedImdbId, cached.Id.ToString());
+                    return cached;
+                }
                 var url = $"{BASE_URL}/movie/{movieId}?api_key={API_KEY}&language={language}&append_to_response=images,external_ids&include_image_language={shortLang},en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Request: {url}");
                 var json = await _client.GetStringAsync(url);
                 var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
                 if (result != null) 
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Parsed: {result.Title}. BackdropPath: {result.BackdropPath}");
+                    System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Parsed: {result.Title}. Resolved IMDb: {result.ResolvedImdbId}");
                     TmdbCacheService.Instance.Set(cacheKey, result);
+
+                    // [NEW] Persist the ID mapping globally for subtitle resolution
+                    if (!string.IsNullOrEmpty(result.ResolvedImdbId))
+                        IdMappingService.Instance.RegisterMapping(result.ResolvedImdbId, result.Id.ToString());
                 }
                 return result;
             }
@@ -445,15 +455,25 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
                 var cacheKey = $"tv_id_{tvId}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
+                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) 
+                {
+                    // [NEW] Persist mapping even on cache hits
+                    if (!string.IsNullOrEmpty(cached.ResolvedImdbId))
+                        IdMappingService.Instance.RegisterMapping(cached.ResolvedImdbId, cached.Id.ToString());
+                    return cached;
+                }
                 var url = $"{BASE_URL}/tv/{tvId}?api_key={API_KEY}&language={language}&append_to_response=images,external_ids&include_image_language={shortLang},en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Request: {url}");
                 var json = await _client.GetStringAsync(url);
                 var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
                 if (result != null) 
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Parsed: {result.Name}. BackdropPath: {result.BackdropPath}");
+                    System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Parsed: {result.Name}. Resolved IMDb: {result.ResolvedImdbId}");
                     TmdbCacheService.Instance.Set(cacheKey, result);
+
+                    // [NEW] Persist the ID mapping globally for subtitle resolution
+                    if (!string.IsNullOrEmpty(result.ResolvedImdbId))
+                        IdMappingService.Instance.RegisterMapping(result.ResolvedImdbId, result.Id.ToString());
                 }
                 return result;
             }

@@ -252,11 +252,13 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         public async Task<List<StremioSubtitle>> GetSubtitlesAsync(string baseUrl, string type, string id, string extra = "")
         {
+            string url = $"{baseUrl.TrimEnd('/')}/subtitles/{type}/{id}";
             try
             {
-                string url = $"{baseUrl.TrimEnd('/')}/subtitles/{type}/{id}";
                 if (!string.IsNullOrEmpty(extra)) url += $"/{extra}";
                 url += ".json";
+
+                AppLogger.Info($"[StremioService] Fetching subtitles from: {url}");
 
                 string json = await _client.GetStringAsync(url);
                 var response = JsonSerializer.Deserialize<StremioSubtitleResponse>(json, _jsonOptions);
@@ -264,7 +266,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
             catch (Exception ex)
             {
-                AppLogger.Warn($"Error fetching subtitles from {baseUrl}: {ex.Message}");
+                AppLogger.Warn($"GetSubtitlesAsync failed for {url}: {ex.Message}");
                 return new List<StremioSubtitle>();
             }
         }
