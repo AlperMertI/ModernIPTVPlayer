@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Linq;
 
 using ModernIPTVPlayer.Services;
+using ModernIPTVPlayer.Services.Metadata; // [NEW] For IdMappingService
 
 namespace ModernIPTVPlayer
 {
@@ -228,41 +229,107 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<string?> GetTrailerKeyAsync(int tmdbId, bool isTv = false)
+        public static async Task<string?> GetTrailerKeyAsync(int tmdbId, bool isTv = false, string? language = null)
         {
             try
             {
+                language ??= AppSettings.TmdbLanguage;
                 string type = isTv ? "tv" : "movie";
-                var cacheKey = $"trailer_{type}_{tmdbId}";
-                if (TmdbCacheService.Instance.Get<string>(cacheKey) is string cached) return cached;
+                
+                System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] Start lookup for ID:{tmdbId} ({type}) | Language:{language}");
 
-                // Get all videos without language filter to find English trailers as fallback
-                var url = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}";
-                System.Diagnostics.Debug.WriteLine($"[TMDB] Fetching Videos: {url}");
+                // 1. Try with localized language FIRST
+                var cacheKey = $"trailer_{type}_{tmdbId}_{language}";
+                if (TmdbCacheService.Instance.Get<string>(cacheKey) is string cached) 
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] Cache HIT for {cacheKey}: {cached}");
+                    return cached;
+                }
+
+                var url = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}&language={language}";
                 var json = await _client.GetStringAsync(url);
                 var result = JsonSerializer.Deserialize<TmdbVideosResponse>(json);
 
-                if (result?.Results != null)
+                string? trailerKey = null;
+                if (result?.Results != null && result.Results.Count > 0)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[TMDB] Found {result.Results.Count} videos for {type} ID {tmdbId}");
-                    // Find first Youtube trailer
-                    var trailer = result.Results.FirstOrDefault(v => v.Site == "YouTube" && v.Type == "Trailer");
-                    if (trailer == null) 
-                    {
-                        // Fallback to Clip or Teaser if no Trailer
-                        trailer = result.Results.FirstOrDefault(v => v.Site == "YouTube" && (v.Type == "Clip" || v.Type == "Teaser"));
-                    }
-
-                    if (trailer != null) System.Diagnostics.Debug.WriteLine($"[TMDB] Trailer/Video Found: {trailer.Key}");
-                    else System.Diagnostics.Debug.WriteLine("[TMDB] No suitable YouTube video found.");
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] Localized search ({language}) returned {result.Results.Count} videos.");
                     
-                    if (trailer?.Key != null) TmdbCacheService.Instance.Set(cacheKey, trailer.Key);
-                    return trailer?.Key; 
+                    // [PRIORITY] Prefer 'Trailer' over other types for the localized language
+                    var bestMatch = result.Results
+                        .Where(v => v.Site == "YouTube")
+                        .OrderBy(v => v.Type == "Trailer" ? 0 : 1) // Trailers first
+                        .ThenBy(v => v.Type == "Teaser" ? 0 : 1)   // Then Teasers
+                        .FirstOrDefault();
+                    
+                    if (bestMatch != null) 
+                    {
+                        trailerKey = bestMatch.Key;
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] Selected Localized ({language}) {bestMatch.Type}: {trailerKey} (Name: {bestMatch.Name})");
+                    }
                 }
-                return null;
+
+                // 2. Fallback to English/Global if no localized trailer found
+                if (string.IsNullOrEmpty(trailerKey))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] No localized trailer found for {language}. Retrying with English (en-US) fallback...");
+                    var fallbackUrl = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}&language=en-US";
+                    var fallbackJson = await _client.GetStringAsync(fallbackUrl);
+                    var fallbackResult = JsonSerializer.Deserialize<TmdbVideosResponse>(fallbackJson);
+
+                    if (fallbackResult?.Results != null && fallbackResult.Results.Count > 0)
+                    {
+                        var bestFallback = fallbackResult.Results
+                            .Where(v => v.Site == "YouTube")
+                            .OrderBy(v => v.Type == "Trailer" ? 0 : 1)
+                            .ThenBy(v => v.Type == "Teaser" ? 0 : 1)
+                            .FirstOrDefault();
+                        
+                        if (bestFallback != null) 
+                        {
+                            trailerKey = bestFallback.Key;
+                            System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] Selected Fallback (en-US) {bestFallback.Type}: {trailerKey} (Name: {bestFallback.Name})");
+                        }
+                    }
+                }
+
+                // 3. Last resort: Try without ANY language parameter to see if anything exists
+                if (string.IsNullOrEmpty(trailerKey))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] No English trailer found. Retrying with NO language parameter (Global)...");
+                    var lastUrl = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}";
+                    var lastJson = await _client.GetStringAsync(lastUrl);
+                    var lastResult = JsonSerializer.Deserialize<TmdbVideosResponse>(lastJson);
+                    
+                    if (lastResult?.Results != null && lastResult.Results.Count > 0)
+                    {
+                        var lastMatch = lastResult.Results
+                            .Where(v => v.Site == "YouTube")
+                            .OrderBy(v => v.Type == "Trailer" ? 0 : 1)
+                            .FirstOrDefault();
+                        
+                        if (lastMatch != null) 
+                        {
+                            trailerKey = lastMatch.Key;
+                            System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] Selected Global {lastMatch.Type}: {trailerKey} (Name: {lastMatch.Name})");
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(trailerKey))
+                {
+                    TmdbCacheService.Instance.Set(cacheKey, trailerKey);
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] FAILED to find any YouTube trailer/teaser/clip for ID:{tmdbId}");
+                }
+                
+                return trailerKey;
             }
-            catch
+            catch (Exception ex)
             {
+                System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] EXCEPTION: {ex.Message}");
                 return null;
             }
         }
@@ -363,7 +430,7 @@ namespace ModernIPTVPlayer
                 if (result != null) 
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Parsed: {result.Title}. BackdropPath: {result.BackdropPath}");
-                    TmdbCacheService.Instance.Set($"movie_id_{movieId}", result);
+                    TmdbCacheService.Instance.Set(cacheKey, result);
                 }
                 return result;
             }
@@ -386,7 +453,7 @@ namespace ModernIPTVPlayer
                 if (result != null) 
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Parsed: {result.Name}. BackdropPath: {result.BackdropPath}");
-                    TmdbCacheService.Instance.Set($"tv_id_{tvId}", result);
+                    TmdbCacheService.Instance.Set(cacheKey, result);
                 }
                 return result;
             }
@@ -424,6 +491,9 @@ namespace ModernIPTVPlayer
             try
             {
                 language ??= AppSettings.TmdbLanguage;
+                var cacheKey = $"find_tv_{externalId}_{language}";
+                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
+
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language={language}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Find ID: {url}");
@@ -435,13 +505,29 @@ namespace ModernIPTVPlayer
                  if (root.TryGetProperty("tv_results", out var tvs) && tvs.GetArrayLength() > 0)
                 {
                     var first = tvs[0];
-                    return JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    var result = JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    if (result != null)
+                    {
+                        TmdbCacheService.Instance.Set(cacheKey, result);
+                        // [NEW] Persist the ID mapping globally
+                        if (!string.IsNullOrEmpty(result.ImdbId))
+                            IdMappingService.Instance.RegisterMapping(result.ImdbId, result.Id.ToString());
+                    }
+                    return result;
                 }
                  // Fallback to movie if TV not found (rare but possible for cross-listings)
                 if (root.TryGetProperty("movie_results", out var movies) && movies.GetArrayLength() > 0)
                 {
                     var first = movies[0];
-                    return JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    var result = JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    if (result != null)
+                    {
+                        TmdbCacheService.Instance.Set(cacheKey, result);
+                        // [NEW] Persist the ID mapping globally
+                        if (!string.IsNullOrEmpty(result.ImdbId))
+                            IdMappingService.Instance.RegisterMapping(result.ImdbId, result.Id.ToString());
+                    }
+                    return result;
                 }
 
                 return null;
@@ -454,6 +540,9 @@ namespace ModernIPTVPlayer
             try
             {
                 language ??= AppSettings.TmdbLanguage;
+                var cacheKey = $"find_movie_{externalId}_{language}";
+                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
+
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language={language}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Find ID: {url}");
@@ -466,12 +555,28 @@ namespace ModernIPTVPlayer
                 if (root.TryGetProperty("movie_results", out var movies) && movies.GetArrayLength() > 0)
                 {
                     var first = movies[0];
-                    return JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    var result = JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    if (result != null)
+                    {
+                        TmdbCacheService.Instance.Set(cacheKey, result);
+                        // [NEW] Persist the ID mapping globally
+                        if (!string.IsNullOrEmpty(result.ImdbId))
+                            IdMappingService.Instance.RegisterMapping(result.ImdbId, result.Id.ToString());
+                    }
+                    return result;
                 }
                  if (root.TryGetProperty("tv_results", out var tvs) && tvs.GetArrayLength() > 0)
                 {
                     var first = tvs[0];
-                    return JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    var result = JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    if (result != null)
+                    {
+                        TmdbCacheService.Instance.Set(cacheKey, result);
+                        // [NEW] Persist the ID mapping globally
+                        if (!string.IsNullOrEmpty(result.ImdbId))
+                            IdMappingService.Instance.RegisterMapping(result.ImdbId, result.Id.ToString());
+                    }
+                    return result;
                 }
 
                 return null;
@@ -703,6 +808,15 @@ namespace ModernIPTVPlayer
         
         [JsonPropertyName("type")]
         public string Type { get; set; }
+
+        [JsonPropertyName("iso_639_1")]
+        public string Iso639_1 { get; set; }
+
+        [JsonPropertyName("iso_3166_1")]
+        public string Iso3166_1 { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
     }
 
     public class TmdbCreditsResponse

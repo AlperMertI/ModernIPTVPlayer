@@ -17,6 +17,13 @@ namespace ModernIPTVPlayer.Models
         string StreamUrl { get; set; }
         TmdbMovieResult TmdbInfo { get; set; }
 
+        // Extended Metadata
+        string? Genres { get; set; }
+        string? Cast { get; set; }
+        string? Director { get; set; }
+        string? TrailerUrl { get; set; }
+        int MetadataPriority { get; set; }
+
         // UI Binding properties for PosterCard
         double ProgressValue { get; }
         bool ShowProgress { get; }

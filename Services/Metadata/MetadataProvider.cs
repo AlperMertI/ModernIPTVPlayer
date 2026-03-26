@@ -406,8 +406,19 @@ namespace ModernIPTVPlayer.Services.Metadata
             };
 
             // [FIX] Ensure IsSeries is correctly synced if we are using a seed (cached result)
-            // This handles cases where a previous fetch misidentified a series as a movie due to case-sensitivity.
             if (seed != null) metadata.IsSeries = isSeriesType;
+
+            // [NEW] Early ID Resolution: If this is a numeric IPTV ID, check if we already have an IMDb mapping.
+            // This allows the fetch to start with a canonical ID even if the user clicked an IPTV result.
+            if (!string.IsNullOrEmpty(metadata.MetadataId) && !IsCanonicalId(metadata.MetadataId) && char.IsDigit(metadata.MetadataId[0]))
+            {
+                var match = IptvMatchService.Instance.FindAllMatchesById(metadata.MetadataId, true).FirstOrDefault();
+                if (match != null && !string.IsNullOrEmpty(match.IMDbId) && IsImdbId(match.IMDbId))
+                {
+                    trace.Log("ID", $"Early Resolution: IPTV {metadata.MetadataId} -> IMDb {match.IMDbId}");
+                    metadata.ImdbId = match.IMDbId;
+                }
+            }
 
             try
             {
@@ -460,6 +471,13 @@ namespace ModernIPTVPlayer.Services.Metadata
                         metadata.TmdbInfo = tmdb;
                         metadata.MetadataSourceInfo = "TMDB (Primary)";
                         metadata.DataSource = string.IsNullOrEmpty(metadata.DataSource) ? "TMDB" : $"{metadata.DataSource} + TMDB";
+
+                        // Set High Priority for TMDB data
+                        metadata.PriorityScore = MetadataPriority.CalculateScore(
+                            MetadataPriority.AUTHORITY_TMDB, 
+                            context == MetadataContext.Detail ? MetadataPriority.DEPTH_DETAIL : 
+                            (context == MetadataContext.Spotlight ? MetadataPriority.DEPTH_SPOTLIGHT : MetadataPriority.DEPTH_CATALOG)
+                        );
 
                         var additionalBackdrops = metadata.IsSeries
                             ? await TmdbHelper.GetTvImagesAsync(tmdb.Id.ToString())
@@ -597,6 +615,30 @@ namespace ModernIPTVPlayer.Services.Metadata
                                     {
                                         trace.Log("Addon", "Missing field kalmadi ve tum oncelikli eklentiler tarandi. Probe zinciri tamamlandi.");
                                         break;
+                                    }
+                                }
+
+                                var addonMeta = await _stremioService.GetMetaAsync(url, type, currentSearchId);
+                                if (addonMeta != null)
+                                {
+                                    int addonPriority = MetadataPriority.CalculateScore(MetadataPriority.AUTHORITY_STREMIO_ADDON, MetadataPriority.DEPTH_DETAIL, index);
+                                    
+                                    // Only update base metadata if this addon has higher or equal priority than current source
+                                    bool canOverwrite = addonPriority >= metadata.PriorityScore;
+                                    
+                                    trace.Log("Addon", $"Fetch success from {GetHostSafe(url)} (Score:{addonPriority}). CanOverwrite={canOverwrite}");
+
+                                    if (canOverwrite)
+                                    {
+                                        MapStremioToUnified(addonMeta, metadata, true);
+                                        metadata.PrimaryMetadataAddonUrl = url;
+                                        metadata.MetadataSourceInfo = $"{GetHostSafe(url)} (Full Details)";
+                                        metadata.PriorityScore = addonPriority;
+                                    }
+                                    else
+                                    {
+                                        // Backfill only
+                                        MapStremioToUnified(addonMeta, metadata, false);
                                     }
                                 }
                                 
@@ -878,11 +920,24 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             string? addonUrl = stream.SourceAddon;
             
+            // [NEW] Check for History Persistence (AUTHORITY_HISTORY)
+            bool isFromHistory = false;
+            string bestId = ResolveBestInitialId(stream);
+            if (!string.IsNullOrEmpty(bestId) && HistoryManager.Instance.GetProgress(bestId) != null)
+            {
+                isFromHistory = true;
+                if (string.IsNullOrEmpty(addonUrl))
+                {
+                    addonUrl = "history";
+                    if (!quiet) trace.Log("History", $"Source identified as Watch History for {bestId}");
+                }
+            }
+            
             // [FALLBACK] If SourceAddon is missing (common for CW items), check Discovery Cache
             if (string.IsNullOrEmpty(addonUrl))
             {
                 // Improved fallback: Search all discovery keys for a match to this ID to recover original source info
-                string? bestId = ResolveBestInitialId(stream) ?? stream.IMDbId ?? stream.Id.ToString();
+                bestId = ResolveBestInitialId(stream) ?? stream.IMDbId ?? stream.Id.ToString();
                 if (!string.IsNullOrEmpty(bestId))
                 {
                     var discoveryEntry = _resultCache.FirstOrDefault(kvp => kvp.Key.Contains(bestId) && kvp.Key.EndsWith("_discovery")).Value;
@@ -909,7 +964,17 @@ namespace ModernIPTVPlayer.Services.Metadata
                 {
                     metadata.Title = newTitle;
                     metadata.CatalogSourceAddonUrl = stream.SourceAddon;
-                    metadata.CatalogSourceInfo = GetHostSafe(stream.SourceAddon);
+                    metadata.CatalogSourceInfo = isFromHistory ? "Watch History" : GetHostSafe(stream.SourceAddon);
+                    
+                    // Assign initial priority
+                    int authority = isFromHistory ? MetadataPriority.AUTHORITY_HISTORY : MetadataPriority.AUTHORITY_STREMIO_ADDON;
+                    int depth = isFromHistory ? MetadataPriority.DEPTH_DETAIL : MetadataPriority.DEPTH_CATALOG; // History has likely been enriched before
+
+                    metadata.PriorityScore = MetadataPriority.CalculateScore(
+                        authority, 
+                        depth, 
+                        currentCatalogPriority >= 0 ? currentCatalogPriority : 99
+                    );
                 }
                 else if (!string.Equals(metadata.Title, newTitle, StringComparison.OrdinalIgnoreCase))
                 {
@@ -978,8 +1043,8 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             if (canOverwriteSeedFields && !string.IsNullOrWhiteSpace(metadata.CatalogSourceInfo))
             {
-                metadata.MetadataSourceInfo = $"{metadata.CatalogSourceInfo} (Catalog Seed)";
-                metadata.PrimaryMetadataAddonUrl = metadata.CatalogSourceAddonUrl;
+                metadata.MetadataSourceInfo = isFromHistory ? "Watch History (Catalog Seed)" : $"{metadata.CatalogSourceInfo} (Catalog Seed)";
+                metadata.PrimaryMetadataAddonUrl = isFromHistory ? "history" : metadata.CatalogSourceAddonUrl;
             }
 
             if (string.IsNullOrWhiteSpace(metadata.DataSource))
@@ -1468,7 +1533,24 @@ namespace ModernIPTVPlayer.Services.Metadata
                             metadata.IsAvailableOnIptv = true;
 
                             // Seed basic info from match
-                            if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = match.Name;
+                            // [REFINEMENT] If current title looks like an episode name (e.g. from an IPTV provider) 
+                            // and the IPTV match name looks more like a series title, promote it.
+                            bool titleIsPlaceholder = string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...";
+                            bool titleLooksLikeEpisode = !titleIsPlaceholder && IsGenericEpisodeTitle(metadata.Title, match.Name);
+                            
+                            // If title is placeholder OR it's a very different name than the match (and match name matches subtitle)
+                            bool shouldPromoteMatchName = titleIsPlaceholder || titleLooksLikeEpisode;
+                            if (!shouldPromoteMatchName && !string.IsNullOrEmpty(metadata.SubTitle) && 
+                                metadata.SubTitle.Contains(match.Name, StringComparison.OrdinalIgnoreCase) &&
+                                !metadata.Title.Contains(match.Name, StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Case: Title="Yaz Geldi...", SubTitle="Watchmen", MatchName="Watchmen"
+                                // The title is clearly wrong and SubTitle holds the real name.
+                                shouldPromoteMatchName = true;
+                                trace?.Log("IPTV", $"Title Promotion: '{metadata.Title}' -> '{match.Name}' (Verified via SubTitle)");
+                            }
+
+                            if (shouldPromoteMatchName) metadata.Title = match.Name;
                             if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.Cover;
                             if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.ReleaseDate;
                             if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = match.Plot;
@@ -1764,11 +1846,23 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             if (stremio == null || stremio.Name == "#DUPE#") return;
 
-            // Only overwrite if currently empty or explicitly requested by priority, as TMDB has higher priority for descriptive text
             // [REFINEMENT] If overwritePrimary is true, only overwrite if source has data (don't overwrite with null)
+            // [CRITICAL] Don't let non-canonical IDs (like numeric IPTV IDs) overwrite existing valid titles.
             string previousTitle = unified.Title;
+            bool isCanonicalSource = !string.IsNullOrEmpty(stremio.Id) && IsCanonicalId(stremio.Id);
+            bool currentIsPlaceholder = string.IsNullOrEmpty(unified.Title) || unified.Title == unified.MetadataId || unified.Title == "Loading...";
             
-            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Name) && !IsGenericEpisodeTitle(stremio.Name, unified.Title)) || string.IsNullOrEmpty(unified.Title) || unified.Title == unified.MetadataId)
+            bool shouldOverwriteTitle = overwritePrimary && !string.IsNullOrEmpty(stremio.Name) && !IsGenericEpisodeTitle(stremio.Name, unified.Title);
+            if (shouldOverwriteTitle && !isCanonicalSource && !currentIsPlaceholder)
+            {
+                // Source is non-canonical (e.g. random IPTV numeric ID) and we already have a real title. 
+                // Don't overwrite the primary title, but we can save it as a subtitle if it's different.
+                shouldOverwriteTitle = false;
+                if (string.IsNullOrEmpty(unified.SubTitle) && stremio.Name != unified.Title)
+                    unified.SubTitle = stremio.Name;
+            }
+
+            if (shouldOverwriteTitle || currentIsPlaceholder)
                 unified.Title = stremio.Name;
             else if (!overwritePrimary && !string.IsNullOrEmpty(stremio.Name) && stremio.Name != unified.Title)
             {
@@ -1796,12 +1890,12 @@ namespace ModernIPTVPlayer.Services.Metadata
                 unified.SubTitle = previousTitle;
             }
 
-            bool currentIsPlaceholder = IsPlaceholderOverview(unified.Overview);
-            bool newIsPlaceholder = IsPlaceholderOverview(stremio.Description);
+            bool currentOverviewIsPlaceholder = IsPlaceholderOverview(unified.Overview);
+            bool newOverviewIsPlaceholder = IsPlaceholderOverview(stremio.Description);
 
-            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Description) && !newIsPlaceholder) || 
+            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Description) && !newOverviewIsPlaceholder) || 
                 string.IsNullOrEmpty(unified.Overview) || 
-                (currentIsPlaceholder && !newIsPlaceholder))
+                (currentOverviewIsPlaceholder && !newOverviewIsPlaceholder))
             {
                 unified.Overview = stremio.Description;
             }
@@ -2116,6 +2210,16 @@ namespace ModernIPTVPlayer.Services.Metadata
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Title search found ID = {titleSearch.Id}, fetching full details...");
                         tmdb = await TmdbHelper.GetTvByIdAsync(titleSearch.Id);
                     }
+                    else if (!string.IsNullOrEmpty(metadata.SubTitle))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Primary title failed. Trying SubTitle fallback = \"{metadata.SubTitle}\"");
+                        var subTitleSearch = await TmdbHelper.SearchTvAsync(metadata.SubTitle, TitleHelper.ExtractYear(metadata.Year));
+                        if (subTitleSearch != null)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: SubTitle search found ID = {subTitleSearch.Id}");
+                            tmdb = await TmdbHelper.GetTvByIdAsync(subTitleSearch.Id);
+                        }
+                    }
                 }
 
                 // Step 4: Try Title Search WITHOUT Year
@@ -2159,6 +2263,16 @@ namespace ModernIPTVPlayer.Services.Metadata
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Search found ID = {searchResult.Id}, fetching full details...");
                         tmdb = await TmdbHelper.GetMovieByIdAsync(searchResult.Id);
                     }
+                    else if (!string.IsNullOrEmpty(metadata.SubTitle))
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Primary title failed. Trying SubTitle fallback = \"{metadata.SubTitle}\"");
+                        var subSearchResult = await TmdbHelper.SearchMovieAsync(metadata.SubTitle, TitleHelper.ExtractYear(metadata.Year));
+                        if (subSearchResult != null)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: SubTitle Search found ID = {subSearchResult.Id}");
+                            tmdb = await TmdbHelper.GetMovieByIdAsync(subSearchResult.Id);
+                        }
+                    }
                 }
             }
 
@@ -2181,13 +2295,52 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // Prioritize localized TMDB data
                 if (!string.IsNullOrEmpty(tmdb.Overview)) metadata.Overview = tmdb.Overview;
                 if (!string.IsNullOrEmpty(tmdb.DisplayTitle) && tmdb.DisplayTitle != metadata.Title) 
+                {
+                    // [NEW] Move previous title to SubTitle if it was valid/meaningful
+                    if (!string.IsNullOrWhiteSpace(metadata.Title) && 
+                        metadata.Title != metadata.MetadataId && 
+                        !IsGenericEpisodeTitle(metadata.Title, tmdb.DisplayTitle))
+                    {
+                        metadata.SubTitle = metadata.Title;
+                    }
                     metadata.Title = tmdb.DisplayTitle;
+                }
 
                 if (!string.IsNullOrEmpty(tmdb.DisplayOriginalTitle))
                     metadata.OriginalTitle = tmdb.DisplayOriginalTitle;
 
                 // Higher quality images
                 if (!string.IsNullOrEmpty(tmdb.FullBackdropUrl)) metadata.BackdropUrl = tmdb.FullBackdropUrl;
+
+                // [TRAILER LOCALIZATION] Try fetching localized trailer key
+                if (AppSettings.IsTmdbEnabled && !string.IsNullOrEmpty(AppSettings.TmdbApiKey))
+                {
+                    // If we have a trailer from Stremio, it might be English. 
+                    // We attempt to get a localized one from TMDB.
+                    var localizedTrailerKey = await TmdbHelper.GetTrailerKeyAsync(tmdb.Id, metadata.IsSeries);
+                    if (!string.IsNullOrEmpty(localizedTrailerKey))
+                    {
+                         string fullTrailerUrl = localizedTrailerKey;
+                         if (!fullTrailerUrl.Contains("/") && !fullTrailerUrl.Contains("."))
+                             fullTrailerUrl = $"https://www.youtube.com/watch?v={localizedTrailerKey}";
+                         
+                         // We overwrite if existing is null OR if it was already a YT link (likely from another source)
+                         // to ensure we get the localized version from TMDB.
+                         if (string.IsNullOrEmpty(metadata.TrailerUrl) || metadata.TrailerUrl.Contains("youtube.com"))
+                         {
+                             System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Overwriting Trailer: {metadata.TrailerUrl} -> {fullTrailerUrl}");
+                             metadata.TrailerUrl = fullTrailerUrl;
+                         }
+                         else
+                         {
+                             System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SKIPPED Trailer overwrite. Current: {metadata.TrailerUrl}, TMDB: {fullTrailerUrl}");
+                         }
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] No trailer found for TMDB ID: {tmdb.Id}");
+                    }
+                }
 
                 // [LOGO LOCALIZATION] Select best logo based on language preference
                 string? tmdbLogo = SelectBestLogo(tmdb);

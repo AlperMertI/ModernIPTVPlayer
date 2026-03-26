@@ -7,6 +7,9 @@ namespace ModernIPTVPlayer.Models
 {
     public class WatchlistItem : IMediaStream
     {
+        private readonly object _metaLock = new();
+        public int MetadataPriority { get; set; } = 0;
+
         public string Id { get; set; }
         public string? IMDbId => Id; // For Stremio, Id is the IMDb ID
         public string Title { get; set; }
@@ -27,6 +30,12 @@ namespace ModernIPTVPlayer.Models
         string IMediaStream.Rating { get => Rating > 0 ? Rating.ToString("0.0") : ""; set { if (double.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r)) Rating = r; } }
 
         public string Type { get; set; }
+        
+        public string? Genres { get; set; }
+        public string? Cast { get; set; }
+        public string? Director { get; set; }
+        public string? TrailerUrl { get; set; }
+
         public DateTime DateAdded { get; set; } = DateTime.Now;
         public StremioMeta StremioMeta { get; set; }
 
@@ -132,7 +141,18 @@ namespace ModernIPTVPlayer.Models
         }
         public void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
         {
-            Models.Metadata.MetadataSync.Sync(this, unified);
+            if (unified == null) return;
+            
+            lock (_metaLock)
+            {
+                bool isDowngrade = unified.PriorityScore < this.MetadataPriority;
+                Models.Metadata.MetadataSync.Sync(this, unified, isDowngrade);
+                
+                if (!isDowngrade)
+                {
+                    this.MetadataPriority = unified.PriorityScore;
+                }
+            }
         }
     }
 }

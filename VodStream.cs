@@ -11,6 +11,9 @@ namespace ModernIPTVPlayer
 {
     public class VodStream : INotifyPropertyChanged, IMediaStream
     {
+        private readonly object _metaLock = new();
+        public int MetadataPriority { get; set; } = 0;
+        
         // IMediaStream Implementation
         public int Id => StreamId;
         
@@ -27,6 +30,19 @@ namespace ModernIPTVPlayer
         private string? _backdropUrl;
         public string? BackdropUrl { get => _backdropUrl; set { if (_backdropUrl != value) { _backdropUrl = value; OnPropertyChanged(); } } }
         public string? Type => "movie";
+        
+        private string? _genres;
+        public string? Genres { get => _genres; set { if (_genres != value) { _genres = value; OnPropertyChanged(); } } }
+
+        private string? _cast;
+        public string? Cast { get => _cast; set { if (_cast != value) { _cast = value; OnPropertyChanged(); } } }
+
+        private string? _director;
+        public string? Director { get => _director; set { if (_director != value) { _director = value; OnPropertyChanged(); } } }
+
+        private string? _trailerUrl;
+        public string? TrailerUrl { get => _trailerUrl; set { if (_trailerUrl != value) { _trailerUrl = value; OnPropertyChanged(); } } }
+
         public string StreamUrl { get; set; } = "";
 
         [JsonPropertyName("rating")]
@@ -53,9 +69,26 @@ namespace ModernIPTVPlayer
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
-        private void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        public void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            var queue = App.MainWindow?.DispatcherQueue;
+            if (queue == null)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+                return;
+            }
+
+            if (queue.HasThreadAccess)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+            }
+            else
+            {
+                queue.TryEnqueue(() =>
+                {
+                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+                });
+            }
         }
 
         [JsonPropertyName("name")]
@@ -171,7 +204,18 @@ namespace ModernIPTVPlayer
 
         public void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
         {
-            Models.Metadata.MetadataSync.Sync(this, unified);
+            if (unified == null) return;
+            
+            lock (_metaLock)
+            {
+                bool isDowngrade = unified.PriorityScore < this.MetadataPriority;
+                Models.Metadata.MetadataSync.Sync(this, unified, isDowngrade);
+                
+                if (!isDowngrade)
+                {
+                    this.MetadataPriority = unified.PriorityScore;
+                }
+            }
         }
     }
 }

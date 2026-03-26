@@ -9,8 +9,27 @@ namespace ModernIPTVPlayer
     public class SeriesStream : IMediaStream, System.ComponentModel.INotifyPropertyChanged
     {
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
-        private void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null) => 
-            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+
+        public void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+        {
+            var queue = App.MainWindow?.DispatcherQueue;
+            if (queue == null)
+            {
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+                return;
+            }
+            if (queue.HasThreadAccess)
+            {
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+            }
+            else
+            {
+                queue.TryEnqueue(() =>
+                {
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+                });
+            }
+        }
 
         // Metadata for the currently active/probed episode
         private string _resolution = "";
@@ -36,6 +55,9 @@ namespace ModernIPTVPlayer
         private bool? _isOnline;
         public bool? IsOnline { get => _isOnline; set { _isOnline = value; OnPropertyChanged(); } }
 
+        private readonly object _metaLock = new();
+        public int MetadataPriority { get; set; } = 0;
+        
         // IMediaStream Implementation
         public int Id => SeriesId;
 
@@ -57,6 +79,13 @@ namespace ModernIPTVPlayer
         private string? _backdropUrl;
         public string? BackdropUrl { get => _backdropUrl; set { if (_backdropUrl != value) { _backdropUrl = value; OnPropertyChanged(); } } }
         public string? Type => "series";
+
+        public string? Genres { get => Genre; set { if (Genre != value) { Genre = value; OnPropertyChanged(); OnPropertyChanged(nameof(Genre)); } } }
+        public string? TrailerUrl { get => YoutubeTrailer; set { if (YoutubeTrailer != value) { YoutubeTrailer = value; OnPropertyChanged(); OnPropertyChanged(nameof(YoutubeTrailer)); } } }
+        
+        string? IMediaStream.Cast { get => Cast; set { if (Cast != value) { Cast = value; OnPropertyChanged(); OnPropertyChanged(nameof(Cast)); } } }
+        string? IMediaStream.Director { get => Director; set { if (Director != value) { Director = value; OnPropertyChanged(); OnPropertyChanged(nameof(Director)); } } }
+
         public string Year 
         { 
             get 
@@ -152,7 +181,18 @@ namespace ModernIPTVPlayer
         }
         public void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
         {
-            Models.Metadata.MetadataSync.Sync(this, unified);
+            if (unified == null) return;
+            
+            lock (_metaLock)
+            {
+                bool isDowngrade = unified.PriorityScore < this.MetadataPriority;
+                Models.Metadata.MetadataSync.Sync(this, unified, isDowngrade);
+                
+                if (!isDowngrade)
+                {
+                    this.MetadataPriority = unified.PriorityScore;
+                }
+            }
         }
     }
 }

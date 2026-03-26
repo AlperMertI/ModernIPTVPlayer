@@ -41,6 +41,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         public bool IsSeries { get; set; }
         public TmdbMovieResult TmdbInfo { get; set; } // Optional enrichment
         public MetadataContext MaxEnrichmentContext { get; set; } // [NEW] Track highest successful enrichment level
+        public int PriorityScore { get; set; } // [NEW] Rule-based priority score
 
         // [NEW] IPTV Integration Properties
         public string StreamUrl { get; set; }

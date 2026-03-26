@@ -16,6 +16,9 @@ namespace ModernIPTVPlayer.Models.Stremio
         
         public StremioMediaStream() { Meta = new StremioMeta(); }
         
+        private readonly object _metaLock = new();
+        public int MetadataPriority { get; set; } = 0;
+        
         public StremioMediaStream(StremioMeta meta)
         {
             Meta = meta;
@@ -171,10 +174,43 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Year { get => Meta?.ReleaseInfo ?? ""; set { if (Meta != null) Meta.ReleaseInfo = value; } }
         public string Banner => Meta?.Background ?? "";
         public string Description { get => Meta?.Description ?? ""; set { if (Meta != null) { Meta.Description = value; OnPropertyChanged(); } } }
-        public string? EpisodeSubtext { get; set; }
-        public string? TrailerUrl => Meta?.Trailers?.FirstOrDefault(t => !string.IsNullOrEmpty(t.Source))?.Source;
 
-        public string Genres => (Meta.Genres != null && Meta.Genres.Count > 0) ? string.Join(", ", Meta.Genres) : "";
+        private string? _cast;
+        public string? Cast { get => _cast; set { if (_cast != value) { _cast = value; OnPropertyChanged(); } } }
+
+        private string? _director;
+        public string? Director { get => _director; set { if (_director != value) { _director = value; OnPropertyChanged(); } } }
+
+        private string? _trailerUrl; // For manual enrichment retention
+        public string? TrailerUrl 
+        { 
+            get => _trailerUrl ?? Meta?.Trailers?.FirstOrDefault(t => !string.IsNullOrEmpty(t.Source))?.Source;
+            set 
+            { 
+                if (_trailerUrl != value)
+                {
+                    _trailerUrl = value;
+                    
+                    // Also sync back to Meta.Trailers if possible
+                    if (Meta != null && !string.IsNullOrEmpty(value))
+                    {
+                        if (Meta.Trailers == null) Meta.Trailers = new System.Collections.Generic.List<StremioMetaTrailer>();
+                        var existing = Meta.Trailers.FirstOrDefault();
+                        if (existing != null) existing.Source = value;
+                        else Meta.Trailers.Add(new StremioMetaTrailer { Source = value, Type = "Trailer" });
+                    }
+                    OnPropertyChanged();
+                }
+            } 
+        }
+
+        public string? Genres 
+        { 
+            get => (Meta.Genres != null && Meta.Genres.Count > 0) ? string.Join(", ", Meta.Genres) : "";
+            set { if (Meta != null && value != null) { Meta.Genres = value.Split(", ").ToList(); OnPropertyChanged(); } } 
+        }
+
+        public string? EpisodeSubtext { get; set; }
         
         // [IPTV Integration]
         public bool IsIptv { get; set; } = false;
@@ -229,12 +265,21 @@ namespace ModernIPTVPlayer.Models.Stremio
         {
             if (meta == null) return;
 
-            // [SAFEGUARD] If we already have high-quality metadata (Spotlight/Detail)
-            // and we receive a shallow update (Discovery), we only "backfill" missing data.
-            bool isDowngrade = meta.MaxEnrichmentContext < this.CurrentEnrichmentLevel;
+            lock (_metaLock)
+            {
+                // Source-Based Priority Protection
+                bool isDowngrade = meta.PriorityScore < this.MetadataPriority;
 
-            // Use centralized sync logic (handles Title, Year, Desc, Rating, TmdbInfo, Posters, etc.)
-            Models.Metadata.MetadataSync.Sync(this, meta, isDowngrade);
+                // Sync with backfillOnly = true if incoming data has lower priority
+                Models.Metadata.MetadataSync.Sync(this, meta, isDowngrade);
+
+                // Update current priority if we successfully enriched or it's equal priority
+                if (!isDowngrade)
+                {
+                    this.MetadataPriority = meta.PriorityScore;
+                    this.CurrentEnrichmentLevel = meta.MaxEnrichmentContext;
+                }
+            }
 
             // High-priority IPTV fields (if specialized)
             if (meta.IsAvailableOnIptv)
@@ -256,6 +301,7 @@ namespace ModernIPTVPlayer.Models.Stremio
             OnPropertyChanged(nameof(BackdropUrl));
             OnPropertyChanged(nameof(Description));
             OnPropertyChanged(nameof(Rating));
+            OnPropertyChanged(nameof(TrailerUrl));
         }
     }
 }
