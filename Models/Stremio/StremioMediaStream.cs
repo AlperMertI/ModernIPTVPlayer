@@ -211,6 +211,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         }
 
         public string? EpisodeSubtext { get; set; }
+        public string? SeriesName { get; set; }
         
         // [IPTV Integration]
         public bool IsIptv { get; set; } = false;

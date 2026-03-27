@@ -133,10 +133,21 @@ namespace ModernIPTVPlayer.Controls
 
             DiscoveryRows.ItemsSource = _discoveryRows;
 
-            // Listen for addon changes to invalidate local state
+            // Manifest Events
             StremioAddonManager.Instance.AddonsChanged += OnAddonsChanged;
+            
+            // History Events
+            HistoryManager.Instance.HistoryChanged += OnHistoryChanged;
 
             this.Unloaded += StremioDiscoveryControl_Unloaded;
+        }
+
+        private void OnHistoryChanged(object sender, EventArgs e)
+        {
+            DispatcherQueue.TryEnqueue(() => 
+            {
+                RefreshContinueWatching();
+            });
         }
 
         private void DiscoveryRows_Loaded(object sender, RoutedEventArgs e)
@@ -153,6 +164,7 @@ namespace ModernIPTVPlayer.Controls
         {
             // [CRITICAL] Unsubscribe from static event to prevent leak
             StremioAddonManager.Instance.AddonsChanged -= OnAddonsChanged;
+            HistoryManager.Instance.HistoryChanged -= OnHistoryChanged;
 
             var sv = MainScrollViewer;
             if (sv != null)
@@ -223,10 +235,12 @@ namespace ModernIPTVPlayer.Controls
                         backdrop = parentHist.BackdropUrl;
                 }
 
+                // [TITLE FIX] Always show Episode Title (hist.Title) on CW poster
+                // Series Name is used for enrichment or subtext if needed.
                 var stream = new StremioMediaStream(new StremioMeta
                 {
                     Id = hist.ParentSeriesId ?? hist.Id,
-                    Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
+                    Name = hist.Title, // Protected Episode Title
                     Poster = hist.PosterUrl,
                     Background = backdrop,
                     Type = hist.ParentSeriesId != null ? "series" : _currentContentType,
@@ -234,6 +248,7 @@ namespace ModernIPTVPlayer.Controls
                         ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 
                         : null
                 });
+                stream.SeriesName = hist.SeriesName;
                 stream.IsContinueWatching = true;
                 stream.EpisodeSubtext = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0 
                     ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 

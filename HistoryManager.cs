@@ -35,22 +35,10 @@ namespace ModernIPTVPlayer
 
     public class HistoryManager
     {
-        private static readonly object _instanceLock = new object();
-        private static HistoryManager _instance;
-        public static HistoryManager Instance
-        {
-            get
-            {
-                if (_instance == null)
-                {
-                    lock (_instanceLock)
-                    {
-                        _instance ??= new HistoryManager();
-                    }
-                }
-                return _instance;
-            }
-        }
+        private static Lazy<HistoryManager> _instance = new Lazy<HistoryManager>(() => new HistoryManager());
+        public static HistoryManager Instance => _instance.Value;
+
+        public event EventHandler HistoryChanged;
 
         private Dictionary<string, HistoryItem> _history = new();
         private const string FILENAME = "watch_history.json";
@@ -176,9 +164,9 @@ namespace ModernIPTVPlayer
                 if (!string.IsNullOrEmpty(backdropUrl)) item.BackdropUrl = backdropUrl;
                 if (!string.IsNullOrEmpty(type)) item.Type = type;
             }
-            // Fire and forget save (maybe debounce this in real app, but for now direct)
-            // Actually better to save on Pause/Stop/Navigation, not every tick.
-            // But we will call SaveAsync() manually from PlayerPage on PageUnload or Pause.
+
+            // Trigger real-time UI refresh
+            HistoryChanged?.Invoke(this, EventArgs.Empty);
         }
 
         public HistoryItem GetProgress(string id)

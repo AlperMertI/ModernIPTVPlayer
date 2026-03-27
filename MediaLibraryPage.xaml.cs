@@ -126,7 +126,12 @@ namespace ModernIPTVPlayer
 
             // Overlay Controller
             _stremioExpandedCardOverlay = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, StremioControl.MainScrollViewer);
-            _stremioExpandedCardOverlay.PlayRequested += (s, stream) => NavigationService.NavigateToDetailsDirect(Frame, stream);
+            _stremioExpandedCardOverlay.PlayRequested += (s, stream) => 
+            {
+                var args = new MediaNavigationArgs(stream) { AutoResume = true };
+                NavigationService.NavigateToDetailsDirect(Frame, args);
+            };
+
             _stremioExpandedCardOverlay.DetailsRequested += (s, e) => NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream, preloadedImage: ActiveExpandedCard.BannerImage.Source, tmdbInfo: e.Tmdb), null);
             
             StremioControl.CardHoverStarted += (s, card) => _stremioExpandedCardOverlay.OnHoverStarted(card);

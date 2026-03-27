@@ -221,6 +221,8 @@ namespace ModernIPTVPlayer
         }
 
         private bool _isSelectionSyncing = false;
+        private int _loadingVersion = 0; // New field
+        private long _historyChangedToken; // New field
         private bool _isHandoffInProgress = false;
         private DispatcherTimer _slideshowTimer;
         private string _slideshowId;
@@ -1367,9 +1369,12 @@ namespace ModernIPTVPlayer
             }
         }
 
-        protected override async void OnNavigatedFrom(NavigationEventArgs e)
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
         {
+            HistoryManager.Instance.HistoryChanged -= OnHistoryChanged;
             base.OnNavigatedFrom(e);
+            
+            _ambienceNavigationEpoch++; // Stop any pending extraction
             StopBackgroundSlideshow();
             
             // CLEANUP ON EXIT: Ensure the cached page is blank for the next movie
@@ -1395,8 +1400,8 @@ namespace ModernIPTVPlayer
             try {
                 if (TrailerOverlay != null && TrailerOverlay.Visibility == Visibility.Visible)
                 {
-                    // AWAIT completion to prevent Access Violation during page destruction
-                    await CloseTrailer();
+                    // Fire and forget trailer close on navigation
+                    _ = CloseTrailer();
                 }
             } catch (Exception ex) {
                 System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Error closing trailer on navigate: {ex.Message}");
@@ -1404,26 +1409,19 @@ namespace ModernIPTVPlayer
 
             if (MediaInfoPlayer != null && PlayerHost != null)
             {
-                 // [FIX] Handover Check:
-                 // We keep the player ONLY if we are navigating to PlayerPage OR if it's a Back navigation (which might be handled by the parent)
-                 // BUT the user specifically said: "detay ekranına geri dönerse arka planda hala hazırda bekleyecek kullanıcı detay ekranından player harici bir ekrana geçene kadar."
-                 // This implies that on NavigatedFrom, if NOT PlayerPage, we should cleanup.
-                 
                  if (e.SourcePageType == typeof(PlayerPage) || _isHandoffInProgress)
                  {
-                     // Just detach from visual tree, don't destroy
                      PlayerHost.Content = null;
                      System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Detached player for handover (preserving instance).");
                  }
                  else
                  {
-                     // Navigating to Discovery, Home, etc. -> STRICT CLEANUP
                      try
                      {
                          System.Diagnostics.Debug.WriteLine("[MediaInfoPage] STRICT CLEANUP: Destroying MpvPlayer instance on exit (non-player destination).");
                          var pToCleanup = MediaInfoPlayer;
                          PlayerHost.Content = null;
-                         MediaInfoPlayer = null; // NULL IMMEDIATELY to prevent re-entry race
+                         MediaInfoPlayer = null; 
                          _prebufferUrl = null;
                          
                          _ = Task.Run(async () => {
@@ -1440,8 +1438,12 @@ namespace ModernIPTVPlayer
             {
                  System.Diagnostics.Debug.WriteLine("[MediaInfoPage] OnNavigatedFrom: No player to clean up.");
             }
-
-            // [REM] Cancel pending ambience removed
+        }
+           private void OnHistoryChanged(object sender, EventArgs e)
+        {
+            DispatcherQueue.TryEnqueue(() => {
+                if (_selectedEpisode != null) _selectedEpisode.RefreshHistoryState();
+            });
         }
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
@@ -1449,10 +1451,11 @@ namespace ModernIPTVPlayer
             try
             {
                 base.OnNavigatedTo(e);
+                
+                HistoryManager.Instance.HistoryChanged += OnHistoryChanged;
+                _loadingVersion++;
 
                 System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-NavTo] START: NavMode={e.NavigationMode}, ParamType={e.Parameter?.GetType().Name}");
-                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-NavTo] InitialState: PageAW={ActualWidth}, AH={ActualHeight}, ScrollViewerAH={RootScrollViewer?.ActualHeight}, ContentGridAH={ContentGrid?.ActualHeight}");
-                System.Diagnostics.Debug.WriteLine($"[ShimmerDebug-NavTo] InfoContainer Initial: VA={InfoContainer?.VerticalAlignment}, AH={InfoContainer?.ActualHeight}");
     
                 // Determine New Item coming in
                 IMediaStream incomingItem = null;
@@ -1462,6 +1465,7 @@ namespace ModernIPTVPlayer
                 IMediaStream previousItem = _item; // [OPTIMIZATION] Track previous to avoid redundant reloads
                 bool isItemSwitching = (incomingItem != null && !IsSameItem(previousItem, incomingItem)) || (_lastUsedTmdbLanguage != AppSettings.TmdbLanguage);
                 bool isBackNav = e.NavigationMode == NavigationMode.Back;
+
                 if (e.NavigationMode != NavigationMode.Back)
                 {
                     _ambienceNavigationEpoch++;
@@ -1477,7 +1481,6 @@ namespace ModernIPTVPlayer
                 }
 
                 // IMMEDIATE CLEANUP - Only if switching items
-                // [OPTIMIZATION] If it's the same item, preserve UI and metadata for instant re-entry feel
                 if (isItemSwitching)
                 {
                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Item switching - Clearing UI and Fetch state");
@@ -1498,50 +1501,31 @@ namespace ModernIPTVPlayer
 
                 _shouldAutoResume = false; // Reset auto-resume flag
 
-
-
-                // Force layout update on each navigation (fixes cached page state issues)
-                _isWideModeIndex = -1;
-                if (ActualWidth > 0)
+                // Layout Adjustment
+                DispatcherQueue.TryEnqueue(() => 
                 {
-                    DispatcherQueue.TryEnqueue(() => 
-                    {
-                        bool isWide = ActualWidth >= LayoutAdaptiveThreshold; // Use constant consistent with UpdateActionBarRealTime
-                        _isWideModeIndex = isWide ? 1 : 0;
-                        UpdateLayoutState(isWide);
-                        UpdateRealTimeScaling(ActualWidth, ActualHeight, isWide);
-                        UpdateActionBarRealTime(ActualWidth, ActualHeight, isWide);
-                    });
-                }
-                
+                    bool isWide = ActualWidth >= LayoutAdaptiveThreshold;
+                    UpdateLayoutState(isWide);
+                    UpdateRealTimeScaling(ActualWidth, ActualHeight, isWide);
+                    SyncIdentityVisibility(false);
+                });
+
                 // SEEDING: Immediately set the image for ConnectedAnimation
                 if (e.Parameter is MediaNavigationArgs args)
                 {
                     _item = args.Stream;
-                    // [FIX] Ignore auto-resume if we are navigating BACK from the player to prevent infinite loop
                     _shouldAutoResume = args.AutoResume && e.NavigationMode != NavigationMode.Back;
-                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] OnNavigatedTo: AutoResume={_shouldAutoResume} (NavMode={e.NavigationMode})");
-
-                    // [PRELOAD LOGO] If we have a logo from the previous page, use it immediately
+                    
                     if (args.PreloadedLogo != null)
                     {
-                        System.Diagnostics.Debug.WriteLine("[MediaInfoPage] PreloadedLogo provided. Relying on EnsureLogoSurface for Composition reveal.");
-                        if (ContentLogoHost != null) ContentLogoHost.Visibility = Visibility.Visible;
-                        TitleText.Visibility = Visibility.Collapsed;
-                        TitlePanel.Opacity = 1;
-                        TitlePanel.Visibility = Visibility.Visible;
+                        SyncIdentityVisibility(false);
                         if (TitleShimmer != null) TitleShimmer.Visibility = Visibility.Collapsed;
                     }
 
-                    // --- CINEMATIC SEEDING (CRITICAL FOR ASPECT RATIO) ---
-                    // [OPTIMIZATION] Only seed if we are switching items OR it is a fresh navigation.
-                    // If we are navigating BACK to the same item, keep the high-res backdrop already loaded.
                     if (isItemSwitching || !isBackNav)
                     {
-                        // [PRELOAD FIX] If we have a pre-decoded image from the source page, use it immediately
                         if (args.PreloadedImage != null)
                         {
-                            System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Using PreloadedImage for instant background reveal.");
                             HeroImage.Source = args.PreloadedImage;
                             HeroImage.Opacity = 1;
                             var v = ElementCompositionPreview.GetElementVisual(HeroImage);
@@ -1551,18 +1535,9 @@ namespace ModernIPTVPlayer
                         }
                         else
                         {
-                            string seedUrl = null;
-                            
-                            if (args.Stream is StremioMediaStream sms && !string.IsNullOrEmpty(sms.Meta.Background))
-                                seedUrl = sms.Meta.Background;
-                            else if (args.TmdbInfo != null && !string.IsNullOrEmpty(args.TmdbInfo.BackdropPath))
-                                seedUrl = args.TmdbInfo.FullBackdropUrl;
-                            else if (!string.IsNullOrEmpty(args.Stream?.PosterUrl))
-                                seedUrl = args.Stream.PosterUrl;
-
+                            string seedUrl = args.Stream?.PosterUrl;
                             if (!string.IsNullOrEmpty(seedUrl) && !ImageHelper.IsPlaceholder(seedUrl))
                             {
-                                // Same-URL Check to avoid re-decode flicker
                                 if (!(HeroImage.Source is BitmapImage bi && bi.UriSource?.ToString() == seedUrl))
                                 {
                                     HeroImage.Source = new BitmapImage(new Uri(seedUrl));
@@ -1575,17 +1550,9 @@ namespace ModernIPTVPlayer
                             }
                         }
                     }
-                    else
-                    {
-                        System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Back nav to same item - Skipping poster seeding to preserve backdrop.");
-                    }
-
-                    // Prepare Parallax & Effects
-                    SetupParallax();
                 }
                 else if (e.Parameter is IMediaStream streamParam)
                 {
-                    // Only seed if starting fresh
                     if (isItemSwitching || !isBackNav)
                     {
                         if (!string.IsNullOrEmpty(streamParam.PosterUrl))
@@ -1600,52 +1567,14 @@ namespace ModernIPTVPlayer
 
                 if (!isBackNav)
                 {
-                    // Start animation immediately while loading metadata
                     StartHeroConnectedAnimation();
-                }
-
-                // [INTENT HANDLING] Check if we returned with a specific intent (like Select Source for Next Ep)
-                if (App.LastPlayerIntent != null)
-                {
-                    var intent = App.LastPlayerIntent;
-                    App.LastPlayerIntent = null; // Clear it
-                    
-                    if (intent.TryGetValue("Intent", out var action) && action.ToString() == "SelectSource")
-                    {
-                        int sNum = (int)intent["Season"];
-                        int eNum = (int)intent["Episode"];
-                        
-                        Debug.WriteLine($"[MediaInfoPage] Intent: SelectSource for S{sNum}E{eNum}");
-                        
-                        // We need to wait for details to load before we can find the episode
-                        _ = Task.Run(async () => {
-                             // Wait for LoadDetailsAsync to at least start/populate seasons
-                             int retries = 0;
-                             while ((Seasons.Count == 0 || CurrentEpisodes.Count == 0) && retries < 20) { await Task.Delay(250); retries++; }
-                             
-                             DispatcherQueue.TryEnqueue(() => {
-                                 var season = Seasons.FirstOrDefault(s => s.SeasonNumber == sNum);
-                                 if (season != null) {
-                                     SeasonComboBox.SelectedItem = season;
-                                     var ep = CurrentEpisodes.FirstOrDefault(e => e.EpisodeNumber == eNum);
-                                     if (ep != null) {
-                                         EpisodesListView.SelectedItem = ep;
-                                         EpisodesListView.ScrollIntoView(ep);
-                                         // This should trigger source fetching automatically via SelectionChanged
-                                     }
-                                 }
-                             });
-                        });
-                    }
                 }
 
                 SetupParallax();
                 _isHandoffInProgress = false;
 
-                // RE-ATTACH: If the player was handed off, it might be detached from its original host.
                 if (App.HandoffPlayer != null)
                 {
-                    // Use the player returned from PlayerPage
                     MediaInfoPlayer = App.HandoffPlayer;
                     App.HandoffPlayer = null;
                     if (PlayerHost != null)
@@ -1653,50 +1582,22 @@ namespace ModernIPTVPlayer
                         PlayerHost.Content = MediaInfoPlayer;
                         MediaInfoPlayer.Visibility = Visibility.Visible;
                         MediaInfoPlayer.Opacity = 1;
-                        
-                        // SYNC: Ensure we track that this player is already prebuffered with this URL
-                        // This allows Smart Probe to work even when returning from PlayerPage
-                        if (incomingItem != null && !string.IsNullOrEmpty(incomingItem.StreamUrl))
-                        {
-                            _prebufferUrl = incomingItem.StreamUrl;
-                        }
-                        
-                        System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Re-attached returned HandoffPlayer.");
                     }
                 }
-                else if (MediaInfoPlayer == null && PlayerHost != null)
-                {
-                     // Only create new player if no handoff player exists
-                     // Skip this for now - let user manually play again
-                     System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Skipping player recreation (user can play again).");
-                }
-                else if (MediaInfoPlayer != null && MediaInfoPlayer.Parent == null && PlayerHost != null)
-                {
-                    PlayerHost.Content = MediaInfoPlayer;
-                    System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Re-attached player to original host.");
-                }
 
-                // Load History
                 await HistoryManager.Instance.InitializeAsync();
-                
-                await CloseTrailer(); // Ensure trailer is closed on navigation
-
-                // Force restore UI visibility in case cached page has hidden elements
+                await CloseTrailer(); 
                 RestoreUIVisibility();
 
-                // Reuse incomingItem determined at the start of the method
                 IMediaStream newItem = incomingItem;
-                if (newItem == null) return; // Should not happen
+                if (newItem == null) return; 
 
-                _item = newItem; // FINAL SYNC
-                
-                // Always do full load - the minimal refresh path doesn't load UI content properly
-                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Loading details for: {newItem.Title}");
+                _item = newItem; 
                 await LoadDetailsAsync(newItem, null, previousItem);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] CRITICAL ERROR in OnNavigatedTo: {ex}");
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Error in OnNavigatedTo: {ex.Message}");
             }
         }
 
@@ -1718,6 +1619,7 @@ namespace ModernIPTVPlayer
 
         private async Task LoadDetailsAsync(IMediaStream item, TmdbMovieResult preFetchedTmdb = null, IMediaStream previousItem = null)
         {
+            int currentVersion = _loadingVersion;
             bool isSwitchingItem = previousItem != null && !IsSameItem(previousItem, item);
             string navSeedTitle = item?.Title?.Trim() ?? "";
 
@@ -1878,7 +1780,8 @@ namespace ModernIPTVPlayer
                     
                     if (!string.IsNullOrEmpty(probeId) && (MetadataProvider.IsCanonicalId(probeId) || isIptvOnly))
                     {
-                         _ = PlayStremioContent(probeId, showGlobalLoading: false);
+                         _ = PlayStremioContent(probeId, showGlobalLoading: false, autoPlay: _shouldAutoResume);
+                         if (_shouldAutoResume) _shouldAutoResume = false;
                     }
                     _areSourcesVisible = true;
                     
@@ -2118,6 +2021,14 @@ namespace ModernIPTVPlayer
                     RestartButton.Visibility = Visibility.Visible;
                     _streamUrl = history.StreamUrl;
                     StartPrebuffering(_streamUrl, history.Position);
+
+                    // AUTO-RESUME TRIGGER (Non-Stremio Movies / IPTV)
+                    if (_shouldAutoResume && !(item is Models.Stremio.StremioMediaStream))
+                    {
+                        _shouldAutoResume = false;
+                        System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Auto-Resume triggered for movie: {unified.Title}");
+                        PlayButton_Click(null, null);
+                    }
                 }
                 else
                 {
@@ -2364,13 +2275,7 @@ namespace ModernIPTVPlayer
             if (TitleText != null) TitleText.Visibility = Visibility.Visible;
             
             // Clear Metadata
-            if (TitleText != null) TitleText.Text = "";
-            if (StickyTitle != null) StickyTitle.Text = "";
-            if (OverviewText != null) OverviewText.Text = "";
-            if (GenresText != null) GenresText.Text = "";
-            if (YearText != null) YearText.Text = "";
-            if (RuntimeText != null) RuntimeText.Text = "";
-            if (SuperTitleText != null) { SuperTitleText.Text = ""; SuperTitleText.Visibility = Visibility.Collapsed; SuperTitleText.Margin = new Thickness(0); }
+            ClearMetadataUI();
             if (TitleShimmer != null) TitleShimmer.Height = 56; // Reset shimmer to default height
 
             if (InfoColumn != null)
@@ -2475,6 +2380,19 @@ namespace ModernIPTVPlayer
 
             _isHeroTransitionInProgress = false; // Reset transition flag on item switch
             System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Page state reset complete.");
+        }
+
+        private void ClearMetadataUI()
+        {
+            if (TitleText != null) TitleText.Text = "";
+            if (YearText != null) YearText.Text = "";
+            if (OverviewText != null) OverviewText.Text = "";
+            
+            SyncIdentityVisibility(false); // Reset to base state
+            
+            if (GenresText != null) { GenresText.Text = ""; GenresText.Visibility = Visibility.Collapsed; }
+            if (RuntimeText != null) RuntimeText.Text = "";
+            if (SuperTitleText != null) { SuperTitleText.Text = ""; SuperTitleText.Visibility = Visibility.Collapsed; SuperTitleText.Margin = new Thickness(0); }
         }
 
         private void ShowShimmer(UIElement shimmer)
@@ -2620,7 +2538,10 @@ namespace ModernIPTVPlayer
             if (hasLogo) 
             {
                 if (ContentLogoHost != null) ShowImmediate(ContentLogoHost, null);
-                ShowImmediate(TitleText, null, forceHide: true);
+                
+                // [FIX] Only forceHide if NO episode is selected. 
+                // If an episode is selected, we want its title visible under the logo.
+                ShowImmediate(TitleText, null, forceHide: (_selectedEpisode == null));
             }
             else
             {
@@ -2793,16 +2714,8 @@ namespace ModernIPTVPlayer
                     }
                 }
 
-                if (ContentLogoHost != null && hasLogo) ContentLogoHost.Opacity = 1;
-                if (_logoVisual != null && hasLogo) _logoVisual.Opacity = 1f;
-
-                if (TitleText != null) 
-                {
-                    TitleText.Opacity = 1;
-                    // IF we have no logo (either none provided OR load failed), ensure TitleText is Visible
-                    if (TitleText.Visibility != (hasLogo ? Visibility.Collapsed : Visibility.Visible))
-                        TitleText.Visibility = hasLogo ? Visibility.Collapsed : Visibility.Visible;
-                }
+                // [TITLE REDESIGN] Use unified identity logic
+                SyncIdentityVisibility(_selectedEpisode != null); // [FIX] Respect current episode selection
 
                 // [FIX] Ensure parent TitlePanel is ready and shimmer is cleared immediately to prevent ghosting.
                 if (TitlePanel != null)
@@ -2930,7 +2843,7 @@ namespace ModernIPTVPlayer
             _logoReadyTcs?.TrySetResult(true);
             System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Logo opened and decoded.");
             
-            // Re-measure now that we have real dimensions
+            // Re-measure now
             DispatcherQueue.TryEnqueue(() => 
             {
                 // legacy AdjustTitleShimmer call removed
@@ -5678,7 +5591,11 @@ namespace ModernIPTVPlayer
                 }
                 else if (_selectedEpisode != null)
                 {
-                    await PlayStremioContent(_selectedEpisode.Id, showGlobalLoading: false, autoPlay: true);
+                    double resumeSeconds = -1;
+                    var h = HistoryManager.Instance.GetProgress(_selectedEpisode.Id);
+                    if (h != null && !h.IsFinished && h.Position > 0) resumeSeconds = h.Position;
+                    
+                    await PlayStremioContent(_selectedEpisode.Id, showGlobalLoading: false, autoPlay: true, startSeconds: resumeSeconds);
                 }
                 return;
             }
@@ -5705,23 +5622,29 @@ namespace ModernIPTVPlayer
                 // [FIX] Prioritize resolved IMDb ID from unified metadata if available for more accurate subtitle matching in PlayerPage
                 string idToPass = ResolveBestContentId(_selectedEpisode?.Id ?? (_item?.IMDbId ?? _item?.Id.ToString()));
                 
-                AppLogger.Info($"[MediaInfo:Play] Base ID: {idToPass} | URL: {(_streamUrl?.Length > 30 ? _streamUrl.Substring(0, 30) + "..." : _streamUrl)}");
+                // [FIX] Get History Position for Resume
+                double startSecs = -1;
+                var h = HistoryManager.Instance.GetProgress(idToPass);
+                if (h == null && _selectedEpisode == null) h = HistoryManager.Instance.GetProgress(_item?.Id.ToString() ?? "");
+                if (h != null && !h.IsFinished && h.Position > 0) startSecs = h.Position;
+
+                AppLogger.Info($"[MediaInfo:Play] Base ID: {idToPass} | URL: {(_streamUrl?.Length > 30 ? _streamUrl.Substring(0, 30) + "..." : _streamUrl)} | Resume: {startSecs}s");
 
                 // Series Episode
                 if (_selectedEpisode != null)
                 {
                      string parentId = _item is SeriesStream ss ? ss.SeriesId.ToString() : null;
-                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, idToPass, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, -1, _item.PosterUrl, "series", GetCurrentBackdrop());
+                     await PerformHandoverAndNavigate(_streamUrl, _selectedEpisode.Title, idToPass, parentId, _item.Title, _selectedEpisode.SeasonNumber, _selectedEpisode.EpisodeNumber, startSecs, _item.PosterUrl, "series", GetCurrentBackdrop());
                 }
                 else if (_item is LiveStream live)
                 {
                     // Movie / Live
-                    await PerformHandoverAndNavigate(_streamUrl, live.Title, idToPass, null, null, 0, 0, -1, live.PosterUrl, "iptv", GetCurrentBackdrop());
+                    await PerformHandoverAndNavigate(_streamUrl, live.Title, idToPass, null, null, 0, 0, startSecs, live.PosterUrl, "iptv", GetCurrentBackdrop());
                 }
                 else
                 {
                     // Fallback
-                    await PerformHandoverAndNavigate(_streamUrl, TitleText.Text, idToPass, backdropUrl: GetCurrentBackdrop());
+                    await PerformHandoverAndNavigate(_streamUrl, TitleText.Text, idToPass, startSeconds: startSecs, backdropUrl: GetCurrentBackdrop());
                 }
             }
         }
@@ -5983,14 +5906,14 @@ namespace ModernIPTVPlayer
                                 string user = App.CurrentLogin.Username ?? "";
                                 string pass = App.CurrentLogin.Password ?? "";
 
-                                if (match is VodStream vod)
+                                if (match is VodStream vStream)
                                 {
-                                    string ext = vod.ContainerExtension ?? "mp4";
-                                    iptvUrl = $"{host}/movie/{user}/{pass}/{vod.StreamId}.{ext}";
+                                    string ext = vStream.ContainerExtension ?? "mp4";
+                                    iptvUrl = $"{host}/movie/{user}/{pass}/{vStream.StreamId}.{ext}";
                                 }
-                                else if (match is SeriesStream series)
+                                else if (match is SeriesStream sStream)
                                 {
-                                    iptvUrl = $"iptv://series/{series.SeriesId}";
+                                    iptvUrl = $"iptv://series/{sStream.SeriesId}";
                                 }
                                 else
                                 {
@@ -6009,6 +5932,8 @@ namespace ModernIPTVPlayer
                                 ProviderText = App.CurrentLogin?.PlaylistName?.ToUpperInvariant() ?? "IPTV",
                                 AddonName = "IPTV",
                                 Url = iptvUrl,
+                                IptvStreamId = (match is VodStream vod) ? (int?)vod.StreamId : null,
+                                IptvSeriesId = (match is SeriesStream series) ? (int?)series.SeriesId : null,
                                 IsCached = true,
                                 Quality = !string.IsNullOrEmpty(match.Resolution) ? match.Resolution : "VOD",
                                 IsActive = !string.IsNullOrEmpty(lastStreamUrl) && iptvUrl == lastStreamUrl
@@ -6027,6 +5952,8 @@ namespace ModernIPTVPlayer
                                     ProviderText = App.CurrentLogin?.PlaylistName?.ToUpperInvariant() ?? "IPTV",
                                     AddonName = "IPTV",
                                     Url = _selectedEpisode.StreamUrl,
+                                    IptvStreamId = _selectedEpisode.IptvStreamId,
+                                    IptvSeriesId = _selectedEpisode.IptvSeriesId,
                                     IsCached = true,
                                     Quality = _selectedEpisode.Resolution,
                                     IsActive = !string.IsNullOrEmpty(lastStreamUrl) && _selectedEpisode.StreamUrl == lastStreamUrl
@@ -7176,6 +7103,8 @@ namespace ModernIPTVPlayer
 
             Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "UpdateTechnicalBadges START", url);
 
+            int currentVersion = _loadingVersion;
+
             // Cancel previous probe
             try
             {
@@ -7223,7 +7152,7 @@ namespace ModernIPTVPlayer
                     DispatcherQueue.TryEnqueue(() => 
                     {
                         TechBadgesContent.Visibility = Visibility.Visible;
-                        ApplyMetadataToUi(probeData);
+                        ApplyMetadataToUi(probeData, currentVersion);
                         SetBadgeLoadingState(false);
                     });
                     return;
@@ -7246,7 +7175,7 @@ namespace ModernIPTVPlayer
                     {
                         TechBadgesContent.Opacity = 0;
                         TechBadgesContent.Visibility = Visibility.Visible;
-                        ApplyMetadataToUi(cached);
+                        ApplyMetadataToUi(cached, currentVersion);
 
                         // Quick Fade In
                         var visContent = ElementCompositionPreview.GetElementVisual(TechBadgesContent);
@@ -7312,7 +7241,7 @@ namespace ModernIPTVPlayer
                     {
                         double shimmerWidth = MetadataShimmer.ActualWidth;
                         TechBadgesContent.Visibility = Visibility.Visible;
-                        ApplyMetadataToUi(probeData);
+                        ApplyMetadataToUi(probeData, currentVersion);
                         
                         bool hasVisibleBadges = HasVisibleBadges();
                         if (hasVisibleBadges && shimmerWidth > 0 && TechBadgesContent.ActualWidth < shimmerWidth)
@@ -7345,7 +7274,7 @@ namespace ModernIPTVPlayer
         }
 
 
-        private void ApplyMetadataToUi(Services.ProbeData result)
+        private void ApplyMetadataToUi(Services.ProbeData result, int currentVersion)
         {
             if (result == null) return;
 
@@ -7417,7 +7346,10 @@ namespace ModernIPTVPlayer
             }
 
             // Age Rating & Country (from UnifiedMetadata)
-            if (_unifiedMetadata != null)
+            // [RACE CONDITION GUARD] If user navigated away or changed items, stop here.
+            if (currentVersion != _loadingVersion) return;
+
+            if (_unifiedMetadata == null)
             {
                 if (BadgeAge != null)
                 {
@@ -8214,234 +8146,6 @@ namespace ModernIPTVPlayer
             visual.StartAnimation("Opacity", animation);
             element.Opacity = 1; // Ensure XAML visibility but use Composition for the actual fade
         }
-    }
-
-    public class SeasonItem
-    {
-        public string Name { get; set; }
-        public string SeasonName { get; set; } // Alias for binding
-        public int SeasonNumber { get; set; }
-        public List<EpisodeItem> Episodes { get; set; }
-        public bool IsEnrichedByTmdb { get; set; }
-    }
-
-    public class EpisodeItem : System.ComponentModel.INotifyPropertyChanged
-    {
-        public string Id { get; set; }
-        public string Title { get; set; }
-        public string Name { get; set; } // Alias
-        public string Overview { get; set; }
-        public string Duration { get; set; }
-        
-        public string ImageUrl { get; set; }
-        
-        public string StreamUrl { get; set; }
-        public string Container { get; set; }
-        public int SeasonNumber { get; set; }
-
-        public int EpisodeNumber { get; set; }
-        
-        public int IptvSeriesId { get; set; }
-        public string IptvSourceTitle { get; set; }
-        
-        // Technical Metadata
-        public string Resolution { get; set; }
-        public string VideoCodec { get; set; }
-        public long Bitrate { get; set; }
-        public bool IsHdr { get; set; }
-        
-        // Formatted Metadata
-        public string EpisodeNumberFormatted => $"{EpisodeNumber}. Bölüm";
-        public string DurationFormatted { get; set; }
-        public bool IsReleased { get; set; } = true;
-        public DateTime? ReleaseDate { get; set; }
-        public string ReleaseDateFormatted => ReleaseDate.HasValue ? ReleaseDate.Value.ToString("d MMMM yyyy", new System.Globalization.CultureInfo("tr-TR")) : "";
-        private bool _isWatched;
-        public bool IsWatched
-        {
-            get => _isWatched;
-            set { if (_isWatched != value) { _isWatched = value; OnPropertyChanged(nameof(IsWatched)); } }
-        }
-        
-        // Progress UI
-        private bool _hasProgress;
-        public bool HasProgress
-        {
-            get => _hasProgress;
-            set { if (_hasProgress != value) { _hasProgress = value; OnPropertyChanged(nameof(HasProgress)); } }
-        }
-
-        private double _progressPercent;
-        public double ProgressPercent
-        {
-            get => _progressPercent;
-            set { if (Math.Abs(_progressPercent - value) > 0.01) { _progressPercent = value; OnPropertyChanged(nameof(ProgressPercent)); } }
-        }
-        public string ProgressText { get; set; }
-
-        private bool _isSelected;
-        public bool IsSelected
-        {
-            get => _isSelected;
-            set
-            {
-                if (_isSelected != value)
-                {
-                    _isSelected = value;
-                    OnPropertyChanged(nameof(IsSelected));
-                }
-            }
-        }
-
-        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
-        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
-
-        public void RefreshHistoryState()
-        {
-            var history = HistoryManager.Instance.GetProgress(Id);
-            if (history != null)
-            {
-                IsWatched = history.IsFinished;
-                HasProgress = history.Position > 0 && !history.IsFinished;
-                if (history.Duration > 0)
-                {
-                    ProgressPercent = (history.Position / history.Duration) * 100;
-                    if (ProgressPercent > 98) { IsWatched = true; HasProgress = false; }
-                    
-                    if (HasProgress)
-                    {
-                        var remaining = TimeSpan.FromSeconds(history.Duration - history.Position);
-                        ProgressText = remaining.TotalHours >= 1 
-                            ? $"{(int)remaining.TotalHours}sa {(int)remaining.Minutes}dk Kaldı"
-                            : $"{(int)remaining.TotalMinutes}dk Kaldı";
-                    }
-                }
-                
-                OnPropertyChanged(nameof(IsWatched));
-                OnPropertyChanged(nameof(HasProgress));
-                OnPropertyChanged(nameof(ProgressPercent));
-                OnPropertyChanged(nameof(ProgressText));
-            }
-        }
-    }
-    
-
-    
-    public class CastItem
-    {
-        public string Name { get; set; }
-        public string Character { get; set; }
-        public string FullProfileUrl { get; set; }
-
-
-
-    }
-
-    public class StremioStreamViewModel : System.ComponentModel.INotifyPropertyChanged
-    {
-        public string Title { get; set; }
-        public string Name { get; set; }
-        public string ProviderText { get; set; }
-        public string AddonName { get; set; }
-        public string AddonUrl { get; set; } // Added
-        public string Url { get; set; }
-        public string ExternalUrl { get; set; }
-        public bool IsExternalLink => !string.IsNullOrEmpty(ExternalUrl) && string.IsNullOrEmpty(Url);
-        
-        private string _quality;
-        public string Quality 
-        { 
-            get => _quality; 
-            set { if (_quality != value) { _quality = value; OnPropertyChanged(nameof(Quality)); OnPropertyChanged(nameof(HasQuality)); } } 
-        }
-        public bool HasQuality => !string.IsNullOrEmpty(Quality);
-
-        private string _size;
-        public string Size 
-        { 
-            get => _size; 
-            set { if (_size != value) { _size = value; OnPropertyChanged(nameof(Size)); OnPropertyChanged(nameof(HasSize)); } } 
-        }
-        public bool HasSize => !string.IsNullOrEmpty(Size);
-
-        private bool _isHdr;
-        public bool IsHdr
-        {
-            get => _isHdr;
-            set { if (_isHdr != value) { _isHdr = value; OnPropertyChanged(nameof(IsHdr)); } }
-        }
-
-        private string _codec;
-        public string Codec
-        {
-            get => _codec;
-            set { if (_codec != value) { _codec = value; OnPropertyChanged(nameof(Codec)); OnPropertyChanged(nameof(HasCodec)); } }
-        }
-        public bool HasCodec => !string.IsNullOrEmpty(Codec);
-
-        public bool IsCached { get; set; }
-        public ModernIPTVPlayer.Models.Stremio.StremioStream OriginalStream { get; set; }
-
-        private bool _isActive;
-        public bool IsActive 
-        { 
-            get => _isActive; 
-            set 
-            { 
-                if (_isActive != value) 
-                { 
-                    _isActive = value; 
-                    OnPropertyChanged(nameof(IsActive)); 
-                } 
-            } 
-        }
-
-        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
-        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
-    }
-
-    public class StremioAddonViewModel : System.ComponentModel.INotifyPropertyChanged
-    {
-        private string _name;
-        public string Name 
-        { 
-            get => _name; 
-            set { if(_name != value) { _name = value; OnPropertyChanged(nameof(Name)); } } 
-        }
-
-        public string AddonUrl { get; set; } // Added
-
-        private List<StremioStreamViewModel> _streams;
-        public List<StremioStreamViewModel> Streams
-        {
-            get => _streams;
-            set { if(_streams != value) { _streams = value; OnPropertyChanged(nameof(Streams)); } }
-        }
-
-        private bool _isLoading;
-        public bool IsLoading
-        {
-            get => _isLoading;
-            set 
-            { 
-                if(_isLoading != value) 
-                { 
-                    _isLoading = value; 
-                    OnPropertyChanged(nameof(IsLoading)); 
-                    OnPropertyChanged(nameof(IsLoaded));
-                } 
-            }
-        }
-        
-        public bool IsLoaded => !IsLoading;
-        
-        public int SortIndex { get; set; }
-
-        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
-        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
-    }
-    public partial class MediaInfoPage
-    {
         #region Mouse Drag-to-Scroll Logic
         private void OnMainPointerPressed(object sender, PointerRoutedEventArgs e)
         {
@@ -8628,7 +8332,6 @@ namespace ModernIPTVPlayer
             {
                 if (EpisodesListView != null) EpisodesListView.SelectedItem = null;
 
-
                 _selectedEpisode = null;
                 _streamUrl = null;
                 
@@ -8652,45 +8355,51 @@ namespace ModernIPTVPlayer
             }
         }
 
+        private void SyncIdentityVisibility(bool showEpisode)
+        {
+            if (TitleText == null) return;
+
+            bool hasLogo = _unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.LogoUrl);
+            
+            // 1. Logo Visibility
+            if (hasLogo)
+            {
+                EnsureLogoSurface(_unifiedMetadata.LogoUrl);
+                if (ContentLogoHost != null && ContentLogoHost.Visibility != Visibility.Visible) ContentLogoHost.Visibility = Visibility.Visible;
+                if (_logoVisual != null && _logoVisual.Opacity != 1f) _logoVisual.Opacity = 1f;
+            }
+            else
+            {
+                if (ContentLogoHost != null && ContentLogoHost.Visibility != Visibility.Collapsed) ContentLogoHost.Visibility = Visibility.Collapsed;
+                if (_logoVisual != null && _logoVisual.Opacity != 0f) _logoVisual.Opacity = 0f;
+            }
+
+            // 2. Title Text Visibility & Content
+            bool shouldShowTitle = showEpisode || !hasLogo;
+            string targetTitle = showEpisode && _selectedEpisode != null 
+                ? (!string.IsNullOrEmpty(_selectedEpisode.Title) ? _selectedEpisode.Title : $"Bölüm {_selectedEpisode.EpisodeNumber}")
+                : (_unifiedMetadata?.Title ?? _item?.Title ?? "");
+
+            if (TitleText.Text != targetTitle) TitleText.Text = targetTitle;
+            if (StickyTitle != null && StickyTitle.Text != targetTitle) StickyTitle.Text = targetTitle;
+
+            if (TitleText.Visibility != (shouldShowTitle ? Visibility.Visible : Visibility.Collapsed))
+                TitleText.Visibility = shouldShowTitle ? Visibility.Visible : Visibility.Collapsed;
+            
+            if (shouldShowTitle && TitleText.Opacity != 1) TitleText.Opacity = 1;
+
+            // 3. Container Visibility
+            if (TitlePanel != null && TitlePanel.Visibility != Visibility.Visible) 
+                TitlePanel.Visibility = Visibility.Visible;
+            if (TitlePanel != null && TitlePanel.Opacity != 1) TitlePanel.Opacity = 1;
+        }
+
         private void UpdateInfoPanelVisibility(bool showEpisode)
         {
+            SyncIdentityVisibility(showEpisode);
+
             if (showEpisode && _selectedEpisode != null)
             {
-                // -- EPISODE VIEW --
-                if (TitleText != null)
-                {
-                    var epTitle = !string.IsNullOrEmpty(_selectedEpisode.Title) ? _selectedEpisode.Title : $"Bölüm {_selectedEpisode.EpisodeNumber}";
-                    if (TitleText.Text != epTitle) TitleText.Text = epTitle;
-                    if (StickyTitle != null && StickyTitle.Text != epTitle) StickyTitle.Text = epTitle;
-                    
-                    // [LOGO SYSTEM] Episode view: show logo if available
-                    if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.LogoUrl))
-                    {
-                        EnsureLogoSurface(_unifiedMetadata.LogoUrl);
-                        if (ContentLogoHost != null && ContentLogoHost.Visibility != Visibility.Visible) ContentLogoHost.Visibility = Visibility.Visible;
-                        if (_logoVisual != null && _logoVisual.Opacity != 1f) _logoVisual.Opacity = 1f;
-                    }
-                    else
-                    {
-                        if (ContentLogoHost != null && ContentLogoHost.Visibility != Visibility.Collapsed) ContentLogoHost.Visibility = Visibility.Collapsed;
-                        if (_logoVisual != null && _logoVisual.Opacity != 0f) _logoVisual.Opacity = 0f;
-                    }
-
-                    if (TitleText.Visibility != Visibility.Visible) TitleText.Visibility = Visibility.Visible;
-                    if (TitleText.Opacity != 1) TitleText.Opacity = 1;
-                    
-                    var textVisual = ElementCompositionPreview.GetElementVisual(TitleText);
-                    if (textVisual != null && textVisual.Opacity != 1f) textVisual.Opacity = 1f;
-
-                    if (SuperTitleText != null && SuperTitleText.Visibility != Visibility.Collapsed) SuperTitleText.Visibility = Visibility.Collapsed;
-
-                    if (TitlePanel != null) 
-                    {
-                        if (TitlePanel.Visibility != Visibility.Visible) TitlePanel.Visibility = Visibility.Visible;
-                        if (TitlePanel.Opacity != 1) TitlePanel.Opacity = 1;
-                    }
-                }
-
                 if (YearText != null)
                 {
                     var epYear = _selectedEpisode.ReleaseDate.HasValue ? _selectedEpisode.ReleaseDate.Value.ToString("yyyy-MM-dd") : (_unifiedMetadata?.Year ?? "");
@@ -8711,62 +8420,28 @@ namespace ModernIPTVPlayer
             }
             else
             {
-                // -- SERIES/MOVIE VIEW --
-                if (TitleText != null)
+                if (YearText != null)
                 {
-                    var baseTitle = _unifiedMetadata?.Title ?? _item?.Title ?? "";
-                    if (TitleText.Text != baseTitle) TitleText.Text = baseTitle;
-                    if (StickyTitle != null && StickyTitle.Text != baseTitle) StickyTitle.Text = baseTitle;
-                    
-                    if (SuperTitleText != null && SuperTitleText.Visibility != Visibility.Collapsed) SuperTitleText.Visibility = Visibility.Collapsed;
-
-                    // [LOGO SYSTEM] Handle Logo vs Title Label visibility
-                    if (_unifiedMetadata != null && !string.IsNullOrEmpty(_unifiedMetadata.LogoUrl))
-                    {
-                        EnsureLogoSurface(_unifiedMetadata.LogoUrl);
-                        if (ContentLogoHost != null)
-                        {
-                            if (ContentLogoHost.Visibility != Visibility.Visible) ContentLogoHost.Visibility = Visibility.Visible;
-                            if (ContentLogoHost.Opacity != 1) ContentLogoHost.Opacity = 1;
-                        }
-                        if (_logoVisual != null && _logoVisual.Opacity != 1f) _logoVisual.Opacity = 1f;
-                        
-                        // Hide title label if logo is present
-                        if (TitleText.Visibility != Visibility.Collapsed) TitleText.Visibility = Visibility.Collapsed;
-                    }
-                    else
-                    {
-                        if (ContentLogoHost != null && ContentLogoHost.Visibility != Visibility.Collapsed) ContentLogoHost.Visibility = Visibility.Collapsed;
-                        if (_logoVisual != null && _logoVisual.Opacity != 0f) _logoVisual.Opacity = 0f;
-                        if (TitleText.Visibility != Visibility.Visible) TitleText.Visibility = Visibility.Visible;
-                    }
-
-                    if (TitlePanel != null) 
-                    {
-                        if (TitlePanel.Visibility != Visibility.Visible) TitlePanel.Visibility = Visibility.Visible;
-                        if (TitlePanel.Opacity != 1) TitlePanel.Opacity = 1;
-                    }
+                    var sYear = _unifiedMetadata?.Year ?? _item?.Year ?? "";
+                    if (YearText.Text != sYear) YearText.Text = sYear;
                 }
 
                 if (OverviewText != null)
                 {
-                    var baseOverview = _unifiedMetadata?.Overview ?? _item?.Description ?? "";
-                    if (OverviewText.Text != baseOverview) OverviewText.Text = baseOverview;
-                }
-
-                if (YearText != null)
-                {
-                    var baseYear = _unifiedMetadata?.Year ?? "";
-                    if (YearText.Text != baseYear) YearText.Text = baseYear;
+                    var sOverview = _unifiedMetadata?.Overview ?? _item?.Description ?? "";
+                    if (OverviewText.Text != sOverview) OverviewText.Text = sOverview;
                 }
 
                 if (GenresText != null)
                 {
-                    var targetVis = string.IsNullOrEmpty(GenresText.Text) ? Visibility.Collapsed : Visibility.Visible;
-                    if (GenresText.Visibility != targetVis)
+                    var sGenres = _unifiedMetadata?.Genres ?? _item?.Genres ?? "";
+                    if (GenresText.Text != sGenres) { GenresText.Text = sGenres; }
+                    
+                    bool hasGenres = !string.IsNullOrEmpty(sGenres);
+                    if (GenresText.Visibility != (hasGenres ? Visibility.Visible : Visibility.Collapsed))
                     {
-                        GenresText.Visibility = targetVis;
-                        if (GenresText.Parent is Grid pGrid) pGrid.Visibility = targetVis;
+                        GenresText.Visibility = hasGenres ? Visibility.Visible : Visibility.Collapsed;
+                        if (GenresText.Parent is Grid pGrid2) pGrid2.Visibility = hasGenres ? Visibility.Visible : Visibility.Collapsed;
                     }
                 }
             }
@@ -8824,8 +8499,12 @@ namespace ModernIPTVPlayer
                                 {
                                     if (_logoVisual != null) _logoVisual.Opacity = 1;
                                     if (ContentLogoHost != null) ContentLogoHost.Opacity = 1;
-                                    if (TitleText != null) TitleText.Visibility = Visibility.Collapsed;
-                                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Logo load success - Transitioned UI from text to logo.");
+                                    
+                                    // [FIX] Respect ShowEpisode state: If an episode is already selected (e.g. Continue Watching auto-select),
+                                    // we MUST keep TitleText visible to show the episode name under the logo.
+                                    if (TitleText != null) TitleText.Visibility = (_selectedEpisode != null) ? Visibility.Visible : Visibility.Collapsed;
+                                    
+                                    System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Logo load success - Transitioned UI (TitleVisible={_selectedEpisode != null}).");
                                 }
                             });
                         }
@@ -9067,6 +8746,147 @@ namespace ModernIPTVPlayer
             return null;
         }
     }
+    public class SeasonItem
+    {
+        public string Name { get; set; }
+        public string SeasonName { get; set; }
+        public int SeasonNumber { get; set; }
+        public List<EpisodeItem> Episodes { get; set; }
+        public bool IsEnrichedByTmdb { get; set; }
+    }
+
+    public class EpisodeItem : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string Id { get; set; }
+        public string Title { get; set; }
+        public string Name { get; set; }
+        public string Overview { get; set; }
+        public string Duration { get; set; }
+        public string ImageUrl { get; set; }
+        public string StreamUrl { get; set; }
+        public string Container { get; set; }
+        public int SeasonNumber { get; set; }
+        public int EpisodeNumber { get; set; }
+        public int IptvSeriesId { get; set; }
+        public int? IptvStreamId { get; set; }
+        public string IptvSourceTitle { get; set; }
+        public string Resolution { get; set; }
+        public string VideoCodec { get; set; }
+        public long Bitrate { get; set; }
+        public bool IsHdr { get; set; }
+        public string EpisodeNumberFormatted => $"{EpisodeNumber}. Bölüm";
+        public string DurationFormatted { get; set; }
+        public bool IsReleased { get; set; } = true;
+        public DateTime? ReleaseDate { get; set; }
+        public string ReleaseDateFormatted => ReleaseDate.HasValue ? ReleaseDate.Value.ToString("d MMMM yyyy", new System.Globalization.CultureInfo("tr-TR")) : "";
+        
+        private bool _isWatched;
+        public bool IsWatched { get => _isWatched; set { if (_isWatched != value) { _isWatched = value; OnPropertyChanged(nameof(IsWatched)); } } }
+        
+        private bool _hasProgress;
+        public bool HasProgress { get => _hasProgress; set { if (_hasProgress != value) { _hasProgress = value; OnPropertyChanged(nameof(HasProgress)); } } }
+        
+        private double _progressPercent;
+        public double ProgressPercent { get => _progressPercent; set { if (Math.Abs(_progressPercent - value) > 0.01) { _progressPercent = value; OnPropertyChanged(nameof(ProgressPercent)); } } }
+        
+        public string ProgressText { get; set; }
+        
+        private bool _isSelected;
+        public bool IsSelected { get => _isSelected; set { if (_isSelected != value) { _isSelected = value; OnPropertyChanged(nameof(IsSelected)); } } }
+
+        public void RefreshHistoryState()
+        {
+            var history = ModernIPTVPlayer.HistoryManager.Instance.GetProgress(Id);
+            UpdateProgress(history);
+        }
+
+        public void UpdateProgress(ModernIPTVPlayer.HistoryItem history)
+        {
+            if (history == null)
+            {
+                IsWatched = false; HasProgress = false; ProgressPercent = 0; ProgressText = "";
+            }
+            else
+            {
+                IsWatched = history.IsFinished;
+                HasProgress = history.Position > 0 && !history.IsFinished;
+                if (history.Duration > 0)
+                {
+                    ProgressPercent = (history.Position / history.Duration) * 100;
+                    if (ProgressPercent > 98) { IsWatched = true; HasProgress = false; }
+                    if (HasProgress)
+                    {
+                        var remaining = TimeSpan.FromSeconds(history.Duration - history.Position);
+                        ProgressText = remaining.TotalHours >= 1 ? $"{(int)remaining.TotalHours}sa {(int)remaining.Minutes}dk Kaldı" : $"{(int)remaining.TotalMinutes}dk Kaldı";
+                    }
+                }
+                OnPropertyChanged(nameof(IsWatched)); 
+                OnPropertyChanged(nameof(HasProgress)); 
+                OnPropertyChanged(nameof(ProgressPercent)); 
+                OnPropertyChanged(nameof(ProgressText));
+            }
+        }
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
+
+    public class CastItem
+    {
+        public string Name { get; set; }
+        public string Character { get; set; }
+        public string FullProfileUrl { get; set; }
+    }
+
+    public class StremioStreamViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        public string Title { get; set; }
+        public string Name { get; set; }
+        public string ProviderText { get; set; }
+        public string AddonName { get; set; }
+        public string AddonUrl { get; set; }
+        public string Url { get; set; }
+        public int? IptvStreamId { get; set; }
+        public int? IptvSeriesId { get; set; }
+        public string ExternalUrl { get; set; }
+        public bool IsExternalLink => !string.IsNullOrEmpty(ExternalUrl) && string.IsNullOrEmpty(Url);
+        
+        private string _quality;
+        public string Quality { get => _quality; set { if (_quality != value) { _quality = value; OnPropertyChanged(nameof(Quality)); OnPropertyChanged(nameof(HasQuality)); } } }
+        public bool HasQuality => !string.IsNullOrEmpty(Quality);
+        
+        private string _size;
+        public string Size { get => _size; set { if (_size != value) { _size = value; OnPropertyChanged(nameof(Size)); OnPropertyChanged(nameof(HasSize)); } } }
+        public bool HasSize => !string.IsNullOrEmpty(Size);
+        
+        private bool _isHdr;
+        public bool IsHdr { get => _isHdr; set { if (_isHdr != value) { _isHdr = value; OnPropertyChanged(nameof(IsHdr)); } } }
+        
+        private string _codec;
+        public string Codec { get => _codec; set { if (_codec != value) { _codec = value; OnPropertyChanged(nameof(Codec)); OnPropertyChanged(nameof(HasCodec)); } } }
+        public bool HasCodec => !string.IsNullOrEmpty(Codec);
+        
+        public bool IsCached { get; set; }
+        public ModernIPTVPlayer.Models.Stremio.StremioStream OriginalStream { get; set; }
+        
+        private bool _isActive;
+        public bool IsActive { get => _isActive; set { if (_isActive != value) { _isActive = value; OnPropertyChanged(nameof(IsActive)); } } }
+        
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
+
+    public class StremioAddonViewModel : System.ComponentModel.INotifyPropertyChanged
+    {
+        private string _name;
+        public string Name { get => _name; set { if (_name != value) { _name = value; OnPropertyChanged(nameof(Name)); } } }
+        public string AddonUrl { get; set; }
+        private List<StremioStreamViewModel> _streams;
+        public List<StremioStreamViewModel> Streams { get => _streams; set { if (_streams != value) { _streams = value; OnPropertyChanged(nameof(Streams)); } } }
+        private bool _isLoading;
+        public bool IsLoading { get => _isLoading; set { if (_isLoading != value) { _isLoading = value; OnPropertyChanged(nameof(IsLoading)); OnPropertyChanged(nameof(IsLoaded)); } } }
+        public bool IsLoaded => !IsLoading;
+        public int SortIndex { get; set; }
+        public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
+        protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
+    }
 }
-
-

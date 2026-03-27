@@ -155,12 +155,11 @@ namespace ModernIPTVPlayer.Services.Stremio
         private async Task RefreshManifestsAsync()
         {
             var client = HttpHelper.Client;
-            bool changed = false;
-
+            
             List<string> urls;
             lock (_addonLock) { urls = _addonUrls.ToList(); }
 
-            foreach (var url in urls)
+            var tasks = urls.Select(async url =>
             {
                 try
                 {
@@ -179,7 +178,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                             {
                                 _manifestCache[url] = manifest;
                             }
-                            changed = true;
+                            return true;
                         }
                     }
                 }
@@ -187,7 +186,11 @@ namespace ModernIPTVPlayer.Services.Stremio
                 {
                     AppLogger.Warn($"[StremioAddonManager] Failed to fetch manifest for {url}: {ex.Message}");
                 }
-            }
+                return false;
+            });
+
+            var results = await Task.WhenAll(tasks);
+            bool changed = results.Any(r => r);
 
             if (changed)
             {

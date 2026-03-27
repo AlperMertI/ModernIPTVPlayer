@@ -41,7 +41,18 @@ namespace ModernIPTVPlayer.Models.Metadata
             {
                 // [ENRICHMENT] Update with better/equal quality data
                 if (!string.IsNullOrEmpty(source.Title) && target.Title != source.Title) 
-                    target.Title = source.Title;
+                {
+                    // [TITLE PROTECTION] For CW series items, enrichment provides Series Title, 
+                    // but we must preserve the Episode Title already in target.Title.
+                    if (target is Stremio.StremioMediaStream sStream && sStream.IsContinueWatching && sStream.IsSeries)
+                    {
+                        sStream.SeriesName = source.Title;
+                    }
+                    else
+                    {
+                        target.Title = source.Title;
+                    }
+                }
                 
                 if (!string.IsNullOrEmpty(source.Overview) && target.Description != source.Overview) 
                     target.Description = source.Overview;
@@ -78,25 +89,25 @@ namespace ModernIPTVPlayer.Models.Metadata
             if (!string.IsNullOrEmpty(bestBackdrop)) target.BackdropUrl = bestBackdrop;
 
             // 3. Special Case: Stremio-specific fields
-            if (target is Stremio.StremioMediaStream stremio)
+            if (target is Stremio.StremioMediaStream stremioFinal)
             {
                 // Strict backfill for Logo/Id
                 if (!string.IsNullOrEmpty(source.LogoUrl))
                 {
-                    if (!backfillOnly || string.IsNullOrEmpty(stremio.LogoUrl)) stremio.LogoUrl = source.LogoUrl;
+                    if (!backfillOnly || string.IsNullOrEmpty(stremioFinal.LogoUrl)) stremioFinal.LogoUrl = source.LogoUrl;
                 }
 
                 if (!string.IsNullOrEmpty(source.ImdbId))
                 {
-                    if (!backfillOnly || string.IsNullOrEmpty(stremio.Meta.Id)) stremio.Meta.Id = source.ImdbId;
+                    if (!backfillOnly || string.IsNullOrEmpty(stremioFinal.Meta.Id)) stremioFinal.Meta.Id = source.ImdbId;
                 }
                 
                 if (!string.IsNullOrEmpty(source.Genres))
                 {
-                     if (!backfillOnly || string.IsNullOrEmpty(stremio.Genres))
+                     if (!backfillOnly || string.IsNullOrEmpty(stremioFinal.Genres))
                      {
-                          stremio.Meta.Genres = source.Genres.Split(", ").ToList();
-                          stremio.OnPropertyChanged("Genres");
+                          stremioFinal.Meta.Genres = source.Genres.Split(", ").ToList();
+                          stremioFinal.OnPropertyChanged("Genres");
                      }
                 }
             }
