@@ -33,6 +33,10 @@ namespace ModernIPTVPlayer
         // Data Store
         private List<LiveCategory> _iptvCategories = new();
         private List<IMediaStream> _allIptvItems = new();
+        private System.Threading.CancellationTokenSource? _navigationCts;
+        private Dictionary<MediaType, List<LiveCategory>> _categoryCache = new();
+        private Dictionary<MediaType, List<IMediaStream>> _itemsCache = new();
+        private Dictionary<MediaType, (Windows.UI.Color Primary, Windows.UI.Color Secondary)?> _heroColorsCache = new();
 
         private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _heroColors;
         private ExpandedCardOverlayController? _stremioExpandedCardOverlay;
@@ -64,7 +68,11 @@ namespace ModernIPTVPlayer
             MediaGrid.ItemClicked += (s, e) => NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
             MediaGrid.PlayAction += (s, e) => NavigationService.NavigateToDetailsDirect(Frame, e);
             MediaGrid.DetailsAction += (s, e) => NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
-            MediaGrid.ColorExtracted += (s, colors) => BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+            MediaGrid.ColorExtracted += (s, colors) => 
+            {
+                _heroColorsCache[_mediaType] = colors;
+                BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+            };
             MediaGrid.HoverEnded += (s, card) => 
             {
                  _ = CloseExpandedCardInternalAsync();
@@ -77,6 +85,7 @@ namespace ModernIPTVPlayer
             StremioControl.BackdropColorChanged += (s, colors) => 
             {
                 _heroColors = colors;
+                _heroColorsCache[_mediaType] = colors;
                 BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
             };
             StremioControl.ViewChanged += (s, e) => 
@@ -89,8 +98,26 @@ namespace ModernIPTVPlayer
                 if (_stremioExpandedCardOverlay != null) 
                 {
                     _stremioExpandedCardOverlay.IsManipulationInProgress = true; 
-                    _stremioExpandedCardOverlay.CancelPendingShow();
+                    _stremioExpandedCardOverlay.UpdatePositions();
                 }
+            };
+
+            StremioControl.HeaderClicked += (s, vm) => 
+            {
+                if (string.IsNullOrEmpty(vm.SourceUrl)) return;
+                var args = new SearchArgs 
+                { 
+                    GenreArgs = new ModernIPTVPlayer.Models.Stremio.GenreSelectionArgs 
+                    {
+                        AddonId = vm.SourceUrl,
+                        CatalogId = vm.CatalogId,
+                        CatalogType = vm.CatalogType,
+                        DisplayName = vm.CatalogName
+                    },
+                    Type = vm.CatalogType,
+                    ParentContext = vm.CatalogName
+                };
+                Frame.Navigate(typeof(SearchResultsPage), args);
             };
             StremioControl.RowScrollEnded += (s, e) => 
             { 
@@ -145,9 +172,13 @@ namespace ModernIPTVPlayer
                 _loginInfo = App.CurrentLogin;
                 UpdateLayoutForMode();
 
+                _navigationCts?.Cancel();
+                _navigationCts = new System.Threading.CancellationTokenSource();
+                var token = _navigationCts.Token;
+
                 if (_currentSource == ContentSource.IPTV && _iptvCategories.Count == 0)
                 {
-                    await LoadIptvDataAsync();
+                    await LoadIptvDataAsync(token);
                 }
                 else if (_currentSource == ContentSource.Stremio && !StremioControl.HasContent)
                 {
@@ -173,20 +204,26 @@ namespace ModernIPTVPlayer
             
             UpdateLayoutForMode();
 
+            _navigationCts?.Cancel();
+            _navigationCts = new System.Threading.CancellationTokenSource();
+            var token = _navigationCts.Token;
+
             if (_currentSource == ContentSource.IPTV)
             {
-                await LoadIptvDataAsync();
+                _ = LoadIptvDataAsync(token);
             }
             else
             {
-                await StremioControl.LoadDiscoveryAsync(_mediaType == MediaType.Movie ? "movie" : "series");
+                _ = StremioControl.LoadDiscoveryAsync(_mediaType == MediaType.Movie ? "movie" : "series");
             }
         }
 
         private void ClearData()
         {
-            _iptvCategories.Clear();
-            _allIptvItems.Clear();
+            // [FIX] Re-assign to new lists instead of calling .Clear()
+            // to avoid clearing the same list instance that might be stored in the memory cache.
+            _iptvCategories = new List<LiveCategory>();
+            _allIptvItems = new List<IMediaStream>();
             CategoryList.ItemsSource = null;
             MediaGrid.ItemsSource = null;
             StremioControl.Clear();
@@ -229,9 +266,13 @@ namespace ModernIPTVPlayer
 
                 UpdateLayoutForMode();
                 
+                _navigationCts?.Cancel();
+                _navigationCts = new System.Threading.CancellationTokenSource();
+                var token = _navigationCts.Token;
+
                 if (_currentSource == ContentSource.IPTV)
                 {
-                    await LoadIptvDataAsync();
+                    await LoadIptvDataAsync(token);
                 }
                 else
                 {
@@ -246,16 +287,47 @@ namespace ModernIPTVPlayer
         // ==========================================
         // IPTV LOADING LOGIC (Optimized)
         // ==========================================
-        private async Task LoadIptvDataAsync()
+        private async Task LoadIptvDataAsync(System.Threading.CancellationToken token = default)
         {
-            AppLogger.Info($"[MediaLibraryPage] Loading IPTV Data ({_mediaType})");
+            var contextType = _mediaType;
+            var contextSource = _currentSource;
+
+            AppLogger.Info($"[MediaLibraryPage] Loading IPTV Data ({contextType})");
+
+            // 0. MEMORY CACHE CHECK (Instant Switch)
+            if (_categoryCache.TryGetValue(contextType, out var memCats) && 
+                _itemsCache.TryGetValue(contextType, out var memItems) && 
+                memCats.Count > 0)
+            {
+                // Yield to ensure the UI thread can finish the navigation transition (sidebar anim, etc.)
+                // before we potentially block it with heavy ItemsSource updates.
+                await Task.Yield();
+                if (token.IsCancellationRequested || _mediaType != contextType) return;
+
+                AppLogger.Info($"[MediaLibraryPage] Restoring from Memory Cache ({contextType})");
+                _iptvCategories = memCats;
+                _allIptvItems = memItems;
+
+                // [RESTORE COLOR]
+                if (_heroColorsCache.TryGetValue(contextType, out var cachedColors) && cachedColors.HasValue)
+                {
+                    _heroColors = cachedColors;
+                    BackdropControl.TransitionTo(cachedColors.Value.Primary, cachedColors.Value.Secondary);
+                }
+
+                DisplayCategories(_iptvCategories, contextType, skipLoadingRing: true, token: token);
+                return;
+            }
+
+            if (token.IsCancellationRequested || _mediaType != contextType) return;
+
             MediaGrid.IsLoading = true;
             var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
             try
             {
                 if (_iptvCategories.Count > 0)
                 {
-                    DisplayCategories(_iptvCategories);
+                    DisplayCategories(_iptvCategories, contextType);
                     return;
                 }
 
@@ -264,10 +336,12 @@ namespace ModernIPTVPlayer
 
                 // 1. Categories
                 _iptvCategories = await ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, $"{typeKey}_categories") ?? new();
+                if (token.IsCancellationRequested || _mediaType != contextType) return;
                 if (_iptvCategories.Count == 0)
                 {
                     string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_{typeKey}_categories";
-                    string json = await _httpClient.GetStringAsync(api);
+                    string json = await _httpClient.GetStringAsync(api, token);
+                    if (token.IsCancellationRequested || _mediaType != contextType) return;
                     _iptvCategories = HttpHelper.TryDeserializeList<LiveCategory>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
                     _ = ContentCacheService.Instance.SaveCacheAsync(playlistId, $"{typeKey}_categories", _iptvCategories);
                 }
@@ -276,6 +350,7 @@ namespace ModernIPTVPlayer
                 if (_mediaType == MediaType.Movie)
                 {
                     var cached = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod");
+                    if (token.IsCancellationRequested || _mediaType != contextType) return;
                     if (cached != null && cached.Count > 0)
                     {
                         foreach(var m in cached)
@@ -288,7 +363,8 @@ namespace ModernIPTVPlayer
                     else
                     {
                         string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams";
-                        string json = await _httpClient.GetStringAsync(api);
+                        string json = await _httpClient.GetStringAsync(api, token);
+                        if (token.IsCancellationRequested || _mediaType != contextType) return;
                         var movies = HttpHelper.TryDeserializeList<VodStream>(json, options);
                         foreach(var m in movies) 
                             m.StreamUrl = $"{_loginInfo.Host}/movie/{_loginInfo.Username}/{_loginInfo.Password}/{m.StreamId}.{(string.IsNullOrEmpty(m.ContainerExtension) ? "mp4" : m.ContainerExtension)}";
@@ -300,6 +376,7 @@ namespace ModernIPTVPlayer
                 else
                 {
                     var cached = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
+                    if (token.IsCancellationRequested || _mediaType != contextType) return;
                     if (cached != null && cached.Count > 0)
                     {
                         _allIptvItems = cached.Cast<IMediaStream>().ToList();
@@ -307,7 +384,8 @@ namespace ModernIPTVPlayer
                     else
                     {
                         string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series";
-                        string json = await _httpClient.GetStringAsync(api);
+                        string json = await _httpClient.GetStringAsync(api, token);
+                        if (token.IsCancellationRequested || _mediaType != contextType) return;
                         var series = HttpHelper.TryDeserializeList<SeriesStream>(json, options);
                         _allIptvItems = series.Cast<IMediaStream>().ToList();
                         await ContentCacheService.Instance.SaveCacheAsync(playlistId, "series", series);
@@ -316,37 +394,56 @@ namespace ModernIPTVPlayer
                 }
 
                 AppLogger.Info($"[MediaLibraryPage] IPTV Load Done. Cats: {_iptvCategories.Count}, Items: {_allIptvItems.Count}");
-                DisplayCategories(_iptvCategories);
+                
+                // Save to Memory Cache
+                _categoryCache[_mediaType] = _iptvCategories;
+                _itemsCache[_mediaType] = _allIptvItems;
+
+                DisplayCategories(_iptvCategories, contextType, token: token);
             }
             catch (Exception ex)
             {
-                AppLogger.Error($"[MediaLibraryPage] LoadIptvDataAsync Error", ex);
+                if (token.IsCancellationRequested)
+                {
+                    AppLogger.Info($"[MediaLibraryPage] LoadIptvDataAsync cancelled for {contextType}.");
+                }
+                else
+                {
+                    AppLogger.Error($"[MediaLibraryPage] LoadIptvDataAsync Error", ex);
+                }
             }
             finally
             {
-                MediaGrid.IsLoading = false;
+                if (!token.IsCancellationRequested)
+                {
+                    MediaGrid.IsLoading = false;
+                }
             }
         }
 
 
 
-        private void DisplayCategories(List<LiveCategory> categories)
+        private void DisplayCategories(List<LiveCategory> categories, MediaType contextType, bool skipLoadingRing = false, System.Threading.CancellationToken token = default)
         {
+            if (token.IsCancellationRequested || _mediaType != contextType) return;
+
             CategoryList.ItemsSource = categories;
             
-            string? lastId = _mediaType == MediaType.Movie ? PageStateProvider.LastMovieCategoryId : PageStateProvider.LastSeriesCategoryId;
+            string? lastId = contextType == MediaType.Movie ? PageStateProvider.LastMovieCategoryId : PageStateProvider.LastSeriesCategoryId;
             var toSelect = categories.FirstOrDefault(c => c.CategoryId == lastId) ?? categories.FirstOrDefault();
 
             if (toSelect != null)
             {
                 CategoryList.SelectedItem = toSelect;
-                _ = LoadCategoryItemsAsync(toSelect);
+                _ = LoadCategoryItemsAsync(toSelect, contextType, skipLoadingRing, token);
             }
         }
 
-        private async Task LoadCategoryItemsAsync(LiveCategory category)
+        private async Task LoadCategoryItemsAsync(LiveCategory category, MediaType contextType, bool skipLoadingRing = false, System.Threading.CancellationToken token = default)
         {
-            MediaGrid.IsLoading = true;
+            if (token.IsCancellationRequested || _mediaType != contextType) return;
+            if (!skipLoadingRing) MediaGrid.IsLoading = true;
+            
             try
             {
                 var filtered = await Task.Run(() => _allIptvItems.Where(i => 
@@ -357,6 +454,8 @@ namespace ModernIPTVPlayer
                     return false;
                 }).ToList());
                 
+                if (token.IsCancellationRequested || _mediaType != contextType) return;
+
                 // STABILITY FIX: Single assignment to avoid GridView virtualization storms
                 MediaGrid.ItemsSource = filtered;
                 AppLogger.Info($"[MediaLibraryPage] Displaying {filtered.Count} items for Category {category.CategoryName}");
@@ -387,7 +486,10 @@ namespace ModernIPTVPlayer
                 if (_mediaType == MediaType.Movie) PageStateProvider.LastMovieCategoryId = cat.CategoryId;
                 else PageStateProvider.LastSeriesCategoryId = cat.CategoryId;
 
-                await LoadCategoryItemsAsync(cat);
+                _navigationCts?.Cancel();
+                _navigationCts = new System.Threading.CancellationTokenSource();
+
+                await LoadCategoryItemsAsync(cat, _mediaType, false, _navigationCts.Token);
                 UpdateSelectionPill();
             }
         }
@@ -438,22 +540,23 @@ namespace ModernIPTVPlayer
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[MediaLibrary] Updating Indexing UI: {isIndexing}");
-                if (IndexingProgressPill == null || HeaderSwitcherContainer == null) return;
+                if (IndexingProgressPill == null) return;
 
-                if (isIndexing) 
+                // [FIX] Enable Translation property early for Composition animations
+                Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.SetIsTranslationEnabled(IndexingProgressPill, true);
+
+                if (isIndexing)
                 {
                     _indexingStartTime = DateTime.Now;
                     IndexingProgressPill.Visibility = Visibility.Visible;
-                    HeaderSwitcherContainer.Spacing = 12;
                 }
                 else
                 {
                     var elapsed = DateTime.Now - _indexingStartTime;
                     if (elapsed.TotalSeconds < 2)
                     {
-                        // Ensure at least 2 seconds visibility
-                        _ = Task.Delay(2000 - (int)elapsed.TotalMilliseconds).ContinueWith(_ => 
+                        // Ensure at least 2 seconds visibility to avoid flicker
+                        _ = Task.Delay(2000 - (int)elapsed.TotalMilliseconds).ContinueWith(_ =>
                         {
                             DispatcherQueue?.TryEnqueue(() => UpdateIndexingProgressUI(false));
                         });
@@ -461,41 +564,37 @@ namespace ModernIPTVPlayer
                     }
                 }
 
-                var storyboard = new Storyboard();
-                
-                var widthAnim = new DoubleAnimation
-                {
-                    To = isIndexing ? 140 : 0,
-                    Duration = TimeSpan.FromMilliseconds(400),
-                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
+                // 120FPS Composition Animation (Offloads from UI Thread)
+                var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(IndexingProgressPill);
+                var compositor = visual.Compositor;
+
+                // Opacity Animation
+                var opacityAnim = compositor.CreateScalarKeyFrameAnimation();
+                opacityAnim.InsertKeyFrame(1f, isIndexing ? 1f : 0f);
+                opacityAnim.Duration = TimeSpan.FromMilliseconds(400);
+
+                // Slide Animation (Translation)
+                var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
+                // [FIX] Slide in from relative right (20px -> 0px)
+                offsetAnim.InsertKeyFrame(0f, isIndexing ? new System.Numerics.Vector3(20, 0, 0) : new System.Numerics.Vector3(0, 0, 0));
+                offsetAnim.InsertKeyFrame(1f, isIndexing ? new System.Numerics.Vector3(0, 0, 0) : new System.Numerics.Vector3(20, 0, 0));
+                offsetAnim.Duration = TimeSpan.FromMilliseconds(500);
+
+                var batch = compositor.CreateScopedBatch(Microsoft.UI.Composition.CompositionBatchTypes.Animation);
+
+                visual.StartAnimation("Opacity", opacityAnim);
+                // [FIX] Use Translation instead of Offset for better layout-independent animation
+                visual.StartAnimation("Translation", offsetAnim);
+
+                batch.Completed += (s, e) => {
+                    if (!isIndexing) IndexingProgressPill.Visibility = Visibility.Collapsed;
                 };
-                Storyboard.SetTarget(widthAnim, IndexingProgressPill);
-                Storyboard.SetTargetProperty(widthAnim, "Width");
-
-                var opacityAnim = new DoubleAnimation
-                {
-                    To = isIndexing ? 1 : 0,
-                    Duration = TimeSpan.FromMilliseconds(300),
-                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
-                };
-                Storyboard.SetTarget(opacityAnim, IndexingProgressPill);
-                Storyboard.SetTargetProperty(opacityAnim, "Opacity");
-
-                storyboard.Children.Add(widthAnim);
-                storyboard.Children.Add(opacityAnim);
-
-                if (!isIndexing)
-                {
-                    storyboard.Completed += (s, e) => 
-                    {
-                        IndexingProgressPill.Visibility = Visibility.Collapsed;
-                        HeaderSwitcherContainer.Spacing = 0;
-                    };
-                }
-
-                storyboard.Begin();
+                batch.End();
             }
-            catch { /* Ignore if UI elements not ready */ }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[MediaLibrary] UI Update Failed", ex);
+            }
         }
     }
 }

@@ -96,6 +96,7 @@ namespace ModernIPTVPlayer.Controls
         private System.Threading.CancellationTokenSource? _loadCts;
         private string _currentContentType;
         private int _discoveryVersion = 0; // Monotonic counter to invalidate stale runs
+        private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _lastHeroColors;
 
         // Hero Priority Logic
         private enum RowState { Pending, Success, Failed }
@@ -107,13 +108,28 @@ namespace ModernIPTVPlayer.Controls
         private readonly HashSet<string> _usedSpotlightIds = new();
         private string _lastUsedStyle = "Standard";
 
+        // Memory Cache for instant switching
+        private class DiscoveryState
+        {
+            public List<CatalogRowViewModel> Rows { get; set; } = new();
+            public Dictionary<string, RowState> RowStates { get; set; } = new();
+            public Dictionary<string, ObservableCollection<StremioMediaStream>> RowItemsBuffer { get; set; } = new();
+            public List<string> HeroPriorityOrder { get; set; } = new();
+            public (Windows.UI.Color Primary, Windows.UI.Color Secondary)? HeroColors { get; set; }
+        }
+        private Dictionary<string, DiscoveryState> _contentCache = new();
+
         public StremioDiscoveryControl()
         {
             this.InitializeComponent();
             
             // Hero Events
             HeroControl.PlayAction += (s, e) => PlayAction?.Invoke(this, e);
-            HeroControl.ColorExtracted += (s, c) => BackdropColorChanged?.Invoke(this, c);
+            HeroControl.ColorExtracted += (s, c) => 
+            {
+                _lastHeroColors = c;
+                BackdropColorChanged?.Invoke(this, c);
+            };
 
             DiscoveryRows.ItemsSource = _discoveryRows;
 
@@ -262,8 +278,9 @@ namespace ModernIPTVPlayer.Controls
             var results = await MetadataProvider.Instance.EnrichItemsAsync(items, context);
             if (results.Count > 0)
             {
+                // [ADVANCED] Use Low priority to ensure 120FPS fluidity (animations/input take precedence)
                 var tcs = new TaskCompletionSource<bool>();
-                DispatcherQueue.TryEnqueue(() =>
+                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
                 {
                     try
                     {
@@ -346,20 +363,53 @@ namespace ModernIPTVPlayer.Controls
 
                 // Fetch Manifests from Cache
                 _currentContentType = contentType;
+
+                // --- 0. CACHE RESTORATION PHASE (Instant Swap) ---
+                if (_contentCache.TryGetValue(contentType, out var cachedState))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[StremioControl] Restoring cached state for {contentType}");
+                    
+                    _heroPriorityOrder = new List<string>(cachedState.HeroPriorityOrder);
+                    lock (_rowItemsBuffer)
+                    {
+                        _rowStates = new Dictionary<string, RowState>(cachedState.RowStates);
+                        _rowItemsBuffer = new Dictionary<string, ObservableCollection<StremioMediaStream>>(cachedState.RowItemsBuffer);
+                    }
+
+                    _discoveryRows.Clear();
+                    // Batch addition to avoid excessive layout passes
+                    var rowList = cachedState.Rows.ToList();
+                    foreach (var row in rowList)
+                    {
+                        _discoveryRows.Add(row);
+                    }
+
+                    // [RESTORE COLOR] Instantly update backdrop color from cache
+                    _lastHeroColors = cachedState.HeroColors;
+                    if (_lastHeroColors.HasValue)
+                        BackdropColorChanged?.Invoke(this, _lastHeroColors.Value);
+
+                    // Update Hero immediately with cached items to avoid shimmer
+                    UpdateHeroState(skipShimmer: true);
+                }
+                else
+                {
+                    // No cache: Perform a clean reset and show shimmer
+                    HeroControl.SetLoading(true);
+                    _discoveryRows.Clear();
+                    lock (_rowItemsBuffer)
+                    {
+                        _rowStates.Clear();
+                        _rowItemsBuffer.Clear();
+                    }
+                }
+
                 var addons = StremioAddonManager.Instance.GetAddonsWithManifests();
                 System.Diagnostics.Debug.WriteLine($"[StremioControl] Starting Discovery for: '{contentType}' with {addons.Count} addons.");
-
-                // Log invalid manifests
-                int validManifests = addons.Count(a => a.Manifest != null);
-                if (validManifests < addons.Count)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[StremioControl] WARNING: Only {validManifests}/{addons.Count} manifests are loaded. Waiting for background refresh...");
-                }
 
                 if (addons.Count == 0)
                 {
                     HeroControl.SetLoading(false);
-                    _discoveryRows.Clear();
                     return;
                 }
 
@@ -510,7 +560,7 @@ namespace ModernIPTVPlayer.Controls
                     _rowStates[rowId] = RowState.Pending;
                 }
 
-                void UpdateHeroState()
+                void UpdateHeroState(bool skipShimmer = false)
                 {
                     DispatcherQueue.TryEnqueue(() =>
                     {
@@ -523,7 +573,7 @@ namespace ModernIPTVPlayer.Controls
                             var state = _rowStates[rowId];
                             if (state == RowState.Pending)
                             {
-                                HeroControl.SetLoading(true);
+                                if (!skipShimmer) HeroControl.SetLoading(true);
                                 return; 
                             }
                             
@@ -551,7 +601,7 @@ namespace ModernIPTVPlayer.Controls
                                     DispatcherQueue.TryEnqueue(() => 
                                     {
                                         HeroControl.SetLoading(false);
-                                        HeroControl.SetItems(heroItemsFinal);
+                                        HeroControl.SetItems(heroItemsFinal, animate: skipShimmer);
                                     });
                                 });
                                 return;
@@ -618,6 +668,9 @@ namespace ModernIPTVPlayer.Controls
                                     }
                                     _discoveryRows.Insert(insertAt, rowResult);
                                     
+                                    // Update Cache (Thread-safe UI context)
+                                    UpdateDiscoveryCache(contentType);
+
                                     UpdateHeroState();
                                 }
                                 else
@@ -625,6 +678,10 @@ namespace ModernIPTVPlayer.Controls
                                     lock(_rowItemsBuffer) {
                                         _rowStates[rowId] = RowState.Failed;
                                     }
+                                    
+                                    // Update Cache (Thread-safe UI context)
+                                    UpdateDiscoveryCache(contentType);
+
                                     UpdateHeroState();
                                 }
                             });
@@ -661,7 +718,30 @@ namespace ModernIPTVPlayer.Controls
             finally
             {
                 _isDiscoveryRunning = false;
+                // Ensure cache is updated on UI thread and only if context is still valid
+                DispatcherQueue.TryEnqueue(() => UpdateDiscoveryCache(contentType));
             }
+        }
+
+        private void UpdateDiscoveryCache(string contentType)
+        {
+            // [STABILITY FIX] Guard against saving stale state from a cancelled task
+            if (string.IsNullOrEmpty(contentType) || contentType != _currentContentType) return;
+
+            var state = new DiscoveryState
+            {
+                Rows = _discoveryRows.ToList(),
+                HeroPriorityOrder = new List<string>(_heroPriorityOrder),
+                HeroColors = _lastHeroColors
+            };
+
+            lock (_rowItemsBuffer)
+            {
+                state.RowStates = new Dictionary<string, RowState>(_rowStates);
+                state.RowItemsBuffer = new Dictionary<string, ObservableCollection<StremioMediaStream>>(_rowItemsBuffer);
+            }
+
+            _contentCache[contentType] = state;
         }
 
         private async Task<CatalogRowViewModel> LoadCatalogRowAsync(string baseUrl, string type, StremioCatalog cat, int sortIndex)

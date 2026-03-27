@@ -97,7 +97,7 @@ namespace ModernIPTVPlayer.Services
         {
             // 1. Initial Index Build (from disk cache)
             _ = Task.Run(async () => {
-                await Task.Delay(3000); // Wait 3s for stability
+                await Task.Delay(1000); // reduced from 3000 for faster content availability
                 System.Diagnostics.Debug.WriteLine("[BackgroundSync] Triggering initial index refresh...");
                 await RefreshIptvMatchIndexAsync();
             });
@@ -209,29 +209,35 @@ namespace ModernIPTVPlayer.Services
                         var vodMap = vods.ToDictionary(v => v.StreamId);
                         var seriesMap = series.ToDictionary(s => s.SeriesId);
 
-                        // Reconstruct ImdbIndex
-                        foreach(var kvp in persisted.ImdbIndex)
+                        // Reconstruct ImdbIndex (Parallelized for 120Hz fluidity)
+                        System.Threading.Tasks.Parallel.ForEach(persisted.ImdbIndex, kvp =>
                         {
                             var list = new List<IMediaStream>();
-                            foreach(var idRef in kvp.Value)
+                            foreach (var idRef in kvp.Value)
                             {
                                 if (idRef.IsSeries && seriesMap.TryGetValue(idRef.Id, out var s)) list.Add(s);
                                 else if (!idRef.IsSeries && vodMap.TryGetValue(idRef.Id, out var v)) list.Add(v);
                             }
-                            if (list.Any()) imdbIndex[kvp.Key] = list;
-                        }
+                            if (list.Any())
+                            {
+                                lock (imdbIndex) imdbIndex[kvp.Key] = list;
+                            }
+                        });
 
-                        // Reconstruct TokenIndex
-                        foreach(var kvp in persisted.TokenIndex)
+                        // Reconstruct TokenIndex (Parallelized)
+                        System.Threading.Tasks.Parallel.ForEach(persisted.TokenIndex, kvp =>
                         {
                             var list = new List<IMediaStream>();
-                            foreach(var idRef in kvp.Value)
+                            foreach (var idRef in kvp.Value)
                             {
                                 if (idRef.IsSeries && seriesMap.TryGetValue(idRef.Id, out var s)) list.Add(s);
                                 else if (!idRef.IsSeries && vodMap.TryGetValue(idRef.Id, out var v)) list.Add(v);
                             }
-                            if (list.Any()) tokenIndex[kvp.Key] = list;
-                        }
+                            if (list.Any())
+                            {
+                                lock (tokenIndex) tokenIndex[kvp.Key] = list;
+                            }
+                        });
 
                         GlobalTokenIndex = tokenIndex;
                         IptvMatchService.Instance.UpdateIndices(vods, series, imdbIndex, tokenIndex);
@@ -241,19 +247,15 @@ namespace ModernIPTVPlayer.Services
 
                     AppLogger.Warn($"[Index] Building Index from scratch for '{targetId}' (Hash mismatch or no index found)...");
                     
-                    // 4. Build Indices in one pass
-                    var imdbIndexNew = new Dictionary<string, List<IMediaStream>>(StringComparer.OrdinalIgnoreCase);
-                    var tokenIndexNew = new Dictionary<string, List<IMediaStream>>(StringComparer.OrdinalIgnoreCase);
-                    
-                    // Persistence structure
-                    var persistImdb = new Dictionary<string, List<StreamIdRef>>(StringComparer.OrdinalIgnoreCase);
-                    var persistToken = new Dictionary<string, List<StreamIdRef>>(StringComparer.OrdinalIgnoreCase);
+                    // 4. Build Indices in parallel
+                    var imdbIndexNew = new System.Collections.Concurrent.ConcurrentDictionary<string, List<IMediaStream>>(StringComparer.OrdinalIgnoreCase);
+                    var tokenIndexNew = new System.Collections.Concurrent.ConcurrentDictionary<string, List<IMediaStream>>(StringComparer.OrdinalIgnoreCase);
+                    var persistImdb = new System.Collections.Concurrent.ConcurrentDictionary<string, List<StreamIdRef>>(StringComparer.OrdinalIgnoreCase);
+                    var persistToken = new System.Collections.Concurrent.ConcurrentDictionary<string, List<StreamIdRef>>(StringComparer.OrdinalIgnoreCase);
 
-                    int count = 0;
-                    foreach (var item in vods.Cast<IMediaStream>().Concat(series))
+                    var allItems = vods.Cast<IMediaStream>().Concat(series).ToList();
+                    System.Threading.Tasks.Parallel.ForEach(allItems, item =>
                     {
-                        if (++count % 10000 == 0) await Task.Yield();
-                        
                         bool isSeries = item is SeriesStream;
                         int id = isSeries ? (item as SeriesStream).SeriesId : (item as VodStream).StreamId;
                         var idRef = new StreamIdRef { Id = id, IsSeries = isSeries };
@@ -264,14 +266,10 @@ namespace ModernIPTVPlayer.Services
                             string normalizedId = item.IMDbId;
                             if (normalizedId.Contains(":")) normalizedId = normalizedId.Split(':').Last();
 
-                            if (!imdbIndexNew.TryGetValue(normalizedId, out var list))
-                            {
-                                list = new List<IMediaStream>();
-                                imdbIndexNew[normalizedId] = list;
-                                persistImdb[normalizedId] = new List<StreamIdRef>();
-                            }
-                            list.Add(item);
-                            persistImdb[normalizedId].Add(idRef);
+                            var list = imdbIndexNew.GetOrAdd(normalizedId, _ => new List<IMediaStream>());
+                            var pList = persistImdb.GetOrAdd(normalizedId, _ => new List<StreamIdRef>());
+                            lock (list) list.Add(item);
+                            lock (pList) pList.Add(idRef);
                         }
 
                         // Token Index
@@ -280,30 +278,32 @@ namespace ModernIPTVPlayer.Services
                             var tokens = TitleHelper.GetSignificantTokens(item.Title);
                             foreach (var t in tokens)
                             {
-                                if (!tokenIndexNew.TryGetValue(t, out var list))
-                                {
-                                    list = new List<IMediaStream>();
-                                    tokenIndexNew[t] = list;
-                                    persistToken[t] = new List<StreamIdRef>();
-                                }
-                                list.Add(item);
-                                persistToken[t].Add(idRef);
+                                var list = tokenIndexNew.GetOrAdd(t, _ => new List<IMediaStream>());
+                                var pList = persistToken.GetOrAdd(t, _ => new List<StreamIdRef>());
+                                lock (list) list.Add(item);
+                                lock (pList) pList.Add(idRef);
                             }
                         }
-                    }
+                    });
+
+                    // Convert back to regular dictionaries for update
+                    var finalImdb = imdbIndexNew.ToDictionary(k => k.Key, v => v.Value);
+                    var finalToken = tokenIndexNew.ToDictionary(k => k.Key, v => v.Value);
+                    var finalPersistImdb = persistImdb.ToDictionary(k => k.Key, v => v.Value);
+                    var finalPersistToken = persistToken.ToDictionary(k => k.Key, v => v.Value);
 
                     // 5. Save for next time
                     var newPersisted = new PersistentIptvIndex {
                         VodHash = vodHash,
                         SeriesHash = seriesHash,
-                        ImdbIndex = persistImdb,
-                        TokenIndex = persistToken
+                        ImdbIndex = finalPersistImdb,
+                        TokenIndex = finalPersistToken
                     };
                     _ = SaveSingularCacheAsync(targetId, "match_index", newPersisted);
 
                     // 6. Atomically Update
-                    GlobalTokenIndex = tokenIndexNew;
-                    IptvMatchService.Instance.UpdateIndices(vods, series, imdbIndexNew, tokenIndexNew);
+                    GlobalTokenIndex = finalToken;
+                    IptvMatchService.Instance.UpdateIndices(vods, series, finalImdb, finalToken);
                     AppLogger.Info($"[Index] Global Index Refreshed & Saved: {vods.Count} VODs, {series.Count} Series. Total Tokens: {tokenIndexNew.Count}");
                 }
                 catch (Exception ex)

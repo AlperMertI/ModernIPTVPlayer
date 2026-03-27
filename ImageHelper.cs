@@ -17,8 +17,9 @@ namespace ModernIPTVPlayer
         private static readonly HttpClient _httpClient = new HttpClient();
         private static readonly ConcurrentDictionary<string, (Color Primary, Color Secondary)> _colorCache = new();
         private static readonly ConcurrentDictionary<string, BitmapImage> _logoCache = new();
+        private static readonly ConcurrentDictionary<string, Task<(Color Primary, Color Secondary)>> _pendingExtractions = new();
+        private static readonly System.Threading.SemaphoreSlim _extractionSemaphore = new System.Threading.SemaphoreSlim(4, 4);
         private static readonly Random _random = new Random();
-        private static readonly System.Threading.SemaphoreSlim _decodeSemaphore = new System.Threading.SemaphoreSlim(2);
 
         private static readonly int MAX_LOGO_CACHE_SIZE = 120;
 
@@ -61,16 +62,28 @@ namespace ModernIPTVPlayer
             if (string.IsNullOrEmpty(imageUrl)) return null;
             if (_colorCache.TryGetValue(imageUrl, out var cached)) return cached;
 
+            // Use pending extraction if already in progress to avoid redundant work/resource exhaustion
+            var task = _pendingExtractions.GetOrAdd(imageUrl, async (url) => {
+                await _extractionSemaphore.WaitAsync();
+                try
+                {
+                    return await ExtractDominantColorsAsync(url);
+                }
+                finally
+                {
+                    _extractionSemaphore.Release();
+                    _pendingExtractions.TryRemove(url, out _);
+                }
+            });
+
             try
             {
-                var colors = await ExtractDominantColorsAsync(imageUrl);
-                // Cache even if it's the fallback color from ExtractDominantColorsAsync
-                _colorCache.TryAdd(imageUrl, colors);
-                return colors;
+                var result = await task;
+                _colorCache.TryAdd(imageUrl, result);
+                return result;
             }
-            catch (Exception)
+            catch
             {
-                // Cache a default dark color to prevent retries
                 var fallback = (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
                 _colorCache.TryAdd(imageUrl, fallback);
                 return fallback;
@@ -103,11 +116,8 @@ namespace ModernIPTVPlayer
 
         private static async Task<(Color Primary, Color Secondary)> ExtractDominantColorsAsync(string imageUrl)
         {
-            await _decodeSemaphore.WaitAsync();
             try
             {
-                using var response = await HttpHelper.Client.GetAsync(imageUrl);
-                response.EnsureSuccessStatusCode();
 
                 using (var stream = await RandomAccessStreamReference.CreateFromUri(new Uri(imageUrl)).OpenReadAsync())
                 {
@@ -115,7 +125,7 @@ namespace ModernIPTVPlayer
                     
                     var decoder = await BitmapDecoder.CreateAsync(stream);
 
-                    uint targetSize = 50;
+                    uint targetSize = 128;
                     var transform = new BitmapTransform
                     {
                         ScaledWidth = targetSize,
@@ -155,7 +165,6 @@ namespace ModernIPTVPlayer
             }
             finally
             {
-                _decodeSemaphore.Release();
             }
         }
 

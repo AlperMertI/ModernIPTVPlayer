@@ -82,41 +82,41 @@ namespace ModernIPTVPlayer.Controls
                 if (visual == null) return;
                 var compositor = visual.Compositor;
 
-                // Primary glow: gentle opacity breathing
+                // Primary glow: intense vibrant center
                 var primaryVisual = ElementCompositionPreview.GetElementVisual(PrimaryGlowLayer);
                 if (primaryVisual != null)
                 {
                     var primaryAnim = compositor.CreateScalarKeyFrameAnimation();
-                    primaryAnim.InsertKeyFrame(0f, 0.35f);
-                    primaryAnim.InsertKeyFrame(0.5f, 0.55f);
-                    primaryAnim.InsertKeyFrame(1f, 0.35f);
-                    primaryAnim.Duration = TimeSpan.FromSeconds(6);
+                    primaryAnim.InsertKeyFrame(0f, 0.65f);
+                    primaryAnim.InsertKeyFrame(0.5f, 0.85f);
+                    primaryAnim.InsertKeyFrame(1f, 0.65f);
+                    primaryAnim.Duration = TimeSpan.FromSeconds(8); // Slower for premium feel
                     primaryAnim.IterationBehavior = Microsoft.UI.Composition.AnimationIterationBehavior.Forever;
                     primaryVisual.StartAnimation("Opacity", primaryAnim);
                 }
 
-                // Ambient: inverse phase
+                // Ambient: robust base atmosphere
                 var ambientVisual = ElementCompositionPreview.GetElementVisual(AmbientLayer);
                 if (ambientVisual != null)
                 {
                     var ambientAnim = compositor.CreateScalarKeyFrameAnimation();
-                    ambientAnim.InsertKeyFrame(0f, 0.30f);
-                    ambientAnim.InsertKeyFrame(0.5f, 0.20f);
-                    ambientAnim.InsertKeyFrame(1f, 0.30f);
-                    ambientAnim.Duration = TimeSpan.FromSeconds(6);
+                    ambientAnim.InsertKeyFrame(0f, 0.50f);
+                    ambientAnim.InsertKeyFrame(0.5f, 0.70f);
+                    ambientAnim.InsertKeyFrame(1f, 0.50f);
+                    ambientAnim.Duration = TimeSpan.FromSeconds(10);
                     ambientAnim.IterationBehavior = Microsoft.UI.Composition.AnimationIterationBehavior.Forever;
                     ambientVisual.StartAnimation("Opacity", ambientAnim);
                 }
 
-                // Bloom: slightly faster cycle
+                // Bloom: vibrant secondary fill
                 var bloomVisual = ElementCompositionPreview.GetElementVisual(BloomLayer);
                 if (bloomVisual != null)
                 {
                     var bloomAnim = compositor.CreateScalarKeyFrameAnimation();
-                    bloomAnim.InsertKeyFrame(0f, 0.10f);
-                    bloomAnim.InsertKeyFrame(0.5f, 0.20f);
-                    bloomAnim.InsertKeyFrame(1f, 0.10f);
-                    bloomAnim.Duration = TimeSpan.FromSeconds(4);
+                    bloomAnim.InsertKeyFrame(0f, 0.20f);
+                    bloomAnim.InsertKeyFrame(0.5f, 0.40f);
+                    bloomAnim.InsertKeyFrame(1f, 0.20f);
+                    bloomAnim.Duration = TimeSpan.FromSeconds(6);
                     bloomAnim.IterationBehavior = Microsoft.UI.Composition.AnimationIterationBehavior.Forever;
                     bloomVisual.StartAnimation("Opacity", bloomAnim);
                 }

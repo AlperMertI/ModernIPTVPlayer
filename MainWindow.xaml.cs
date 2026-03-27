@@ -281,12 +281,23 @@ namespace ModernIPTVPlayer
         private RadioButton GetActiveButton()
         {
             if (ContentFrame.Content == null) return null;
-            string tag = ContentFrame.Content.GetType().Name;
-            // Handle some tag/name mismatches if any
-            if (tag == "AddonsPage") tag = "AddonsPage"; // Namespace check?
+            var content = ContentFrame.Content;
+            Type contentType = content.GetType();
 
             return NavButtonsStack.Children.OfType<RadioButton>()
-                .FirstOrDefault(b => b.Tag?.ToString() == tag);
+                .FirstOrDefault(b => 
+                {
+                    if (b.Tag == null) return false;
+                    string tag = b.Tag.ToString();
+                    if (GetPageTypeFromTag(tag) != contentType) return false;
+
+                    if (contentType == typeof(MediaLibraryPage) && content is MediaLibraryPage libPage)
+                    {
+                        var targetType = tag == "MoviesPage" ? MediaType.Movie : MediaType.Series;
+                        return libPage.MediaType == targetType;
+                    }
+                    return true;
+                });
         }
 
         private void NavButton_Checked(object sender, RoutedEventArgs e)
@@ -463,11 +474,29 @@ namespace ModernIPTVPlayer
 
             // Sync Button Selection
             var activeBtn = NavButtonsStack.Children.OfType<RadioButton>()
-                .FirstOrDefault(b => b.Tag != null && GetPageTypeFromTag(b.Tag.ToString()) == e.SourcePageType);
+                .FirstOrDefault(b => 
+                {
+                    if (b.Tag == null) return false;
+                    string tag = b.Tag.ToString();
+                    Type? pageType = GetPageTypeFromTag(tag);
+                    if (pageType != e.SourcePageType) return false;
+                    
+                    if (pageType == typeof(MediaLibraryPage))
+                    {
+                        var targetType = tag == "MoviesPage" ? MediaType.Movie : MediaType.Series;
+                        if (e.Parameter is MediaLibraryArgs args) return args.Type == targetType;
+                        return PageStateProvider.LastMediaType == targetType;
+                    }
+                    return true;
+                });
             
             if (activeBtn != null)
             {
+                // Temporarily detach Checked event to avoid redundant navigation triggers during sync
+                activeBtn.Checked -= NavButton_Checked;
                 activeBtn.IsChecked = true;
+                activeBtn.Checked += NavButton_Checked;
+
                 UpdatePillPosition(activeBtn);
             }
 

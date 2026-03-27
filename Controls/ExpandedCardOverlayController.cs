@@ -111,6 +111,32 @@ namespace ModernIPTVPlayer.Controls
 
         public void PrepareForTrailer() => _expandedCard.PrepareForTrailer();
 
+        public void UpdatePositions()
+        {
+            if (_activeSourceCard == null || _expandedCard.Visibility != Visibility.Visible || _isInCinemaMode) return;
+            
+            try
+            {
+                var transform = _activeSourceCard.TransformToVisual(_overlayCanvas);
+                var position = transform.TransformPoint(new Windows.Foundation.Point(0, 0));
+
+                double widthDiff = CardWidth - _activeSourceCard.ActualWidth;
+                double heightDiff = CardHeight - _activeSourceCard.ActualHeight;
+
+                double targetX = position.X - (widthDiff / 2);
+                double targetY = position.Y - (heightDiff / 2);
+
+                if (targetX < 10) targetX = 10;
+                if (targetY < 10) targetY = 10;
+                if (targetX + CardWidth > _overlayCanvas.ActualWidth) targetX = _overlayCanvas.ActualWidth - CardWidth - 10;
+                if (targetY + CardHeight > _overlayCanvas.ActualHeight) targetY = _overlayCanvas.ActualHeight - CardHeight - 10;
+
+                Canvas.SetLeft(_expandedCard, targetX);
+                Canvas.SetTop(_expandedCard, targetY);
+            }
+            catch { /* Element might be detached during scroll */ }
+        }
+
         public void CancelPendingShow()
         {
             _hoverTimer?.Stop();
