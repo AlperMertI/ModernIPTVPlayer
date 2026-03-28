@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices;
 using System.Collections.Generic;
+using Microsoft.Win32;
 using Microsoft.UI.Xaml.Hosting;
 using System.Numerics;
 
@@ -54,9 +55,19 @@ public class D3D11RenderControl : ContentControl
     public int CurrentHeight { get; private set; }
     
     // SwapChain Dimensions - Gerçek texture boyutları
-    // SwapChain Dimensions - Gerçek texture boyutları
     private int _swapChainWidth;
     private int _swapChainHeight;
+    private Format _swapChainFormat = Format.FormatB8G8R8A8Unorm;
+    private ColorSpaceType _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG22NoneP709;
+    private bool _isHdrEnabled = false;
+    public bool IsHdrEnabled => _isHdrEnabled;
+
+    private float _peakLuminance = 1000f; 
+    public float PeakLuminance => _peakLuminance;
+    
+    private float _sdrWhiteLevel = 80f;
+    public float SdrWhiteLevel => _sdrWhiteLevel;
+
     
     // Render'da kullanılacak boyutlar - her zaman SwapChain ile sınırlı
     public int RenderWidth => _swapChainWidth > 0 ? _swapChainWidth : CurrentWidth;
@@ -84,6 +95,7 @@ public class D3D11RenderControl : ContentControl
         }
     }
 
+    public event EventHandler<bool> HdrStatusChanged;
     public event EventHandler Ready;
     
     // DEĞİŞİKLİK: Void Action yerine, sonucun döndüğü Func kullanıyoruz
@@ -105,11 +117,61 @@ public class D3D11RenderControl : ContentControl
     [DllImport("user32.dll")]
     private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
 
-    [DllImport("user32.dll")]
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
 
     [DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetActiveWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct MONITORINFOEX
+    {
+        public int Size;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint Flags;
+        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string DeviceName;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;
+
+    private static readonly Guid IID_IDisplayInformation = Guid.Parse("bed11288-c17d-4dc9-bc77-1d167f0d6536");
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern bool EnumDisplayDevices(string lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
+
+    private const uint EDD_GET_DEVICE_INTERFACE_NAME = 0x00000001;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct DISPLAY_DEVICE
+    {
+        public uint cb;
+        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
+        public string DeviceName;
+        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceString;
+        public uint StateFlags;
+        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceID;
+        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
+        public string DeviceKey;
+    }
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static unsafe extern uint WaitForMultipleObjects(uint nCount, IntPtr* lpHandles, bool bWaitAll, uint dwMilliseconds);
@@ -153,13 +215,107 @@ public class D3D11RenderControl : ContentControl
         public int dmPanningHeight;
     }
 
+
     private int _monitorRefreshRate = 60;
 
     public D3D11RenderControl()
     {
         SizeChanged += OnSizeChanged;
         Unloaded += OnUnloaded;
+        UpdateHdrStatus();
         UpdateRefreshRate();
+    }
+
+    private unsafe void UpdateHdrStatus()
+    {
+        bool hdrWasEnabled = _isHdrEnabled;
+        IntPtr hwnd = IntPtr.Zero;
+
+        try
+        {
+            // 1. Identify window and monitor
+            hwnd = GetForegroundWindow();
+            if (hwnd == IntPtr.Zero) return;
+            
+            IntPtr hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            
+            // 2. GET STATUS & BASE PEAK FROM MODERN SDK (Microsoft.Graphics.Display)
+            float sdkPeak = 0;
+            try
+            {
+                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+                if (windowId.Value != 0)
+                {
+                    var displayInfo = Microsoft.Graphics.Display.DisplayInformation.CreateForWindowId(windowId);
+                    var colorInfo = displayInfo.GetAdvancedColorInfo();
+                    
+                    if (colorInfo != null)
+                    {
+                        _isHdrEnabled = colorInfo.CurrentAdvancedColorKind == Microsoft.Graphics.Display.DisplayAdvancedColorKind.HighDynamicRange;
+                        sdkPeak = (float)colorInfo.MaxLuminanceInNits;
+                        _sdrWhiteLevel = (float)colorInfo.SdrWhiteLevelInNits;
+                    }
+                }
+            }
+            catch { /* Fallback to older methods */ }
+
+            // 3. GET PHYSICAL TRUTH FROM EDID (Hardware Level)
+            bool hardwarePeakFound = false;
+            try
+            {
+                float edidPeak = GetPhysicalPeakFromEdid(hMonitor);
+                if (edidPeak > 300)
+                {
+                    _peakLuminance = edidPeak;
+                    hardwarePeakFound = true;
+                    LogSync($"[HDR_EDID] Success! Hardware-level Peak detected: {_peakLuminance:F1} nits.");
+                }
+            }
+            catch (Exception edidEx)
+            {
+                LogSync($"[HDR_EDID_ERR] EDID discovery failed: {edidEx.Message}");
+            }
+
+            // 4. FINAL PEAK CALIBRATION
+            if (hardwarePeakFound)
+            {
+                // We use the 616.9 (or similar) from your hardware directly.
+            }
+            else if (_isHdrEnabled)
+            {
+                // Fallback to SDK if healthy, otherwise use safety heuristic
+                _peakLuminance = (sdkPeak > 250) ? sdkPeak : 600.0f;
+                if (sdkPeak <= 250) LogSync($"[HDR_FIX] Low OS peak ({sdkPeak:F1}). Applying generic 600 nits fallback.");
+            }
+            else
+            {
+                _peakLuminance = 80; // SDR
+            }
+
+            // 5. SIGNALING SELECTION
+            if (_isHdrEnabled)
+            {
+                _swapChainFormat = Format.FormatR10G10B10A2Unorm; // Native 10-bit
+                _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG2084NoneP2020; // Native PQ
+            }
+            else
+            {
+                _swapChainFormat = Format.FormatB8G8R8A8Unorm;
+                _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG22NoneP709; // sRGB
+            }
+
+            // 6. APPLY CHANGES
+            if (hdrWasEnabled != _isHdrEnabled)
+            {
+                LogSync($"[HDR_STATUS] SYNC -> Enabled: {_isHdrEnabled} | Format: {_swapChainFormat} | Final Peak: {_peakLuminance:F1}");
+                HdrStatusChanged?.Invoke(this, _isHdrEnabled);
+                if (_swapChain.Handle != null) RequestResize(force: true);
+            }
+        }
+        catch (Exception ex)
+        {
+            LogSync($"[HDR_ERR] Critical sync failure: {ex.Message}");
+        }
     }
 
     private void UpdateRefreshRate()
@@ -381,6 +537,10 @@ public class D3D11RenderControl : ContentControl
 
         int width, height;
         double logW, logH, scaleX, scaleY;
+        
+        // RE-CHECK HDR Status on every physical resize to catch monitor switches/toggles
+        UpdateHdrStatus();
+
         lock (_sizeLock)
         {
             logW = _targetWidth;
@@ -458,12 +618,15 @@ public class D3D11RenderControl : ContentControl
                 }
                 else
                 {
-                    var hr = _swapChain.Handle->ResizeBuffers(3, (uint)width, (uint)height, Format.FormatB8G8R8A8Unorm, (uint)SwapChainFlag.FrameLatencyWaitableObject);
+                    var hr = _swapChain.Handle->ResizeBuffers(3, (uint)width, (uint)height, _swapChainFormat, (uint)SwapChainFlag.FrameLatencyWaitableObject);
                     if (hr < 0) {
                         _swapChain.Dispose();
                         CreateSwapChain(width, height);
                     }
                 }
+                
+                // 3. COLOR SPACE
+                UpdateColorSpace();
                 
                 resizeBuffersTime = sw.Elapsed.TotalMilliseconds - (lockTime + flushTime + releaseTime);
 
@@ -518,6 +681,25 @@ public class D3D11RenderControl : ContentControl
         }
     }
 
+    private unsafe void UpdateColorSpace()
+    {
+        if (_swapChain.Handle == null) return;
+        
+        using var sc3 = _swapChain.QueryInterface<IDXGISwapChain3>();
+        if (sc3.Handle != null)
+        {
+            var hr = sc3.Handle->SetColorSpace1(_swapChainColorSpace);
+            if (hr < 0)
+            {
+                LogSync($"[HDR_ERR] SetColorSpace1 Failed: 0x{hr:X}");
+            }
+            else
+            {
+                // LogSync($"[HDR_TRACE] SetColorSpace1 Success: {_swapChainColorSpace}");
+            }
+        }
+    }
+
     private unsafe void CreateSwapChain(int width, int height)
     {
         if (_swapChain.Handle != null) return;
@@ -535,7 +717,7 @@ public class D3D11RenderControl : ContentControl
         SwapChainDesc1 desc = new SwapChainDesc1
         {
             Width = (uint)width, Height = (uint)height,
-            Format = Format.FormatB8G8R8A8Unorm,
+            Format = _swapChainFormat,
             BufferCount = 3, BufferUsage = DXGI.UsageRenderTargetOutput,
             SampleDesc = new SampleDesc(1, 0), Scaling = Scaling.Stretch,
             SwapEffect = SwapEffect.FlipDiscard, AlphaMode = AlphaMode.Ignore,
@@ -549,6 +731,8 @@ public class D3D11RenderControl : ContentControl
         var sc1 = new ComPtr<IDXGISwapChain1>(sc1Raw);
         _swapChain = sc1.QueryInterface<IDXGISwapChain2>();
         sc1.Dispose();
+        
+        UpdateColorSpace();
     }
     
 
@@ -711,6 +895,137 @@ public class D3D11RenderControl : ContentControl
             _needsFirstFrameLink = false;
             LogSync("[FIX] EnsureSwapChainLinked: Forced immediate swap chain linkage.");
         }
+    }
+
+    private float GetPhysicalPeakFromEdid(IntPtr hMonitor)
+    {
+        try
+        {
+            // 1. Get Monitor Name (e.g. \\.\DISPLAY1)
+            MONITORINFOEX info = new MONITORINFOEX();
+            info.Size = Marshal.SizeOf(info);
+            if (!GetMonitorInfo(hMonitor, ref info)) 
+            {
+                LogSync("[HDR_EDID_ERR] GetMonitorInfo failed.");
+                return 0;
+            }
+            string deviceName = info.DeviceName;
+            LogSync($"[HDR_EDID_STEP] Scanning Display: {deviceName}");
+
+            // 2. Enum Display Devices to find Hardware ID
+            DISPLAY_DEVICE device = new DISPLAY_DEVICE();
+            device.cb = (uint)Marshal.SizeOf(device);
+            
+            // Loop through monitor devices on this display
+            uint i = 0;
+            while (EnumDisplayDevices(deviceName, i++, ref device, 1)) 
+            {
+                string hardwareId = device.DeviceID;
+                if (string.IsNullOrEmpty(hardwareId)) continue;
+                
+                LogSync($"[HDR_EDID_STEP] Found Monitor {i-1}: {hardwareId}");
+                
+                // Normalize hardware ID for registry path
+                // Input: \\?\DISPLAY#SDC4178#4&32ada849&0&UID8388688#{e6f07b5f-...}
+                // Output: DISPLAY\SDC4178\4&32ada849&0&UID8388688
+                string regId = hardwareId;
+                if (regId.StartsWith(@"\\?\")) regId = regId.Substring(4);
+                
+                string[] parts = regId.Split('#');
+                if (parts.Length >= 3)
+                {
+                    string cleanId = $@"DISPLAY\{parts[1]}\{parts[2]}";
+                    string regPath = $@"SYSTEM\CurrentControlSet\Enum\{cleanId}\Device Parameters";
+                    LogSync($"[HDR_EDID_STEP] Opening Registry: {regPath}");
+                    
+                    using (var key = Registry.LocalMachine.OpenSubKey(regPath))
+                {
+                    if (key != null)
+                    {
+                        byte[] edid = (byte[])key.GetValue("EDID");
+                        if (edid != null && edid.Length >= 128)
+                        {
+                            float peak = ParseHdrPeakFromEdid(edid);
+                            LogSync($"[HDR_EDID_STEP] EDID binary found. Parsed Peak: {peak} nits.");
+                            if (peak > 0) return peak;
+                        }
+                        else
+                        {
+                            LogSync("[HDR_EDID_STEP] EDID value missing in key.");
+                        }
+                    }
+                    else
+                    {
+                        LogSync("[HDR_EDID_STEP] Registry key NOT found.");
+                    }
+                }
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+            LogSync($"[HDR_EDID_ERR] Discovery failed: {ex.Message}");
+        }
+        return 0;
+    }
+
+    private float ParseHdrPeakFromEdid(byte[] edid)
+    {
+        try
+        {
+            if (edid == null || edid.Length < 128) return 0;
+            
+            // 1. Log Basic Info
+            int extensions = edid[126];
+            LogSync($"[HDR_EDID_SCAN] Extensions: {extensions} | Total Bytes: {edid.Length}");
+            
+            // 2. UNIVERSAL SIGNATURE SCAN (Deep Scan)
+            // We search for the E6-06 signature (CTA-861 Static HDR Metadata Block) 
+            // anywhere in the extension blocks. This bypasses structural quirks (like DisplayID wrapping).
+            for (int i = 128; i < edid.Length - 6; i++)
+            {
+                // E6 06 is the magic signature for HDR Static Metadata
+                if (edid[i] == 0xE6 && edid[i+1] == 0x06)
+                {
+                    LogSync($"[HDR_EDID_SCAN] Found HDR Signature (E6-06) at offset {i}");
+                    
+                    // Byte 4 from the start of the block header (i) is Max Luminance
+                    // Based on CTA-861: 
+                    // i+0: Tag (E6)
+                    // i+1: Enum (06)
+                    // i+2: Supported EOTFs
+                    // i+3: Static Metadata Descriptors
+                    // i+4: Max Luminance (Desired Content)
+                    // i+5: Max Frame-Average Luminance
+                    // i+6: Min Luminance
+                    
+                    byte maxLum = edid[i + 4];
+                    byte maxAvg = edid[i + 5];
+                    byte minLum = edid[i + 6];
+                    
+                    if (maxLum > 0)
+                    {
+                        float peakNits = 50.0f * (float)Math.Pow(2, maxLum / 32.0);
+                        float avgNits = 50.0f * (float)Math.Pow(2, maxAvg / 32.0);
+                        float blackNits = 0.005f * (float)Math.Pow(2, minLum / 32.0);
+                        
+                        LogSync($"[HDR_EDID_SCAN] >>> HARDWARE CALIBRATION FOUND <<<");
+                        LogSync($"[HDR_EDID_SCAN] * Physical Peak: {peakNits:F1} nits (Raw: 0x{maxLum:X2})");
+                        LogSync($"[HDR_EDID_SCAN] * Full Frame Max: {avgNits:F1} nits (Raw: 0x{maxAvg:X2})");
+                        LogSync($"[HDR_EDID_SCAN] * Black Level: {blackNits:F4} nits (Raw: 0x{minLum:X2})");
+                        
+                        return peakNits;
+                    }
+                }
+            }
+            
+            LogSync("[HDR_EDID_FAILED] No HDR signature found in EDID payload.");
+        }
+        catch (Exception ex)
+        {
+            LogSync($"[HDR_EDID_ERR] Universal Scan failed: {ex.Message}");
+        }
+        return 0;
     }
 
     private void LogSync(string message) => Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SYNC] [Thread:{Environment.CurrentManagedThreadId}] {message}");

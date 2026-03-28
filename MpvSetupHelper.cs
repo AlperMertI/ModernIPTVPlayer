@@ -177,19 +177,32 @@ namespace ModernIPTVPlayer
                 }
 
                 // Target Display Mode (HDR/SDR Control)
-                switch (pSettings.TargetDisplayMode)
+                // If set to Auto, we query the hardware status from the RenderControl
+                var displayMode = pSettings.TargetDisplayMode;
+                if (displayMode == Models.TargetDisplayMode.Auto)
+                {
+                    displayMode = player.IsHdrEnabled ? Models.TargetDisplayMode.HdrPassthrough : Models.TargetDisplayMode.SdrForce;
+                    AppLogger.Info($"[HDR_AUTO] Hardware HDR Enabled: {player.IsHdrEnabled}. Selecting: {displayMode}");
+                }
+
+                switch (displayMode)
                 {
                     case Models.TargetDisplayMode.SdrForce:
                         await SetPropertySafeAsync(player, "target-colorspace-hint", "no");
                         await SetPropertySafeAsync(player, "target-trc", "srgb");
                         break;
                     case Models.TargetDisplayMode.HdrPassthrough:
+                        // Native HDR Path: Force libmpv to output PQ/BT.2020 to match our 10/16-bit SwapChain
                         await SetPropertySafeAsync(player, "target-colorspace-hint", "yes");
                         await SetPropertySafeAsync(player, "target-trc", "pq");
                         await SetPropertySafeAsync(player, "target-prim", "bt.2020");
-                        break;
-                    default: // Auto
-                        await SetPropertySafeAsync(player, "target-colorspace-hint", "auto");
+                        
+                        // [FIX] Use hardware-level initial peak if available, instead of 'auto'
+                        float rawPeak = player.PeakLuminance;
+                        int peak = (int)Math.Round(rawPeak);
+                        string initialPeak = peak > 300 ? peak.ToString() : "auto";
+                        await SetPropertySafeAsync(player, "target-peak", initialPeak);
+                        AppLogger.Info($"[HDR_INIT] Setting initial target-peak to {initialPeak} (Hardware Raw: {rawPeak:F1})");
                         break;
                 }
 

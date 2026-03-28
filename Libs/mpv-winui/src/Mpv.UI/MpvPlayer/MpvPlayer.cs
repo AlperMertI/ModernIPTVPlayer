@@ -31,6 +31,10 @@ public sealed partial class MpvPlayer : Control
         set => SetValue(RenderApiProperty, value);
     }
 
+    public bool IsHdrEnabled => _renderControl?.IsHdrEnabled ?? false;
+    public float PeakLuminance => _renderControl?.PeakLuminance ?? 1000f;
+    public float SdrWhiteLevel => _renderControl?.SdrWhiteLevel ?? 200f;
+
     protected override void OnApplyTemplate()
     {
         _renderControl = (D3D11RenderControl)GetTemplateChild("RenderControl");
@@ -39,6 +43,35 @@ public sealed partial class MpvPlayer : Control
         {
             // Event yerine Delegate ataması yaptık, böylece return değerini (bool) alabiliriz.
             _renderControl.RenderFrame = Render;
+            _renderControl.HdrStatusChanged += OnHdrStatusChanged;
+        }
+    }
+
+    private void OnHdrStatusChanged(object? sender, bool isEnabled)
+    {
+        if (Player?.Client?.IsInitialized is true)
+        {
+            _ = Task.Run(async () =>
+            {
+                if (isEnabled)
+                {
+                    float rawPeak = _renderControl?.PeakLuminance ?? 1000f;
+                    int peak = (int)Math.Round(rawPeak); // Round to nearest integer (e.g. 617) for stability
+                    
+                    await SetPropertyAsync("target-colorspace-hint", "yes");
+                    await SetPropertyAsync("target-trc", "pq");
+                    await SetPropertyAsync("target-prim", "bt.2020");
+                    await SetPropertyAsync("target-peak", peak.ToString());
+                    
+                    Debug.WriteLine($"[HDR_SYNC] MPV Tone-Mapping Optimized for Hardware: {peak} nits.");
+                }
+                else
+                {
+                    await SetPropertyAsync("target-colorspace-hint", "no");
+                    await SetPropertyAsync("target-trc", "srgb");
+                }
+                Debug.WriteLine($"[HDR_SYNC] MPV Properties Updated - HDR Enabled: {isEnabled}");
+            });
         }
     }
 
@@ -111,13 +144,34 @@ public sealed partial class MpvPlayer : Control
     {
         if (Player == null || value == null) return;
         var valStr = value.ToString();
-        try
+        int maxRetries = 5;
+        int delay = 250;
+
+        for (int i = 0; i < maxRetries; i++)
         {
-            await Task.Run(() => Player.Client.SetProperty(name, valStr));
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[MPV_ERR] Failed to set property '{name}' to '{valStr}': {ex.Message}");
+            try
+            {
+                await Task.Run(() => Player.Client.SetProperty(name, valStr));
+                return; // Success
+            }
+            catch (Exception ex) when (ex.Message.Contains("unsupported format") || i < 2)
+            {
+                // Most common during initialization (VO not ready). 
+                // We retry a few times to "apply when ready".
+                if (i == maxRetries - 1) 
+                {
+                    Debug.WriteLine($"[MPV_ERR] Permanent Failure setting '{name}' to '{valStr}': {ex.Message}");
+                    throw;
+                }
+                Debug.WriteLine($"[MPV_RETRY] Property '{name}' not ready. Retrying in {delay}ms... (Attempt {i + 1}/{maxRetries})");
+                await Task.Delay(delay);
+                delay *= 2; // Exponential backoff
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[MPV_FATAL] Unexpected error setting '{name}': {ex.Message}");
+                break;
+            }
         }
     }
 
