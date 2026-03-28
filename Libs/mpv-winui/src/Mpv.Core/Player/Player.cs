@@ -130,7 +130,7 @@ public sealed partial class Player
         }
     }
 
-    public async Task InitializeDXGIAsync(IntPtr device, IntPtr context, string api = "dxgi")
+    public async Task InitializeDXGIAsync(IntPtr device, IntPtr context, string adapterName = "auto", string api = "dxgi")
     {
         if (Client.IsInitialized)
         {
@@ -146,13 +146,25 @@ public sealed partial class Player
         Client.SetOption("input-default-bindings", true);
         Client.SetOption("input-vo-keyboard", false); // We handle keyboard input in WinUI
         
-        // Increase log level to debug script loading issues
-        Client.RequestLogMessage(MpvLogLevel.Info);
+        // Increase log level to debug script loading and hardware decoding issues
+        Client.RequestLogMessage(MpvLogLevel.V);
+        
+        // Initialize D3D11 Context to ensure libplacebo captures the context correctly
+        Client.SetOption("gpu-api", "d3d11");
+        Client.SetOption("gpu-context", "d3d11");
+
+        Client.SetOption("d3d11-output-mode", "composition");
+        Client.SetOption("d3d11-adapter", adapterName ?? "auto");
+        Client.SetOption("d3d11-output-format", "rgba16f");
+        Client.SetOption("d3d11-flip", "yes");
+        Client.SetOption("d3d11-feature-level", "11_1");
+        
+        // Note: hwdec and d3d11va-zero-copy are now handled by MpvSetupHelper
+        // to allow user preferences (AutoSafe/AutoCopy) to take effect correctly.
 
         await Client.InitializeAsync();
         
         Client.SetProperty("vo", "libmpv");
-        Client.SetProperty("gpu-api", "d3d11");
 
         // Enable OSD level 1 for stats/osc visibility (Must be set as property AFTER init)
         Client.SetProperty("osd-level", 1L); 
@@ -216,10 +228,13 @@ public sealed partial class Player
         Marshal.WriteIntPtr(dxgiParamsPtr + 8, context);
 
         var advControlPtr = Marshal.AllocHGlobal(sizeof(int));
-        Marshal.WriteInt32(advControlPtr, 0); // 0 = Let MPV handle internal locking/sync
+        Marshal.WriteInt32(advControlPtr, 1); // Native Zero-Copy (Direct Rendering) Enabled
         
         var d3d11DevPtr = Marshal.AllocHGlobal(IntPtr.Size);
         Marshal.WriteIntPtr(d3d11DevPtr, device);
+
+        var d3d11CtxPtr = Marshal.AllocHGlobal(IntPtr.Size);
+        Marshal.WriteIntPtr(d3d11CtxPtr, context);
 
         try {
             RenderContext = new MpvRenderContextNative(
@@ -228,7 +243,8 @@ public sealed partial class Player
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = apiStringPtr },
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIInitParams, Data = dxgiParamsPtr },
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.AdvancedControl, Data = advControlPtr },
-                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.D3D11Device, Data = d3d11DevPtr },
+                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.D3D11Device, Data = d3d11DevPtr }, // Correct pointer-to-pointer
+                    new MpvRenderParam { Type = (Enums.Render.MpvRenderParamType)25, Data = d3d11CtxPtr },    // Custom Context handle
                     new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero }
                 ]);
             Debug.WriteLine($"[LOG] {api} RenderContext created SUCCESSFULLY!");
@@ -241,6 +257,7 @@ public sealed partial class Player
         Marshal.FreeCoTaskMem(apiStringPtr);
         Marshal.FreeHGlobal(advControlPtr);
         Marshal.FreeHGlobal(d3d11DevPtr);
+        Marshal.FreeHGlobal(d3d11CtxPtr);
     }
 
     public void RenderGL(int width, int height, int fboInt)

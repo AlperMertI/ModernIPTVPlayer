@@ -25,6 +25,7 @@
 #include "video/hwdec.h"
 #include "video/d3d.h"
 #include "video/out/d3d11/ra_d3d11.h"
+#include "video/out/placebo/ra_pl.h"
 #include "video/out/gpu/hwdec.h"
 
 struct d3d11va_opts {
@@ -180,9 +181,27 @@ static int mapper_init(struct ra_hwdec_mapper *mapper)
         }
 
         for (int i = 0; i < desc.num_planes; i++) {
-            mapper->tex[i] = ra_d3d11_wrap_tex_video(mapper->ra, p->copy_tex,
-                mp_image_plane_w(&layout, i), mp_image_plane_h(&layout, i), 0,
-                desc.planes[i]);
+            if (ra_pl_get(mapper->ra)) {
+                // Determine the correct per-plane DXGI format.
+                // Hardware decoded surfaces (NV12/P010) are planar and require 
+                // different views for Luma (R8/R16) and Chroma (R8G8/R16G16).
+                DXGI_FORMAT plane_fmt = DXGI_FORMAT_UNKNOWN;
+                if (copy_fmt == DXGI_FORMAT_NV12) {
+                    plane_fmt = i == 0 ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_R8G8_UNORM;
+                } else if (copy_fmt == DXGI_FORMAT_P010) {
+                    plane_fmt = i == 0 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R16G16_UNORM;
+                }
+                mapper->tex[i] = ra_pl_wrap_d3d11_video(mapper->ra, p->copy_tex,
+                    mp_image_plane_w(&layout, i), mp_image_plane_h(&layout, i), 0,
+                    plane_fmt, desc.planes[i]);
+            } else {
+                mapper->tex[i] = ra_d3d11_wrap_tex_video(mapper->ra, p->copy_tex,
+                    mp_image_plane_w(&layout, i), mp_image_plane_h(&layout, i), 0,
+                    desc.planes[i]);
+            }
+
+
+
             if (!mapper->tex[i]) {
                 MP_FATAL(mapper, "Could not create RA texture view\n");
                 return -1;
@@ -228,8 +247,24 @@ static int mapper_map(struct ra_hwdec_mapper *mapper)
             int w = desc2d.Width / (chroma ? 2 : 1);
             int h = desc2d.Height / (chroma ? 2 : 1);
 
-            mapper->tex[i] = ra_d3d11_wrap_tex_video(mapper->ra, tex,
-                w, h, subresource, p->fmt[i]);
+            if (ra_pl_get(mapper->ra)) {
+                // For direct zero-copy mapping, determine the plane format
+                // based on the original decoder output texture's format.
+                DXGI_FORMAT plane_fmt = DXGI_FORMAT_UNKNOWN;
+                if (desc2d.Format == DXGI_FORMAT_NV12) {
+                    plane_fmt = i == 0 ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_R8G8_UNORM;
+                } else if (desc2d.Format == DXGI_FORMAT_P010) {
+                    plane_fmt = i == 0 ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_R16G16_UNORM;
+                }
+                mapper->tex[i] = ra_pl_wrap_d3d11_video(mapper->ra, tex,
+                    w, h, subresource, plane_fmt, p->fmt[i]);
+            } else {
+                mapper->tex[i] = ra_d3d11_wrap_tex_video(mapper->ra, tex,
+                    w, h, subresource, p->fmt[i]);
+            }
+
+
+
             if (!mapper->tex[i])
                 return -1;
         }

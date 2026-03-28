@@ -180,14 +180,11 @@ static int get_target_size(struct render_backend *ctx, mpv_render_param *params,
 static int render(struct render_backend *ctx, mpv_render_param *params,
                   struct vo_frame *frame)
 {
-    int64_t t_start = mp_time_ns();
     struct priv *p = ctx->priv;
 
     // 1. Wrap FBO
-    int64_t t0 = mp_time_ns();
     struct ra_tex *tex;
     int err = p->context->fns->wrap_fbo(p->context, params, &tex);
-    int64_t t1 = mp_time_ns();
     if (err < 0)
         return err;
 
@@ -202,31 +199,18 @@ static int render(struct render_backend *ctx, mpv_render_param *params,
     struct ra_fbo target = {.tex = tex, .flip = flip};
     
     // 3. Render Frame
-    int64_t t2 = mp_time_ns();
     gl_video_render_frame(p->renderer, frame, &target, RENDER_FRAME_DEF);
-    int64_t t3 = mp_time_ns();
 
     // 4. Done Frame (Sync)
     p->context->fns->done_frame(p->context, frame->display_synced);
-    int64_t t4 = mp_time_ns();
 
     // 5. Cleanup
     ra_tex_free(p->context->ra_ctx->ra, &tex);
-    int64_t t5 = mp_time_ns();
-
-    double total = (t5 - t_start) / 1000000.0;
-    if (total > 0.001) { // Only log if it's not basically 0
-        MP_INFO(ctx, "[PERF_STEP] Frame:%lld | Total:%.3fms [Wrap:%.3f Setup:%.3f Render:%.3f Done:%.3f Free:%.3f]\n",
-                (long long)frame->frame_id, total,
-                (t1 - t0) / 1000000.0,
-                (t2 - t1) / 1000000.0,
-                (t3 - t2) / 1000000.0,
-                (t4 - t3) / 1000000.0,
-                (t5 - t4) / 1000000.0);
-    }
 
     return 0;
 }
+
+
 
 static struct mp_image *get_image(struct render_backend *ctx, int imgfmt,
                                   int w, int h, int stride_align, int flags)

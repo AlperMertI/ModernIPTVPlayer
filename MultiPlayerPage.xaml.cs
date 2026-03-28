@@ -104,6 +104,7 @@ namespace ModernIPTVPlayer
             EmptyMessage.Visibility = Visibility.Collapsed;
 
             var control = new DraggablePlayerControl();
+            control.IsSecondary = _activePlayers.Count > 0;
             
             // Z-Index: Base level
             Canvas.SetZIndex(control, 10);

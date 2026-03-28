@@ -3,6 +3,8 @@
 
 #include "ra_pl.h"
 #include "utils.h"
+#include <libplacebo/d3d11.h>
+
 
 struct ra_pl {
     pl_gpu gpu;
@@ -66,6 +68,7 @@ struct ra *ra_create_pl(pl_gpu gpu, struct mp_log *log)
     if (r8->caps & PL_FMT_CAP_BLITTABLE)
         ra->caps |= RA_CAP_BLIT;
 
+
     ra->max_texture_wh = gpu->limits.max_tex_2d_dim;
     ra->max_pushc_size = gpu->limits.max_pushc_size;
     ra->max_compute_group_threads = gpu->glsl.max_group_threads;
@@ -121,9 +124,9 @@ static struct ra_format *map_fmt(struct ra *ra, pl_fmt plfmt)
             return ra->formats[i];
     }
 
-    MP_ERR(ra, "Failed mapping pl_fmt '%s' to ra_fmt?\n", plfmt->name);
     return NULL;
 }
+
 
 bool mppl_wrap_tex(struct ra *ra, pl_tex pltex, struct ra_tex *out_tex)
 {
@@ -153,6 +156,53 @@ bool mppl_wrap_tex(struct ra *ra, pl_tex pltex, struct ra_tex *out_tex)
 
     return !!out_tex->params.format;
 }
+
+/*
+ * Wrap a native D3D11 video texture (e.g. from a hardware decoder) into an ra_tex.
+ * 
+ * This uses Libplacebo's native pl_d3d11_wrap API, which is the preferred modern
+ * way to handle hardware interop when using the gpu-next renderer. It ensures
+ * that Libplacebo manages the resource views (SRV/RTV) using its own internal
+ * logic, avoiding compatibility issues with the legacy ra_d3d11 wrapper.
+ */
+struct ra_tex *ra_pl_wrap_d3d11_video(struct ra *ra, ID3D11Texture2D *res,
+                                       int w, int h, int array_slice,
+                                       DXGI_FORMAT dxgi_fmt,
+                                       const struct ra_format *ra_fmt)
+{
+    struct ra_pl *p = ra->priv;
+    if (!p->gpu)
+        return NULL;
+
+    // Use Libplacebo's native D3D11 wrapping.
+    // We pass the DXGI_FORMAT explicitly because hardware decoded surfaces
+    // (like NV12/P010) often require specific plane-based format interpretation
+    // that the high-level pl_fmt structure doesn't expose directly.
+    pl_tex pltex = pl_d3d11_wrap(p->gpu, pl_d3d11_wrap_params(
+        .tex = (ID3D11Resource *)res,
+        .w = w,
+        .h = h,
+        .array_slice = array_slice,
+        .fmt = dxgi_fmt,
+    ));
+
+    if (!pltex) {
+        MP_ERR(ra, "ra_pl_wrap_d3d11_video: pl_d3d11_wrap failed for DXGI format %d\n", (int)dxgi_fmt);
+        return NULL;
+    }
+
+    struct ra_tex *ra_tex = talloc_zero(NULL, struct ra_tex);
+    if (!mppl_wrap_tex(ra, pltex, ra_tex)) {
+        pl_tex_destroy(p->gpu, &pltex);
+        talloc_free(ra_tex);
+        return NULL;
+    }
+
+    return ra_tex;
+}
+
+
+
 
 static struct ra_tex *tex_create_pl(struct ra *ra,
                                     const struct ra_tex_params *params)

@@ -55,9 +55,9 @@ public sealed partial class MpvPlayer : Control
             Player.PlaybackStateChanged += OnStateChanged;
             _renderControl.Initialize();
             Player.Client.SetProperty("vo", "libmpv");
-            Player.Client.RequestLogMessage(MpvLogLevel.Info);
+            Player.Client.RequestLogMessage(MpvLogLevel.V);
             Player.LogMessageReceived += OnLogMessageReceived;
-            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, RenderApi);
+            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi);
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
@@ -94,9 +94,9 @@ public sealed partial class MpvPlayer : Control
             Player.PlaybackStateChanged += OnStateChanged;
             _renderControl.Initialize();
             Player.Client.SetProperty("vo", "libmpv");
-            Player.Client.RequestLogMessage(MpvLogLevel.Info);
+            Player.Client.RequestLogMessage(MpvLogLevel.V);
             Player.LogMessageReceived += OnLogMessageReceived;
-            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, RenderApi);
+            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi);
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
@@ -195,39 +195,29 @@ public sealed partial class MpvPlayer : Control
 
     public async Task CleanupAsync()
     {
-
-        
         // 1. Stop the Render Loop FIRST to prevent access violations during disposal
         if (_renderControl != null)
         {
-
             await _renderControl.StopLoopAsync();
         }
 
         // 2. Dispose of libmpv AFTER rendering is guaranteed to have stopped
-        if (Player != null)
+        // Skip disposal if handoff is active to preserve player state
+        if (Player != null && (_renderControl == null || !_renderControl.PreserveStateOnUnload))
         {
-
             try
             {
                 await Player.DisposeAsync();
-
             }
-            catch (Exception ex)
-            {
-
-            }
+            catch (Exception) { }
             Player = null;
         }
 
         // 3. Destroy D3D11 Resources LAST
-        if (_renderControl != null)
+        if (_renderControl != null && (_renderControl == null || !_renderControl.PreserveStateOnUnload))
         {
-
             _renderControl.DestroyResources();
         }
-
-
     }
 
     public void SetDisplayFps(double fps)

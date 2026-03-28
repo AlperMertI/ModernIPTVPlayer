@@ -91,6 +91,7 @@ public class D3D11RenderControl : ContentControl
 
     public IntPtr DeviceHandle { get; private set; }
     public IntPtr ContextHandle { get; private set; }
+    public string AdapterName { get; private set; } = "auto";
     
     private IntPtr _atomicBackBuffer = IntPtr.Zero;
     public IntPtr RenderTargetHandle => _atomicBackBuffer;
@@ -337,6 +338,11 @@ public class D3D11RenderControl : ContentControl
     private unsafe void CreateDevice()
     {
         uint flags = (uint)CreateDeviceFlag.BgraSupport; 
+        
+        // Phase 13: Enable Video Support to allow d3d11va decoder to bind to this device
+        // 0x800 = D3D11_CREATE_DEVICE_VIDEO_SUPPORT
+        flags |= 0x800; 
+
         ID3D11Device* device;
         ID3D11DeviceContext* context;
 
@@ -349,7 +355,18 @@ public class D3D11RenderControl : ContentControl
         DeviceHandle = (IntPtr)_device.Handle;
         ContextHandle = (IntPtr)_context.Handle;
 
-        LogSync($"Device Context Ready. Dev: {DeviceHandle:X}");
+        try
+        {
+            using var dxgiDevice = _device.QueryInterface<IDXGIDevice1>();
+            IDXGIAdapter* adapter;
+            dxgiDevice.Handle->GetAdapter(&adapter);
+            using var dxgiAdapter = new ComPtr<IDXGIAdapter>(adapter);
+            AdapterDesc desc;
+            dxgiAdapter.Handle->GetDesc(&desc);
+            AdapterName = SilkMarshal.PtrToString((IntPtr)desc.Description);
+            LogSync($"Device Context Ready (VideoSupport=0x800). Adapter: {AdapterName}");
+        }
+        catch { AdapterName = "auto"; }
     }
 
     private void UpdateSwapChain()

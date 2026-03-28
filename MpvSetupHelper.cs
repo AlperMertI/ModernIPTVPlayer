@@ -85,26 +85,45 @@ namespace ModernIPTVPlayer
                 // Force Performance Settings for Secondary Player (PiP/Preview) to save resources
                 if (isSecondary)
                 {
+                    var userHwdec = pSettings.HardwareDecoding;
                     pSettings = Models.PlayerSettings.GetDefault(Models.PlayerProfile.Performance);
+                    pSettings.HardwareDecoding = userHwdec; // Respect user's global choice
                 }
 
                 // Hardware Decoding
-                string hwdecValue = pSettings.HardwareDecoding switch
-                {
-                    Models.HardwareDecoding.AutoSafe => "auto-safe",
-                    Models.HardwareDecoding.AutoCopy => "auto-copy",
-                    Models.HardwareDecoding.No => "no",
-                    _ => "auto-safe"
-                };
-                
+                string hwdecValue;
+                bool zeroCopy;
 
+                switch (pSettings.HardwareDecoding)
+                {
+                    case Models.HardwareDecoding.AutoSafe:
+                        hwdecValue = "d3d11va";
+                        zeroCopy = true;
+                        break;
+                    case Models.HardwareDecoding.AutoCopy:
+                        hwdecValue = "d3d11va-copy";
+                        zeroCopy = false;
+                        break;
+                    case Models.HardwareDecoding.No:
+                        hwdecValue = "no";
+                        zeroCopy = false;
+                        break;
+                    default:
+                        hwdecValue = "d3d11va";
+                        zeroCopy = true;
+                        break;
+                }
 
                 await player.SetPropertyAsync("hwdec", hwdecValue);
-                await player.SetPropertyAsync("hwdec-codecs", "all");
+                await player.SetPropertyAsync("d3d11va-zero-copy", zeroCopy ? "yes" : "no");
+                await player.SetPropertyAsync("vd-lavc-dr", zeroCopy ? "yes" : "no");
 
-                // 4. Performance Profile & Video Settings
-                await player.SetPropertyAsync("profile", "fast"); // Always start with fast base for low latency
-                
+                // DIAGNOSTIC LOGGING: Enable verbose logs for decoder/output to find failure cause
+                try { await player.SetPropertyAsync("msg-level", "all=v,vd=v,vo=v,libmpv_render=v"); } catch { }
+
+                // Note: GPU-API and zero-copy defaults are handled globally as pre-init options 
+                // in Player.cs to ensure a unified D3D11 Context.
+
                 // Video Output
                 // CRITICAL: Do NOT set 'vo' manually for this custom C# backend.
                 // The 'MpvPlayer' wrapper initializes the context with 'libmpv' (or equivalent).
@@ -190,8 +209,10 @@ namespace ModernIPTVPlayer
                 else
                 {
                     int userBuffer = AppSettings.BufferSeconds;
-                    await player.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
-                    await player.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
+                    // Memory caps optimized for high-bitrate 4K streaming.
+                    // 512MiB is sufficient for stable Zero-Copy playback.
+                    await player.SetPropertyAsync("demuxer-max-bytes", isSecondary ? "128MiB" : "512MiB");
+                    await player.SetPropertyAsync("demuxer-max-back-bytes", "16MiB");
                     await player.SetPropertyAsync("demuxer-readahead-secs", userBuffer.ToString());
                 }
 
@@ -215,6 +236,16 @@ namespace ModernIPTVPlayer
                 await SetPropertySafeAsync(player, "cache-secs", isSecondary ? "20" : AppSettings.BufferSeconds.ToString());
                 await player.SetPropertyAsync("sub-scale-with-window", "yes");
 
+                // Force stable hardware decoding parameters.
+                await player.SetPropertyAsync("vid", "1"); 
+                try { await player.SetPropertyAsync("hwdec-extra-frames", "32"); } catch { }
+                await SetPropertySafeAsync(player, "vd-lavc-dr", "yes");   // Direct rendering attempt
+                await SetPropertySafeAsync(player, "vd-lavc-fast", "yes"); // Speed up decoding initialization
+                // Limit the number of GPU internal surfaces (Reduces VRAM usage in 4K)
+                await SetPropertySafeAsync(player, "swapchain-depth", isSecondary ? "1" : "2");
+                await SetPropertySafeAsync(player, "gpu-shader-cache-dir", System.IO.Path.GetTempPath());
+                await SetPropertySafeAsync(player, "vd-lavc-threads", "4"); // Limit HW decoder threads for 4K stability
+
                 // Network Stability & Performance
                 await SetPropertySafeAsync(player, "network-timeout", "20");
                 await SetPropertySafeAsync(player, "stream-buffer-size", "4MiB"); // Increased buffering for 4K streams
@@ -227,8 +258,7 @@ namespace ModernIPTVPlayer
                 // reconnect_at_eof=1: vital for some live streams that close cleanly but aren't done
                 await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=30,reconnect_on_network_error=1,reconnect_on_http_error=4xx,5xx,reconnect_at_eof=1");
 
-                await SetPropertySafeAsync(player, "vd-lavc-fast", "yes"); // Speed up hardware decoding
-                await SetPropertySafeAsync(player, "vd-lavc-dr", "yes");   // Direct rendering
+                // Reconnect logic complete. All HWDEC and DR are set at launch or Phase 7 block.
 
                 // 7. Audio Settings
                 string acValue = pSettings.AudioChannels switch

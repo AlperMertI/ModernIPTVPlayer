@@ -16,6 +16,8 @@
 #include "video/out/gpu/d3d11_helpers.h"
 
 #include "ra_d3d11.h"
+#include "video/out/placebo/ra_pl.h"
+#include <libplacebo/d3d11.h>
 
 #ifndef D3D11_1_UAV_SLOT_COUNT
 #define D3D11_1_UAV_SLOT_COUNT (64)
@@ -380,6 +382,8 @@ error:
     return false;
 }
 
+
+
 static void tex_destroy(struct ra *ra, struct ra_tex *tex)
 {
     if (!tex)
@@ -617,6 +621,7 @@ error:
     return NULL;
 }
 
+
 struct ra_tex *ra_d3d11_wrap_tex_video(struct ra *ra, ID3D11Texture2D *res,
                                        int w, int h, int array_slice,
                                        const struct ra_format *fmt)
@@ -659,6 +664,8 @@ error:
     tex_destroy(ra, tex);
     return NULL;
 }
+
+
 
 ID3D11Resource *ra_d3d11_get_raw_tex(struct ra *ra, struct ra_tex *tex,
                                      int *array_slice)
@@ -2513,14 +2520,55 @@ error:
     return NULL;
 }
 
+/*
+ * Polymorphic helper to retrieve the underlying ID3D11Device from an RA.
+ * 
+ * This function handles both native D3D11 RAs and Libplacebo (gpu-next) RAs.
+ * It is used for interop between the hardware decoder and the renderer.
+ * 
+ * Returns an AddRef'd ID3D11Device or NULL.
+ */
 ID3D11Device *ra_d3d11_get_device(struct ra *ra)
 {
+    if (!ra)
+        return NULL;
+
+    pl_gpu gpu = ra_pl_get(ra);
+    if (gpu) {
+        // For Libplacebo RAs, extract the device via the pl_d3d11 backend.
+        pl_d3d11 d3d11 = pl_d3d11_get(gpu);
+        if (d3d11 && d3d11->device) {
+            ID3D11Device_AddRef(d3d11->device);
+            return d3d11->device;
+        }
+    }
+
+    // Identity Guard: Only access ra->priv as struct ra_d3d11 if it matches the native driver.
+    if (ra->fns != &ra_fns_d3d11) {
+        MP_VERBOSE(ra, "ra_d3d11_get_device: Identity mismatch (not a native D3D11 RA).\n");
+        return NULL; 
+    }
+
     struct ra_d3d11 *p = ra->priv;
-    ID3D11Device_AddRef(p->dev);
-    return p->dev;
+    if (p && p->dev) {
+        ID3D11Device_AddRef(p->dev);
+        return p->dev;
+    }
+
+    return NULL;
 }
 
+
+/*
+ * Check if the RA is D3D11-compatible.
+ * 
+ * Returns true if the RA is either a native D3D11 driver or a Libplacebo driver 
+ * backed by D3D11, allowing hardware decoders to bind to it.
+ */
 bool ra_is_d3d11(struct ra *ra)
 {
-    return ra->fns == &ra_fns_d3d11;
+    if (!ra)
+        return false;
+    return ra->fns == &ra_fns_d3d11 || ra_pl_get(ra) != NULL;
 }
+

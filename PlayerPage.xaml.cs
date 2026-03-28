@@ -319,8 +319,11 @@ namespace ModernIPTVPlayer
 
             try 
             {
-                // Sync Play/Pause State
-                bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
+                // Project Zero - Phase 5 Stability: 
+                // During handoff, property lookup can occasionally fail natively if the context is changing state.
+                bool isPaused = false;
+                try { isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause"); } catch { return; }
+
                 PlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE"; // Sync with improved glyphs
                 if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE";
 
@@ -411,8 +414,8 @@ namespace ModernIPTVPlayer
                     int bufferSecs = AppSettings.BufferSeconds;
                     await _mpvPlayer.SetPropertyAsync("cache", "yes");
                     await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", bufferSecs.ToString());
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "32MiB");
                     
                     _bufferUnlocked = true;
                 }
@@ -1535,10 +1538,20 @@ namespace ModernIPTVPlayer
                 {
                     // HANDOFF MODE: FAST PATH (No Delay!)
                     Debug.WriteLine("[PlayerPage] Doing Handoff...");
+                    var pSettings = AppSettings.PlayerSettings;
                     _isHandoff = true;
                     _bufferUnlocked = false;
                     _mpvPlayer = App.HandoffPlayer;
                     App.HandoffPlayer = null; 
+
+                    // Project Zero - Phase 5: RESTORE VISUALS
+                    // Pre-buffer was set to "vid=no" to save VRAM. Re-enable primary video track now.
+                    try 
+                    {
+                        _mpvPlayer.RenderApi = pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext ? "d3d11" : "dxgi";
+                        await _mpvPlayer.SetPropertyAsync("vid", "1");
+                        Debug.WriteLine($"[PlayerPage] Handoff: Restored RenderApi and enabled vid=1");
+                    } catch { }
                     
                     PlayerContainer.Children.Add(_mpvPlayer);
                     _mpvPlayer.Visibility = Visibility.Visible;
@@ -1562,8 +1575,8 @@ namespace ModernIPTVPlayer
                     int mainBuffer = AppSettings.BufferSeconds;
                     _ = _mpvPlayer.SetPropertyAsync("cache", "yes");
                     await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB");
+                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "32MiB");
 
                     // 3. Verify and Fix
                     var pPause = await _mpvPlayer.GetPropertyAsync("pause");
@@ -1602,7 +1615,7 @@ namespace ModernIPTVPlayer
                     // [RESTORE SAVED AUDIO/SUBTITLE TRACKS]
                     string contentId = !string.IsNullOrEmpty(_navArgs?.Id) ? _navArgs.Id : _streamUrl;
                     var history = HistoryManager.Instance.GetProgress(contentId);
-                    var pSettings = AppSettings.PlayerSettings;
+                    // pSettings already defined above
 
                     // Logic: If user changed global language preferences AFTER they manually picked a track for this video,
                     // we should respect the new global preference (override the override).

@@ -15,6 +15,7 @@ namespace ModernIPTVPlayer.Controls
         public MpvPlayer Player { get; private set; }
         public string StreamUrl { get; private set; }
         public string StreamId { get; set; }
+        public bool IsSecondary { get; set; } = true;
 
         private DispatcherTimer _diagTimer;
         
@@ -80,7 +81,7 @@ namespace ModernIPTVPlayer.Controls
                     // Configure it
                     if (!string.IsNullOrEmpty(url))
                     {
-                        await MpvSetupHelper.ConfigurePlayerAsync(Player, url, isSecondary: true);
+                        await MpvSetupHelper.ConfigurePlayerAsync(Player, url, isSecondary: IsSecondary);
                         await Player.OpenAsync(url);
                     }
                 }
