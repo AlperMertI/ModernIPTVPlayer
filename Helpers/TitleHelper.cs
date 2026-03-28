@@ -11,20 +11,12 @@ namespace ModernIPTVPlayer.Helpers
 {
     public static class TitleHelper
     {
-        private static readonly ConcurrentDictionary<string, string> NormalizeCache = new();
-        private static readonly ConcurrentDictionary<string, HashSet<string>> TokenCache = new();
-        private static readonly ConcurrentDictionary<string, HashSet<string>> BaseTokenCache = new();
-        private static readonly object _cacheLock = new();
-
+        // NO GLOBAL UNBOUNDED CACHE (Project Zero Phase 2)
+        // Static caches removed to prevent heap bloat with large playlists.
+        
         public static void ClearCaches()
         {
-            lock (_cacheLock)
-            {
-                NormalizeCache.Clear();
-                TokenCache.Clear();
-                BaseTokenCache.Clear();
-            }
-            AppLogger.Info("[TitleHelper] Caches cleared.");
+            // No-op now as we don't hold static dictionaries
         }
 
         private static readonly string[] Articles = { 
@@ -164,7 +156,6 @@ namespace ModernIPTVPlayer.Helpers
         public static string Normalize(string? title)
         {
             if (string.IsNullOrEmpty(title)) return string.Empty;
-            if (NormalizeCache.TryGetValue(title, out string cached)) return cached;
 
             // 1. Strip Common IPTV Prefixes at the start of string (e.g. "TR - ", "4K | ", "IT:")
             string cleaned = Regex.Replace(title, @"^.{1,4}\s*[:\-\|]\s*", " ", RegexOptions.IgnoreCase);
@@ -173,7 +164,6 @@ namespace ModernIPTVPlayer.Helpers
             cleaned = Regex.Replace(cleaned, @"\[.*?\]|\(.*?\)", " ");
             
             // 3. Strip common IPTV Language Codes anywhere as words
-            // [FIX] Removed "NO" (Norway) from language list because it's a common word in English titles (e.g. "No Way Home")
             string langPattern = @"\b(TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR|NF|IR|GR|EN|US|UK|CA|AU)\b";
             cleaned = Regex.Replace(cleaned, langPattern, " ", RegexOptions.IgnoreCase);
 
@@ -197,31 +187,20 @@ namespace ModernIPTVPlayer.Helpers
                 }
             }
 
-            var result = sb.ToString().Normalize(NormalizationForm.FormC).Replace("İ", "i").Replace("I", "i").ToLowerInvariant()
+            return sb.ToString().Normalize(NormalizationForm.FormC).Replace("İ", "i").Replace("I", "i").ToLowerInvariant()
                      .Replace(" ", ""); 
-            
-            NormalizeCache.TryAdd(title, result);
-            return result;
         }
 
         public static HashSet<string> GetSignificantTokens(string title)
         {
             if (string.IsNullOrEmpty(title)) return new HashSet<string>();
-            if (TokenCache.TryGetValue(title, out var cached)) return cached;
-
-            var result = GetSignificantTokensInternal(title, true);
-            TokenCache.TryAdd(title, result);
-            return result;
+            return GetSignificantTokensInternal(title, true);
         }
 
         public static HashSet<string> GetBaseTokens(string title)
         {
             if (string.IsNullOrEmpty(title)) return new HashSet<string>();
-            if (BaseTokenCache.TryGetValue(title, out var cached)) return cached;
-
-            var result = GetSignificantTokensInternal(title, false);
-            BaseTokenCache.TryAdd(title, result);
-            return result;
+            return GetSignificantTokensInternal(title, false);
         }
 
         private static HashSet<string> GetSignificantTokensInternal(string title, bool includeComposite)

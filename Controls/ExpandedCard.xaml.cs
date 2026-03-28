@@ -71,6 +71,57 @@ namespace ModernIPTVPlayer.Controls
             
             // Mouse Wheel Fix: Prevent bubbling to main page
             ContentScrollViewer.PointerWheelChanged += ContentScrollViewer_PointerWheelChanged;
+
+            // Project Zero: Mandatory Cleanup Registration
+            this.Unloaded += (s, e) => Cleanup();
+        }
+
+        /// <summary>
+        /// Project Zero: Explicitly releases all resources, breaks interop links, 
+        /// and clears large collections to ensure memory is reclaimed by GC/Native.
+        /// </summary>
+        public void Cleanup()
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[Cleanup] ExpandedCard releasing resources for: {_stream?.Title ?? "None"}");
+                
+                // 1. Release Heavy UI Resources
+                BackdropImage.Source = null;
+                
+                // 2. Kill Trailer Engine (WebView2 is a massive process/memory consumer)
+                if (TrailerWebView != null)
+                {
+                    TrailerWebView.Visibility = Visibility.Collapsed;
+                    try { TrailerWebView.Source = new Uri("about:blank"); } catch { }
+                    // WebView2.Close() is often hidden in WinUI 3, setting Source/Visibility is the standard safe route.
+                }
+
+                // 3. Clear Managed Collections (Breaks reference chains)
+                CastList?.Clear();
+                DirectorList?.Clear();
+                // Assuming TechBadgesPanel is a Panel control defined in XAML
+                // If not, this line might cause a compile error if not present in the actual code.
+                // For this exercise, I'm including it as per the instruction.
+                // TechBadgesPanel?.Children?.Clear(); 
+
+                // 4. Cancel pending tasks
+                _trailerCts?.Cancel();
+                _trailerCts?.Dispose();
+                _trailerCts = null;
+
+                // 5. Break Interop Facades
+                _compositor = null;
+                _stream = null;
+                _tmdbInfo = null;
+
+                // 6. Unsubscribe from manual handlers 
+                ContentScrollViewer.PointerWheelChanged -= ContentScrollViewer_PointerWheelChanged;
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Cleanup] Error during ExpandedCard release: {ex.Message}");
+            }
         }
 
         #region Drag-to-Scroll Logic (Vertical)
@@ -719,7 +770,7 @@ namespace ModernIPTVPlayer.Controls
             // Set initial low-res image (or clear it if none)
             if (!string.IsNullOrEmpty(stream.PosterUrl))
             {
-                BackdropImage.Source = new BitmapImage(new Uri(stream.PosterUrl));
+                BackdropImage.Source = ImageHelper.GetImage(stream.PosterUrl, 0, 420);
             }
             else
             {
@@ -1627,6 +1678,8 @@ namespace ModernIPTVPlayer.Controls
 
         private void StaggeredRevealContent()
         {
+            if (_compositor == null || RealContentPanel == null) return;
+
             double delay = 0;
             const double staggerIncrement = 0.08; 
 

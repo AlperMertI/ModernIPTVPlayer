@@ -244,19 +244,8 @@ namespace ModernIPTVPlayer.Services.Stremio
 
             foreach (var res in manifest.Resources)
             {
-                if (res.ValueKind == JsonValueKind.String)
-                {
-                    if (string.Equals(res.GetString(), resourceName, StringComparison.OrdinalIgnoreCase))
-                        return true;
-                }
-                else if (res.ValueKind == JsonValueKind.Object)
-                {
-                    if (res.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String)
-                    {
-                        if (string.Equals(nameProp.GetString(), resourceName, StringComparison.OrdinalIgnoreCase))
-                            return true;
-                    }
-                }
+                if (string.Equals(res?.Name, resourceName, StringComparison.OrdinalIgnoreCase))
+                    return true;
             }
 
             return false;

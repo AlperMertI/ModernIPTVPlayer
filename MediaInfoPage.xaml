@@ -674,7 +674,7 @@
                                         <Border CornerRadius="6" Height="100" Width="80" Background="#1AFFFFFF">
                                             <Grid CornerRadius="6">
                                                 <FontIcon Glyph="&#xE77B;" FontSize="32" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
+                                                <Image Source="{Binding ProfileImage}" Stretch="UniformToFill"/>
                                             </Grid>
                                         </Border>
                                         
@@ -740,7 +740,7 @@
                                         <Border CornerRadius="6" Height="100" Width="80" Background="#1AFFFFFF">
                                             <Grid CornerRadius="6">
                                                 <FontIcon Glyph="&#xE77B;" FontSize="32" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill"/>
+                                                <Image Source="{Binding ProfileImage}" Stretch="UniformToFill"/>
                                             </Grid>
                                         </Border>
                                         
@@ -828,7 +828,7 @@
                                                   
                                                   <!-- Thumbnail -->
                                                  <Grid Grid.Column="0" CornerRadius="12" Height="80" HorizontalAlignment="Left" VerticalAlignment="Center" Width="150">
-                                                     <Image Source="{x:Bind ImageUrl, Converter={StaticResource StringToImage}}" Stretch="UniformToFill"/>
+                                                     <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill"/>
                                                      
                                                      <!-- Dark Gradient Overlay -->
                                                      <Grid Background="#33000000"/>

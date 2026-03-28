@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Models.Stremio
 {
@@ -22,7 +24,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Description { get; set; }
 
         [JsonPropertyName("resources")]
-        public List<System.Text.Json.JsonElement> Resources { get; set; } // Can be strings or StremioResource objects
+        public List<StremioResource> Resources { get; set; }
 
         [JsonPropertyName("types")]
         public List<string> Types { get; set; }
@@ -35,6 +37,73 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         [JsonPropertyName("background")]
         public string Background { get; set; }
+    }
+
+    [JsonConverter(typeof(StremioResourceConverter))]
+    public class StremioResource
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("types")]
+        public List<string> Types { get; set; }
+
+        [JsonPropertyName("idPrefixes")]
+        public List<string> IdPrefixes { get; set; }
+
+        // Logic to handle if resource is just a string during deserialization
+        public static implicit operator StremioResource(string name) => new StremioResource { Name = name };
+    }
+
+    public class StremioResourceConverter : JsonConverter<StremioResource>
+    {
+        public override StremioResource Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                return new StremioResource { Name = reader.GetString() };
+            }
+            if (reader.TokenType == JsonTokenType.StartObject)
+            {
+                using (var doc = JsonDocument.ParseValue(ref reader))
+                {
+                    var root = doc.RootElement;
+                    var res = new StremioResource();
+                    if (root.TryGetProperty("name", out var n)) res.Name = n.GetString();
+                    if (root.TryGetProperty("types", out var t) && t.ValueKind == JsonValueKind.Array)
+                    {
+                        res.Types = new List<string>();
+                        foreach (var item in t.EnumerateArray()) res.Types.Add(item.GetString());
+                    }
+                    if (root.TryGetProperty("idPrefixes", out var idp) && idp.ValueKind == JsonValueKind.Array)
+                    {
+                        res.IdPrefixes = new List<string>();
+                        foreach (var item in idp.EnumerateArray()) res.IdPrefixes.Add(item.GetString());
+                    }
+                    return res;
+                }
+            }
+            return null;
+        }
+
+        public override void Write(Utf8JsonWriter writer, StremioResource value, JsonSerializerOptions options)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("name", value.Name);
+            if (value.Types != null)
+            {
+                writer.WriteStartArray("types");
+                foreach (var t in value.Types) writer.WriteStringValue(t);
+                writer.WriteEndArray();
+            }
+            if (value.IdPrefixes != null)
+            {
+                writer.WriteStartArray("idPrefixes");
+                foreach (var idp in value.IdPrefixes) writer.WriteStringValue(idp);
+                writer.WriteEndArray();
+            }
+            writer.WriteEndObject();
+        }
     }
 
     public class StremioCatalog
@@ -99,43 +168,66 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("aliases")]
         public List<string> Aliases { get; set; }
 
+        private int _posterOff, _posterLen;
         [JsonPropertyName("poster")]
-        public string Poster { get; set; }
-
-        [JsonPropertyName("background")]
-        public string Background { get; set; }
-
-        [JsonPropertyName("logo")]
-        public string Logo { get; set; }
-
-        [JsonPropertyName("description")]
-        public string Description { get; set; }
-
-        [JsonPropertyName("releaseInfo")]
-        public object ReleaseInfoRaw { get; set; } // Can be string or int
-
-        [JsonIgnore]
-        public string ReleaseInfo 
+        public string Poster 
         { 
-            get => ReleaseInfoRaw?.ToString();
-            set => ReleaseInfoRaw = value;
+            get => MetadataBuffer.GetString(_posterOff, _posterLen); 
+            set { if (MetadataBuffer.IsEqual(_posterOff, _posterLen, value)) return; var r = MetadataBuffer.Store(value); _posterOff = r.Offset; _posterLen = r.Length; } 
         }
 
-        [JsonPropertyName("imdbRating")]
-        public object ImdbRatingRaw { get; set; } // Can be string or double
-
-        [JsonIgnore]
-        public string ImdbRating 
+        private int _bgOff, _bgLen;
+        [JsonPropertyName("background")]
+        public string Background 
         { 
-            get => ImdbRatingRaw?.ToString();
-            set => ImdbRatingRaw = value;
+            get => MetadataBuffer.GetString(_bgOff, _bgLen); 
+            set { if (MetadataBuffer.IsEqual(_bgOff, _bgLen, value)) return; var r = MetadataBuffer.Store(value); _bgOff = r.Offset; _bgLen = r.Length; } 
+        }
+
+        private int _logoOff, _logoLen;
+        [JsonPropertyName("logo")]
+        public string Logo 
+        { 
+            get => MetadataBuffer.GetString(_logoOff, _logoLen); 
+            set { if (MetadataBuffer.IsEqual(_logoOff, _logoLen, value)) return; var r = MetadataBuffer.Store(value); _logoOff = r.Offset; _logoLen = r.Length; } 
+        }
+
+        private int _descOff, _descLen;
+        [JsonPropertyName("description")]
+        public string Description 
+        { 
+            get => MetadataBuffer.GetString(_descOff, _descLen); 
+            set { if (MetadataBuffer.IsEqual(_descOff, _descLen, value)) return; var r = MetadataBuffer.Store(value); _descOff = r.Offset; _descLen = r.Length; } 
+        }
+
+        private int _relOff, _relLen;
+        [JsonPropertyName("releaseInfo")]
+        [JsonConverter(typeof(Helpers.UniversalStringConverter))]
+        public string? ReleaseInfo 
+        { 
+            get => MetadataBuffer.GetString(_relOff, _relLen); 
+            set { if (MetadataBuffer.IsEqual(_relOff, _relLen, value)) return; var r = MetadataBuffer.Store(value); _relOff = r.Offset; _relLen = r.Length; } 
+        }
+
+        private int _ratOff, _ratLen;
+        [JsonPropertyName("imdbRating")]
+        [JsonConverter(typeof(Helpers.UniversalStringConverter))]
+        public string? ImdbRating 
+        { 
+            get => MetadataBuffer.GetString(_ratOff, _ratLen); 
+            set { if (MetadataBuffer.IsEqual(_ratOff, _ratLen, value)) return; var r = MetadataBuffer.Store(value); _ratOff = r.Offset; _ratLen = r.Length; } 
         }
 
         [JsonPropertyName("genres")]
         public List<string> Genres { get; set; }
 
+        private int _runOff, _runLen;
         [JsonPropertyName("runtime")]
-        public string Runtime { get; set; }
+        public string Runtime 
+        { 
+            get => MetadataBuffer.GetString(_runOff, _runLen); 
+            set { if (MetadataBuffer.IsEqual(_runOff, _runLen, value)) return; var r = MetadataBuffer.Store(value); _runOff = r.Offset; _runLen = r.Length; } 
+        }
         
         [JsonPropertyName("cast")]
         public List<string> Cast { get; set; }
@@ -150,16 +242,23 @@ namespace ModernIPTVPlayer.Models.Stremio
         public List<StremioMetaTrailer> Trailers { get; set; }
 
         [JsonPropertyName("moviedb_id")]
-        public object MovieDbId { get; set; }
+        [JsonConverter(typeof(Helpers.UniversalStringConverter))]
+        public string? MovieDbId { get; set; }
 
         [JsonPropertyName("imdb_id")]
         public string ImdbId { get; set; }
 
         [JsonPropertyName("tvdb_id")]
-        public object TvDbId { get; set; }
+        [JsonConverter(typeof(Helpers.UniversalStringConverter))]
+        public string? TvDbId { get; set; }
 
+        private int _webOff, _webLen;
         [JsonPropertyName("website")]
-        public string Website { get; set; }
+        public string Website 
+        { 
+            get => MetadataBuffer.GetString(_webOff, _webLen); 
+            set { if (MetadataBuffer.IsEqual(_webOff, _webLen, value)) return; var r = MetadataBuffer.Store(value); _webOff = r.Offset; _webLen = r.Length; } 
+        }
 
         [JsonPropertyName("links")]
         public List<StremioLink> Links { get; set; }
@@ -254,14 +353,29 @@ namespace ModernIPTVPlayer.Models.Stremio
 
     public class StremioLink
     {
+        private int _nameOff, _nameLen;
         [JsonPropertyName("name")]
-        public string Name { get; set; }
+        public string Name 
+        { 
+            get => MetadataBuffer.GetString(_nameOff, _nameLen); 
+            set { if (MetadataBuffer.IsEqual(_nameOff, _nameLen, value)) return; var r = MetadataBuffer.Store(value); _nameOff = r.Offset; _nameLen = r.Length; } 
+        }
 
+        private int _catOff, _catLen;
         [JsonPropertyName("category")]
-        public string Category { get; set; }
+        public string Category 
+        { 
+            get => MetadataBuffer.GetString(_catOff, _catLen); 
+            set { if (MetadataBuffer.IsEqual(_catOff, _catLen, value)) return; var r = MetadataBuffer.Store(value); _catOff = r.Offset; _catLen = r.Length; } 
+        }
 
+        private int _urlOff, _urlLen;
         [JsonPropertyName("url")]
-        public string Url { get; set; }
+        public string Url 
+        { 
+            get => MetadataBuffer.GetString(_urlOff, _urlLen); 
+            set { if (MetadataBuffer.IsEqual(_urlOff, _urlLen, value)) return; var r = MetadataBuffer.Store(value); _urlOff = r.Offset; _urlLen = r.Length; } 
+        }
     }
 
     public class StremioMetaTrailer
@@ -278,17 +392,37 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("id")]
         public string Id { get; set; } // "tt1234:1:1"
 
+        private int _nameOff, _nameLen;
         [JsonPropertyName("name")]
-        public string Name { get; set; }
+        public string Name 
+        { 
+            get => MetadataBuffer.GetString(_nameOff, _nameLen); 
+            set { if (MetadataBuffer.IsEqual(_nameOff, _nameLen, value)) return; var r = MetadataBuffer.Store(value); _nameOff = r.Offset; _nameLen = r.Length; } 
+        }
 
+        private int _titleOff, _titleLen;
         [JsonPropertyName("title")]
-        public string Title { get; set; }
+        public string Title 
+        { 
+            get => MetadataBuffer.GetString(_titleOff, _titleLen); 
+            set { if (MetadataBuffer.IsEqual(_titleOff, _titleLen, value)) return; var r = MetadataBuffer.Store(value); _titleOff = r.Offset; _titleLen = r.Length; } 
+        }
 
+        private int _relOff, _relLen;
         [JsonPropertyName("released")]
-        public string Released { get; set; }
+        public string Released 
+        { 
+            get => MetadataBuffer.GetString(_relOff, _relLen); 
+            set { if (MetadataBuffer.IsEqual(_relOff, _relLen, value)) return; var r = MetadataBuffer.Store(value); _relOff = r.Offset; _relLen = r.Length; } 
+        }
 
+        private int _thumbOff, _thumbLen;
         [JsonPropertyName("thumbnail")]
-        public string Thumbnail { get; set; }
+        public string Thumbnail 
+        { 
+            get => MetadataBuffer.GetString(_thumbOff, _thumbLen); 
+            set { if (MetadataBuffer.IsEqual(_thumbOff, _thumbLen, value)) return; var r = MetadataBuffer.Store(value); _thumbOff = r.Offset; _thumbLen = r.Length; } 
+        }
 
         [JsonPropertyName("streams")]
         public List<StremioStream> Streams { get; set; }
@@ -302,11 +436,21 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("season")]
         public int Season { get; set; }
 
+        private int _ovOff, _ovLen;
         [JsonPropertyName("overview")]
-        public string Overview { get; set; }
+        public string Overview 
+        { 
+            get => MetadataBuffer.GetString(_ovOff, _ovLen); 
+            set { if (MetadataBuffer.IsEqual(_ovOff, _ovLen, value)) return; var r = MetadataBuffer.Store(value); _ovOff = r.Offset; _ovLen = r.Length; } 
+        }
 
+        private int _descOff, _descLen;
         [JsonPropertyName("description")]
-        public string Description { get; set; }
+        public string Description 
+        { 
+            get => MetadataBuffer.GetString(_descOff, _descLen); 
+            set { if (MetadataBuffer.IsEqual(_descOff, _descLen, value)) return; var r = MetadataBuffer.Store(value); _descOff = r.Offset; _descLen = r.Length; } 
+        }
     }
 
     // ==========================================

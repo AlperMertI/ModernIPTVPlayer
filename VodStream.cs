@@ -3,53 +3,116 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Text.Json.Serialization;
-
+using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Models;
 
 namespace ModernIPTVPlayer
 {
+    [JsonConverter(typeof(VodStreamConverter))]
     public class VodStream : INotifyPropertyChanged, IMediaStream
     {
         private readonly object _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
+
+        // Compact storage (Offsets + Lengths)
+        private int _nameOffset, _nameLen;
+        private int _iconOffset, _iconLen;
+        private int _catOffset, _catLen;
+        private int _extOffset, _extLen;
+        private int _imdbOffset, _imdbLen;
+        private int _descOff, _descLen;
+        private int _bgOff, _bgLen;
+        private int _genreOff, _genreLen;
+        private int _castOff, _castLen;
+        private int _dirOff, _dirLen;
+        private int _trailOff, _trailLen;
+        private int _ratOff, _ratLen;
+
+        // Bit-packed flags (1: IsFavorite, 2: IsHdr, 4: IsProbing, 8: IsOnline (null as false), 16: IsAvailableOnIptv)
+        private byte _bitFlags = 16; 
         
         // IMediaStream Implementation
         public int Id => StreamId;
         
         [JsonPropertyName("imdb_id")]
-        public string? ImdbId { get; set; }
+        public string? ImdbId 
+        { 
+            get => MetadataBuffer.GetString(_imdbOffset, _imdbLen);
+            set 
+            { 
+                if (MetadataBuffer.IsEqual(_imdbOffset, _imdbLen, value)) return;
+                var res = MetadataBuffer.Store(value); 
+                _imdbOffset = res.Offset; _imdbLen = res.Length; 
+                OnPropertyChanged();
+            }
+        }
         public string? IMDbId => ImdbId;
-        public string Title { get => Name; set { if (Name != value) { Name = value; OnPropertyChanged(); OnPropertyChanged(nameof(Name)); } } }
+        
+        [JsonIgnore]
+        public string Title 
+        { 
+            get => Name; 
+            set => Name = value; 
+        }
 
-        private string? _description;
-        public string? Description { get => _description; set { if (_description != value) { _description = value; OnPropertyChanged(); } } }
+        public string? Description 
+        { 
+            get => MetadataBuffer.GetString(_descOff, _descLen); 
+            set { if (MetadataBuffer.IsEqual(_descOff, _descLen, value)) return; var r = MetadataBuffer.Store(value); _descOff = r.Offset; _descLen = r.Length; OnPropertyChanged(); } 
+        }
 
-        public string PosterUrl { get => IconUrl; set { if (IconUrl != value) { IconUrl = value; OnPropertyChanged(); OnPropertyChanged(nameof(IconUrl)); } } }
+        [JsonIgnore]
+        public string PosterUrl 
+        { 
+            get => IconUrl; 
+            set => IconUrl = value; 
+        }
 
-        private string? _backdropUrl;
-        public string? BackdropUrl { get => _backdropUrl; set { if (_backdropUrl != value) { _backdropUrl = value; OnPropertyChanged(); } } }
+        public string? BackdropUrl 
+        { 
+            get => MetadataBuffer.GetString(_bgOff, _bgLen); 
+            set { if (MetadataBuffer.IsEqual(_bgOff, _bgLen, value)) return; var r = MetadataBuffer.Store(value); _bgOff = r.Offset; _bgLen = r.Length; OnPropertyChanged(); } 
+        }
         public string? Type => "movie";
         
-        private string? _genres;
-        public string? Genres { get => _genres; set { if (_genres != value) { _genres = value; OnPropertyChanged(); } } }
+        public string? Genres 
+        { 
+            get => MetadataBuffer.GetString(_genreOff, _genreLen); 
+            set { if (MetadataBuffer.IsEqual(_genreOff, _genreLen, value)) return; var r = MetadataBuffer.Store(value); _genreOff = r.Offset; _genreLen = r.Length; OnPropertyChanged(); } 
+        }
 
-        private string? _cast;
-        public string? Cast { get => _cast; set { if (_cast != value) { _cast = value; OnPropertyChanged(); } } }
+        public string? Cast 
+        { 
+            get => MetadataBuffer.GetString(_castOff, _castLen); 
+            set { if (MetadataBuffer.IsEqual(_castOff, _castLen, value)) return; var r = MetadataBuffer.Store(value); _castOff = r.Offset; _castLen = r.Length; OnPropertyChanged(); } 
+        }
 
-        private string? _director;
-        public string? Director { get => _director; set { if (_director != value) { _director = value; OnPropertyChanged(); } } }
+        public string? Director 
+        { 
+            get => MetadataBuffer.GetString(_dirOff, _dirLen); 
+            set { if (MetadataBuffer.IsEqual(_dirOff, _dirLen, value)) return; var r = MetadataBuffer.Store(value); _dirOff = r.Offset; _dirLen = r.Length; OnPropertyChanged(); } 
+        }
 
-        private string? _trailerUrl;
-        public string? TrailerUrl { get => _trailerUrl; set { if (_trailerUrl != value) { _trailerUrl = value; OnPropertyChanged(); } } }
+        public string? TrailerUrl 
+        { 
+            get => MetadataBuffer.GetString(_trailOff, _trailLen); 
+            set { if (MetadataBuffer.IsEqual(_trailOff, _trailLen, value)) return; var r = MetadataBuffer.Store(value); _trailOff = r.Offset; _trailLen = r.Length; OnPropertyChanged(); } 
+        }
 
         public string StreamUrl { get; set; } = "";
 
         [JsonPropertyName("rating")]
-        public object? RatingRaw { get; set; }
+        [JsonConverter(typeof(Helpers.UniversalStringConverter))]
+        public string? RatingRaw 
+        { 
+            get => MetadataBuffer.GetString(_ratOff, _ratLen); 
+            set { if (MetadataBuffer.IsEqual(_ratOff, _ratLen, value)) return; var r = MetadataBuffer.Store(value); _ratOff = r.Offset; _ratLen = r.Length; OnPropertyChanged(); OnPropertyChanged(nameof(Rating)); } 
+        }
 
         [JsonIgnore]
-        public string Rating { get => RatingRaw?.ToString() ?? ""; set { if (RatingRaw != value) { RatingRaw = value; OnPropertyChanged(); } } }
+        public string Rating { get => RatingRaw ?? ""; set => RatingRaw = value; }
 
         // UI Binding Implementation
         public double ProgressValue => 0;
@@ -59,7 +122,11 @@ namespace ModernIPTVPlayer
 
         public string SourceBadgeText => "IPTV";
         public bool ShowSourceBadge => true;
-        public bool IsAvailableOnIptv { get; set; } = true;
+        public bool IsAvailableOnIptv 
+        { 
+            get => (_bitFlags & 16) != 0; 
+            set { if (value) _bitFlags |= 16; else _bitFlags &= 239; } 
+        }
         
         // Custom
         
@@ -68,43 +135,87 @@ namespace ModernIPTVPlayer
 
 
         public event PropertyChangedEventHandler? PropertyChanged;
+        private static long _globalPropertyChangedCount = 0;
 
-        public void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        public void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         {
+            _globalPropertyChangedCount++;
+            if (_globalPropertyChangedCount % 5000 == 0)
+            {
+                System.Diagnostics.Debug.WriteLine($"[VodStream] Property Change Count: {_globalPropertyChangedCount}, Property: {name}");
+            }
+
+            if (PropertyChanged == null) return; // Project Zero Fix: Don't enqueue if no one's listening (prevents RAM bloat during load)
+
             var queue = App.MainWindow?.DispatcherQueue;
             if (queue == null)
             {
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
                 return;
             }
-
             if (queue.HasThreadAccess)
             {
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
             }
             else
             {
                 queue.TryEnqueue(() =>
                 {
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
                 });
             }
         }
 
-        [JsonPropertyName("name")]
-        public string Name { get; set; } = "Film";
+        public string Name 
+        { 
+            get => MetadataBuffer.GetString(_nameOffset, _nameLen);
+            set 
+            { 
+                if (MetadataBuffer.IsEqual(_nameOffset, _nameLen, value)) return;
+                var res = MetadataBuffer.Store(value); 
+                _nameOffset = res.Offset; _nameLen = res.Length; 
+                OnPropertyChanged(); OnPropertyChanged(nameof(Title)); 
+            }
+        }
         
         [JsonPropertyName("stream_id")]
         public int StreamId { get; set; }
         
-        [JsonPropertyName("stream_icon")]
-        public string? IconUrl { get; set; }
+        public string? IconUrl 
+        { 
+            get => MetadataBuffer.GetString(_iconOffset, _iconLen);
+            set 
+            { 
+                if (MetadataBuffer.IsEqual(_iconOffset, _iconLen, value)) return;
+                var res = MetadataBuffer.Store(value); 
+                _iconOffset = res.Offset; _iconLen = res.Length; 
+                OnPropertyChanged(); OnPropertyChanged(nameof(PosterUrl)); 
+            }
+        }
 
-        [JsonPropertyName("container_extension")]
-        public string? ContainerExtension { get; set; }
+        public string? ContainerExtension 
+        { 
+            get => MetadataBuffer.GetString(_extOffset, _extLen);
+            set 
+            { 
+                if (MetadataBuffer.IsEqual(_extOffset, _extLen, value)) return;
+                var res = MetadataBuffer.Store(value); 
+                _extOffset = res.Offset; _extLen = res.Length; 
+                OnPropertyChanged();
+            }
+        }
 
-        [JsonPropertyName("category_id")]
-        public string? CategoryId { get; set; }
+        public string? CategoryId 
+        { 
+            get => MetadataBuffer.GetString(_catOffset, _catLen);
+            set 
+            { 
+                if (MetadataBuffer.IsEqual(_catOffset, _catLen, value)) return;
+                var res = MetadataBuffer.Store(value); 
+                _catOffset = res.Offset; _catLen = res.Length; 
+                OnPropertyChanged();
+            }
+        }
         
         [JsonPropertyName("added")]
         public string? DateAdded { get; set; }
@@ -132,7 +243,11 @@ namespace ModernIPTVPlayer
         }
         private string? _year;
         
-        public bool IsFavorite { get; set; } // Local state
+        public bool IsFavorite 
+        { 
+            get => (_bitFlags & 1) != 0; 
+            set { if (value) _bitFlags |= 1; else _bitFlags &= 254; } 
+        }
 
         // ==========================================
         // PROBING METADATA (Dynamic)
@@ -176,10 +291,10 @@ namespace ModernIPTVPlayer
         private bool? _isOnline;
         public bool? IsOnline
         {
-            get => _isOnline;
+            get => (_bitFlags & 8) != 0;
             set
             {
-                _isOnline = value;
+                if (value == true) _bitFlags |= 8; else _bitFlags &= 247;
                 OnPropertyChanged(nameof(IsOnline));
                 OnPropertyChanged(nameof(ShowTechnicalBadges));
             }
@@ -216,6 +331,67 @@ namespace ModernIPTVPlayer
                     this.MetadataPriority = unified.PriorityScore;
                 }
             }
+        }
+    }
+
+    public class VodStreamConverter : JsonConverter<VodStream>
+    {
+        public override VodStream Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        {
+            if (reader.TokenType != JsonTokenType.StartObject) return null;
+            var stream = new VodStream();
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName) continue;
+                string propName = reader.GetString();
+                reader.Read();
+
+                if (reader.TokenType == JsonTokenType.Null) continue;
+
+                switch (propName)
+                {
+                    case "name":
+                        stream.Name = reader.GetString(); // MetadataBuffer internally handles this through property setter
+                        break;
+                    case "stream_id":
+                        stream.StreamId = reader.GetInt32();
+                        break;
+                    case "stream_icon":
+                        stream.IconUrl = reader.GetString();
+                        break;
+                    case "container_extension":
+                        stream.ContainerExtension = FastStringPool.Intern(reader.GetString());
+                        break;
+                    case "category_id":
+                        stream.CategoryId = FastStringPool.Intern(reader.GetString());
+                        break;
+                    case "imdb_id":
+                        stream.ImdbId = reader.GetString();
+                        break;
+                    case "rating":
+                        stream.RatingRaw = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
+                        break;
+                    case "added":
+                        stream.DateAdded = FastStringPool.Intern(reader.GetString());
+                        break;
+                    // Other fields can be handled by standard deserialization if we don't care as much about them
+                    // or we can add them here for 100% control.
+                }
+            }
+            return stream;
+        }
+
+        public override void Write(Utf8JsonWriter writer, VodStream value, JsonSerializerOptions options)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("name", value.Name);
+            writer.WriteNumber("stream_id", value.StreamId);
+            writer.WriteString("stream_icon", value.IconUrl);
+            writer.WriteString("container_extension", value.ContainerExtension);
+            writer.WriteString("category_id", value.CategoryId);
+            writer.WriteString("imdb_id", value.ImdbId);
+            writer.WriteString("rating", value.RatingRaw);
+            writer.WriteEndObject();
         }
     }
 }

@@ -36,7 +36,9 @@ namespace ModernIPTVPlayer.Services.Stremio
         private JsonSerializerOptions _jsonOptions;
 
         // In-Memory Cache for Catalogs to speed up switching
+        private const int MAX_CATALOG_CACHE_SIZE = 40;
         private System.Collections.Concurrent.ConcurrentDictionary<string, List<StremioMediaStream>> _catalogCache = new();
+        private System.Collections.Concurrent.ConcurrentQueue<string> _catalogCacheKeys = new();
 
         private readonly Dictionary<string, HashSet<StremioMediaStream>> _globalMetaIndex = new();
         private readonly object _indexLock = new();
@@ -127,6 +129,17 @@ namespace ModernIPTVPlayer.Services.Stremio
                     }
                     
                     _catalogCache[cacheKey] = result;
+                    _catalogCacheKeys.Enqueue(cacheKey);
+
+                    // Maintain max size
+                    if (_catalogCache.Count > MAX_CATALOG_CACHE_SIZE)
+                    {
+                        if (_catalogCacheKeys.TryDequeue(out var oldKey))
+                        {
+                            _catalogCache.TryRemove(oldKey, out _);
+                        }
+                    }
+
                     lock (_indexLock)
                     {
                         foreach (var stream in result) IndexStreamInternal(stream);

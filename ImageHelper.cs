@@ -17,6 +17,7 @@ namespace ModernIPTVPlayer
         private static readonly HttpClient _httpClient = new HttpClient();
         private static readonly ConcurrentDictionary<string, (Color Primary, Color Secondary)> _colorCache = new();
         private static readonly ConcurrentDictionary<string, BitmapImage> _logoCache = new();
+        private static readonly ConcurrentDictionary<string, BitmapImage> _posterCache = new();
         private static readonly ConcurrentDictionary<string, Task<(Color Primary, Color Secondary)>> _pendingExtractions = new();
         private static readonly System.Threading.SemaphoreSlim _extractionSemaphore = new System.Threading.SemaphoreSlim(4, 4);
         private static readonly Random _random = new Random();
@@ -24,37 +25,53 @@ namespace ModernIPTVPlayer
         private static readonly int MAX_LOGO_CACHE_SIZE = 120;
 
         /// <summary>
+        /// Centralized image engine for Project Zero. 
+        /// Provides optimized BitmapImage with optional DecodePixel constraints to save Native Memory.
+        /// MUST BE CALLED FROM UI THREAD.
+        /// </summary>
+        public static BitmapImage GetImage(string url, int decodeWidth = 0, int decodeHeight = 0)
+        {
+            if (string.IsNullOrEmpty(url)) return null;
+
+            // Use poster cache for small/medium images (DecodePixel < 500)
+            bool isThumbnail = (decodeWidth > 0 && decodeWidth < 500) || (decodeHeight > 0 && decodeHeight < 500);
+            if (isThumbnail && _posterCache.TryGetValue(url, out var existing)) return existing;
+
+            try
+            {
+                var bitmap = new BitmapImage();
+                
+                // CRITICAL: Prevent WinUI from holding the full-resolution source in its internal cache
+                // if we are providing a decoded constraint.
+                if (decodeWidth > 0 || decodeHeight > 0)
+                {
+                    bitmap.DecodePixelType = DecodePixelType.Logical;
+                    if (decodeWidth > 0) bitmap.DecodePixelWidth = decodeWidth;
+                    if (decodeHeight > 0) bitmap.DecodePixelHeight = decodeHeight;
+                }
+
+                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache; // We'll manage hit-testing for big items ourselves
+                bitmap.UriSource = new Uri(url);
+
+                if (isThumbnail)
+                {
+                    // Cache management (LIFO-ish simple clear)
+                    if (_posterCache.Count > 200) _posterCache.Clear();
+                    _posterCache.TryAdd(url, bitmap);
+                }
+
+                return bitmap;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>
         /// Gets a cached BitmapImage for a logo URL. If not cached, creates one and adds it.
         /// MUST BE CALLED FROM UI THREAD.
         /// </summary>
         public static BitmapImage GetCachedLogo(string url)
         {
-            if (string.IsNullOrEmpty(url)) return null;
-            if (_logoCache.TryGetValue(url, out var existing)) return existing;
-
-            // Cache size management
-            if (_logoCache.Count > MAX_LOGO_CACHE_SIZE)
-            {
-                // Partial clear strategy: remove ~half to maintain some hits
-                var keysToRemove = _logoCache.Keys.Take(MAX_LOGO_CACHE_SIZE / 2).ToList();
-                foreach (var key in keysToRemove) _logoCache.TryRemove(key, out _);
-            }
-
-            try
-            {
-                var bitmap = new BitmapImage();
-                // Optimization: Logos are never shown very large, usually < 120px height
-                bitmap.DecodePixelHeight = 120;
-                bitmap.CreateOptions = BitmapCreateOptions.None; // WinUI 3 handles decoding asynchronously by default
-                bitmap.UriSource = new Uri(url);
-                
-                _logoCache.TryAdd(url, bitmap);
-                return bitmap;
-            }
-            catch
-            {
-                return null;
-            }
+            return GetImage(url, 0, 120); // Logos are usually height-constrained
         }
 
         public static async Task<(Color Primary, Color Secondary)?> GetOrExtractColorAsync(string imageUrl)

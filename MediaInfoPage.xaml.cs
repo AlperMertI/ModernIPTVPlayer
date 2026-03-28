@@ -145,6 +145,7 @@ namespace ModernIPTVPlayer
             Revealing,   // Data arrived, animation starting
             Ready        // Everything complete
         }
+        private bool _isHandoffInProgress = false;
         private bool _isProcessingSizeChanged = false;
         private PageLoadState _pageLoadState = PageLoadState.Initial;
         private IMediaStream _pendingLoadItem;  // Item waiting for layout
@@ -200,7 +201,7 @@ namespace ModernIPTVPlayer
             // Root height is now handled by XAML Stretch alignments
 
             System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Constructor completed.");
-            this.NavigationCacheMode = NavigationCacheMode.Required;
+            this.NavigationCacheMode = NavigationCacheMode.Disabled;
             SetupProfessionalAnimations();
             SetupActionBarDynamics();
             SetupStabilityComposition();
@@ -218,12 +219,116 @@ namespace ModernIPTVPlayer
             CastListView.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnCastPointerReleased), true);
             CastListView.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnCastPointerReleased), true);
             CastListView.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnCastPointerReleased), true);
+
+            // Project Zero: Mandatory Cleanup Registration
+            this.Unloaded += (s, e) => Cleanup();
+        }
+
+        /// <summary>
+        /// Project Zero: Major resource reclamation. 
+        /// Explicitly breaks reference chains and interop links that often cause memory leaks in WinUI 3.
+        /// </summary>
+        public void Cleanup()
+        {
+            try
+            {
+                System.Diagnostics.Debug.WriteLine($"[Cleanup] MediaInfoPage releasing resources for: {_item?.Title ?? "None"}");
+
+                // 1. Kill Heavy Engines
+                if (TrailerWebView != null)
+                {
+                    try { TrailerWebView.Source = new Uri("about:blank"); } catch { }
+                    TrailerWebView.Visibility = Visibility.Collapsed;
+                }
+                
+                _slideshowTimer?.Stop();
+                _slideshowTimer = null;
+
+                // 2. Clear Managed Collections (Frees strings and model objects)
+                Seasons?.Clear();
+                CurrentEpisodes?.Clear();
+                CastList?.Clear();
+                DirectorList?.Clear();
+                _stremioSourcesCache?.Clear();
+                _addonResults?.Clear();
+                _backdropUrls?.Clear();
+                _validatedBackdrops?.Clear();
+
+                // 2.5 Kill & Dispose Pre-buffer Player (MPV Native RAM)
+                if (MediaInfoPlayer != null)
+                {
+                    try 
+                    { 
+                        // Project Zero - Phase 5: FIX HANDOVER CRASH (RACECONDITION)
+                        // If we are currently handing off this player, DO NOT destroy it!
+                        // App.HandoffPlayer might be cleared by PlayerPage already, so we use our local flag.
+                        if (_isHandoffInProgress)
+                        {
+                            Debug.WriteLine("[Cleanup] MediaInfoPage: Handoff in progress. Preserving player instance.");
+                        }
+                        else 
+                        {
+                            var pToCleanup = MediaInfoPlayer;
+                            _ = Task.Run(async () => {
+                                try { await pToCleanup.CleanupAsync(); } catch { }
+                            });
+                            Debug.WriteLine("[Cleanup] MediaInfoPage: CleanupAsync started.");
+                        }
+                    } catch { }
+                    MediaInfoPlayer = null;
+                }
+                if (PlayerHost != null) PlayerHost.Content = null;
+                _prebufferUrl = null;
+                _prebufferCts?.Cancel();
+                _prebufferCts?.Dispose();
+                _prebufferCts = null;
+
+                // 3. Nullify Image/Composition Resources
+                if (HeroImage != null) HeroImage.Source = null;
+                if (HeroImage != null) HeroImage.Opacity = 0; // Visual reset for next item
+                if (ContentLogoHost != null) ElementCompositionPreview.SetElementChildVisual(ContentLogoHost, null);
+                
+                _logoVisual = null;
+                _logoBrush = null;
+                if (_logoSurface != null)
+                {
+                    _logoSurface.Dispose();
+                    _logoSurface = null;
+                }
+
+                // 4. Break Metadata & Interop Links
+                _item = null;
+                _unifiedMetadata = null;
+                _compositor = null;
+                _trailerCts?.Cancel();
+                _trailerCts?.Dispose();
+                _trailerCts = null;
+
+                // 5. Unsubscribe from manual event handlers
+                this.SizeChanged -= MediaInfoPage_SizeChanged;
+                
+                // Project Zero: Explicitly remove Pointer Handlers (Fixes EventSourceCache leaks)
+                RootScrollViewer.RemoveHandler(PointerPressedEvent, new PointerEventHandler(OnMainPointerPressed));
+                RootScrollViewer.RemoveHandler(PointerMovedEvent, new PointerEventHandler(OnMainPointerMoved));
+                RootScrollViewer.RemoveHandler(PointerReleasedEvent, new PointerEventHandler(OnMainPointerReleased));
+                RootScrollViewer.RemoveHandler(PointerCanceledEvent, new PointerEventHandler(OnMainPointerReleased));
+                RootScrollViewer.RemoveHandler(PointerCaptureLostEvent, new PointerEventHandler(OnMainPointerReleased));
+
+                CastListView.RemoveHandler(PointerPressedEvent, new PointerEventHandler(OnCastPointerPressed));
+                CastListView.RemoveHandler(PointerMovedEvent, new PointerEventHandler(OnCastPointerMoved));
+                CastListView.RemoveHandler(PointerReleasedEvent, new PointerEventHandler(OnCastPointerReleased));
+                CastListView.RemoveHandler(PointerCanceledEvent, new PointerEventHandler(OnCastPointerReleased));
+                CastListView.RemoveHandler(PointerCaptureLostEvent, new PointerEventHandler(OnCastPointerReleased));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Cleanup] MediaInfoPage error: {ex.Message}");
+            }
         }
 
         private bool _isSelectionSyncing = false;
         private int _loadingVersion = 0; // New field
         private long _historyChangedToken; // New field
-        private bool _isHandoffInProgress = false;
         private DispatcherTimer _slideshowTimer;
         private string _slideshowId;
         private List<string> _backdropUrls = new List<string>();
@@ -1535,12 +1640,12 @@ namespace ModernIPTVPlayer
                         }
                         else
                         {
-                            string seedUrl = args.Stream?.PosterUrl;
+                            string seedUrl = _item?.PosterUrl;
                             if (!string.IsNullOrEmpty(seedUrl) && !ImageHelper.IsPlaceholder(seedUrl))
                             {
                                 if (!(HeroImage.Source is BitmapImage bi && bi.UriSource?.ToString() == seedUrl))
                                 {
-                                    HeroImage.Source = new BitmapImage(new Uri(seedUrl));
+                                    HeroImage.Source = ImageHelper.GetImage(seedUrl);
                                 }
                                 HeroImage.Opacity = 1;
                                 var v = ElementCompositionPreview.GetElementVisual(HeroImage);
@@ -1557,7 +1662,7 @@ namespace ModernIPTVPlayer
                     {
                         if (!string.IsNullOrEmpty(streamParam.PosterUrl))
                         {
-                            HeroImage.Source = new BitmapImage(new Uri(streamParam.PosterUrl));
+                            HeroImage.Source = ImageHelper.GetImage(streamParam.PosterUrl);
                             HeroImage.Opacity = 1;
                             _isFirstImageApplied = true;
                             _ = ExtractAndApplyAmbienceAsync(HeroImage, "provisional-poster-seed");
@@ -2087,14 +2192,32 @@ namespace ModernIPTVPlayer
                 var newCast = new List<CastItem>();
                 if (unified.Cast != null && unified.Cast.Count > 0 && unified.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl)))
                 {
-                    foreach (var c in unified.Cast.Take(10)) newCast.Add(new CastItem { Name = c.Name, Character = c.Character, FullProfileUrl = c.ProfileUrl });
+                    foreach (var c in unified.Cast.Take(10)) 
+                    {
+                        newCast.Add(new CastItem 
+                        { 
+                            Name = c.Name, 
+                            Character = c.Character, 
+                            FullProfileUrl = c.ProfileUrl,
+                            ProfileImage = ImageHelper.GetImage(c.ProfileUrl, 80, 100)
+                        });
+                    }
                 }
                 else if (unified.TmdbInfo != null && AppSettings.IsTmdbEnabled)
                 {
                     var credits = await TmdbHelper.GetCreditsAsync(unified.TmdbInfo.Id, unified.IsSeries);
                     if (credits?.Cast != null)
                     {
-                        foreach (var c in credits.Cast.Take(10)) newCast.Add(new CastItem { Name = c.Name, Character = c.Character, FullProfileUrl = c.FullProfileUrl });
+                        foreach (var c in credits.Cast.Take(10)) 
+                        {
+                            newCast.Add(new CastItem 
+                            { 
+                                Name = c.Name, 
+                                Character = c.Character, 
+                                FullProfileUrl = c.FullProfileUrl,
+                                ProfileImage = ImageHelper.GetImage(c.FullProfileUrl, 80, 100)
+                            });
+                        }
                     }
                 }
 
@@ -2126,7 +2249,16 @@ namespace ModernIPTVPlayer
                 var newDirectors = new List<CastItem>();
                 if (unified.Directors != null && unified.Directors.Count > 0)
                 {
-                    foreach (var d in unified.Directors.Take(5)) newDirectors.Add(new CastItem { Name = d.Name, Character = "Yönetmen", FullProfileUrl = d.ProfileUrl });
+                    foreach (var d in unified.Directors.Take(5)) 
+                    {
+                        newDirectors.Add(new CastItem 
+                        { 
+                            Name = d.Name, 
+                            Character = "Yönetmen", 
+                            FullProfileUrl = d.ProfileUrl,
+                            ProfileImage = ImageHelper.GetImage(d.ProfileUrl, 80, 100)
+                        });
+                    }
                 }
 
                 bool needsDirectorImages = newDirectors.Any(d => string.IsNullOrEmpty(d.FullProfileUrl));
@@ -2141,7 +2273,11 @@ namespace ModernIPTVPlayer
                             if (string.IsNullOrEmpty(d.FullProfileUrl))
                             {
                                 var match = tmdbDirectors.FirstOrDefault(tc => tc.Name.Equals(d.Name, StringComparison.OrdinalIgnoreCase));
-                                if (match != null) d.FullProfileUrl = match.FullProfileUrl;
+                                if (match != null) 
+                                {
+                                    d.FullProfileUrl = match.FullProfileUrl;
+                                    d.ProfileImage = ImageHelper.GetImage(match.FullProfileUrl, 80, 100);
+                                }
                             }
                         }
                     }
@@ -2205,7 +2341,7 @@ namespace ModernIPTVPlayer
                 visual1.StopAnimation("Opacity");
                 visual2.StopAnimation("Opacity");
 
-                HeroImage.Source = new BitmapImage(uri);
+                HeroImage.Source = ImageHelper.GetImage(imageUrl);
                 HeroImage.Opacity = 1;
                 visual1.Opacity = 1f;
                 
@@ -3885,6 +4021,7 @@ namespace ModernIPTVPlayer
                             Name = e.Title,
                             Overview = e.Overview,
                             ImageUrl = !string.IsNullOrEmpty(e.ThumbnailUrl) ? e.ThumbnailUrl : (unified.PosterUrl ?? ""),
+                            Thumbnail = ImageHelper.GetImage(!string.IsNullOrEmpty(e.ThumbnailUrl) ? e.ThumbnailUrl : (unified.PosterUrl ?? ""), 150, 80),
                             ReleaseDate = e.AirDate,
                             IsReleased = e.AirDate.HasValue ? e.AirDate.Value <= DateTime.Now : true,
                             StreamUrl = e.StreamUrl,
@@ -4126,6 +4263,7 @@ namespace ModernIPTVPlayer
                                  Name = e.Title,
                                  Overview = e.Overview,
                                  ImageUrl = !string.IsNullOrEmpty(e.ThumbnailUrl) ? e.ThumbnailUrl : (_item?.PosterUrl ?? ""),
+                                 Thumbnail = ImageHelper.GetImage(!string.IsNullOrEmpty(e.ThumbnailUrl) ? e.ThumbnailUrl : (_item?.PosterUrl ?? ""), 150, 80),
                                  StreamUrl = e.StreamUrl,
                                  IsReleased = (e.AirDate ?? DateTime.MinValue) <= DateTime.Now,
                                  DurationFormatted = (!string.IsNullOrEmpty(e.RuntimeFormatted)) ? e.RuntimeFormatted : "",
@@ -5287,28 +5425,30 @@ namespace ModernIPTVPlayer
             if (MediaInfoPlayer == null)
             {
                 MediaInfoPlayer = new MpvWinUI.MpvPlayer();
-
-                try 
-                {
-                    var pSettings = AppSettings.PlayerSettings;
-                    if (pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
-                    {
-                        MediaInfoPlayer.RenderApi = "d3d11";
-                    }
-                    else
-                    {
-                        MediaInfoPlayer.RenderApi = "dxgi";
-                    }
-                    Debug.WriteLine($"[MediaInfoPage] Selected Render API: {MediaInfoPlayer.RenderApi}");
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[MediaInfoPage] Failed to load settings for RenderApi: {ex.Message}");
-                    MediaInfoPlayer.RenderApi = "d3d11"; // Default to gpu-next
-                }
-
                 isNew = true;
-                if (PlayerHost != null) PlayerHost.Content = MediaInfoPlayer;
+            }
+
+            try 
+            {
+               // Project Zero - Phase 6: Instant-On Initialization
+               // We use real RenderApi and vid=1 (forced in helper) for zero-latency.
+               var pSettings = AppSettings.PlayerSettings;
+               MediaInfoPlayer.RenderApi = pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext ? "d3d11" : "dxgi";
+               
+               await MpvSetupHelper.ConfigurePlayerAsync(MediaInfoPlayer, url, isSecondary: true);
+               
+               Debug.WriteLine($"[MediaInfoPage] Optimization: Initialized for Zero-Latency FastStart.");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[MediaInfoPage] Failed to init pre-buffer player: {ex.Message}");
+            }
+
+            if (isNew)
+            {
+               MediaInfoPlayer.Width = 100; // Small internal footprint
+               MediaInfoPlayer.Height = 100;
+               if (PlayerHost != null) PlayerHost.Content = MediaInfoPlayer;
             }
             else
             {
@@ -5394,8 +5534,8 @@ namespace ModernIPTVPlayer
                 await MediaInfoPlayer.SetPropertyAsync("cache", "yes"); // Enable cache explicitly
                 await MediaInfoPlayer.SetPropertyAsync("cache-pause", "yes"); // Buffer while paused
                 await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", preSeconds.ToString());
-                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "1000MiB"); 
-                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "1MiB"); // Minimize back buffer during pre-buffering
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "128MiB"); 
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "0"); // No back buffer during pre-buffering
 
                 // [RESTORE AUDIO/SUBTITLE PREFERENCES]
                 // Attempt to retrieve history item to restore track preferences.
@@ -5670,20 +5810,25 @@ namespace ModernIPTVPlayer
                         }
                         else
                         {
-                            var path = await MediaInfoPlayer.GetPropertyAsync("path");
+                            string path = null;
+                            try { path = await MediaInfoPlayer.GetPropertyAsync("path"); } catch { }
+
                             if (!string.IsNullOrEmpty(path) && path != "N/A")
                             {
                                 isPlayerActive = true;
+                                _isHandoffInProgress = true;
                                 App.HandoffPlayer = MediaInfoPlayer; // Valid Handoff
                             
-                            Debug.WriteLine($"[MediaInfoPage:Handoff] Player State BEFORE: Pause={await MediaInfoPlayer.GetPropertyAsync("pause")}, Mute={await MediaInfoPlayer.GetPropertyAsync("mute")}");
+                            Debug.WriteLine($"[MediaInfoPage:Handoff] Player matched path: {path}");
                             
                             // APPLY MAIN BUFFER SETTINGS
-                            int mainBuffer = AppSettings.BufferSeconds;
-                            await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
-                            await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB"); 
-                            
-                            await MediaInfoPlayer.SetPropertyAsync("pause", "no");
+                            try 
+                            {
+                                int mainBuffer = AppSettings.BufferSeconds;
+                                await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
+                                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB"); 
+                                await MediaInfoPlayer.SetPropertyAsync("pause", "no");
+                            } catch { }
                             
                             // [FIX] Force swap chain linking BEFORE handoff detachment
                             // Without this, the swap chain may never be linked to the SwapChainPanel
@@ -8763,6 +8908,7 @@ namespace ModernIPTVPlayer
         public string Overview { get; set; }
         public string Duration { get; set; }
         public string ImageUrl { get; set; }
+        public Microsoft.UI.Xaml.Media.ImageSource Thumbnail { get; set; }
         public string StreamUrl { get; set; }
         public string Container { get; set; }
         public int SeasonNumber { get; set; }
@@ -8835,6 +8981,7 @@ namespace ModernIPTVPlayer
         public string Name { get; set; }
         public string Character { get; set; }
         public string FullProfileUrl { get; set; }
+        public Microsoft.UI.Xaml.Media.ImageSource ProfileImage { get; set; }
     }
 
     public class StremioStreamViewModel : System.ComponentModel.INotifyPropertyChanged

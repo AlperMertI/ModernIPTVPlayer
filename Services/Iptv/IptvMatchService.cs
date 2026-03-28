@@ -15,8 +15,9 @@ namespace ModernIPTVPlayer.Services.Iptv
 
         private List<IMediaStream> _vods = new();
         private List<IMediaStream> _series = new();
-        private Dictionary<string, List<IMediaStream>> _imdbIndex = new(StringComparer.OrdinalIgnoreCase);
-        private Dictionary<string, List<IMediaStream>> _tokenIndex = new(StringComparer.OrdinalIgnoreCase);
+        private Dictionary<int, IMediaStream> _idMap = new(); // Fast lookup
+        private Dictionary<string, int[]> _imdbIndex = new(StringComparer.OrdinalIgnoreCase);
+        private Dictionary<string, int[]> _tokenIndex = new(StringComparer.OrdinalIgnoreCase);
         private bool _isInitialized = false;
         private readonly object _indexLock = new();
 
@@ -27,18 +28,28 @@ namespace ModernIPTVPlayer.Services.Iptv
         /// indices are pre-built by ContentCacheService in a background thread.
         /// </summary>
         public void UpdateIndices(IEnumerable<IMediaStream> vods, IEnumerable<IMediaStream> series, 
-            Dictionary<string, List<IMediaStream>> imdbIndex, Dictionary<string, List<IMediaStream>> tokenIndex)
+            Dictionary<string, int[]> imdbIndex, Dictionary<string, int[]> tokenIndex)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            System.Diagnostics.Debug.WriteLine($"[IptvMatchService] UpdateIndices STARTED at {DateTime.Now}");
+
             lock (_indexLock)
             {
                 _vods = vods?.ToList() ?? new List<IMediaStream>();
                 _series = series?.ToList() ?? new List<IMediaStream>();
-                _imdbIndex = imdbIndex ?? new Dictionary<string, List<IMediaStream>>(StringComparer.OrdinalIgnoreCase);
-                _tokenIndex = tokenIndex ?? new Dictionary<string, List<IMediaStream>>(StringComparer.OrdinalIgnoreCase);
+                
+                // Build ID Map with packing (-id for series to distinguish from VODs)
+                _idMap = _vods.Select(v => new { Id = v.Id, Item = v })
+                             .Concat(_series.Select(s => new { Id = -s.Id, Item = s }))
+                             .GroupBy(x => x.Id)
+                             .ToDictionary(g => g.Key, g => g.First().Item);
+
+                _imdbIndex = imdbIndex ?? new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
+                _tokenIndex = tokenIndex ?? new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
                 
                 _isInitialized = true;
                 TitleHelper.ClearCaches();
-                AppLogger.Info($"[IptvMatchService] Indices updated. VODs: {_vods.Count}, Series: {_series.Count}, Imdb/Tmdb Index: {_imdbIndex.Count}, Tokens: {_tokenIndex.Count}");
+                System.Diagnostics.Debug.WriteLine($"[IptvMatchService] UpdateIndices COMPLETED in {sw.ElapsedMilliseconds}ms. VODs: {_vods.Count}, Series: {_series.Count}");
             }
         }
 
@@ -69,7 +80,10 @@ namespace ModernIPTVPlayer.Services.Iptv
                  }
              }
 
-             UpdateIndices(vods, series, imdbIndex, tokenIndex);
+             var imdbRun = imdbIndex.ToDictionary(k => k.Key, v => v.Value.Select(s => s is SeriesStream ? -s.Id : s.Id).ToArray(), StringComparer.OrdinalIgnoreCase);
+             var tokenRun = tokenIndex.ToDictionary(k => k.Key, v => v.Value.Select(s => s is SeriesStream ? -s.Id : s.Id).ToArray(), StringComparer.OrdinalIgnoreCase);
+
+             UpdateIndices(vods, series, imdbRun, tokenRun);
         }
 
         public bool InstanceInitializeCheck() => _isInitialized;
@@ -127,9 +141,10 @@ namespace ModernIPTVPlayer.Services.Iptv
                     if (token.Length < 2 && !char.IsDigit(token[0])) continue;
                     if (_tokenIndex.TryGetValue(token, out var matches))
                     {
-                        foreach (var m in matches)
+                        foreach (var mid in matches)
                         {
                             ct.ThrowIfCancellationRequested();
+                            if (!_idMap.TryGetValue(mid, out var m)) continue;
                             if (m.Type != (isSeries ? "series" : "movie")) continue;
                             if (titleLevelMatches.ContainsKey(m)) titleLevelMatches[m]++;
                             else titleLevelMatches[m] = 1;
@@ -186,8 +201,9 @@ namespace ModernIPTVPlayer.Services.Iptv
                         if (token.Length < 2 && !char.IsDigit(token[0])) continue;
                         if (_tokenIndex.TryGetValue(token, out var matches))
                         {
-                            foreach (var m in matches)
+                            foreach (var mid in matches)
                             {
+                                if (!_idMap.TryGetValue(mid, out var m)) continue;
                                 if (m.Type != fallbackType) continue;
                                 if (titleLevelMatches.ContainsKey(m)) titleLevelMatches[m]++;
                                 else titleLevelMatches[m] = 1;
@@ -373,12 +389,17 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             lock (_indexLock)
             {
-                if (_imdbIndex.TryGetValue(normalizedId, out var list))
+                if (_imdbIndex.TryGetValue(normalizedId, out var matches))
                 {
-                    var matches = list.Where(m => m.Type == (isSeries ? "series" : "movie")).ToList();
-                    AppLogger.Info($"[IptvMatch] ID Match HIT for {normalizedId}: Found {matches.Count} results.");
-                    if (stopOnHighConfidence && matches.Any()) return new List<IMediaStream> { matches[0] };
-                    return matches;
+                    var results = new List<IMediaStream>();
+                    foreach (var mid in matches)
+                    {
+                        if (_idMap.TryGetValue(mid, out var m) && m.Type == (isSeries ? "series" : "movie"))
+                            results.Add(m);
+                    }
+                    AppLogger.Info($"[IptvMatch] ID Match HIT for {normalizedId}: Found {results.Count} results.");
+                    if (stopOnHighConfidence && results.Any()) return new List<IMediaStream> { results[0] };
+                    return results;
                 }
             }
             return new List<IMediaStream>();
@@ -401,13 +422,16 @@ namespace ModernIPTVPlayer.Services.Iptv
             {
                 if (!_imdbIndex.ContainsKey(imdbId))
                 {
-                    _imdbIndex[imdbId] = new List<IMediaStream>();
+                    _imdbIndex[imdbId] = new int[0];
                 }
 
-                var list = _imdbIndex[imdbId];
-                if (!list.Contains(item))
+                var arr = _imdbIndex[imdbId];
+                if (!arr.Contains(item.Id))
                 {
-                    list.Add(item);
+                    var newArr = new int[arr.Length + 1];
+                    Array.Copy(arr, newArr, arr.Length);
+                    newArr[arr.Length] = item.Id;
+                    _imdbIndex[imdbId] = newArr;
                     AppLogger.Info($"[IptvMatch] Learned: '{item.Title}' -> {imdbId}. Match registered in runtime ID index.");
                 }
             }
