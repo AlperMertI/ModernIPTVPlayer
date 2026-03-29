@@ -34,33 +34,37 @@ namespace ModernIPTVPlayer
                 await player.SetPropertyAsync("ytdl", "no");
 
                 // 2. Network & Headers
-                string headers = ""; // Scope Fix for Logging at line 87
+                string headers = ""; 
 
-                // Bypass headers for local bridge to avoid 400 Bad Request
-                if (streamUrl.Contains("127.0.0.1"))
+                // Only apply headers if we have a URL
+                if (!string.IsNullOrEmpty(streamUrl))
                 {
-                    AppLogger.Info("Local Bridge URL detected. Skipping external headers.");
-                }
-                else
-                {
-                    string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-                    string cookieHeader = ExtractCookiesForUrl(streamUrl);
-                    headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
-
-                    if (!string.IsNullOrEmpty(cookieHeader))
+                    // Bypass headers for local bridge to avoid 400 Bad Request
+                    if (streamUrl.Contains("127.0.0.1"))
                     {
-                        headers += $"Cookie: {cookieHeader}\n";
-                        AppLogger.Info($"Cookies applied for {streamUrl}");
+                        AppLogger.Info("Local Bridge URL detected. Skipping external headers.");
                     }
-
-                    await player.SetPropertyAsync("user-agent", userAgent);
-                    await player.SetPropertyAsync("http-header-fields", headers);
-
-                    // [FIX] YouTube Bot Detection: Apply browser-like headers for yt-dlp
-                    if (streamUrl.Contains("youtube.com") || streamUrl.Contains("youtu.be"))
+                    else
                     {
-                        await player.SetPropertyAsync("ytdl-raw-options", $"user-agent=\"{userAgent}\",no-check-certificate=");
-                        AppLogger.Info("Applied yt-dlp workaround for YouTube.");
+                        string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+                        string cookieHeader = ExtractCookiesForUrl(streamUrl);
+                        headers = $"Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
+
+                        if (!string.IsNullOrEmpty(cookieHeader))
+                        {
+                            headers += $"Cookie: {cookieHeader}\n";
+                            AppLogger.Info($"Cookies applied for {streamUrl}");
+                        }
+
+                        await player.SetPropertyAsync("user-agent", userAgent);
+                        await player.SetPropertyAsync("http-header-fields", headers);
+
+                        // [FIX] YouTube Bot Detection: Apply browser-like headers for yt-dlp
+                        if (streamUrl.Contains("youtube.com") || streamUrl.Contains("youtu.be"))
+                        {
+                            await player.SetPropertyAsync("ytdl-raw-options", $"user-agent=\"{userAgent}\",no-check-certificate=");
+                            AppLogger.Info("Applied yt-dlp workaround for YouTube.");
+                        }
                     }
                 }
 
@@ -151,12 +155,12 @@ namespace ModernIPTVPlayer
                 string tmValue = pSettings.ToneMapping switch
                 {
                     Models.ToneMapping.Clip => "clip",
-                    Models.ToneMapping.Spline => "spline", // Native spline supported!
-                    Models.ToneMapping.Bt2446a => "bt.2446a", // Native bt.2446a supported!
-                    Models.ToneMapping.St2094_40 => "st2094-40", // Native st2094-40 supported!
+                    Models.ToneMapping.Spline => "spline", 
+                    Models.ToneMapping.Bt2446a => "bt.2446a",
+                    Models.ToneMapping.St2094_40 => "st2094-40",
                     _ => "auto"
                 };
-                await SetPropertySafeAsync(player, "tone-mapping", tmValue);
+                                await SetPropertySafeAsync(player, "tone-mapping", tmValue);
 
                 // Target Peak
                 if (pSettings.TargetPeak != Models.TargetPeak.Auto)
@@ -197,12 +201,21 @@ namespace ModernIPTVPlayer
                         await SetPropertySafeAsync(player, "target-trc", "pq");
                         await SetPropertySafeAsync(player, "target-prim", "bt.2020");
                         
-                        // [FIX] Use hardware-level initial peak if available, instead of 'auto'
-                        float rawPeak = player.PeakLuminance;
-                        int peak = (int)Math.Round(rawPeak);
-                        string initialPeak = peak > 300 ? peak.ToString() : "auto";
+                        // [FIX] Expert Formula: Match the OS limit but never exceed hardware reality.
+                        // This prevents clipping from the very first frame.
+                        float hardwarePeak = player.PeakLuminance;
+                        float osPeak = player.OsMaxLuminance;
+                        float calculatedPeak = Math.Min(osPeak, hardwarePeak);
+                        
+                        int peak = (int)Math.Round(calculatedPeak);
+                        string initialPeak = peak > 150 ? peak.ToString() : "auto";
+                        
                         await SetPropertySafeAsync(player, "target-peak", initialPeak);
-                        AppLogger.Info($"[HDR_INIT] Setting initial target-peak to {initialPeak} (Hardware Raw: {rawPeak:F1})");
+                        
+                        // Vitality Boost: Enable dynamic tone mapping for better brightness.
+                        await SetPropertySafeAsync(player, "hdr-compute-peak", "yes");
+                        
+                        AppLogger.Info($"[HDR_INIT] Setting initial target-peak to {initialPeak} (OS: {osPeak:F1}, HW: {hardwarePeak:F1})");
                         break;
                 }
 
@@ -213,9 +226,9 @@ namespace ModernIPTVPlayer
                 await player.SetPropertyAsync("cache-pause-wait", "1"); // Wait 1s buffer before resume
                 await player.SetPropertyAsync("cache-pause-initial", "yes"); // Wait for initial buffer
 
-                if (isSecondary)
+                                if (isSecondary)
                 {
-                    await player.SetPropertyAsync("demuxer-max-bytes", "64MiB");
+                                        await player.SetPropertyAsync("demuxer-max-bytes", "64MiB");
                     await player.SetPropertyAsync("demuxer-max-back-bytes", "16MiB");
                     await player.SetPropertyAsync("demuxer-readahead-secs", "20");
                 }

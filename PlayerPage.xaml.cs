@@ -563,7 +563,8 @@ namespace ModernIPTVPlayer
                             if (!string.IsNullOrEmpty(hdrStatus) && hdrStatus != "N/A" && double.TryParse(hdrStatus, NumberStyles.Any, CultureInfo.InvariantCulture, out double peak) && peak > 1.0)
                             {
                                 int nits = (int)Math.Round(peak * 203.0);
-                                _cachedHdr = $"HDR ({nits} nits)";
+                                string activeTm = await _mpvPlayer.GetPropertyAsync("tone-mapping");
+                                _cachedHdr = $"HDR ({nits} nits) - {activeTm.ToUpper()}";
                             }
                             else
                             {
@@ -622,6 +623,8 @@ namespace ModernIPTVPlayer
                     var vo = await _mpvPlayer.GetPropertyAsync("vo-configured");
                     TxtHardware.Text = (hwdec != "no" && !string.IsNullOrEmpty(hwdec)) ? $"{hwdec.ToUpper()} ({vo})" : $"SOFTWARE ({vo})";
                     TxtRenderer.Text = _mpvPlayer.RenderApi == "d3d11" ? "GPU-NEXT (Placebo)" : "GPU (Legacy DXGI)";
+                    TxtAppliedPeak.Text = _mpvPlayer.AppliedPeak > 0 ? $"{_mpvPlayer.AppliedPeak:F0} nits" : "-";
+                    TxtSdrWhite.Text = _mpvPlayer.SdrWhiteLevel > 0 ? $"{_mpvPlayer.SdrWhiteLevel:F0} nits" : "-";
 
                     // Drops & AV Sync
                     try 
@@ -1552,7 +1555,7 @@ namespace ModernIPTVPlayer
                         await _mpvPlayer.SetPropertyAsync("vid", "1");
                         Debug.WriteLine($"[PlayerPage] Handoff: Restored RenderApi and enabled vid=1");
                     } catch { }
-                    
+
                     PlayerContainer.Children.Add(_mpvPlayer);
                     _mpvPlayer.Visibility = Visibility.Visible;
                     _mpvPlayer.Opacity = 1;
@@ -1588,23 +1591,23 @@ namespace ModernIPTVPlayer
                     if (string.IsNullOrEmpty(pPath) || pPath == "N/A")
                     {
                         Debug.WriteLine("[PlayerPage:Handoff] Path is EMPTY or INVALID! Player lost content. Reloading URL...");
-                        
+
                         // [OPTIMIZATION] Set start time BEFORE OpenAsync to avoid seeking delay (Handoff Recovery)
                         if (_navArgs != null && _navArgs.StartSeconds > 0)
                         {
-                            Debug.WriteLine($"[PlayerPage:Handoff] Setting start time for recovery: {_navArgs.StartSeconds}");
+Debug.WriteLine($"[PlayerPage:Handoff] Setting start time for recovery: {_navArgs.StartSeconds}");
                             await _mpvPlayer.SetPropertyAsync("start", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         }
 
                         await _mpvPlayer.OpenAsync(_navArgs.Url);
-                        await _mpvPlayer.SetPropertyAsync("pause", "no");
+await _mpvPlayer.SetPropertyAsync("pause", "no");
                     }
                     else if (pIdle == "yes")
                     {
                         // Some streams need a kick after attachment
-                        Debug.WriteLine("[PlayerPage:Handoff] Player is stuck idle. Retrying unpause...");
+Debug.WriteLine("[PlayerPage:Handoff] Player is stuck idle. Retrying unpause...");
                         await _mpvPlayer.SetPropertyAsync("pause", "no");
-                        await Task.Delay(200);
+await Task.Delay(200);
                         await _mpvPlayer.SetPropertyAsync("pause", "no");
                         _mpvPlayer.Redraw(); // Force redraw after unpause kick
                     }
@@ -1615,9 +1618,9 @@ namespace ModernIPTVPlayer
                     // [RESTORE SAVED AUDIO/SUBTITLE TRACKS]
                     string contentId = !string.IsNullOrEmpty(_navArgs?.Id) ? _navArgs.Id : _streamUrl;
                     var history = HistoryManager.Instance.GetProgress(contentId);
-                    // pSettings already defined above
+// pSettings already defined above
 
-                    // Logic: If user changed global language preferences AFTER they manually picked a track for this video,
+// Logic: If user changed global language preferences AFTER they manually picked a track for this video,
                     // we should respect the new global preference (override the override).
                     bool isHistoryStale = history != null && pSettings.PreferredLanguagesUpdatedAt > history.Timestamp;
 
@@ -1626,13 +1629,13 @@ namespace ModernIPTVPlayer
                         if (!string.IsNullOrEmpty(history.AudioTrackId))
                         {
                             Debug.WriteLine($"[PlayerPage:Handoff] Restoring Audio Track: {history.AudioTrackId}");
-                            await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
-                        }
+await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
+}
                         if (!string.IsNullOrEmpty(history.SubtitleTrackId))
                         {
                             Debug.WriteLine($"[PlayerPage:Handoff] Restoring Subtitle Track: {history.SubtitleTrackId}");
-                            await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
-                        }
+await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
+}
                     }
                     else if (isHistoryStale)
                     {

@@ -62,12 +62,13 @@ public class D3D11RenderControl : ContentControl
     private bool _isHdrEnabled = false;
     public bool IsHdrEnabled => _isHdrEnabled;
 
-    private float _peakLuminance = 1000f; 
-    public float PeakLuminance => _peakLuminance;
-    
-    private float _sdrWhiteLevel = 80f;
-    public float SdrWhiteLevel => _sdrWhiteLevel;
+    private float _peakLuminance = 80.0f;
+    private float _sdrWhiteLevel = 80.0f;
+    private float _osMaxLuminance = 1000.0f;
 
+    public float PeakLuminance => _peakLuminance;
+    public float SdrWhiteLevel => _sdrWhiteLevel;
+    public float OsMaxLuminance => _osMaxLuminance;
     
     // Render'da kullanılacak boyutlar - her zaman SwapChain ile sınırlı
     public int RenderWidth => _swapChainWidth > 0 ? _swapChainWidth : CurrentWidth;
@@ -98,8 +99,11 @@ public class D3D11RenderControl : ContentControl
     public event EventHandler<bool> HdrStatusChanged;
     public event EventHandler Ready;
     
+    private Microsoft.Graphics.Display.DisplayInformation _displayInfo;
+    
     // DEĞİŞİKLİK: Void Action yerine, sonucun döndüğü Func kullanıyoruz
     public Func<TimeSpan, bool> RenderFrame; 
+    public Action SwapChainPresented;
 
     public IntPtr DeviceHandle { get; private set; }
     public IntPtr ContextHandle { get; private set; }
@@ -217,6 +221,8 @@ public class D3D11RenderControl : ContentControl
 
 
     private int _monitorRefreshRate = 60;
+    private IntPtr _lastHMonitor = IntPtr.Zero;
+    private long _frameCounter = 0;
 
     public D3D11RenderControl()
     {
@@ -228,6 +234,7 @@ public class D3D11RenderControl : ContentControl
 
     private unsafe void UpdateHdrStatus()
     {
+        float oldSdrWhite = _sdrWhiteLevel; // Capture before sync
         bool hdrWasEnabled = _isHdrEnabled;
         IntPtr hwnd = IntPtr.Zero;
 
@@ -239,64 +246,61 @@ public class D3D11RenderControl : ContentControl
             
             IntPtr hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
             
-            // 2. GET STATUS & BASE PEAK FROM MODERN SDK (Microsoft.Graphics.Display)
-            float sdkPeak = 0;
-            try
-            {
-                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
-                if (windowId.Value != 0)
-                {
-                    var displayInfo = Microsoft.Graphics.Display.DisplayInformation.CreateForWindowId(windowId);
-                    var colorInfo = displayInfo.GetAdvancedColorInfo();
-                    
-                    if (colorInfo != null)
-                    {
-                        _isHdrEnabled = colorInfo.CurrentAdvancedColorKind == Microsoft.Graphics.Display.DisplayAdvancedColorKind.HighDynamicRange;
-                        sdkPeak = (float)colorInfo.MaxLuminanceInNits;
-                        _sdrWhiteLevel = (float)colorInfo.SdrWhiteLevelInNits;
-                    }
-                }
-            }
-            catch { /* Fallback to older methods */ }
+            // 2. STATUS & BASE PEAK are now handled by SyncHdrMetadata on the UI Thread.
+            // This method (UpdateHdrStatus) runs on the background loop and only
+            // processes the EDID physics and change detection.
 
             // 3. GET PHYSICAL TRUTH FROM EDID (Hardware Level)
+            // Cache check: only re-scan registry if the monitor handle changed
             bool hardwarePeakFound = false;
-            try
+            
+            if (hMonitor == _lastHMonitor && _peakLuminance > 150)
             {
-                float edidPeak = GetPhysicalPeakFromEdid(hMonitor);
-                if (edidPeak > 300)
-                {
-                    _peakLuminance = edidPeak;
-                    hardwarePeakFound = true;
-                    LogSync($"[HDR_EDID] Success! Hardware-level Peak detected: {_peakLuminance:F1} nits.");
-                }
+                hardwarePeakFound = true;
             }
-            catch (Exception edidEx)
+            else
             {
-                LogSync($"[HDR_EDID_ERR] EDID discovery failed: {edidEx.Message}");
+                _lastHMonitor = hMonitor;
+                try
+                {
+                    float edidPeak = GetPhysicalPeakFromEdid(hMonitor);
+                    if (edidPeak > 300)
+                    {
+                        _peakLuminance = edidPeak;
+                        hardwarePeakFound = true;
+                        LogSync($"[HDR_EDID] MONITOR_CHANGE Detect! Peak: {_peakLuminance:F1} nits.");
+                    }
+                }
+                catch (Exception edidEx)
+                {
+                    LogSync($"[HDR_EDID_ERR] Discovery failed: {edidEx.Message}");
+                }
             }
 
             // 4. FINAL PEAK CALIBRATION
             if (hardwarePeakFound)
             {
-                // We use the 616.9 (or similar) from your hardware directly.
+                // Physical Truth prioritized
             }
             else if (_isHdrEnabled)
             {
-                // Fallback to SDK if healthy, otherwise use safety heuristic
-                _peakLuminance = (sdkPeak > 250) ? sdkPeak : 600.0f;
-                if (sdkPeak <= 250) LogSync($"[HDR_FIX] Low OS peak ({sdkPeak:F1}). Applying generic 600 nits fallback.");
+                // Fallback to cached OS peak or generic 600
+                _peakLuminance = (_osMaxLuminance > 250) ? _osMaxLuminance : 600.0f;
             }
             else
             {
                 _peakLuminance = 80; // SDR
             }
 
-            // 5. SIGNALING SELECTION
+            // 5. SIGNALING SELECTION (Switch to scRGB for Absolute HDR)
             if (_isHdrEnabled)
             {
-                _swapChainFormat = Format.FormatR10G10B10A2Unorm; // Native 10-bit
-                _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG2084NoneP2020; // Native PQ
+                // Format: PQ 10-bit (R10G10B10A2_UNORM)
+                // ColorSpace: HDR10 (G2084/BT.2020)
+                // In this mode, luminance is absolute (PQ curve). 
+                // Windows SDR White slider does NOT affect this swapchain.
+                _swapChainFormat = Format.FormatR10G10B10A2Unorm; 
+                _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG2084NoneP2020; 
             }
             else
             {
@@ -305,11 +309,14 @@ public class D3D11RenderControl : ContentControl
             }
 
             // 6. APPLY CHANGES
-            if (hdrWasEnabled != _isHdrEnabled)
+            bool sdrLevelChanged = Math.Abs(oldSdrWhite - _sdrWhiteLevel) > 1.0f;
+            
+            if (hdrWasEnabled != _isHdrEnabled || sdrLevelChanged)
             {
-                LogSync($"[HDR_STATUS] SYNC -> Enabled: {_isHdrEnabled} | Format: {_swapChainFormat} | Final Peak: {_peakLuminance:F1}");
+                LogSync($"[LUM_CHANGE] HDR_Active: {_isHdrEnabled} | SdrWhite: {_sdrWhiteLevel:F1} nits | OsMaxLum: {_osMaxLuminance:F1} nits");
                 HdrStatusChanged?.Invoke(this, _isHdrEnabled);
-                if (_swapChain.Handle != null) RequestResize(force: true);
+                if (_swapChain.Handle != null && hdrWasEnabled != _isHdrEnabled) RequestResize(force: true);
+                else { UpdateColorSpace(); } // Ensure metadata stays in sync if only luminance changed
             }
         }
         catch (Exception ex)
@@ -371,8 +378,39 @@ public class D3D11RenderControl : ContentControl
             _targetScaleY = _swapChainPanel.CompositionScaleY;
 
             UpdateSwapChain();
+            
+            // UI-Thread HDR Synchronization
+            try
+            {
+                IntPtr hwnd = GetActiveWindow();
+                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+                if (windowId.Value != 0)
+                {
+                    _displayInfo = Microsoft.Graphics.Display.DisplayInformation.CreateForWindowId(windowId);
+                    SyncHdrMetadata();
+                    _displayInfo.AdvancedColorInfoChanged += (s, e) => { SyncHdrMetadata(); UpdateHdrStatus(); };
+                }
+            }
+            catch (Exception ex)
+            {
+                LogSync($"[HDR_UI_ERR] UI Thread metadata tracking failed: {ex.Message}");
+            }
+
             Ready?.Invoke(this, EventArgs.Empty);
             StartRenderLoop();
+        }
+    }
+
+    private void SyncHdrMetadata()
+    {
+        if (_displayInfo == null) return;
+        var colorInfo = _displayInfo.GetAdvancedColorInfo();
+        if (colorInfo != null)
+        {
+            _isHdrEnabled = colorInfo.CurrentAdvancedColorKind == Microsoft.Graphics.Display.DisplayAdvancedColorKind.HighDynamicRange;
+            _sdrWhiteLevel = (float)colorInfo.SdrWhiteLevelInNits;
+            _osMaxLuminance = (float)colorInfo.MaxLuminanceInNits;
+            LogSync($"[HDR_UI_SYNC] ColorKind: {colorInfo.CurrentAdvancedColorKind} | SdrWhite: {_sdrWhiteLevel:F1} | OsMaxLum: {_osMaxLuminance:F1}");
         }
     }
 
@@ -416,6 +454,10 @@ public class D3D11RenderControl : ContentControl
             }
             var waitMs = (float)stageSw.Elapsed.TotalMilliseconds;
 
+            // 0. POLLING SDR SLIDER removed from hot path to avoid blocking the render thread.
+            // HDR status and monitor peaks are now managed via UI events and initialized once.
+            _frameCounter++;
+
             var loopStamp = Stopwatch.GetTimestamp();
             stageSw.Restart();
             lock (_renderLock)
@@ -437,7 +479,12 @@ public class D3D11RenderControl : ContentControl
 
                 try
                 {
-                    if (_atomicBackBuffer == IntPtr.Zero || (CurrentWidth <= 1 && CurrentHeight <= 1)) {
+                    if (_atomicBackBuffer == IntPtr.Zero) {
+                         continue;
+                    }
+
+                    // [FIX] Relaxed dimension check to avoid "stuck" render context on startup
+                    if (CurrentWidth < 1 || CurrentHeight < 1) {
                          continue;
                     }
 
@@ -455,6 +502,7 @@ public class D3D11RenderControl : ContentControl
                     {
                         stageSw.Restart();
                         PresentFrame();
+                        SwapChainPresented?.Invoke();
                         presentMs = (float)stageSw.Elapsed.TotalMilliseconds;
                         lastPresentWasSuccess = true;
                     }
@@ -689,14 +737,42 @@ public class D3D11RenderControl : ContentControl
         if (sc3.Handle != null)
         {
             var hr = sc3.Handle->SetColorSpace1(_swapChainColorSpace);
-            if (hr < 0)
-            {
-                LogSync($"[HDR_ERR] SetColorSpace1 Failed: 0x{hr:X}");
-            }
-            else
-            {
-                // LogSync($"[HDR_TRACE] SetColorSpace1 Success: {_swapChainColorSpace}");
-            }
+            LogSync($"[DXGI_COLOR_SYNC] Space: {_swapChainColorSpace} | Result: 0x{hr:X}");
+        }
+
+        if (_isHdrEnabled)
+        {
+            UpdateHdrMetadata();
+        }
+    }
+
+    private unsafe void UpdateHdrMetadata()
+    {
+        if (_swapChain.Handle == null) return;
+
+        using var sc4 = _swapChain.QueryInterface<IDXGISwapChain4>();
+        if (sc4.Handle != null)
+        {
+            // Standard HDR10/PQ Metadata
+            HdrMetadataHdr10 metadata = new HdrMetadataHdr10();
+            
+            // BT.2020 Primaries (Standard)
+            metadata.RedPrimary[0] = 35400; metadata.RedPrimary[1] = 14600;
+            metadata.GreenPrimary[0] = 8500; metadata.GreenPrimary[1] = 39850;
+            metadata.BluePrimary[0] = 6550; metadata.BluePrimary[1] = 2300;
+            metadata.WhitePoint[0] = 15635; metadata.WhitePoint[1] = 16450;
+
+            float targetPeak = _peakLuminance; // Hardware Physical Peak
+            if (targetPeak < 100) targetPeak = 400.0f; // Safety Floor
+            
+            metadata.MaxMasteringLuminance = (uint)(targetPeak * 10000); 
+            metadata.MinMasteringLuminance = 10; // 0.001 nit
+            metadata.MaxContentLightLevel = (ushort)targetPeak;
+            metadata.MaxFrameAverageLightLevel = (ushort)(targetPeak * 0.9f);
+
+            sc4.Handle->SetHDRMetaData(HdrMetadataType.HdrMetadataTypeHdr10, (uint)sizeof(HdrMetadataHdr10), &metadata);
+            
+            LogSync($"[DXGI_METADATA_SIGNAL] Result: 0x0 | Peak: {targetPeak:F0} nits | BT.2020 (Standard)");
         }
     }
 

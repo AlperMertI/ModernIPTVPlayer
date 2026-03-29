@@ -32,8 +32,27 @@ public sealed partial class MpvPlayer : Control
     }
 
     public bool IsHdrEnabled => _renderControl?.IsHdrEnabled ?? false;
-    public float PeakLuminance => _renderControl?.PeakLuminance ?? 1000f;
-    public float SdrWhiteLevel => _renderControl?.SdrWhiteLevel ?? 200f;
+    private float _appliedPeakOverride = 0;
+    public float AppliedPeak
+    {
+        get
+        {
+            if (_appliedPeakOverride > 0) return _appliedPeakOverride;
+            if (!IsHdrEnabled || _renderControl == null) return 0;
+            
+            float h = _renderControl.PeakLuminance;
+            float s = _renderControl.SdrWhiteLevel;
+            float g = Math.Max(s / 80.0f, 0.1f);
+            float peak = h / g;
+            return (int)Math.Round(Math.Max(peak, 80.0f));
+        }
+        private set => _appliedPeakOverride = value;
+    }
+    public float PeakLuminance => _renderControl?.PeakLuminance ?? 80f;
+    public float SdrWhiteLevel => _renderControl?.SdrWhiteLevel ?? 80f;
+    public float OsMaxLuminance => _renderControl?.OsMaxLuminance ?? 80f;
+
+    public string PreferredToneMapping { get; set; } = "auto";
 
     protected override void OnApplyTemplate()
     {
@@ -41,38 +60,72 @@ public sealed partial class MpvPlayer : Control
         
         if (_renderControl != null)
         {
-            // Event yerine Delegate ataması yaptık, böylece return değerini (bool) alabiliriz.
             _renderControl.RenderFrame = Render;
             _renderControl.HdrStatusChanged += OnHdrStatusChanged;
+            _renderControl.SwapChainPresented = () => Player?.RenderContext?.ReportSwap();
+            
+            // Initial sync request (will run once player is ready)
+            _ = SyncHdrStatusAsync();
+        }
+    }
+
+    public async Task SyncHdrStatusAsync()
+    {
+        if (Player?.Client?.IsInitialized is not true || _renderControl == null)
+            return;
+
+        // Content-based HDR Detection (Matches mpv profile-cond logic)
+        string colormatrix = await GetPropertyAsync("video-params/colormatrix");
+        bool isHdrContent = colormatrix == "bt.2020-ncl" || colormatrix == "dolbyvision";
+        
+        // Display-based HDR Status
+        bool isHdrEnabled = _renderControl.IsHdrEnabled;
+
+        async Task SetResilient(string prop, object val) {
+            try {
+                await SetPropertyAsync(prop, val);
+            } catch (Exception ex) {
+                Debug.WriteLine($"[HDR_RESILIENT_ERR] Property '{prop}' failed: {ex.Message}");
+            }
+        }
+
+        if (isHdrEnabled && isHdrContent)
+        {
+            // Full HDR Passthrough: Let Windows and MPV sync via hint=yes
+            AppliedPeak = _renderControl.PeakLuminance;
+            
+            await SetResilient("target-colorspace-hint", "yes");
+            await SetResilient("target-peak", "auto");
+            await SetResilient("tone-mapping", PreferredToneMapping);
+            
+            // Standardize primary and trc for high-bitrate output
+            await SetResilient("target-trc", "pq");
+            await SetResilient("target-prim", "bt.2020");
+            
+            Debug.WriteLine($"[HDR_ACTIVE] Content: {colormatrix} | Hint: yes | Peak: auto | Tone: {PreferredToneMapping}");
+        }
+        else if (isHdrEnabled && !isHdrContent)
+        {
+            // SDR Content on HDR Screen: Use hint=yes to maintain OS UI brightness parity
+            AppliedPeak = 0;
+            await SetResilient("target-colorspace-hint", "yes");
+            await SetResilient("target-peak", "auto");
+            await SetResilient("target-trc", "srgb");
+            Debug.WriteLine($"[HDR_SDR_PASS] SDR Content on HDR Screen. Hint: yes.");
+        }
+        else
+        {
+            // pure SDR mode
+            AppliedPeak = 0;
+            await SetResilient("target-colorspace-hint", "no");
+            await SetResilient("target-trc", "srgb");
+            Debug.WriteLine($"[HDR_OFF] Pure SDR mode.");
         }
     }
 
     private void OnHdrStatusChanged(object? sender, bool isEnabled)
     {
-        if (Player?.Client?.IsInitialized is true)
-        {
-            _ = Task.Run(async () =>
-            {
-                if (isEnabled)
-                {
-                    float rawPeak = _renderControl?.PeakLuminance ?? 1000f;
-                    int peak = (int)Math.Round(rawPeak); // Round to nearest integer (e.g. 617) for stability
-                    
-                    await SetPropertyAsync("target-colorspace-hint", "yes");
-                    await SetPropertyAsync("target-trc", "pq");
-                    await SetPropertyAsync("target-prim", "bt.2020");
-                    await SetPropertyAsync("target-peak", peak.ToString());
-                    
-                    Debug.WriteLine($"[HDR_SYNC] MPV Tone-Mapping Optimized for Hardware: {peak} nits.");
-                }
-                else
-                {
-                    await SetPropertyAsync("target-colorspace-hint", "no");
-                    await SetPropertyAsync("target-trc", "srgb");
-                }
-                Debug.WriteLine($"[HDR_SYNC] MPV Properties Updated - HDR Enabled: {isEnabled}");
-            });
-        }
+        _ = SyncHdrStatusAsync();
     }
 
     public async Task OpenAsync(StorageFile file)
@@ -97,6 +150,11 @@ public sealed partial class MpvPlayer : Control
 
     private void OnStateChanged(object sender, PlaybackStateChangedEventArgs e)
     {
+        if (e.NewState == PlaybackState.Decoding || e.NewState == PlaybackState.Playing)
+        {
+            // When video starts, ensure HDR peak is correctly synced with the OS slider
+            _ = SyncHdrStatusAsync();
+        }
     }
 
     private void OnPositionChanged(object sender, PlaybackPositionChangedEventArgs e)
@@ -143,34 +201,41 @@ public sealed partial class MpvPlayer : Control
     public async Task SetPropertyAsync<T>(string name, T value)
     {
         if (Player == null || value == null) return;
-        var valStr = value.ToString();
-        int maxRetries = 5;
-        int delay = 250;
+        
+        // Ensure decimal values ALWAYS use '.' (dot) regardless of system language.
+        string valStr = value is IFormattable formattable
+            ? formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture)
+            : value.ToString();
+
+        int maxRetries = 3;
+        int delay = 200;
 
         for (int i = 0; i < maxRetries; i++)
         {
             try
             {
-                await Task.Run(() => Player.Client.SetProperty(name, valStr));
+                // We use mpv_set_property_string (via the string overload) for maximum compatibility.
+                await Task.Run(() => 
+                {
+                    try {
+                        Player.Client.SetProperty(name, valStr);
+                    } catch (Exception ex) {
+                        // Capture it inside the task to prevent unhandled UI exceptions.
+                        Debug.WriteLine($"[MPV_SET_ERR] Error setting '{name}' to '{valStr}': {ex.Message}");
+                    }
+                });
                 return; // Success
             }
-            catch (Exception ex) when (ex.Message.Contains("unsupported format") || i < 2)
+            catch (Exception ex) when (ex.Message.Contains("unsupported format") || i < maxRetries - 1)
             {
-                // Most common during initialization (VO not ready). 
-                // We retry a few times to "apply when ready".
-                if (i == maxRetries - 1) 
-                {
-                    Debug.WriteLine($"[MPV_ERR] Permanent Failure setting '{name}' to '{valStr}': {ex.Message}");
-                    throw;
-                }
-                Debug.WriteLine($"[MPV_RETRY] Property '{name}' not ready. Retrying in {delay}ms... (Attempt {i + 1}/{maxRetries})");
+                if (i == maxRetries - 1) return; // Silent give up on last try
                 await Task.Delay(delay);
-                delay *= 2; // Exponential backoff
+                delay *= 2; 
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[MPV_FATAL] Unexpected error setting '{name}': {ex.Message}");
-                break;
+                Debug.WriteLine($"[MPV_CRITICAL_ERR] {name}: {ex.Message}");
+                return; // Exit silent
             }
         }
     }
@@ -325,14 +390,16 @@ public sealed partial class MpvPlayer : Control
             return false;
         }
 
-        // 1. Yeni kare var mı kontrolü
+        // 1. Check for update flags
         var updateSw = Stopwatch.StartNew();
         var flags = Player.RenderContext.Update();
         var updateMs = updateSw.Elapsed.TotalMilliseconds;
-        bool hasFrame = (flags & MpvRenderUpdateFlag.Frame) != 0;
+        
+        // 2. We MUST render if mpv returns ANY non-zero flag (mostly Frame=1) 
+        //    OR if a forced redraw is requested (resize/UI update).
+        bool needsRender = (flags != 0) || _renderControl.ForceRedraw;
 
-        // 2. Yeni kare yoksa VE zorla çizim istenmiyorsa (Resize vb.) çık.
-        if (!hasFrame && !_renderControl.ForceRedraw)
+        if (!needsRender)
         {
             return false;
         }
