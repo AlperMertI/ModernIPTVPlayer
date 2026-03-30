@@ -1,4 +1,4 @@
-﻿// Copyright (c) Bili Copilot. All rights reserved.
+// Copyright (c) Bili Copilot. All rights reserved.
 
 using Mpv.Core.Enums.Client;
 using Mpv.Core.Enums.Render;
@@ -140,11 +140,7 @@ public partial class MpvRenderContextNative
 
     public void ReportSwap()
     {
-        var errorCode = mpv_render_context_report_swap(Handle);
-        if (errorCode != MpvError.Success)
-        {
-            throw new Exception($"Failed to report a render context swap. Error: {errorCode}", CreateError(errorCode));
-        }
+        mpv_render_context_report_swap(Handle);
     }
 
     public MpvRenderContextHandle Handle { get; }
