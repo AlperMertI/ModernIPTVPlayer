@@ -1,4 +1,4 @@
-﻿// Copyright (c) Bili Copilot. All rights reserved.
+// Copyright (c) Bili Copilot. All rights reserved.
 
 namespace Mpv.Core.Enums.Render;
 
@@ -300,4 +300,56 @@ public enum MpvRenderParamType
     /// Type: ID3D11Device*
     /// </summary>
     D3D11Device = 24,
+
+    /// <summary>
+    /// DXGI shared texture handle. Valid for mpv_render_context_render().
+    /// Type: HANDLE
+    /// </summary>
+    DXGISharedTexture = 26,
+
+    /// <summary>
+    /// DXGI color space type for target display. Valid for mpv_render_context_create().
+    /// Type: int* (MpvDXGIColorSpaceType value, same as DXGI_COLOR_SPACE_TYPE)
+    /// This tells the renderer the color space of the swapchain so that
+    /// proper HDR tone mapping and color conversion can be performed.
+    /// </summary>
+    DXGIColorspace = 27,
+}
+
+/// <summary>
+/// DXGI color space types matching DXGI_COLOR_SPACE_TYPE enum.
+/// Used with MpvRenderParamType.DXGIColorspace.
+/// </summary>
+public enum MpvDXGIColorSpaceType
+{
+    /// <summary>SDR: RGB Full Range, Gamma 2.2, BT.709 primaries</summary>
+    RgbFullG22NoneP709 = 0,
+    /// <summary>HDR: RGB Full Range, PQ (ST 2084), BT.2020 primaries</summary>
+    RgbFullG2084NoneP2020 = 2,
+    /// <summary>SDR: RGB Studio Range, Gamma 2.2, BT.709 primaries</summary>
+    RgbStudioG22NoneP709 = 5,
+    /// <summary>HDR: RGB Studio Range, PQ (ST 2084), BT.2020 primaries</summary>
+    RgbStudioG2084NoneP2020 = 7,
+    /// <summary>SDR: YCbCr Full Range, Gamma 2.2, BT.601</summary>
+    YcbcrFullG22NoneP709X601 = 8,
+    /// <summary>SDR: YCbCr Studio Range, Gamma 2.2, Left-aligned, BT.601</summary>
+    YcbcrStudioG22LeftP601 = 9,
+    /// <summary>SDR: YCbCr Full Range, Gamma 2.2, Left-aligned, BT.601</summary>
+    YcbcrFullG22LeftP601 = 10,
+    /// <summary>SDR: YCbCr Studio Range, Gamma 2.2, Left-aligned, BT.709</summary>
+    YcbcrStudioG22LeftP709 = 11,
+    /// <summary>SDR: YCbCr Full Range, Gamma 2.2, Left-aligned, BT.709</summary>
+    YcbcrFullG22LeftP709 = 12,
+    /// <summary>SDR: YCbCr Studio Range, Gamma 2.2, Left-aligned, BT.2020</summary>
+    YcbcrStudioG22LeftP2020 = 13,
+    /// <summary>SDR: YCbCr Full Range, Gamma 2.2, Left-aligned, BT.2020</summary>
+    YcbcrFullG22LeftP2020 = 14,
+    /// <summary>HDR: YCbCr Studio Range, PQ (ST 2084), Left-aligned, BT.2020</summary>
+    YcbcrStudioG2084LeftP2020 = 18,
+    /// <summary>HDR: YCbCr Studio Range, Gamma 2.2, Top-Left, BT.2020</summary>
+    YcbcrStudioG22TopLeftP2020 = 20,
+    /// <summary>HDR: YCbCr Studio Range, PQ (ST 2084), Top-Left, BT.2020</summary>
+    YcbcrStudioG2084TopLeftP2020 = 22,
+    /// <summary>HDR: RGB Full Range, PQ (ST 2084), BT.2020, ST 2094 (Dolby Vision)</summary>
+    RgbFullG2084NoneP2020St2094 = 24,
 }

@@ -53,6 +53,27 @@ public sealed partial class MpvPlayer : Control
     public float OsMaxLuminance => _renderControl?.OsMaxLuminance ?? 80f;
 
     public string PreferredToneMapping { get; set; } = "auto";
+    
+    /// <summary>
+    /// Enable shared texture mode for zero-copy rendering.
+    /// When enabled, mpv renders to a shared texture instead of swapchain backbuffer.
+    /// </summary>
+    public bool UseSharedTexture
+    {
+        get => _renderControl?.UseSharedTexture ?? false;
+        set
+        {
+            if (_renderControl != null)
+            {
+                _renderControl.UseSharedTexture = value;
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Gets the shared texture handle for cross-process rendering.
+    /// </summary>
+    public IntPtr SharedTextureHandle => _renderControl?.SharedTextureHandle ?? IntPtr.Zero;
 
     protected override void OnApplyTemplate()
     {
@@ -74,52 +95,58 @@ public sealed partial class MpvPlayer : Control
         if (Player?.Client?.IsInitialized is not true || _renderControl == null)
             return;
 
-        // Content-based HDR Detection (Matches mpv profile-cond logic)
+        // 1. Content-based HDR Detection (Expanded for better accuracy)
         string colormatrix = await GetPropertyAsync("video-params/colormatrix");
-        bool isHdrContent = colormatrix == "bt.2020-ncl" || colormatrix == "dolbyvision";
+        string colorprim = await GetPropertyAsync("video-params/primaries");
+        bool isHdrContent = colormatrix == "bt.2020-ncl" || colormatrix == "dolbyvision" || colorprim == "bt.2020";
         
-        // Display-based HDR Status
+        // 2. Display-based HDR Status from RenderControl
         bool isHdrEnabled = _renderControl.IsHdrEnabled;
+
+        // 3. Peak Calculation (Luminance Parity Logic)
+        // This maps the Windows "SDR Content Brightness" slider to MPV's target-peak.
+        float gain = Math.Max(_renderControl.SdrWhiteLevel / 80.0f, 0.1f);
+        float displayPeak = _renderControl.PeakLuminance / gain;
+        
+        // Ensure we don't drop below the standard 100 nits
+        int targetPeakNits = (int)Math.Round(Math.Max(displayPeak, 100.0f));
 
         async Task SetResilient(string prop, object val) {
             try {
                 await SetPropertyAsync(prop, val);
-            } catch (Exception ex) {
-                Debug.WriteLine($"[HDR_RESILIENT_ERR] Property '{prop}' failed: {ex.Message}");
-            }
+            } catch { }
         }
 
         if (isHdrEnabled && isHdrContent)
         {
-            // Full HDR Passthrough: Let Windows and MPV sync via hint=yes
-            AppliedPeak = _renderControl.PeakLuminance;
-            
+            // [HDR_ACTIVE] Full HDR10/PQ Path
+            // We NO LONGER set target-trc/target-prim manually for gpu-next zero-copy.
+            // This allows libmpv to handle Dolby Vision and HDR10 automatically.
             await SetResilient("target-colorspace-hint", "yes");
-            await SetResilient("target-peak", "auto");
-            await SetResilient("tone-mapping", PreferredToneMapping);
+            // await SetResilient("target-trc", "pq");
+            // await SetResilient("target-prim", "bt.2020");
+            await SetResilient("target-peak", targetPeakNits);
+            await SetResilient("hdr-compute-peak", "yes"); // Mandatory for dynamic tone mapping like ST2094-40
             
-            // Standardize primary and trc for high-bitrate output
-            await SetResilient("target-trc", "pq");
-            await SetResilient("target-prim", "bt.2020");
-            
-            Debug.WriteLine($"[HDR_ACTIVE] Content: {colormatrix} | Hint: yes | Peak: auto | Tone: {PreferredToneMapping}");
+            Debug.WriteLine($"[HDR_AUTH] ACTIVE | Gain: {gain:F2} | TargetPeak: {targetPeakNits} | Content: {colormatrix} | Renderer: gpu-next internal");
         }
         else if (isHdrEnabled && !isHdrContent)
         {
-            // SDR Content on HDR Screen: Use hint=yes to maintain OS UI brightness parity
-            AppliedPeak = 0;
+            // [HDR_SDR_PASS] SDR Content on HDR Screen
             await SetResilient("target-colorspace-hint", "yes");
             await SetResilient("target-peak", "auto");
-            await SetResilient("target-trc", "srgb");
-            Debug.WriteLine($"[HDR_SDR_PASS] SDR Content on HDR Screen. Hint: yes.");
+            // await SetResilient("target-trc", "srgb");
+            // await SetResilient("target-prim", "bt.709");
+            
+            Debug.WriteLine($"[HDR_AUTH] SDR_ON_HDR | Hint: yes");
         }
         else
         {
-            // pure SDR mode
-            AppliedPeak = 0;
+            // [HDR_OFF] Pure SDR Path
             await SetResilient("target-colorspace-hint", "no");
             await SetResilient("target-trc", "srgb");
-            Debug.WriteLine($"[HDR_OFF] Pure SDR mode.");
+            
+            Debug.WriteLine($"[HDR_AUTH] OFF | Standard SDR Path");
         }
     }
 
@@ -140,10 +167,11 @@ public sealed partial class MpvPlayer : Control
             Player.PlaybackPositionChanged += OnPositionChanged;
             Player.PlaybackStateChanged += OnStateChanged;
             _renderControl.Initialize();
+            await _renderControl.WaitForHdrStatusAsync();
             Player.Client.SetProperty("vo", "libmpv");
             Player.Client.RequestLogMessage(MpvLogLevel.V);
             Player.LogMessageReceived += OnLogMessageReceived;
-            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi);
+            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi, colorspace: (int)_renderControl.SwapChainColorSpace);
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
@@ -172,7 +200,7 @@ public sealed partial class MpvPlayer : Control
         Debug.WriteLine($"[{e.Level}]\t{e.Prefix}: {e.Message}");
     }
 
-    public async Task InitializePlayerAsync()
+    public async Task InitializePlayerAsync(bool skipScripts = false)
     {
         Player ??= new Player();
 
@@ -184,10 +212,12 @@ public sealed partial class MpvPlayer : Control
             Player.PlaybackPositionChanged += OnPositionChanged;
             Player.PlaybackStateChanged += OnStateChanged;
             _renderControl.Initialize();
-            Player.Client.SetProperty("vo", "libmpv");
+            await _renderControl.WaitForHdrStatusAsync();
             Player.Client.RequestLogMessage(MpvLogLevel.V);
             Player.LogMessageReceived += OnLogMessageReceived;
-            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi);
+            
+            // Note: vo is set to libmpv in InitializeDXGIAsync after gpu-next pre-init choice
+            await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi, skipScripts, colorspace: (int)_renderControl.SwapChainColorSpace);
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
@@ -411,12 +441,27 @@ public sealed partial class MpvPlayer : Control
         long currentResizeId = _renderControl.ActiveResizeId;
         if (_renderControl.ForceRedraw)
         {
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RES_STEP_3] RenderDXGI START | ID: {currentResizeId} | Target: {_renderControl.CurrentWidth}x{_renderControl.CurrentHeight} | UpdateContext: {updateMs:F2}ms | ForceRedraw: True");
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RES_STEP_3] RenderDXGI START | ID: {currentResizeId} | Target: {_renderControl.CurrentWidth}x{_renderControl.CurrentHeight} | Render: {_renderControl.RenderWidth}x{_renderControl.RenderHeight} | SwapChain: {_renderControl.SwapChainWidth}x{_renderControl.SwapChainHeight} | UpdateContext: {updateMs:F2}ms | ForceRedraw: True");
         }
 
         // 3. Çizimi gerçekleştir - RenderWidth/RenderHeight SwapChain sınırlarını aşmaz
         var renderSw = Stopwatch.StartNew();
-        Player.RenderDXGI(backBufferHandle, _renderControl.RenderWidth, _renderControl.RenderHeight, block: false);
+        
+        bool usingShared = UseSharedTexture && SharedTextureHandle != IntPtr.Zero;
+        if (_renderControl.ForceRedraw)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RES_STEP_RENDER] Path: {(usingShared ? "SHARED_TEX" : "FBO")} | SharedHandle: 0x{SharedTextureHandle:X} | BackBuffer: 0x{backBufferHandle:X}");
+        }
+        
+        if (usingShared)
+        {
+            Player.RenderDXGIShared(SharedTextureHandle, block: false);
+        }
+        else
+        {
+            Player.RenderDXGI(backBufferHandle, _renderControl.RenderWidth, _renderControl.RenderHeight, block: false);
+        }
+        
         var renderDuration = renderSw.Elapsed.TotalMilliseconds;
 
         if (_renderControl.ForceRedraw)

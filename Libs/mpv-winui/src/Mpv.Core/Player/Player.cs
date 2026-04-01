@@ -130,7 +130,7 @@ public sealed partial class Player
         }
     }
 
-    public async Task InitializeDXGIAsync(IntPtr device, IntPtr context, string adapterName = "auto", string api = "dxgi")
+    public async Task InitializeDXGIAsync(IntPtr device, IntPtr context, string adapterName = "auto", string api = "dxgi", bool skipScripts = false, int colorspace = 0)
     {
         if (Client.IsInitialized)
         {
@@ -139,125 +139,136 @@ public sealed partial class Player
 
         Debug.WriteLine($"[LOG] InitializeAsync (API: {api}) - Using Persistent D3D11 Handles (Dev: {device:X})");
         
-        // CrITICAL: Set options BEFORE initialization to ensure scripts and OSD load correctly.
-        // Enable built-in scripts (osc, stats) via explicit loading.
-        // Must use SetOption with correct types (bool/long) for pre-init configuration!
-        Client.SetOption("load-scripts", true);
-        Client.SetOption("input-default-bindings", true);
-        Client.SetOption("input-vo-keyboard", false); // We handle keyboard input in WinUI
-        
-        // Increase log level to debug script loading and hardware decoding issues
+        // 1. Core Pre-Init Options
+        Client.SetOption("load-scripts", !skipScripts);
+        Client.SetOption("input-default-bindings", !skipScripts);
+        Client.SetOption("input-vo-keyboard", false); 
         Client.RequestLogMessage(MpvLogLevel.V);
         
-        // Initialize D3D11 Context to ensure libplacebo captures the context correctly
+        // [FIX] Force correctly selected renderer (gpu-next vs gpu)
+        string voName = api == "d3d11" ? "gpu-next" : "gpu";
+        Client.SetOption("vo", voName);
+        
         Client.SetOption("gpu-api", "d3d11");
         Client.SetOption("gpu-context", "d3d11");
-
         Client.SetOption("d3d11-output-mode", "composition");
         Client.SetOption("d3d11-adapter", adapterName ?? "auto");
         Client.SetOption("d3d11-output-format", "rgba16f");
         Client.SetOption("d3d11-flip", "yes");
         Client.SetOption("d3d11-feature-level", "11_1");
         
-        // Note: hwdec and d3d11va-zero-copy are now handled by MpvSetupHelper
-        // to allow user preferences (AutoSafe/AutoCopy) to take effect correctly.
-
         await Client.InitializeAsync();
         
+        // Necessary for libmpv-based render contexts
         Client.SetProperty("vo", "libmpv");
-
-        // Enable OSD level 1 for stats/osc visibility (Must be set as property AFTER init)
         Client.SetProperty("osd-level", 1L); 
 
-        // Load scripts manually using robust command execution
-        // We use ExecuteWithResultAsync with an array to ensure paths with spaces are handled correctly by libmpv
-        try
+        // 2. Script Loading (Phase 2 - Persistent players only)
+        if (!skipScripts)
         {
-            var appPath = AppDomain.CurrentDomain.BaseDirectory;
-            var scriptDir = System.IO.Path.Combine(appPath, "scripts");
-            
-            // Normalize paths to forward slashes for MPV compatibility
-            var statsPath = System.IO.Path.Combine(scriptDir, "stats.lua").Replace("\\", "/");
-            var oscPath = System.IO.Path.Combine(scriptDir, "osc.lua").Replace("\\", "/");
-            
-            Debug.WriteLine($"[MpvPlayer] Loading scripts from: {scriptDir}");
-            Debug.WriteLine($"[MpvPlayer] Stats Path: {statsPath}");
-
-            if (System.IO.File.Exists(statsPath))
+            try
             {
-                try 
+                var appPath = AppDomain.CurrentDomain.BaseDirectory;
+                var scriptDir = System.IO.Path.Combine(appPath, "scripts");
+                var statsPath = System.IO.Path.Combine(scriptDir, "stats.lua").Replace("\\", "/");
+                var oscPath = System.IO.Path.Combine(scriptDir, "osc.lua").Replace("\\", "/");
+
+                if (System.IO.File.Exists(statsPath))
                 {
                     Debug.WriteLine($"[MpvPlayer] Loading stats.lua...");
                     await Client.ExecuteWithResultAsync(new[] { "load-script", statsPath });
-                    Debug.WriteLine($"[MpvPlayer] stats.lua loaded successfully.");
                 }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[MpvPlayer] ERROR loading stats.lua: {ex.Message}");
-                }
-            }
-            else
-            {
-                 Debug.WriteLine($"[MpvPlayer] stats.lua NOT FOUND at {statsPath}");
-            }
 
-            if (System.IO.File.Exists(oscPath))
-            {
-                try
+                if (System.IO.File.Exists(oscPath))
                 {
                     Debug.WriteLine($"[MpvPlayer] Loading osc.lua...");
                     await Client.ExecuteWithResultAsync(new[] { "load-script", oscPath });
-                    Debug.WriteLine($"[MpvPlayer] osc.lua loaded successfully.");
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine($"[MpvPlayer] ERROR loading osc.lua: {ex.Message}");
                 }
             }
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[MpvPlayer] General Script loading error: {ex}");
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[MpvPlayer] Script loading error: {ex}");
+            }
         }
         
         RerunEventLoop();
+        RerunEventLoop();
 
-        var apiStringPtr = Marshal.StringToCoTaskMemUTF8(api);
-        var dxgiParamsPtr = Marshal.AllocHGlobal(16);
-        Marshal.WriteIntPtr(dxgiParamsPtr, device);
-        Marshal.WriteIntPtr(dxgiParamsPtr + 8, context);
-
-        var advControlPtr = Marshal.AllocHGlobal(sizeof(int));
-        Marshal.WriteInt32(advControlPtr, 1); // Native Zero-Copy (Direct Rendering) Enabled
+        // [STRICT_RENDERER_INIT] 
+        // We must strictly separate legacy (dxgi) and modern (gpu-next/d3d11) params.
+        // Modern (gpu-next) API Name = "d3d11" (per libmpv_d3d11.c:273)
+        // Legacy (vo_gpu) API Name = "dxgi" (per libmpv_d3d11.c:83)
+        var parameters = new System.Collections.Generic.List<MpvRenderParam>();
         
-        var d3d11DevPtr = Marshal.AllocHGlobal(IntPtr.Size);
-        Marshal.WriteIntPtr(d3d11DevPtr, device);
+        // Strict mapping: anything other than "dxgi" is treated as modern (forced).
+        bool isModern = api != "dxgi";
+        string internalApiName = isModern ? "d3d11" : "dxgi";
 
-        var d3d11CtxPtr = Marshal.AllocHGlobal(IntPtr.Size);
-        Marshal.WriteIntPtr(d3d11CtxPtr, context);
+        var apiStringPtr = Marshal.StringToCoTaskMemUTF8(internalApiName);
+        var advControlPtr = Marshal.AllocHGlobal(sizeof(int));
+        Marshal.WriteInt32(advControlPtr, 1); 
 
-        try {
-            RenderContext = new MpvRenderContextNative(
-                Client.Handle,
-                [
-                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = apiStringPtr },
-                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIInitParams, Data = dxgiParamsPtr },
-                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.AdvancedControl, Data = advControlPtr },
-                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.D3D11Device, Data = d3d11DevPtr }, // Correct pointer-to-pointer
-                    new MpvRenderParam { Type = (Enums.Render.MpvRenderParamType)25, Data = d3d11CtxPtr },    // Custom Context handle
-                    new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero }
-                ]);
-            Debug.WriteLine($"[LOG] {api} RenderContext created SUCCESSFULLY!");
-        } catch (Exception ex) {
-            Debug.WriteLine($"[FATAL] {api} failed: {ex.Message}");
-            throw;
+        parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = apiStringPtr });
+        parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.AdvancedControl, Data = advControlPtr });
+
+        IntPtr dxgiParamsPtr = IntPtr.Zero;
+        IntPtr d3d11DevPtr = IntPtr.Zero;
+        IntPtr d3d11CtxPtr = IntPtr.Zero;
+
+        if (isModern)
+        {
+            // Modern Path (gpu-next/libplacebo)
+            // PASS ID3D11Device* (Type 24) and ID3D11DeviceContext* (Type 25) directly.
+            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.D3D11Device, Data = device });
+            parameters.Add(new MpvRenderParam { Type = (Enums.Render.MpvRenderParamType)25, Data = context });
+            
+            // Pass DXGI colorspace for proper HDR tone mapping (Type 27)
+            var cspPtr = Marshal.AllocHGlobal(sizeof(int));
+            Marshal.WriteInt32(cspPtr, colorspace);
+            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIColorspace, Data = cspPtr });
+            
+            Debug.WriteLine($"[MpvCore] Renderer Init: FORCING MODERN (gpu-next) via '{internalApiName}' | DevPtr: {device:X} | Colorspace: {colorspace}");
+        }
+        else
+        {
+            // Legacy Path (vo_gpu/dxgi)
+            // MUST pass mpv_dxgi_init_params* (Type 21).
+            dxgiParamsPtr = Marshal.AllocHGlobal(16);
+            Marshal.WriteIntPtr(dxgiParamsPtr, device);
+            Marshal.WriteIntPtr(dxgiParamsPtr + 8, context);
+            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIInitParams, Data = dxgiParamsPtr });
+            Debug.WriteLine($"[MpvCore] Renderer Init: USING LEGACY (vo_gpu/dxgi) via '{internalApiName}'");
         }
 
-        Marshal.FreeHGlobal(dxgiParamsPtr);
-        Marshal.FreeCoTaskMem(apiStringPtr);
-        Marshal.FreeHGlobal(advControlPtr);
-        Marshal.FreeHGlobal(d3d11DevPtr);
-        Marshal.FreeHGlobal(d3d11CtxPtr);
+        parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero });
+
+        try {
+            // [DETECTIVE_MODE] 
+            // Force gpu-api to d3d11 before initializing the render context.
+            if (isModern)
+            {
+                Client.SetOption("gpu-api", "d3d11"); 
+                Client.SetOption("gpu-context", "d3d11");
+            }
+            
+            RenderContext = new MpvRenderContextNative(Client.Handle, parameters.ToArray());
+            
+            // Post-Init Check
+            var actualVo = Client.GetPropertyToString("vo");
+            Debug.WriteLine($"[DETECTIVE] RenderContext created for {internalApiName}. Actual Core VO: {actualVo}");
+            
+            if (isModern && actualVo != "libmpv") {
+                 Debug.WriteLine($"[DETECTIVE_WARNING] Modern renderer (gpu-next) might have failed! core vo is {actualVo}");
+            }
+        } catch (Exception ex) {
+            Debug.WriteLine($"[FATAL] {internalApiName} failed: {ex.Message}");
+            throw;
+        } finally {
+            // Cleanup native memory
+            Marshal.FreeCoTaskMem(apiStringPtr);
+            Marshal.FreeHGlobal(advControlPtr);
+            if (dxgiParamsPtr != IntPtr.Zero) Marshal.FreeHGlobal(dxgiParamsPtr);
+        }
     }
 
     public void RenderGL(int width, int height, int fboInt)
@@ -296,6 +307,13 @@ public sealed partial class Player
         var fboPtr = Marshal.AllocHGlobal(Marshal.SizeOf(fbo));
         Marshal.StructureToPtr(fbo, fboPtr, false);
 
+        // Raw memory dump to verify C# struct layout
+        int structSize = Marshal.SizeOf(fbo);
+        byte[] raw = new byte[structSize];
+        Marshal.Copy(fboPtr, raw, 0, raw.Length);
+        Debug.WriteLine($"[FBO_DEBUG] RenderDXGI: texture=0x{texture:X} w={width} h={height} | structSize={structSize} | WidthOffset={Marshal.OffsetOf<MpvDxgiFbo>("Width")} | HeightOffset={Marshal.OffsetOf<MpvDxgiFbo>("Height")}");
+        Debug.WriteLine($"[FBO_DEBUG] Raw FBO bytes: {BitConverter.ToString(raw)}");
+
         var blockPtr = Marshal.AllocHGlobal(sizeof(int));
         Marshal.WriteInt32(blockPtr, block ? 1 : 0);
 
@@ -306,6 +324,20 @@ public sealed partial class Player
         ]);
 
         Marshal.FreeHGlobal(fboPtr);
+        Marshal.FreeHGlobal(blockPtr);
+    }
+
+    public void RenderDXGIShared(IntPtr sharedHandle, bool block = true)
+    {
+        var blockPtr = Marshal.AllocHGlobal(sizeof(int));
+        Marshal.WriteInt32(blockPtr, block ? 1 : 0);
+
+        RenderContext!.Render([
+            new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGISharedTexture, Data = sharedHandle },
+            new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.BlockForTargetTime, Data = blockPtr },
+            new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero },
+        ]);
+
         Marshal.FreeHGlobal(blockPtr);
     }
 

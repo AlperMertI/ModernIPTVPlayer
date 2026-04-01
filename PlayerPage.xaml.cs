@@ -1547,13 +1547,25 @@ namespace ModernIPTVPlayer
                     _mpvPlayer = App.HandoffPlayer;
                     App.HandoffPlayer = null; 
 
-                    // Project Zero - Phase 5: RESTORE VISUALS
-                    // Pre-buffer was set to "vid=no" to save VRAM. Re-enable primary video track now.
+                    // Phase 2: RE-ENABLE VISUALS & UNLOCK BUFFER
+                    // This performs a complete upgrade from the 'vid=no' pre-buffer state
                     try 
                     {
-                        _mpvPlayer.RenderApi = pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext ? "d3d11" : "dxgi";
+                        // 1. Restore Video Rendering
                         await _mpvPlayer.SetPropertyAsync("vid", "1");
-                        Debug.WriteLine($"[PlayerPage] Handoff: Restored RenderApi and enabled vid=1");
+
+                        // 2. Expand Buffers for active watch (Unlock from 128MB pre-buffer)
+                        int mainBuffer = AppSettings.BufferSeconds;
+                        await _mpvPlayer.SetPropertyAsync("cache", "yes");
+                        await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
+                        await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB");
+                        await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "32MiB");
+
+                        // 3. Trigger Phase 2: Visual Enhancements (Scalers, Deband, etc.) via Helper
+                        await MpvSetupHelper.ApplyVisualSettingsAsync(_mpvPlayer);
+
+                        // 4. Initial Color Space Sync
+                        await _mpvPlayer.SyncHdrStatusAsync();
                     } catch { }
 
                     PlayerContainer.Children.Add(_mpvPlayer);
@@ -1563,6 +1575,26 @@ namespace ModernIPTVPlayer
                     _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
                     _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
 
+                    // Enable shared texture mode only for gpu-next in handoff
+                    var pSettingsHandoff = AppSettings.PlayerSettings;
+                    if (pSettingsHandoff.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
+                    {
+                        try
+                        {
+                            // DISABLED: SharedTextureHelper P/Invoke is broken
+                            // _mpvPlayer.UseSharedTexture = true;
+                            Debug.WriteLine("[PlayerPage:Handoff] Shared texture DISABLED (P/Invoke broken)");
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"[PlayerPage:Handoff] Failed to enable shared texture: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        _mpvPlayer.UseSharedTexture = false;
+                        Debug.WriteLine("[PlayerPage:Handoff] Legacy DXGI - shared texture disabled");
+                    }
 
                     _mpvPlayer.Redraw();
 
@@ -1574,12 +1606,7 @@ namespace ModernIPTVPlayer
                     await _mpvPlayer.SetPropertyAsync("pause", "no");
                     await _mpvPlayer.SetPropertyAsync("mute", "no");
 
-                    // 2. Apply main buffer settings from user preferences
-                    int mainBuffer = AppSettings.BufferSeconds;
-                    _ = _mpvPlayer.SetPropertyAsync("cache", "yes");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "32MiB");
+                    // 2. Buffer & Sync Verification
 
                     // 3. Verify and Fix
                     var pPause = await _mpvPlayer.GetPropertyAsync("pause");
@@ -1662,17 +1689,32 @@ await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
                          if (pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
                          {
                              _mpvPlayer.RenderApi = "d3d11";
+                             
+                             // Enable shared texture mode only for gpu-next
+                             // DISABLED: SharedTextureHelper P/Invoke is broken
+                             try
+                             {
+                                 // _mpvPlayer.UseSharedTexture = true;
+                                 Debug.WriteLine("[PlayerPage] Shared texture DISABLED (P/Invoke broken)");
+                             }
+                             catch (Exception ex)
+                             {
+                                 Debug.WriteLine($"[PlayerPage] Failed to enable shared texture: {ex.Message}");
+                             }
                          }
                          else
                          {
                              _mpvPlayer.RenderApi = "dxgi";
+                             _mpvPlayer.UseSharedTexture = false;
+                             Debug.WriteLine("[PlayerPage] Legacy DXGI mode - shared texture disabled");
                          }
                          Debug.WriteLine($"[PlayerPage] Selected Render API: {_mpvPlayer.RenderApi}");
                      }
                      catch (Exception ex)
                      {
                          Debug.WriteLine($"[PlayerPage] Failed to load settings for RenderApi: {ex.Message}");
-                         _mpvPlayer.RenderApi = "d3d11"; // Default to gpu-next
+                          _mpvPlayer.RenderApi = "d3d11"; // Default to gpu-next
+                          // _mpvPlayer.UseSharedTexture = true; // DISABLED
                      }
 
                      PlayerContainer.Children.Add(_mpvPlayer);

@@ -7,6 +7,7 @@ struct ra_tex;
 struct libmpv_gpu_context {
     struct mpv_global *global;
     struct mp_log *log;
+    struct mp_hwdec_devices *hwdec_devs;
     const struct libmpv_gpu_context_fns *fns;
 
     struct ra_ctx *ra_ctx;
@@ -39,4 +40,6 @@ struct libmpv_gpu_context_fns {
 
 extern const struct libmpv_gpu_context_fns libmpv_gpu_context_gl;
 extern const struct libmpv_gpu_context_fns libmpv_gpu_context_d3d11;
+
+void gpu_sync_trace(const char *msg);
 

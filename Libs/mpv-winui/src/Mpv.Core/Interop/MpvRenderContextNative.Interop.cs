@@ -11,25 +11,25 @@ namespace Mpv.Core.Interop;
 public partial class MpvRenderContextNative
 {
     [LibraryImport(MpvIdentifier)]
-    private static partial MpvError mpv_render_context_create(out MpvRenderContextHandle context, IntPtr handle, IntPtr param);
+    private static partial MpvError mpv_render_context_create(out IntPtr context, IntPtr handle, IntPtr param);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial MpvError mpv_render_context_set_parameter(MpvRenderContextHandle context, MpvRenderParam param);
+    private static partial MpvError mpv_render_context_set_parameter(IntPtr context, MpvRenderParam param);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial MpvError mpv_render_context_get_info(MpvRenderContextHandle context, MpvRenderParam param);
+    private static partial MpvError mpv_render_context_get_info(IntPtr context, MpvRenderParam param);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial MpvError mpv_render_context_set_update_callback(MpvRenderContextHandle context, MpvRenderUpdateCallback callback, IntPtr callbackContext);
+    private static partial MpvError mpv_render_context_set_update_callback(IntPtr context, MpvRenderUpdateCallback callback, IntPtr callbackContext);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial MpvRenderUpdateFlag mpv_render_context_update(MpvRenderContextHandle context);
+    private static partial MpvRenderUpdateFlag mpv_render_context_update(IntPtr context);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial MpvError mpv_render_context_render(MpvRenderContextHandle context, IntPtr param);
+    private static partial MpvError mpv_render_context_render(IntPtr context, IntPtr param);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial void mpv_render_context_report_swap(MpvRenderContextHandle context);
+    private static partial void mpv_render_context_report_swap(IntPtr context);
 
     [LibraryImport(MpvIdentifier)]
     private static partial void mpv_render_context_free(IntPtr context);

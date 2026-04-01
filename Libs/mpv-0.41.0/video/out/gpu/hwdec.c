@@ -25,6 +25,8 @@
 #include "options/m_config.h"
 #include "hwdec.h"
 
+extern void gpu_sync_trace(const char *msg);
+
 extern const struct ra_hwdec_driver ra_hwdec_vaapi;
 extern const struct ra_hwdec_driver ra_hwdec_videotoolbox;
 extern const struct ra_hwdec_driver ra_hwdec_vdpau;
@@ -335,11 +337,19 @@ void ra_hwdec_ctx_load_fmt(struct ra_hwdec_ctx *ctx, struct mp_hwdec_devices *de
 
 struct ra_hwdec *ra_hwdec_get(struct ra_hwdec_ctx *ctx, int imgfmt)
 {
+    char diag[256];
+    snprintf(diag, sizeof(diag), "CORE: ra_hwdec_get (fmt=%s, num_hwdecs=%d)", 
+             mp_imgfmt_to_name(imgfmt), ctx->num_hwdecs);
+    gpu_sync_trace(diag);
+
     for (int n = 0; n < ctx->num_hwdecs; n++) {
-        if (ra_hwdec_test_format(ctx->hwdecs[n], imgfmt))
+        if (ra_hwdec_test_format(ctx->hwdecs[n], imgfmt)) {
+            gpu_sync_trace("CORE: ra_hwdec_get SUCCESS");
             return ctx->hwdecs[n];
+        }
     }
 
+    gpu_sync_trace("CORE: ra_hwdec_get FAIL - No suitable driver found");
     return NULL;
 }
 

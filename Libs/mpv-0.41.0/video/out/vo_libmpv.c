@@ -22,6 +22,7 @@
 #include "osdep/threads.h"
 #include "osdep/timer.h"
 
+#include <windows.h>
 #include "common/global.h"
 #include "player/client.h"
 
@@ -112,6 +113,7 @@ struct mpv_render_context {
 };
 
 const struct render_backend_fns *render_backends[] = {
+    &render_backend_gpu_next,
     &render_backend_gpu,
     &render_backend_sw,
     NULL
@@ -164,6 +166,7 @@ static struct mp_image *render_get_image(void *ptr, int imgfmt, int w, int h,
 int mpv_render_context_create(mpv_render_context **res, mpv_handle *mpv,
                               mpv_render_param *params)
 {
+
     mpv_render_context *ctx = talloc_zero(NULL, mpv_render_context);
     mp_mutex_init(&ctx->control_lock);
     mp_mutex_init(&ctx->lock);

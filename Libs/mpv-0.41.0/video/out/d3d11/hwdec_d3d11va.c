@@ -74,9 +74,18 @@ static int init(struct ra_hwdec *hw)
     struct priv_owner *p = hw->priv;
     HRESULT hr;
 
-    if (!ra_is_d3d11(hw->ra_ctx->ra))
-        return -1;
-    p->device = ra_d3d11_get_device(hw->ra_ctx->ra);
+    if (!ra_is_d3d11(hw->ra_ctx->ra)) {
+        // [HWDEC INTEROP] Support libplacebo wrapper (gpu-next)
+        p->device = ra_get_native_resource(hw->ra_ctx->ra, "d3d11_device_ptr");
+        if (p->device) {
+            ID3D11Device_AddRef(p->device);
+        } else {
+            return -1;
+        }
+    } else {
+        p->device = ra_d3d11_get_device(hw->ra_ctx->ra);
+    }
+    
     if (!p->device)
         return -1;
 

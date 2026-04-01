@@ -5417,27 +5417,28 @@ namespace ModernIPTVPlayer
             var ct = _prebufferCts.Token;
             _prebufferUrl = url;
 
+            var swTotal = System.Diagnostics.Stopwatch.StartNew();
             Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "START Prebuffering", $"{url} | Resume: {startTime}s");
 
             // 1. Ensure Player Instance Exists & is Attached
             bool isNew = false;
-            // Only create if we don't have one
             if (MediaInfoPlayer == null)
             {
                 MediaInfoPlayer = new MpvWinUI.MpvPlayer();
                 isNew = true;
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Mpv Control Constructor Done.");
             }
 
             try 
             {
-               // Project Zero - Phase 6: Instant-On Initialization
-               // We use real RenderApi and vid=1 (forced in helper) for zero-latency.
+               long startInit = swTotal.ElapsedMilliseconds;
                var pSettings = AppSettings.PlayerSettings;
-               MediaInfoPlayer.RenderApi = pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext ? "d3d11" : "dxgi";
+               MediaInfoPlayer.RenderApi = pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext ? "gpu-next" : "dxgi";
                
-               await MpvSetupHelper.ConfigurePlayerAsync(MediaInfoPlayer, url, isSecondary: true);
-               
-               Debug.WriteLine($"[MediaInfoPage] Optimization: Initialized for Zero-Latency FastStart.");
+               // Phase 1: Essential
+               Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Starting Phase 1 (Essential Settings)...");
+               await MpvSetupHelper.ApplyEssentialSettingsAsync(MediaInfoPlayer, url, isSecondary: true);
+               Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Phase 1 Complete.");
             }
             catch (Exception ex)
             {
@@ -5446,31 +5447,16 @@ namespace ModernIPTVPlayer
 
             if (isNew)
             {
-               MediaInfoPlayer.Width = 100; // Small internal footprint
-               MediaInfoPlayer.Height = 100;
-               if (PlayerHost != null) PlayerHost.Content = MediaInfoPlayer;
-            }
-            else
-            {
-                 // [FIX] If we have a player but it's not appropriately attached yet
-                if (PlayerHost != null && PlayerHost.Content != MediaInfoPlayer)
-                {
-                    // Ensure it's detached from any previous parent (like PlayerPage)
-                    var parent = VisualTreeHelper.GetParent(MediaInfoPlayer) as ContentControl;
-                    if (parent != null)
-                    {
-                        parent.Content = null;
-                        Debug.WriteLine("[FastStart] Detached MediaInfoPlayer from previous host.");
-                    }
-                    
-                    PlayerHost.Content = MediaInfoPlayer;
-                    Debug.WriteLine("[FastStart] Re-attached MediaInfoPlayer to Detail Page.");
-                }
+                MediaInfoPlayer.Width = 100;
+                MediaInfoPlayer.Height = 100;
+                if (PlayerHost != null) PlayerHost.Content = MediaInfoPlayer;
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Player attached to Host.");
             }
 
             // 2. WAIT for RenderControl (Critical for Re-entry)
             if (isNew)
             {
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Waiting for Player.Loaded event...");
                 var tcs = new TaskCompletionSource<bool>();
                 RoutedEventHandler handler = null;
                 handler = (s, e) =>
@@ -5480,111 +5466,55 @@ namespace ModernIPTVPlayer
                 };
                 MediaInfoPlayer.Loaded += handler;
 
-                // Safety timeout
                 var timeoutTask = Task.Delay(2000);
                 var completed = await Task.WhenAny(tcs.Task, timeoutTask);
-                if (completed == timeoutTask)
-                {
-                    Debug.WriteLine("[FastStart] Warning: Player Loaded event timed out. Attempting to proceed...");
-                }
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Player.Loaded event {(completed == timeoutTask ? "TIMED OUT" : "RECEIVED")}.");
             }
 
             try
             {
                 ct.ThrowIfCancellationRequested();
-                // NEW: CHECK IF ALREADY PLAYING THIS CONTENT (Reuse for seamless transition)
-                string currentPath = null;
-                try { currentPath = await MediaInfoPlayer.GetPropertyAsync("path"); } catch { }
-
-                // Allow fuzzy match (http vs https, or slight var) or exact match
-                if (!string.IsNullOrEmpty(currentPath) && currentPath == url)
-                {
-                     Debug.WriteLine($"[FastStart] Player already loaded with {url}. Reusing instance (Paused).");
-                     
-                     // Just ensure state is correct for "background wait"
-                     try { await MediaInfoPlayer.SetPropertyAsync("mute", "yes"); } catch { }
-                     try { await MediaInfoPlayer.SetPropertyAsync("pause", "yes"); } catch { } // User requested PAUSE state
-                     
-                     // Ensure visibility
-                     if (PlayerOverlayContainer != null)
-                     {
-                        PlayerOverlayContainer.Visibility = Visibility.Visible;
-                        PlayerOverlayContainer.Opacity = 0; 
-                     }
-                     return; // SKIP RE-INITIALIZATION
-                }
+                
+                // [DEEP_DIAG_MARK] Timing analysis enabled.
 
                 // 3. Configure Player
-                ct.ThrowIfCancellationRequested();
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Starting Phase 2 (Configuration)...");
                 await MpvSetupHelper.ConfigurePlayerAsync(MediaInfoPlayer, url, isSecondary: true);
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Phase 2 Complete.");
 
-                // 4. PRE-SEEK using 'start' property (Native MPV Feature)
+                // 4. PRE-SEEK
                 if (startTime > 0)
                 {
-                    Debug.WriteLine($"[FastStart] Setting start time to {startTime}s");
                     await MediaInfoPlayer.SetPropertyAsync("start", startTime.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 }
-                else
-                {
-                    await MediaInfoPlayer.SetPropertyAsync("start", "0");
-                }
 
-                // 5. Override buffer settings for fast start
+                // 5. Buffer settings
                 int preSeconds = AppSettings.PrebufferSeconds;
-                await MediaInfoPlayer.SetPropertyAsync("cache", "yes"); // Enable cache explicitly
-                await MediaInfoPlayer.SetPropertyAsync("cache-pause", "yes"); // Buffer while paused
+                await MediaInfoPlayer.SetPropertyAsync("cache", "yes");
+                await MediaInfoPlayer.SetPropertyAsync("cache-pause", "yes");
                 await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", preSeconds.ToString());
-                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "128MiB"); 
-                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-back-bytes", "0"); // No back buffer during pre-buffering
+                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB"); 
+                
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Buffer/Seek properties set.");
 
-                // [RESTORE AUDIO/SUBTITLE PREFERENCES]
-                // Attempt to retrieve history item to restore track preferences.
-                if (_item is Models.Stremio.StremioMediaStream sItem)
-                {
-                     var h = HistoryManager.Instance.GetProgress(sItem.Meta.Id);
-                     // Also check for episode...
-                     if (sItem.Meta.Type == "series" && _selectedEpisode != null)
-                     {
-                         h = HistoryManager.Instance.GetProgress(_selectedEpisode.Id);
-                     }
-
-                     if (h != null)
-                     {
-                         if (!string.IsNullOrEmpty(h.AudioTrackId)) await MediaInfoPlayer.SetPropertyAsync("aid", h.AudioTrackId);
-                         if (!string.IsNullOrEmpty(h.SubtitleTrackId)) await MediaInfoPlayer.SetPropertyAsync("sid", h.SubtitleTrackId);
-                     }
-                }
-                else if (!string.IsNullOrEmpty(url)) // Iptv or explicit URL
-                {
-                     // Try to key by URL
-                     var h = HistoryManager.Instance.GetProgress(url);
-                     if (h != null)
-                     {
-                         if (!string.IsNullOrEmpty(h.AudioTrackId)) await MediaInfoPlayer.SetPropertyAsync("aid", h.AudioTrackId);
-                         if (!string.IsNullOrEmpty(h.SubtitleTrackId)) await MediaInfoPlayer.SetPropertyAsync("sid", h.SubtitleTrackId);
-                     }
-                }
-
-                // 6. Make player host visible
+                // 6. Final UI Prep
                 if (PlayerOverlayContainer != null)
                 {
                     PlayerOverlayContainer.Visibility = Visibility.Visible;
                     PlayerOverlayContainer.Opacity = 0;
                 }
 
-                // 7. Open & Wait (Paused)
-                // We pause immediately so it doesn't advance history, but fills buffer.
+                // 7. OpenAsync
                 ct.ThrowIfCancellationRequested();
                 await MediaInfoPlayer.SetPropertyAsync("pause", "yes"); 
-                ct.ThrowIfCancellationRequested();
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Calling OpenAsync (loadfile)...");
                 await MediaInfoPlayer.OpenAsync(url);
-                ct.ThrowIfCancellationRequested();
-                await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - OpenAsync CALL returned.");
                 
-                // Note: Setting pause=yes BEFORE OpenAsync helps, but repeating it after ensures it sticks.
+                await MediaInfoPlayer.SetPropertyAsync("mute", "yes");
                 await MediaInfoPlayer.SetPropertyAsync("pause", "yes");
 
-                Debug.WriteLine("[FastStart] Pre-buffering started (PAUSED). Buffer filling in background...");
+                Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Pre-buffering STARTED. Monitoring handshake...");
             }
             catch (OperationCanceledException)
             {
