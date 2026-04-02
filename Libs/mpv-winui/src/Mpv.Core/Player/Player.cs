@@ -136,7 +136,7 @@ public sealed partial class Player
         Client.SetOption("gpu-context", "d3d11");
         Client.SetOption("d3d11-output-mode", "composition");
         Client.SetOption("d3d11-adapter", adapterName ?? "auto");
-        Client.SetOption("d3d11-output-format", "rgba16f");
+        Client.SetOption("d3d11-output-format", "rgb10_a2");
         Client.SetOption("d3d11-flip", "yes");
         Client.SetOption("d3d11-feature-level", "11_1");
         

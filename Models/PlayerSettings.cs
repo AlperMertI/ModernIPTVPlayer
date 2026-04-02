@@ -80,6 +80,7 @@ namespace ModernIPTVPlayer.Models
         public TargetDisplayMode TargetDisplayMode { get; set; } = TargetDisplayMode.Auto;
         public AudioChannels AudioChannels { get; set; } = AudioChannels.AutoSafe;
         public ExclusiveMode ExclusiveAudio { get; set; } = ExclusiveMode.No;
+        public bool HdrComputePeak { get; set; } = true;
         private string _preferredSubtitleLanguage = "tur,tr,eng,en";
         public string PreferredSubtitleLanguage
         {
@@ -110,6 +111,7 @@ namespace ModernIPTVPlayer.Models
                     settings.ToneMapping = ToneMapping.Auto;
                     settings.TargetPeak = 0; // Auto
                     settings.TargetDisplayMode = TargetDisplayMode.Auto;
+                    settings.HdrComputePeak = false;
                     break;
 
                 case PlayerProfile.Balanced:
@@ -120,6 +122,7 @@ namespace ModernIPTVPlayer.Models
                     settings.ToneMapping = ToneMapping.Spline;
                     settings.TargetPeak = 0; // Auto
                     settings.TargetDisplayMode = TargetDisplayMode.Auto;
+                    settings.HdrComputePeak = true;
                     break;
 
                 case PlayerProfile.HighQuality:
@@ -130,6 +133,7 @@ namespace ModernIPTVPlayer.Models
                     settings.ToneMapping = ToneMapping.St2094_40;
                     settings.TargetPeak = 0; // Auto
                     settings.TargetDisplayMode = TargetDisplayMode.Auto;
+                    settings.HdrComputePeak = true;
                     break;
                     
                 // Custom keeps whatever was last set, technically doesn't change anything here

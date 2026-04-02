@@ -65,17 +65,18 @@ namespace ModernIPTVPlayer
             string hwdecValue = GetHwdecValue(pSettings.HardwareDecoding, out bool zeroCopy);
             await player.SetPropertyAsync("hwdec", hwdecValue);
             
-            // For gpu-next, ensure the underlying API is pinned to d3d11
-            if (pSettings.VideoOutput == Models.VideoOutput.GpuNext)
-            {
-                await player.SetPropertyAsync("gpu-api", "d3d11");
-                await player.SetPropertyAsync("gpu-context", "d3d11");
-            }
+            // For both modes, ensure the underlying API is pinned to d3d11
+            await player.SetPropertyAsync("gpu-api", "d3d11");
+            await player.SetPropertyAsync("gpu-context", "d3d11");
 
             await player.SetPropertyAsync("d3d11va-zero-copy", zeroCopy ? "yes" : "no");
             await player.SetPropertyAsync("vd-lavc-dr", zeroCopy ? "yes" : "no");
             
             // [LATENCY-FIX] Stable Canvas & Viewport Rendering Config
+            // 1. High-Performance 10-bit Output (Saves 50% VRAM Bandwidth vs rgba16f)
+            await player.SetPropertyAsync("d3d11-output-format", "rgb10_a2");
+            await player.SetPropertyAsync("fbo-format", "rgb10_a2");
+
             if (pSettings.VideoOutput == Models.VideoOutput.GpuNext)
             {
                 // 1. Persistent Shader Cache (Eliminates 250ms stalls on ratio change)
@@ -88,10 +89,6 @@ namespace ModernIPTVPlayer
 
                 await player.SetPropertyAsync("gpu-shader-cache", "yes");
                 await player.SetPropertyAsync("gpu-shader-cache-dir", cacheDir);
-
-                // 2. High-Performance 10-bit Output (Saves 50% VRAM Bandwidth vs rgba16f)
-                await player.SetPropertyAsync("d3d11-output-format", "rgb10_a2");
-                await player.SetPropertyAsync("fbo-format", "rgb10_a2");
 
                     // 3. [FIT-TO-WINDOW] Force aspect ratio and zoom to ensure video
                 // scales to the FBO viewport instead of rendering at native size.
@@ -171,6 +168,7 @@ namespace ModernIPTVPlayer
             // Phase 2: User Settings & Visuals
             player.PreferredToneMapping = pSettings.ToneMapping.ToString().ToLower();
             player.ManualPeakLuminance = (float)pSettings.TargetPeak;
+            player.HdrComputePeak = pSettings.HdrComputePeak;
 
             // 1. Scalers & Shaders
             string scalerValue = pSettings.Scaler switch

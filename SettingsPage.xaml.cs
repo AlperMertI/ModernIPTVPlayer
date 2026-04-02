@@ -304,6 +304,7 @@ namespace ModernIPTVPlayer
                 SetComboSelection(AudioChannelsCombo, settings.AudioChannels.ToString());
 
                 DebandToggle.IsOn = settings.Deband == Models.DebandMode.Yes;
+                HdrComputePeakToggle.IsOn = settings.HdrComputePeak;
                 ExclusiveToggle.IsOn = settings.ExclusiveAudio == Models.ExclusiveMode.Yes;
                 PreferredAudioLangBox.Text = settings.PreferredAudioLanguage ?? "";
                 PreferredSubtitleLangBox.Text = settings.PreferredSubtitleLanguage ?? "";
@@ -362,6 +363,7 @@ namespace ModernIPTVPlayer
                         TargetPeakBox.Text = defaults.TargetPeak == 0 ? "" : defaults.TargetPeak.ToString();
                         SetComboSelection(AudioChannelsCombo, defaults.AudioChannels.ToString());
                         DebandToggle.IsOn = defaults.Deband == Models.DebandMode.Yes;
+                        HdrComputePeakToggle.IsOn = defaults.HdrComputePeak;
                         ExclusiveToggle.IsOn = defaults.ExclusiveAudio == Models.ExclusiveMode.Yes;
                     }
                     finally
@@ -488,6 +490,7 @@ namespace ModernIPTVPlayer
             }
 
             settings.Deband = DebandToggle.IsOn ? Models.DebandMode.Yes : Models.DebandMode.No;
+            settings.HdrComputePeak = HdrComputePeakToggle.IsOn;
             settings.ExclusiveAudio = ExclusiveToggle.IsOn ? Models.ExclusiveMode.Yes : Models.ExclusiveMode.No;
             settings.PreferredAudioLanguage = PreferredAudioLangBox.Text?.Trim();
             settings.PreferredSubtitleLanguage = PreferredSubtitleLangBox.Text?.Trim();

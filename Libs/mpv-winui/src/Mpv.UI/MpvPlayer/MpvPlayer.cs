@@ -34,6 +34,15 @@ public sealed partial class MpvPlayer : Control
         set => SetValue(RenderApiProperty, value);
     }
 
+    public static readonly DependencyProperty HdrComputePeakProperty =
+        DependencyProperty.Register("HdrComputePeak", typeof(bool), typeof(MpvPlayer), new PropertyMetadata(true));
+
+    public bool HdrComputePeak
+    {
+        get => (bool)GetValue(HdrComputePeakProperty);
+        set => SetValue(HdrComputePeakProperty, value);
+    }
+
     public bool IsHdrEnabled => _renderControl?.IsHdrEnabled ?? false;
     private float _appliedPeakOverride = 0;
     public float AppliedPeak
@@ -95,20 +104,63 @@ public sealed partial class MpvPlayer : Control
         if (Player?.Client?.IsInitialized is not true || _renderControl == null)
             return;
 
+        string renderApi = "dxgi";
+        bool isHdrEnabled = false;
+        bool computePeak = true;
+        float sdrWhite = 80f;
+        float peakLuma = 80f;
+
+        // [THREAD-SAFETY] Capture UI-bound properties safely on the UI thread.
+        // This prevents COMExceptions when called from background threads (like mpv events).
+        if (this.DispatcherQueue != null)
+        {
+            if (this.DispatcherQueue.HasThreadAccess)
+            {
+                renderApi = RenderApi;
+                isHdrEnabled = _renderControl.IsHdrEnabled;
+                computePeak = HdrComputePeak;
+                sdrWhite = _renderControl.SdrWhiteLevel;
+                peakLuma = _renderControl.PeakLuminance;
+            }
+            else
+            {
+                var tcs = new TaskCompletionSource<bool>();
+                bool queued = this.DispatcherQueue.TryEnqueue(() =>
+                {
+                    try
+                    {
+                        renderApi = RenderApi;
+                        isHdrEnabled = _renderControl.IsHdrEnabled;
+                        computePeak = HdrComputePeak;
+                        sdrWhite = _renderControl.SdrWhiteLevel;
+                        peakLuma = _renderControl.PeakLuminance;
+                        tcs.SetResult(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        tcs.SetException(ex);
+                    }
+                });
+
+                if (queued)
+                {
+                    try { await tcs.Task; } catch { return; }
+                }
+                else
+                {
+                    return; // Dispatcher is likely shutting down
+                }
+            }
+        }
+
         // 1. Content-based HDR Detection (Expanded for better accuracy)
         string colormatrix = await GetPropertyAsync("video-params/colormatrix");
         string colorprim = await GetPropertyAsync("video-params/primaries");
         bool isHdrContent = colormatrix == "bt.2020-ncl" || colormatrix == "dolbyvision" || colorprim == "bt.2020";
         
-        // 2. Display-based HDR Status from RenderControl
-        bool isHdrEnabled = _renderControl.IsHdrEnabled;
-
-        // 3. Peak Calculation (Luminance Parity Logic)
-        // This maps the Windows "SDR Content Brightness" slider to MPV's target-peak.
-        float gain = Math.Max(_renderControl.SdrWhiteLevel / 80.0f, 0.1f);
-        float displayPeak = _renderControl.PeakLuminance / gain;
-        
-        // Ensure we don't drop below the standard 100 nits
+        // 2. Peak Calculation (Luminance Parity Logic)
+        float gain = Math.Max(sdrWhite / 80.0f, 0.1f);
+        float displayPeak = peakLuma / gain;
         int targetPeakNits = (int)Math.Round(Math.Max(displayPeak, 100.0f));
 
         async Task SetResilient(string prop, object val) {
@@ -117,35 +169,37 @@ public sealed partial class MpvPlayer : Control
             } catch { }
         }
 
-        if (isHdrEnabled && isHdrContent)
+        if (isHdrEnabled)
         {
-            // [HDR_ACTIVE] Full HDR10/PQ Path
-            // We NO LONGER set target-trc/target-prim manually for gpu-next zero-copy.
-            // This allows libmpv to handle Dolby Vision and HDR10 automatically.
+            // [DISPLAY_HDR] The swapchain is in HDR mode. Manual hints required for legacy dxgi.
             await SetResilient("target-colorspace-hint", "yes");
-            // await SetResilient("target-trc", "pq");
-            // await SetResilient("target-prim", "bt.2020");
-            await SetResilient("target-peak", targetPeakNits);
-            await SetResilient("hdr-compute-peak", "yes"); // Mandatory for dynamic tone mapping like ST2094-40
             
-            Debug.WriteLine($"[HDR_AUTH] ACTIVE | Gain: {gain:F2} | TargetPeak: {targetPeakNits} | Content: {colormatrix} | Renderer: gpu-next internal");
-        }
-        else if (isHdrEnabled && !isHdrContent)
-        {
-            // [HDR_SDR_PASS] SDR Content on HDR Screen
-            await SetResilient("target-colorspace-hint", "yes");
-            await SetResilient("target-peak", "auto");
-            // await SetResilient("target-trc", "srgb");
-            // await SetResilient("target-prim", "bt.709");
-            
-            Debug.WriteLine($"[HDR_AUTH] SDR_ON_HDR | Hint: yes");
+            if (renderApi == "dxgi")
+            {
+                await SetResilient("target-trc", "pq");
+                await SetResilient("target-prim", "bt.2020");
+            }
+
+            if (isHdrContent)
+            {
+                // [HDR10 Path] Content is 10-bit HDR.
+                await SetResilient("target-peak", targetPeakNits);
+                await SetResilient("hdr-compute-peak", computePeak ? "yes" : "no");
+                
+                Debug.WriteLine($"[HDR_AUTH] ACTIVE | Gain: {gain:F2} | TargetPeak: {targetPeakNits} | Content: {colormatrix} | Renderer: {renderApi} | ComputePeak: {computePeak}");
+            }
+            else
+            {
+                // [SDR-on-HDR Path] Content is SDR but display is HDR.
+                await SetResilient("target-peak", "auto");
+                Debug.WriteLine($"[HDR_AUTH] SDR_ON_HDR | Hint: yes | Renderer: {renderApi}");
+            }
         }
         else
         {
-            // [HDR_OFF] Pure SDR Path
+            // [DISPLAY_SDR] Pure SDR Path
             await SetResilient("target-colorspace-hint", "no");
             await SetResilient("target-trc", "srgb");
-            
             Debug.WriteLine($"[HDR_AUTH] OFF | Standard SDR Path");
         }
     }

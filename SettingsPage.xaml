@@ -107,7 +107,14 @@
                             <TextBox x:Name="TargetPeakBox" Header="Hedef Parlaklık (Nits)" PlaceholderText="0 (Otomatik)" InputScope="Number" HorizontalAlignment="Stretch" Grid.Column="1" TextChanged="TargetPeakBox_TextChanged"/>
                         </Grid>
 
-                        <ToggleSwitch x:Name="DebandToggle" Header="Deband (Renk Geçişlerini Yumuşat)" Toggled="PlayerSetting_Toggled" Margin="0,4,0,0"/>
+                        <Grid ColumnSpacing="12" Margin="0,4,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <ToggleSwitch x:Name="DebandToggle" Header="Deband (Yumuşat)" Toggled="PlayerSetting_Toggled" HorizontalAlignment="Stretch"/>
+                            <ToggleSwitch x:Name="HdrComputePeakToggle" Header="HDR Dinamik Parlaklık" Toggled="PlayerSetting_Toggled" Grid.Column="1" HorizontalAlignment="Stretch" ToolTipService.ToolTip="HDR sahnelerini analiz ederek parlaklığı dinamik ayarlar. Düşük sistemlerde kapatılabilir."/>
+                        </Grid>
                     </StackPanel>
 
                     <!-- GROUP 4: SES AYARLARI -->
