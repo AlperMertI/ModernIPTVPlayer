@@ -144,10 +144,16 @@ public partial class MpvRenderContextNative
         if (Handle.Handle == IntPtr.Zero) return;
         try
         {
-            mpv_render_context_free(Handle.Handle);
+            mpv_render_context_set_update_callback(Handle.Handle, null!, IntPtr.Zero);
+
+            // Run on background thread to prevent UI thread deadlock during GPU sync
+            Task.Run(() => {
+                mpv_render_context_free(Handle.Handle);
+            });
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Debug.WriteLine($"[NATIVE_RC] Exception during Destroy: {ex.Message}");
         }
     }
 

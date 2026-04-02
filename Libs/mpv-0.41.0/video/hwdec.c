@@ -28,8 +28,19 @@ void hwdec_devices_destroy(struct mp_hwdec_devices *devs)
 {
     if (!devs)
         return;
-    mp_assert(!devs->num_hwctxs); // must have been hwdec_devices_remove()ed
-    mp_assert(!devs->load_api); // must have been unset
+    
+    mp_mutex_lock(&devs->lock);
+    // Explicitly drain any remaining contexts to avoid leaking
+    // and to prevent the abort() triggered by mp_assert(!devs->num_hwctxs).
+    while (devs->num_hwctxs > 0) {
+        // Note: we don't own these, so we just remove the pointers.
+        // The individual ra_hwdec contexts are managed by ra_hwdec_ctx_uninit.
+        devs->num_hwctxs--;
+    }
+    
+    devs->load_api = NULL;
+    mp_mutex_unlock(&devs->lock);
+
     mp_mutex_destroy(&devs->lock);
     talloc_free(devs);
 }

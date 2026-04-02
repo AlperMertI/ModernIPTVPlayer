@@ -34,5 +34,6 @@ public partial class MpvRenderContextNative
     [LibraryImport(MpvIdentifier)]
     private static partial void mpv_render_context_free(IntPtr context);
 
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void MpvRenderUpdateCallback(IntPtr callbackCtx);
 }

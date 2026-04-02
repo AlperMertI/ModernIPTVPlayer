@@ -19,13 +19,6 @@ public sealed partial class MpvPlayer : Control
 {
     public MpvPlayer()
     {
-        try
-        {
-            var logPath = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\cs_debug.log";
-            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [CS] MpvPlayer Constructor Start\n");
-        }
-        catch { }
-        
         DefaultStyleKey = typeof(MpvPlayer);
     }
 
@@ -76,11 +69,6 @@ public sealed partial class MpvPlayer : Control
     {
         _renderControl = (D3D11RenderControl)GetTemplateChild("RenderControl");
         
-        try {
-            var logPath = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\cs_debug.log";
-            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [CS] OnApplyTemplate - RenderControl Found: {_renderControl != null}\n");
-        } catch { }
-
         if (_renderControl != null)
         {
             _renderControl.RenderFrame = Render;
@@ -370,19 +358,31 @@ public sealed partial class MpvPlayer : Control
             await _renderControl.StopLoopAsync();
         }
 
-        // 2. Dispose of libmpv AFTER rendering is guaranteed to have stopped
-        // Skip disposal if handoff is active to preserve player state
+        // 2. Dispose of libmpv BEFORE disconnecting SwapChain or Flush
+        // [STABLE_SHUTDOWN] mpv needs a fully valid/connected D3D11 environment to cleanly
+        // release its cached HW decoding surfaces and libplacebo internal textures.
         if (Player != null && (_renderControl == null || !_renderControl.PreserveStateOnUnload))
         {
             try
             {
                 await Player.DisposeAsync();
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] Player.DisposeAsync SUCCESS");
             }
-            catch (Exception) { }
+            catch (Exception ex) 
+            { 
+                Debug.WriteLine($"[D3D_CTRL] Player.DisposeAsync ERROR: {ex.Message}");
+            }
             Player = null;
         }
 
-        // 3. Destroy D3D11 Resources LAST
+        // 3. BREAK the link between UI and SwapChain AFTER mpv is done
+        if (_renderControl != null)
+        {
+            _renderControl.DisconnectSwapChain();
+            _renderControl.FlushContext();
+        }
+
+        // 4. Finally destroy the hardware device
         if (_renderControl != null && (_renderControl == null || !_renderControl.PreserveStateOnUnload))
         {
             _renderControl.DestroyResources();
@@ -468,9 +468,6 @@ public sealed partial class MpvPlayer : Control
             return false;
         }
         
-        // [DEBUG_RESIZE] Log MPV rendering parameters
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RENDER_MPV] Flags: {flags} | SC: {_renderControl.SwapChainWidth}x{_renderControl.SwapChainHeight} | Current: {_renderControl.CurrentWidth}x{_renderControl.CurrentHeight}");
-
         Player.RenderDXGI(backBufferHandle, 
                  _renderControl.SwapChainWidth, _renderControl.SwapChainHeight,
                  _renderControl.CurrentWidth, _renderControl.CurrentHeight,

@@ -4,24 +4,6 @@
 #include <time.h>
 #include "mpv/render_dxgi.h"
 
-static FILE *gn_log_fp = NULL;
-static void gn_log_init(void) {
-    if (!gn_log_fp) {
-        gn_log_fp = fopen("C:\\Users\\ASUS\\Documents\\ModernIPTVPlayer\\gn_debug.log", "a");
-        if (gn_log_fp) {
-            fprintf(gn_log_fp, "=== GN LOG SESSION START ===\n");
-            fflush(gn_log_fp);
-        }
-    }
-}
-#define GN_LOG(fmt, ...) do { \
-    gn_log_init(); \
-    char _gn_buf[512]; \
-    snprintf(_gn_buf, sizeof(_gn_buf), "[GN] " fmt "\n", ##__VA_ARGS__); \
-    if (gn_log_fp) { fprintf(gn_log_fp, "%s", _gn_buf); fflush(gn_log_fp); } \
-    OutputDebugStringA(_gn_buf); \
-} while(0)
-
 #include <libplacebo/colorspace.h>
 #include <libplacebo/options.h>
 #include <libplacebo/renderer.h>
@@ -444,25 +426,25 @@ static void update_overlays(struct priv *p, struct mp_osd_res res,
 static bool hwdec_reconfig(struct priv *p, struct ra_hwdec *hwdec,
                            const struct mp_image_params *par)
 {
-    GN_LOG("HWDEC_RECONFIG: hwdec=%p par=%p imgfmt=%d", (void*)hwdec, (void*)par, par->imgfmt);
+
     if (p->hwdec_mapper) {
-        GN_LOG("HWDEC_RECONFIG: existing mapper=%p", (void*)p->hwdec_mapper);
+
         if (mp_image_params_static_equal(par, &p->hwdec_mapper->src_params)) {
-            GN_LOG("HWDEC_RECONFIG: reusing mapper");
+
             p->hwdec_mapper->src_params.repr.dovi = par->repr.dovi;
             p->hwdec_mapper->dst_params.repr.dovi = par->repr.dovi;
             p->hwdec_mapper->src_params.color.hdr = par->color.hdr;
             p->hwdec_mapper->dst_params.color.hdr = par->color.hdr;
             return p->hwdec_mapper;
         } else {
-            GN_LOG("HWDEC_RECONFIG: freeing old mapper");
+
             ra_hwdec_mapper_free(&p->hwdec_mapper);
         }
     }
 
-    GN_LOG("HWDEC_RECONFIG: calling ra_hwdec_mapper_create");
+
     p->hwdec_mapper = ra_hwdec_mapper_create(hwdec, par);
-    GN_LOG("HWDEC_RECONFIG: ra_hwdec_mapper_create returned %p", (void*)p->hwdec_mapper);
+
     if (!p->hwdec_mapper) {
         MP_ERR(p, "Initializing texture for hardware decoding failed.\n");
         return NULL;
@@ -657,45 +639,43 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
     struct frame_priv *fp = mpi->priv;
     struct priv *p = fp->ctx->priv;
 
-    GN_LOG("MAP_FRAME: Step 1: imgfmt=%s(%d) w=%d h=%d", mp_imgfmt_to_name(mpi->imgfmt), mpi->imgfmt, mpi->w, mpi->h);
+
 
     fp->hwdec = ra_hwdec_get(&p->hwdec_ctx, mpi->imgfmt);
-    GN_LOG("MAP_FRAME: Step 2: ra_hwdec_get returned %p (num_hwdecs=%d, hwdec_devs=%p)", (void*)fp->hwdec, p->hwdec_ctx.num_hwdecs, (void*)fp->ctx->hwdec_devs);
+
 
     /* If no hwdec driver found for a hw format, trigger lazy loading directly.
      * In the VO this is done via VOCTRL_LOAD_HWDEC_API, but the bridge has no
      * VO control path. We call ra_hwdec_ctx_load_fmt directly instead. */
     if (!fp->hwdec && mpi->imgfmt == IMGFMT_D3D11) {
-        GN_LOG("MAP_FRAME: Step 2b: No driver found for D3D11 hwdec format, triggering lazy load");
+
         struct hwdec_imgfmt_request req = { .imgfmt = mpi->imgfmt, .probing = true };
         ra_hwdec_ctx_load_fmt(&p->hwdec_ctx, fp->ctx->hwdec_devs, &req);
-        GN_LOG("MAP_FRAME: Step 2c: After lazy load, num_hwdecs=%d", p->hwdec_ctx.num_hwdecs);
+
         fp->hwdec = ra_hwdec_get(&p->hwdec_ctx, mpi->imgfmt);
-        GN_LOG("MAP_FRAME: Step 2d: Second ra_hwdec_get returned %p", (void*)fp->hwdec);
+
     }
 
     if (fp->hwdec) {
-        GN_LOG("MAP_FRAME: Step 3: Calling hwdec_reconfig");
+
         if (!hwdec_reconfig(p, fp->hwdec, &mpi->params)) {
-            GN_LOG("MAP_FRAME: Step 3b: hwdec_reconfig FAILED");
+
             talloc_free(mpi);
             return false;
         }
-        GN_LOG("MAP_FRAME: Step 4: hwdec_reconfig OK, mapper=%p", (void*)p->hwdec_mapper);
+
 
         par = p->hwdec_mapper->dst_params;
         par.repr.sys = mpi->params.repr.sys;
         par.repr.dovi = mpi->params.repr.dovi;
     } else {
-        GN_LOG("MAP_FRAME: Step 4b: No hwdec driver available for %s, falling back to SW", mp_imgfmt_to_name(mpi->imgfmt));
+
     }
 
     // SOURCE MONITORING: Check what the video file is reporting
     static int last_src_trc = -1;
     if (mpi->params.color.transfer != last_src_trc) {
         last_src_trc = mpi->params.color.transfer;
-        GN_LOG("MAP_FRAME: Source Colorspace: Transfer=%d, Primaries=%d (SDR=2/3, PQ=12/6)", 
-               mpi->params.color.transfer, mpi->params.color.primaries);
     }
 
     // Use image params directly, if available (already mapped by mpv internals)
@@ -704,7 +684,7 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
 
     if (mpi->dovi) {
         frame_repr.dovi = (const struct pl_dovi_metadata *) mpi->dovi->data;
-        GN_LOG("MAP_FRAME: DOVI metadata from AVBuffer detected: %p (PTS: %f)", (void*)frame_repr.dovi, mpi->pts);
+
     }
 
     *frame = (struct pl_frame) {
@@ -729,9 +709,9 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
     pl_icc_profile_compute_signature(&frame->profile);
 
     if (fp->hwdec) {
-        GN_LOG("MAP_FRAME: Step 6: Setting up hwdec planes");
+
         struct mp_imgfmt_desc desc = mp_imgfmt_get_desc(par.imgfmt);
-        GN_LOG("MAP_FRAME: Step 6a: num_planes=%d", desc.num_planes);
+
         frame->acquire = hwdec_acquire;
         frame->release = hwdec_release;
         frame->num_planes = desc.num_planes;
@@ -751,7 +731,7 @@ static bool map_frame(pl_gpu gpu, pl_tex *tex, const struct pl_source_frame *src
                 map[index] = c;
             }
         }
-        GN_LOG("MAP_FRAME: Step 6b: hwdec planes setup done");
+
     } else {
         struct pl_plane_data data[4] = {0};
         bool use_uint = false;
@@ -1027,11 +1007,11 @@ static enum pl_color_primaries get_best_prim_container(const struct pl_raw_prima
  * to 0 so libplacebo can compute them from source frame content. */
 static struct pl_color_space dxgi_to_pl_colorspace(int dxgi)
 {
-    GN_LOG("DXGI_MAP: Interpreting DXGI integer %d", dxgi);
+
 
     /* 1. Prioritize common Windows standard values (from Silk.NET/DXGI) */
     if (dxgi == 12 || dxgi == 14 || dxgi == 18 || dxgi == 22) { // HDR PQ
-        GN_LOG("DXGI_MAP: Matched Windows HDR10 (PQ/BT.2020)");
+
         return (struct pl_color_space){
             .primaries = PL_COLOR_PRIM_BT_2020,
             .transfer = PL_COLOR_TRC_PQ,
@@ -1039,7 +1019,7 @@ static struct pl_color_space dxgi_to_pl_colorspace(int dxgi)
     }
 
     if (dxgi == 0 || dxgi == 1 || dxgi == 5 || dxgi == 11) { // SDR sRGB
-        GN_LOG("DXGI_MAP: Matched Windows SDR (sRGB/BT.709)");
+
         return (struct pl_color_space){
             .primaries = PL_COLOR_PRIM_BT_709,
             .transfer = PL_COLOR_TRC_SRGB,
@@ -1054,7 +1034,7 @@ static struct pl_color_space dxgi_to_pl_colorspace(int dxgi)
     case MPV_DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_TOPLEFT_P2020:
     case MPV_DXGI_COLOR_SPACE_YCBCR_STUDIO_G2084_TOPLEFT_P2020:
     case MPV_DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020_ST2094:
-        GN_LOG("DXGI_MAP: Matched libmpv HDR10 (PQ/BT.2020)");
+
         return (struct pl_color_space){
             .primaries = PL_COLOR_PRIM_BT_2020,
             .transfer = PL_COLOR_TRC_PQ,
@@ -1067,7 +1047,7 @@ static struct pl_color_space dxgi_to_pl_colorspace(int dxgi)
     case MPV_DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P601:
     case MPV_DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709:
         // Note: 12 is handled by the initial if() check to favor HDR
-        GN_LOG("DXGI_MAP: Matched libmpv SDR (sRGB/BT.709)");
+
         return (struct pl_color_space){
             .primaries = PL_COLOR_PRIM_BT_709,
             .transfer = PL_COLOR_TRC_SRGB,
@@ -1075,14 +1055,14 @@ static struct pl_color_space dxgi_to_pl_colorspace(int dxgi)
 
     case MPV_DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P2020:
     case MPV_DXGI_COLOR_SPACE_YCBCR_FULL_G22_LEFT_P2020:
-        GN_LOG("DXGI_MAP: Matched libmpv BT.2020-SDR");
+
         return (struct pl_color_space){
             .primaries = PL_COLOR_PRIM_BT_2020,
             .transfer = PL_COLOR_TRC_SRGB,
         };
 
     default:
-        GN_LOG("DXGI_MAP: Unknown colorspace, defaulting to sRGB");
+
         return pl_color_space_srgb;
     }
 }
@@ -1400,10 +1380,10 @@ static void update_ra_ctx_options(struct priv *p, struct ra_ctx_opts *ctx_opts)
 
 static void update_render_options(struct priv *p)
 {
-    GN_LOG("URO: Step 1: Entry");
+
     pl_options pars = p->pars;
     const struct gl_video_opts *opts = p->opts_cache->opts;
-    GN_LOG("URO: Step 2: opts=%p deband=%d deband_opts=%p icc_opts=%p", (void*)opts, opts->deband, (void*)opts->deband_opts, (void*)opts->icc_opts);
+
     pars->params.background_color[0] = opts->background_color.r / 255.0;
     pars->params.background_color[1] = opts->background_color.g / 255.0;
     pars->params.background_color[2] = opts->background_color.b / 255.0;
@@ -1411,7 +1391,7 @@ static void update_render_options(struct priv *p)
     pars->params.skip_anti_aliasing = !opts->correct_downscaling;
     pars->params.disable_linear_scaling = !opts->linear_downscaling && !opts->linear_upscaling;
     pars->params.disable_fbos = opts->dumb_mode == 1;
-    GN_LOG("URO: Step 3: Background params set");
+
 
 #if PL_API_VER >= 346
     static const int map_background_types[] = {
@@ -1436,28 +1416,24 @@ static void update_render_options(struct priv *p)
         pars->params.tile_colors[i][1] = opts->background_tile_color[i].g / 255.0f;
         pars->params.tile_colors[i][2] = opts->background_tile_color[i].b / 255.0f;
     }
-    GN_LOG("URO: Step 4: Tile params set");
+
 
     pars->params.corner_rounding = p->next_opts->corner_rounding;
     pars->params.correct_subpixel_offsets = !opts->scaler_resizes_only;
 
-    GN_LOG("URO: Step 5: Mapping scalers");
+
     pars->params.upscaler = map_scaler(p, SCALER_SCALE);
-    GN_LOG("URO: Step 5a: upscaler done");
+
     pars->params.downscaler = map_scaler(p, SCALER_DSCALE);
-    GN_LOG("URO: Step 5b: downscaler done");
+
     pars->params.plane_upscaler = map_scaler(p, SCALER_CSCALE);
-    GN_LOG("URO: Step 5c: plane_upscaler done");
+
     pars->params.frame_mixer = opts->interpolation ? map_scaler(p, SCALER_TSCALE) : NULL;
-    GN_LOG("URO: Step 5d: frame_mixer done");
 
-    int req_frames = 2;
-    if (pars->params.frame_mixer) {
-        req_frames += ceilf(pars->params.frame_mixer->kernel->radius) *
-                      (pars->params.skip_anti_aliasing ? 1 : 2);
-    }
 
-    GN_LOG("URO: Step 6: Setting deband (deband=%d deband_opts=%p)", opts->deband, (void*)opts->deband_opts);
+
+
+
     pars->params.deband_params = opts->deband ? &pars->deband_params : NULL;
     if (opts->deband && opts->deband_opts) {
         pars->deband_params.iterations = opts->deband_opts->iterations;
@@ -1465,14 +1441,14 @@ static void update_render_options(struct priv *p)
         pars->deband_params.threshold = opts->deband_opts->threshold / 16.384;
         pars->deband_params.grain = opts->deband_opts->grain / 8.192;
     }
-    GN_LOG("URO: Step 7: Deband done");
 
-    GN_LOG("URO: Step 8: Setting sigmoid");
+
+
     pars->params.sigmoid_params = opts->sigmoid_upscaling ? &pars->sigmoid_params : NULL;
     pars->sigmoid_params.center = opts->sigmoid_center;
     pars->sigmoid_params.slope = opts->sigmoid_slope;
 
-    GN_LOG("URO: Step 9: Setting peak_detect");
+
     pars->params.peak_detect_params = opts->tone_map.compute_peak >= 0 ? &pars->peak_detect_params : NULL;
     pars->peak_detect_params.smoothing_period = opts->tone_map.decay_rate;
     pars->peak_detect_params.scene_threshold_low = opts->tone_map.scene_threshold_low;
@@ -1480,7 +1456,7 @@ static void update_render_options(struct priv *p)
     pars->peak_detect_params.percentile = opts->tone_map.peak_percentile;
     pars->peak_detect_params.allow_delayed = p->next_opts->delayed_peak;
 
-    GN_LOG("URO: Step 10: Setting tone mapping");
+
     const struct pl_tone_map_function * const tone_map_funs[] = {
         [TONE_MAPPING_AUTO]     = &pl_tone_map_auto,
         [TONE_MAPPING_CLIP]     = &pl_tone_map_clip,
@@ -1520,7 +1496,7 @@ AV_NOWARN_DEPRECATED(
     pars->color_map_params.visualize_lut = opts->tone_map.visualize;
     pars->color_map_params.contrast_smoothness = opts->tone_map.contrast_smoothness;
     pars->color_map_params.gamut_mapping = gamut_modes[opts->tone_map.gamut_mode];
-    GN_LOG("URO: Step 11: Tone mapping done");
+
 
     pars->params.dither_params = NULL;
     pars->params.error_diffusion = NULL;
@@ -1548,12 +1524,12 @@ AV_NOWARN_DEPRECATED(
         pars->params.dither_params = NULL;
         pars->params.error_diffusion = NULL;
     }
-    GN_LOG("URO: Step 12: Dither done");
 
-    GN_LOG("URO: Step 13: Calling update_icc_opts icc_opts=%p", (void*)opts->icc_opts);
+
+
     if (opts->icc_opts)
         update_icc_opts(p, opts->icc_opts);
-    GN_LOG("URO: Step 14: update_icc_opts done");
+
 
     pars->params.num_hooks = 0;
     const struct pl_hook *hook;
@@ -1563,11 +1539,11 @@ AV_NOWARN_DEPRECATED(
             update_hook_opts(p, opts->user_shader_opts, opts->user_shaders[i], hook);
         }
     }
-    GN_LOG("URO: Step 15: Hooks done");
+
 
     pars->params.hooks = p->hooks;
 
-    GN_LOG("URO: Step 16: DONE");
+
     p->want_reset = true;
 }
 
@@ -1779,14 +1755,14 @@ static inline void copy_frame_info_to_mp(struct frame_info *pl,
 
 static int init(struct render_backend *ctx, mpv_render_param *params)
 {
-    GN_LOG("GN-INIT: Step 1: Starting");
+
     ctx->priv = talloc_zero(NULL, struct priv);
-    GN_LOG("GN-INIT: Step 2: ctx->priv allocated, priv=%p", ctx->priv);
+
     struct priv *p = ctx->priv;
 
-    GN_LOG("GN-INIT: Step 3: About to alloc opts_cache, ctx->global=%p", (void*)ctx->global);
+
     p->opts_cache = m_config_cache_alloc(p, ctx->global, &gl_video_conf);
-    GN_LOG("GN-INIT: Step 4: opts_cache=%p", (void*)p->opts_cache);
+
 
     /* Manually allocate sub-structs that gl_video_conf defaults can't provide
      * (pointer fields in compound literals are not allocated). */
@@ -1802,7 +1778,7 @@ static int init(struct render_backend *ctx, mpv_render_param *params)
 
     /* gl_next_conf is not registered in the global config tree for render
      * backends, so m_config_cache_alloc would crash. Allocate directly. */
-    GN_LOG("GN-INIT: Step 5: Allocating next_opts directly");
+
     p->next_opts = talloc_zero(p, struct gl_next_opts);
     *p->next_opts = (struct gl_next_opts) {
         .border_background = BACKGROUND_COLOR,
@@ -1813,11 +1789,11 @@ static int init(struct render_backend *ctx, mpv_render_param *params)
         .target_hint = -1,
         .target_hint_strict = true,
     };
-    GN_LOG("GN-INIT: Step 6: next_opts=%p", (void*)p->next_opts);
 
-    GN_LOG("GN-INIT: Step 7: About to create video_eq");
+
+
     p->video_eq = mp_csp_equalizer_create(p, ctx->global);
-    GN_LOG("GN-INIT: Step 8: video_eq=%p", (void*)p->video_eq);
+
     p->global = ctx->global;
     p->log = ctx->log;
     p->dxgi_colorspace = -1;
@@ -1829,7 +1805,7 @@ static int init(struct render_backend *ctx, mpv_render_param *params)
     char *api = (char *)get_mpv_render_param(params, MPV_RENDER_PARAM_API_TYPE, NULL);
     if (!api) return MPV_ERROR_INVALID_PARAMETER;
 
-    GN_LOG("GN-INIT: Colorspace= %d, API type = '%s'", p->dxgi_colorspace, api ? api : "(null)");
+
 
     for (int n = 0; context_backends[n]; n++) {
         if (strcmp(context_backends[n]->api_name, api) == 0) {
@@ -1914,14 +1890,14 @@ static int get_target_size(struct render_backend *ctx, mpv_render_param *params,
 {
     struct priv *p = ctx->priv;
     struct ra_tex *tex = NULL;
-    GN_LOG("GET_TARGET_SIZE: Starting wrap_fbo...");
+
     int err = p->context->fns->wrap_fbo(p->context, params, &tex);
     if (err < 0) {
-        GN_LOG("GET_TARGET_SIZE: wrap_fbo FAILED with err=%d", err);
+
         return err == MPV_ERROR_INVALID_PARAMETER ? 0 : err;
     }
     if (!tex) {
-        GN_LOG("GET_TARGET_SIZE: tex is NULL!");
+
         return 0;
     }
 
@@ -1931,8 +1907,8 @@ static int get_target_size(struct render_backend *ctx, mpv_render_param *params,
     // and only the top-left portion of the video appears on the swapchain.
     *out_w = tex->params.w;
     *out_h = tex->params.h;
-    mpv_dxgi_fbo *fbo = get_mpv_render_param(params, MPV_RENDER_PARAM_DXGI_FBO, NULL);
-    GN_LOG("GET_TARGET_SIZE: Using Full Buffer %dx%d (fbo_ptr=%p)", *out_w, *out_h, (void*)fbo);
+    // get_mpv_render_param(params, ...);
+
 
     ra_tex_free(p->context->ra_ctx->ra, &tex);
     return 0;
@@ -1959,10 +1935,7 @@ static void resize(struct render_backend *ctx, struct mp_rect *src,
 {
     struct priv *p = ctx->priv;
     if (!p) return;
-    GN_LOG("RESIZE_EVENT: src=(%d,%d)-(%d,%d) | dst=(%d,%d)-(%d,%d) | osd=%dx%d",
-           src->x0, src->y0, src->x1, src->y1,
-           dst->x0, dst->y0, dst->x1, dst->y1,
-           osd->w, osd->h);
+
 
     if (mp_rect_equals(&p->src, src) &&
         mp_rect_equals(&p->dst, dst) &&
@@ -1999,7 +1972,7 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
                            !frame->still && frame->num_frames > 1;
     double pts_offset = can_interpolate ? frame->ideal_frame_vsync : 0;
     
-    GN_LOG("RENDER_START: FrameNum=%d | Still=%d | Interpolate=%d", frame->num_frames, frame->still, can_interpolate);
+
     
     render_params.info_callback = info_callback;
     render_params.info_priv = p;
@@ -2060,19 +2033,17 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
     int wrap_err = p->context->fns->wrap_fbo(p->context, params, &fbo_tex);
     if (wrap_err < 0 || !fbo_tex || !fbo_tex->priv) {
         if (fbo_tex) talloc_free(fbo_tex);
-        GN_LOG("RENDER: [FBO] wrap_fbo FAILED: err=%d fbo_tex=%p priv=%p", wrap_err, (void*)fbo_tex, fbo_tex ? (void*)fbo_tex->priv : NULL);
+
         return 0;
     }
 
-    GN_LOG("RENDER: [FBO] wrap_fbo OK: fbo=%dx%d | tex_priv=%p", fbo_tex->params.w, fbo_tex->params.h, (void*)fbo_tex->priv);
+
 
     struct pl_swapchain_frame swframe = { .fbo = (pl_tex)fbo_tex->priv };
 
     struct pl_frame target;
     pl_frame_from_swapchain(&target, &swframe);
-    GN_LOG("RENDER: [TARGET] pl_frame_from_swapchain: crop=(%.1f,%.1f)-(%.1f,%.1f) wh=%.1fx%.1f",
-           target.crop.x0, target.crop.y0, target.crop.x1, target.crop.y1,
-           pl_rect_w(target.crop), pl_rect_h(target.crop));
+
 
     bool pass_colorspace = false;
     struct pl_color_space target_csp = {0};
@@ -2088,8 +2059,6 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
     static int last_csp_log = -1;
     if (last_csp_log != p->dxgi_colorspace) {
         last_csp_log = p->dxgi_colorspace;
-        GN_LOG("RENDER: Target Colorspace Initialized/Changed to %d (Transfer=%d, Primaries=%d)", 
-               p->dxgi_colorspace, target_csp.transfer, target_csp.primaries);
     }
 
     if (target_csp.primaries == PL_COLOR_PRIM_UNKNOWN)
@@ -2215,7 +2184,7 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
     if (frame->current && frame->current->params.repr.dovi) {
         static bool dovi_logged = false;
         if (!dovi_logged) {
-            GN_LOG("RENDER: Dolby Vision Metadata (IPTPQc4/RPU) Sync: ACTIVE");
+
             dovi_logged = true;
         }
     }
@@ -2246,11 +2215,11 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
 #endif
     }
 
-    GN_LOG("RENDER: Step 22: Calling update_overlays");
+
     update_overlays(p, p->osd_res,
                     (frame->current && opts->blend_subs) ? OSD_DRAW_OSD_ONLY : 0,
                     PL_OVERLAY_COORDS_DST_FRAME, &p->osd_state, &target, frame->current);
-    GN_LOG("RENDER: Step 23: update_overlays done");
+
 
     // Bridge mode fix: vo_libmpv skips resize() when ctx->vo is NULL (bridge mode),
     // leaving p->dst at {0,0,0,0} and p->src at {0,0,0,0}. Use actual FBO and
@@ -2267,7 +2236,7 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
     // p->dst yalnızca mpv tarafından henüz hesaplanmamışsa (sıfırsa) doldurulur.
     // Böylece mpv'nin hesapladığı siyah barlar (en-boy oranı) korunur ve video kırpılmaz.
     if (mp_rect_w(p->dst) <= 0 || mp_rect_h(p->dst) <= 0) {
-        GN_LOG("RENDER: [FALLBACK] p->dst invalid, using viewport %dx%d", rw, rh);
+
         p->dst = (struct mp_rect){0, 0, rw, rh};
     }
 
@@ -2275,25 +2244,15 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
     // Without this, apply_crop(image, p->src, ...) gives image.crop = {0,0,0,0}
     // and libplacebo renders the video at its native size instead of scaling to FBO.
     if ((mp_rect_w(p->src) <= 0 || mp_rect_h(p->src) <= 0) && frame->current) {
-        GN_LOG("RENDER: [FALLBACK] p->src invalid, using frame %dx%d",
-               frame->current->w, frame->current->h);
         p->src = (struct mp_rect){0, 0, frame->current->w, frame->current->h};
     }
 
-    GN_LOG("RENDER: Step 24: apply_crop, dst=(%d,%d)-(%d,%d) fbo=%dx%d",
-           p->dst.x0, p->dst.y0, p->dst.x1, p->dst.y1, fbo_tex->params.w, fbo_tex->params.h);
+
     apply_crop(&target, p->dst, fbo_tex->params.w, fbo_tex->params.h);
-    GN_LOG("RENDER: Step 25: apply_crop done, target.crop=(%.1f,%.1f)-(%.1f,%.1f) | target.crop_wh=%.1fx%.1f",
-           target.crop.x0, target.crop.y0, target.crop.x1, target.crop.y1,
-           pl_rect_w(target.crop), pl_rect_h(target.crop));
+
 
     // Granular resize debug: log src/dst state
-    GN_LOG("RENDER: [STATE] p->src=(%d,%d)-(%d,%d) | p->dst=(%d,%d)-(%d,%d) | fbo=%dx%d | current_frame=%dx%d",
-           p->src.x0, p->src.y0, p->src.x1, p->src.y1,
-           p->dst.x0, p->dst.y0, p->dst.x1, p->dst.y1,
-           fbo_tex->params.w, fbo_tex->params.h,
-           frame->current ? frame->current->params.w : 0,
-           frame->current ? frame->current->params.h : 0);
+
     update_tm_viz(&pars->color_map_params, &target);
 
     struct pl_frame_mix mix = {0};
@@ -2313,7 +2272,7 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
         struct pl_source_frame first;
         if (pl_queue_peek(p->queue, 0, &first) && qparams.pts < first.pts) {
             if (first.pts != frame->current->pts)
-                GN_LOG("RENDER: PTS mismatch cur=%f vpts=%f", frame->current->pts, first.pts);
+
             qparams.pts = first.pts;
         }
         p->last_pts = qparams.pts;
@@ -2326,23 +2285,12 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
         for (int i = 0; i < mix.num_frames; i++) {
             struct pl_frame *image = (struct pl_frame *) mix.frames[i];
             
-            // VERIFICATION LOG: Proof that DoVi is being processed
-            if (image->repr.dovi) {
-                static int dovi_frame_count = 0;
-                if (dovi_frame_count++ % 60 == 0) { // Log every 60 frames to avoid flooding
-                    struct mp_image *mpi = (struct mp_image *) image->user_data;
-                    GN_LOG("RENDER_PROC: Dolby Vision RPU metadata PRESENT in pl_frame (PTS: %f)", mpi->pts);
-                }
-            }
+
 
             struct mp_image *mpi = image->user_data;
             struct frame_priv *fp = mpi->priv;
             apply_crop(image, p->src, frame->current->w, frame->current->h);
-            GN_LOG("SRC_FRAME[%d]: crop=(%.1f,%.1f)-(%.1f,%.1f) wh=%.1fx%.1f | frame_w=%d h=%d | p_src=(%d,%d)-(%d,%d)",
-                   i, image->crop.x0, image->crop.y0, image->crop.x1, image->crop.y1,
-                   pl_rect_w(image->crop), pl_rect_h(image->crop),
-                   frame->current->w, frame->current->h,
-                   p->src.x0, p->src.y0, p->src.x1, p->src.y1);
+
             if (opts->blend_subs) {
                 if (frame->redraw)
                     p->osd_sync++;
@@ -2410,9 +2358,9 @@ done:
     p->frame_pending = true;
 
     p->context->fns->done_frame(p->context, frame ? frame->display_synced : false);
-    GN_LOG("RENDER: Step 34: done_frame done");
+
     talloc_free(fbo_tex);
-    GN_LOG("RENDER: Step 35: Returning 0");
+
     return 0;
 }
 
@@ -2621,22 +2569,17 @@ static void destroy(struct render_backend *ctx)
     struct priv *p = ctx->priv;
     if (!p) return;
 
-    pl_queue_destroy(&p->queue);
+    if (p->queue) pl_queue_destroy(&p->queue);
+    
     for (int i = 0; i < MP_ARRAY_SIZE(p->osd_state.entries); i++)
         pl_tex_destroy(p->gpu, &p->osd_state.entries[i].tex);
+    
     for (int i = 0; i < p->num_sub_tex; i++)
         pl_tex_destroy(p->gpu, &p->sub_tex[i]);
+    
     for (int i = 0; i < p->num_user_hooks; i++)
         pl_mpv_user_shader_destroy(&p->user_hooks[i].hook);
 
-    if (ctx->hwdec_devs) {
-        ra_hwdec_mapper_free(&p->hwdec_mapper);
-        ra_hwdec_ctx_uninit(&p->hwdec_ctx);
-        hwdec_devices_set_loader(ctx->hwdec_devs, NULL, NULL);
-        hwdec_devices_destroy(ctx->hwdec_devs);
-    }
-
-    mp_assert(p->num_dr_buffers == 0);
     mp_mutex_destroy(&p->dr_lock);
 
     cache_uninit(p, &p->shader_cache);
@@ -2647,24 +2590,37 @@ static void destroy(struct render_backend *ctx)
     pl_lut_free(&p->next_opts->target_lut.lut);
 
     pl_icc_close(&p->icc_profile);
+
     pl_renderer_destroy(&p->rr);
 
-    for (int i = 0; i < VO_PASS_PERF_MAX; ++i) {
-        pl_shader_info_deref(&p->perf_fresh.info[i].shader);
-        pl_shader_info_deref(&p->perf_redraw.info[i].shader);
-    }
+    if (p->queue) pl_queue_destroy(&p->queue);
 
     pl_options_free(&p->pars);
+    
+    if (p->pllog) pl_log_destroy(&p->pllog);
 
+    if (p->opts_cache) talloc_free(p->opts_cache);
+
+    if (ctx->hwdec_devs) {
+        ra_hwdec_mapper_free(&p->hwdec_mapper);
+        ra_hwdec_ctx_uninit(&p->hwdec_ctx);
+        hwdec_devices_set_loader(ctx->hwdec_devs, NULL, NULL);
+        hwdec_devices_destroy(ctx->hwdec_devs);
+    }
+    
     p->ra_ctx = NULL;
     p->pllog = NULL;
     p->gpu = NULL;
-    p->sw = NULL;
+    
     if (p->context) {
         if (p->context->fns->destroy) p->context->fns->destroy(p->context);
         talloc_free(p->context);
+        p->context = NULL;
     }
+
+    talloc_free(p->video_eq);
     talloc_free(p);
+    ctx->priv = NULL;
 }
 
 static int set_parameter(struct render_backend *ctx, mpv_render_param param)

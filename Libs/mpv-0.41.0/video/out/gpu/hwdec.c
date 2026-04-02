@@ -26,6 +26,8 @@
 #include "hwdec.h"
 
 extern void gpu_sync_trace(const char *msg);
+#include <windows.h>
+#include <debugapi.h>
 
 extern const struct ra_hwdec_driver ra_hwdec_vaapi;
 extern const struct ra_hwdec_driver ra_hwdec_videotoolbox;
@@ -113,8 +115,13 @@ struct ra_hwdec *ra_hwdec_load_driver(struct ra_ctx *ra_ctx,
 
 void ra_hwdec_uninit(struct ra_hwdec *hwdec)
 {
-    if (hwdec)
+    if (hwdec) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "[NATIVE_HWDEC] ra_hwdec_uninit: %s START\n", hwdec->driver->name);
+        OutputDebugStringA(buf);
         hwdec->driver->uninit(hwdec);
+        OutputDebugStringA("[NATIVE_HWDEC] ra_hwdec_uninit: FINISHED\n");
+    }
     talloc_free(hwdec);
 }
 
@@ -290,11 +297,13 @@ void ra_hwdec_ctx_init(struct ra_hwdec_ctx *ctx, struct mp_hwdec_devices *devs,
 
 void ra_hwdec_ctx_uninit(struct ra_hwdec_ctx *ctx)
 {
+    OutputDebugStringA("[NATIVE_HWDEC] ra_hwdec_ctx_uninit: START\n");
     for (int n = 0; n < ctx->num_hwdecs; n++)
         ra_hwdec_uninit(ctx->hwdecs[n]);
 
     talloc_free(ctx->hwdecs);
     memset(ctx, 0, sizeof(*ctx));
+    OutputDebugStringA("[NATIVE_HWDEC] ra_hwdec_ctx_uninit: FINISHED\n");
 }
 
 void ra_hwdec_ctx_load_fmt(struct ra_hwdec_ctx *ctx, struct mp_hwdec_devices *devs,

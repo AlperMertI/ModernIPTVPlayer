@@ -710,7 +710,7 @@ public class D3D11RenderControl : ContentControl
             float offsetY = (float)((_targetHeight - _swapChainHeight * scale) / 2.0);
 
             // [DEBUG_RESIZE] Log translation and scaling
-            LogSync($"[PRESENT_D3D] Target: {(_targetWidth):F1}x{(_targetHeight):F1} | SC: {_swapChainWidth}x{_swapChainHeight} | Scale: {scale:F4} | Offset: {offsetX:F1},{offsetY:F1}");
+
 
             // Always update the transform — SetMatrixTransform is a cheap metadata operation.
             // Caching caused stale positioning when the swap chain AR didn't change but the panel did.
@@ -1135,19 +1135,80 @@ public class D3D11RenderControl : ContentControl
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int SetSwapChainDelegate(IntPtr thisPtr, IntPtr swapChain);
 
+    public unsafe void DisconnectSwapChain()
+    {
+        if (_swapChainPanel == null) return;
+
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DisconnectSwapChain STARTED");
+
+        try
+        {
+            if (_cachedNativePanel != IntPtr.Zero)
+            {
+                var pBase = ((WinRT.IWinRTObject)_swapChainPanel).NativeObject.ThisPtr;
+                Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
+                IntPtr nativePanel = IntPtr.Zero;
+
+                if (Marshal.QueryInterface(pBase, ref g1w, out nativePanel) != 0)
+                {
+                    Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
+                    Marshal.QueryInterface(pBase, ref g1u, out nativePanel);
+                }
+
+                if (nativePanel != IntPtr.Zero)
+                {
+                    IntPtr vtable = Marshal.ReadIntPtr(nativePanel);
+                    IntPtr methodPtr = Marshal.ReadIntPtr(vtable, NSwapChainPanelNative.Slot_SetSwapChain * IntPtr.Size);
+                    var setSc = (SetSwapChainDelegate)Marshal.GetDelegateForFunctionPointer(methodPtr, typeof(SetSwapChainDelegate));
+
+                    int hr = setSc(nativePanel, IntPtr.Zero);
+                    Marshal.Release(nativePanel);
+
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DisconnectSwapChain: SetSwapChain(NULL) HR=0x{hr:X}");
+                    _lastLinkedHandle = IntPtr.Zero;
+                    _needsFirstFrameLink = true;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[D3D_CTRL] DisconnectSwapChain Error: {ex.Message}");
+        }
+
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DisconnectSwapChain COMPLETED");
+    }
+
+    public unsafe void FlushContext()
+    {
+        if (_context.Handle == null) return;
+
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] FlushContext STARTED");
+
+        try
+        {
+            _context.Handle->ClearState();
+            _context.Handle->Flush();
+
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] FlushContext COMPLETED");
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[D3D_CTRL] FlushContext Error: {ex.Message}");
+        }
+    }
+
     public async Task StopLoopAsync()
     {
         if (_cts == null || _cts.IsCancellationRequested) return;
-        
+
         Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] StopLoopAsync STARTED");
         _cts.Cancel();
-        _resizeEvent.Set(); // Wake up the loop if it's waiting
+        _resizeEvent.Set();
 
         if (_renderTask != null)
         {
             try
             {
-                // Wait for the task to complete
                 await _renderTask.ContinueWith(t => { }, TaskScheduler.Default);
                 Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] RenderLoop TASK COMPLETED");
             }

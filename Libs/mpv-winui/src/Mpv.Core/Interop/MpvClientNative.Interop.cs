@@ -1,4 +1,4 @@
-﻿// Copyright (c) Bili Copilot. All rights reserved.
+// Copyright (c) Bili Copilot. All rights reserved.
 
 using Mpv.Core.Enums.Client;
 using Mpv.Core.Structs.Client;
@@ -127,6 +127,7 @@ public partial class MpvClientNative
     #endregion
 
     #region Delegate
+    [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
     public delegate void MpvWakeupCallback<in T>(T data);
     #endregion
 }

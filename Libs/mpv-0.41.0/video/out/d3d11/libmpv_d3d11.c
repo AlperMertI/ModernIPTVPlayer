@@ -15,24 +15,6 @@ extern void gpu_sync_trace(const char *msg);
 #include "video/hwdec.h"
 #include "video/d3d.h"
 
-// --- GN LOG (same as libmpv_gpu.c) ---
-static FILE *wrap_log_fp = NULL;
-static void wrap_log_init(void) {
-    if (!wrap_log_fp) {
-        wrap_log_fp = fopen("C:\\Users\\ASUS\\Documents\\ModernIPTVPlayer\\wrap_debug.log", "a");
-        if (wrap_log_fp) {
-            fprintf(wrap_log_fp, "=== WRAP_FBO LOG SESSION START ===\n");
-            fflush(wrap_log_fp);
-        }
-    }
-}
-// [PERF] Disabled verbose WRAP_LOG - uncomment for debugging
-#define WRAP_LOG(ctx, fmt, ...) do { } while(0)
-/*
-#define WRAP_LOG(ctx, fmt, ...) do { \
-    MP_INFO(ctx, "[WRAP][TID:%u] " fmt "\n", (unsigned int)GetCurrentThreadId(), ##__VA_ARGS__); \
-} while(0)
-*/
 #include "video/out/placebo/ra_pl.h"
 #include "video/out/placebo/utils.h"
 // -------------------------
@@ -123,7 +105,6 @@ struct priv_pl {
     pl_d3d11 d3d11;
     pl_gpu gpu;
     struct ra_ctx *ra_ctx;
-    IDXGIKeyedMutex *shared_mutex;
     struct mp_hwdec_ctx hwctx;
 };
 
@@ -133,6 +114,7 @@ static void destroy_d3d11_pl(struct libmpv_gpu_context *ctx)
     if (!p)
         return;
 
+    OutputDebugStringA("[NATIVE_D3D] destroy_d3d11_pl: START\n");
     MP_INFO(ctx, "[D3D11_PL_DESTROY] Step 1: Destroying RA...\n");
 
     // Order matters: RA uses pl_gpu, so destroy RA first
@@ -140,29 +122,42 @@ static void destroy_d3d11_pl(struct libmpv_gpu_context *ctx)
         struct ra *ra = p->ra_ctx->ra;
         p->ra_ctx->ra = NULL;
         ra->fns->destroy(ra);
+        OutputDebugStringA("[NATIVE_D3D] RA destroyed.\n");
+        MP_INFO(ctx, "[NATIVE_D3D] RA destroyed.\n");
     }
 
-    MP_INFO(ctx, "[D3D11_PL_DESTROY] Step 2: RA destroyed. Destroying pl_d3d11...\n");
-
-    // Then destroy pl_d3d11 (which owns pl_gpu)
-    if (p->d3d11) {
-        hwdec_devices_remove(ctx->hwdec_devs, &p->hwctx);
-        av_buffer_unref(&p->hwctx.av_device_ref);
-        pl_d3d11_destroy(&p->d3d11);
-    }
-
-    MP_INFO(ctx, "[D3D11_PL_DESTROY] Step 3: pl_d3d11 destroyed. Destroying pl_log...\n");
-
-    // Finally destroy pl_log
-    if (p->pllog)
+    if (p->pllog) {
+        OutputDebugStringA("[NATIVE_D3D] Destroying pl_log...\n");
         pl_log_destroy(&p->pllog);
+        OutputDebugStringA("[NATIVE_D3D] pl_log destroyed.\n");
+    }
 
-    MP_INFO(ctx, "[D3D11_PL_DESTROY] Step 4: pl_log destroyed. talloc_free(p)...\n");
+    // [STABLE SHUTDOWN] Synchronize GPU before releasing Device/Context
+    if (p->gpu) {
+        OutputDebugStringA("[NATIVE_D3D] Starting pl_gpu_finish (GPU Sync)...\n");
+        pl_gpu_finish(p->gpu);
+        OutputDebugStringA("[NATIVE_D3D] pl_gpu_finish COMPLETED.\n");
+    }
+
+    if (p->d3d11) {
+        OutputDebugStringA("[NATIVE_D3D] Destroying pl_d3d11 (libplacebo backend)...\n");
+        pl_d3d11_destroy(&p->d3d11);
+        OutputDebugStringA("[NATIVE_D3D] pl_d3d11 destroyed.\n");
+    }
+
+    OutputDebugStringA("[NATIVE_D3D] Releasing D3D11 COM references...\n");
+    if (p->context) {
+        ID3D11DeviceContext_Release(p->context);
+        p->context = NULL;
+    }
+    if (p->device) {
+        ID3D11Device_Release(p->device);
+        p->device = NULL;
+    }
+    OutputDebugStringA("[NATIVE_D3D] destroy_d3d11_pl: FINISHED\n");
 
     talloc_free(p);
     ctx->priv = NULL;
-
-    // Note: can't log after this point since p (and its log context) is freed
 }
 
 static int init_d3d11_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params)
@@ -174,9 +169,13 @@ static int init_d3d11_pl(struct libmpv_gpu_context *ctx, mpv_render_param *param
         switch (params[n].type) {
         case 24: // MPV_RENDER_PARAM_D3D11_DEVICE
             p->device = (ID3D11Device *)params[n].data;
+            if (p->device)
+                ID3D11Device_AddRef(p->device);
             break;
         case 25: // MPV_RENDER_PARAM_D3D11_CONTEXT
             p->context = (ID3D11DeviceContext *)params[n].data;
+            if (p->context)
+                ID3D11DeviceContext_AddRef(p->context);
             break;
         }
     }
@@ -201,36 +200,36 @@ static int init_d3d11_pl(struct libmpv_gpu_context *ctx, mpv_render_param *param
     }
 
     // 3. Create libplacebo D3D11 context
-    WRAP_LOG(ctx, "init_d3d11_pl: Preparing pl_d3d11_params (Heap-Alloc to avoid stack guards)");
+
     
     struct pl_d3d11_params *d3d11_params = talloc_zero(NULL, struct pl_d3d11_params);
     d3d11_params->device = p->device;
     d3d11_params->allow_software = false; // [CRITICAL] Prevent WARP fallback / Green Screen
 
-    WRAP_LOG(ctx, "init_d3d11_pl: Calling pl_d3d11_create...");
+
     p->d3d11 = pl_d3d11_create(p->pllog, d3d11_params);
     talloc_free(d3d11_params);
 
     if (!p->d3d11) {
-        WRAP_LOG(ctx, "init_d3d11_pl: FAIL - pl_d3d11_create failed (Feature level mismatch?)");
+
         return MPV_ERROR_GENERIC;
     }
-    WRAP_LOG(ctx, "init_d3d11_pl: SUCCESS - pl_d3d11 active (gpu:%p)", (void*)p->d3d11->gpu);
+
     p->gpu = p->d3d11->gpu;
 
     // 4. Create RA wrapper around pl_gpu
-    WRAP_LOG(ctx, "init_d3d11_pl: Calling ra_create_pl...");
+
     struct ra *ra = ra_create_pl(p->gpu, ctx->log);
     if (!ra) {
-        WRAP_LOG(ctx, "init_d3d11_pl: FAIL - ra_create_pl");
+
         destroy_d3d11_pl(ctx);
         return MPV_ERROR_UNSUPPORTED;
     }
-    WRAP_LOG(ctx, "init_d3d11_pl: SUCCESS - ra_create_pl OK (%p)", (void*)ra);
+
     
     // [HWDEC INTEROP] Add native resource so d3d11va driver can find the device
     ra_add_native_resource(ra, "d3d11_device_ptr", p->device);
-    WRAP_LOG(ctx, "init_d3d11_pl: Native Resource registered (Device: %p)", (void*)p->device);
+
 
     // 5. Setup internal context
     p->ra_ctx = talloc_zero(p, struct ra_ctx);
@@ -277,10 +276,12 @@ static void release_shared_mutex(void *ptr)
 static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
                        struct ra_tex **out)
 {
+    OutputDebugStringA("[NATIVE_D3D] wrap_fbo_pl: START\n");
     struct priv_pl *p = ctx->priv;
     ID3D11Resource *tex = NULL;
     int w = 0, h = 0;
     bool is_shared = false;
+    IDXGIKeyedMutex *shared_mutex = NULL;
 
     // [ZERO-COPY] Check for shared texture handle first
     void *shared_handle = get_mpv_render_param(params, MPV_RENDER_PARAM_DXGI_SHARED_TEXTURE, NULL);
@@ -294,38 +295,26 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
         }
         tex = (ID3D11Resource *)shared_tex;
         is_shared = true;
-        WRAP_LOG(ctx, "wrap_fbo_pl: Received Shared Texture IntPtr: %p", (void*)tex);
+
 
         // [MUTEX] Keys are 0. The host (C#) already acquired the mutex for this thread 
         // before calling mpv_render_context_render. 
         // DO NOT acquire it here, as it causes a DEADLOCK.
-        if (SUCCEEDED(ID3D11Resource_QueryInterface(tex, &IID_IDXGIKeyedMutex, (void **)&p->shared_mutex))) {
-             WRAP_LOG(ctx, "wrap_fbo_pl: Mutex interface queried successfully.");
-        } else {
-             WRAP_LOG(ctx, "wrap_fbo_pl: NO KeyedMutex found on this resource!");
+        IDXGIKeyedMutex *mutex = NULL;
+        if (SUCCEEDED(ID3D11Resource_QueryInterface(tex, &IID_IDXGIKeyedMutex, (void **)&mutex))) {
+             // Attach the mutex to the frame destruction context later
+             shared_mutex = mutex;
         }
     } else {
         mpv_dxgi_fbo *fbo = get_mpv_render_param(params, MPV_RENDER_PARAM_DXGI_FBO, NULL);
         if (!fbo || !fbo->texture) {
-            WRAP_LOG(ctx, "CRITICAL: No FBO or Texture pointer! ParamsPtr=%p", (void*)params);
+
             return MPV_ERROR_INVALID_PARAMETER;
         }
 
         tex = (ID3D11Resource *)fbo->texture;
         w = fbo->w;
         h = fbo->h;
-        int render_w = fbo->render_w;
-        int render_h = fbo->render_h;
-        WRAP_LOG(ctx, "wrap_fbo_pl: tex=%p w=%u h=%u | render=%dx%d", (void*)tex, w, h, render_w, render_h);
-
-        WRAP_LOG(ctx, "RAW_DATA: fbo=%p | tex=%p | w=%d | h=%d | rw=%d | rh=%d", 
-                 (void*)fbo, (void*)tex, w, h, render_w, render_h);
-
-        if (render_w > 0 && render_h > 0) {
-            WRAP_LOG(ctx, "STABLE_CANVAS: Viewport Detected -> %dx%d (Internal: %dx%d)", render_w, render_h, fbo->w, fbo->h);
-        } else {
-            WRAP_LOG(ctx, "PHYSICAL_RESIZE: No Viewport -> Using full buffer %dx%d", w, h);
-        }
     }
 
     // [DIMENSION PROBE] Identity check & dimension discovery
@@ -336,7 +325,7 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
         ID3D11Texture2D_Release(prob_tex);
     }
 
-    WRAP_LOG(ctx, "Texture desc=%ux%u | passed w=%d h=%d | using w=%d h=%d", desc.Width, desc.Height, w, h, w, h);
+
 
     if (w <= 0) w = desc.Width;
     if (h <= 0) h = desc.Height;
@@ -366,8 +355,7 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
     // Letterboxing/scaling is handled by mpv's p->dst rect in libmpv_gpu.c.
     int wrap_w = (int)desc.Width;
     int wrap_h = (int)desc.Height;
-    WRAP_LOG(ctx, "WRAP_VIEWPORT: physical=%dx%d | final_wrap=%dx%d",
-             w, h, wrap_w, wrap_h);
+
 
     pl_tex pl_tex = pl_d3d11_wrap(p->gpu, pl_d3d11_wrap_params(
         .tex = tex,
@@ -380,30 +368,26 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
          return MPV_ERROR_UNSUPPORTED;
     }
 
-    // [ROOT CAUSE FIX] Force blit_dst/blit_src on the underlying pl_tex.
-    //
-    // WHY: libplacebo's pl_tex_clear_ex() (gpu.c:318) requires dst->params.blit_dst.
-    //      WinUI textures often miss these flags during automatic wrapping.
-    struct pl_tex_params *mutable_params = (struct pl_tex_params *)&pl_tex->params;
-    mutable_params->blit_dst = true;
-    mutable_params->blit_src = true;
-    mutable_params->renderable = true; // Ensure it can be cleared
+    // [FIX] Manually override capability flags
+    // Libplacebo sometimes misdetects capabilities on WinUI 3 shared textures.
+    struct pl_tex_params *mut_params = (struct pl_tex_params *)&pl_tex->params;
+    mut_params->sampleable = true;
+    mut_params->renderable = true;
+    mut_params->blit_dst = true;
+    mut_params->blit_src = true;
 
     // 2. Wrap pl_tex into ra_tex for MPV
     // mppl_wrap_tex is the bridge helper from ra_pl.h
     *out = talloc_zero(NULL, struct ra_tex);
     if (!mppl_wrap_tex(p->ra_ctx->ra, pl_tex, *out)) {
-         WRAP_LOG(ctx, "WRAP_FAIL: mppl_wrap_tex failed");
          MP_ERR(ctx, "Failed to wrap pl_tex into ra_tex!\n");
          pl_tex_destroy(p->gpu, &pl_tex);
          if (is_shared) ID3D11Resource_Release(tex);
-         if (p->shared_mutex) {
-             IDXGIKeyedMutex_ReleaseSync(p->shared_mutex, 0);
-             IDXGIKeyedMutex_Release(p->shared_mutex);
-             p->shared_mutex = NULL;
+         if (shared_mutex) {
+             IDXGIKeyedMutex_Release(shared_mutex);
          }
          talloc_free(*out);
-         *out = NULL; // Safety: Never return partially allocated junk
+         *out = NULL;
          return MPV_ERROR_UNSUPPORTED;
     }
 
@@ -415,10 +399,10 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
             talloc_set_destructor(owner, release_shared_tex);
         }
         
-        if (p->shared_mutex) {
+        if (shared_mutex) {
             IDXGIKeyedMutex **m_owner = talloc_size(*out, sizeof(IDXGIKeyedMutex *));
             if (m_owner) {
-                *m_owner = p->shared_mutex;
+                *m_owner = shared_mutex;
                 talloc_set_destructor(m_owner, release_shared_mutex);
             }
         }
@@ -435,13 +419,6 @@ static void done_frame_pl(struct libmpv_gpu_context *ctx, bool ds)
 {
     struct priv_pl *p = ctx->priv;
     
-    if (p->shared_mutex) {
-        // We don't ReleaseSync(0) here because the host (C#) does it 
-        // after render call returns.
-        ID3D11Resource_Release(p->shared_mutex);
-        p->shared_mutex = NULL; 
-    }
-
     // OPTIMIZATION: Use flush() instead of finish()
     pl_gpu_flush(p->gpu);
 }
