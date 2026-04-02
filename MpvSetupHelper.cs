@@ -21,6 +21,14 @@ namespace ModernIPTVPlayer
         public static async Task ApplyEssentialSettingsAsync(MpvPlayer player, string streamUrl, bool isSecondary = false)
         {
             if (player == null) return;
+
+            try {
+            var baseDir = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\";
+            System.IO.File.AppendAllText(System.IO.Path.Combine(baseDir, "init_debug.log"), $"[{DateTime.Now:HH:mm:ss.fff}] [INIT] ApplyEssentialSettingsAsync (Session Reset)\n");
+            System.IO.File.AppendAllText(System.IO.Path.Combine(baseDir, "control_debug.log"), $"[{DateTime.Now:HH:mm:ss.fff}] [CONTROL] Startup Reset\n");
+            System.IO.File.AppendAllText(System.IO.Path.Combine(baseDir, "cs_debug.log"), $"[{DateTime.Now:HH:mm:ss.fff}] [CS] Startup Reset\n");
+        } catch { }
+
             var pSettings = AppSettings.PlayerSettings;
 
             // Select the modern (d3d11/gpu-next) or legacy (dxgi/vo_gpu) backend
@@ -67,12 +75,34 @@ namespace ModernIPTVPlayer
             await player.SetPropertyAsync("d3d11va-zero-copy", zeroCopy ? "yes" : "no");
             await player.SetPropertyAsync("vd-lavc-dr", zeroCopy ? "yes" : "no");
             
-            // Enable shared texture path for gpu-next + zero-copy
-            // DISABLED: SharedTextureHelper P/Invoke is broken (CreateTexture2D COM method)
-            // if (pSettings.VideoOutput == Models.VideoOutput.GpuNext && zeroCopy)
-            // {
-            //     player.UseSharedTexture = true;
-            // }
+            // [LATENCY-FIX] Stable Canvas & Viewport Rendering Config
+            if (pSettings.VideoOutput == Models.VideoOutput.GpuNext)
+            {
+                // 1. Persistent Shader Cache (Eliminates 250ms stalls on ratio change)
+                string cacheDir = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), 
+                    "ModernIPTVPlayer", "mpv-shader-cache");
+                
+                if (!System.IO.Directory.Exists(cacheDir))
+                    System.IO.Directory.CreateDirectory(cacheDir);
+
+                await player.SetPropertyAsync("gpu-shader-cache", "yes");
+                await player.SetPropertyAsync("gpu-shader-cache-dir", cacheDir);
+
+                // 2. High-Performance 10-bit Output (Saves 50% VRAM Bandwidth vs rgba16f)
+                await player.SetPropertyAsync("d3d11-output-format", "rgb10_a2");
+                await player.SetPropertyAsync("fbo-format", "rgb10_a2");
+
+                // 3. [FIT-TO-WINDOW] Force aspect ratio and zoom to ensure video
+                // scales to the FBO viewport instead of rendering at native size.
+                await player.SetPropertyAsync("keepaspect", "yes");
+                await player.SetPropertyAsync("video-zoom", "0");
+                await player.SetPropertyAsync("panscan", "0");
+                await player.SetPropertyAsync("autofit", "");
+                await player.SetPropertyAsync("autofit-larger", "");
+                await player.SetPropertyAsync("autofit-smaller", "");
+            }
+            
             
             // Monitor for decoder failure and fallback to safe d3d11va
             _ = MonitorHwdecFallbackAsync(player, hwdecValue);

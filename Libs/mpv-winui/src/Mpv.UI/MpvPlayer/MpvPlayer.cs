@@ -19,8 +19,18 @@ public sealed partial class MpvPlayer : Control
 {
     public MpvPlayer()
     {
+        try
+        {
+            var logPath = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\cs_debug.log";
+            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [CS] MpvPlayer Constructor Start\n");
+        }
+        catch { }
+        
         DefaultStyleKey = typeof(MpvPlayer);
     }
+
+    private bool _mpvGpuIsDirty = false;
+    private Mpv.Core.Interop.MpvRenderContextNative.MpvRenderUpdateCallback _updateCallback;
 
     public static readonly DependencyProperty RenderApiProperty =
         DependencyProperty.Register("RenderApi", typeof(string), typeof(MpvPlayer), new PropertyMetadata("dxgi"));
@@ -54,39 +64,35 @@ public sealed partial class MpvPlayer : Control
 
     public string PreferredToneMapping { get; set; } = "auto";
     
-    /// <summary>
-    /// Enable shared texture mode for zero-copy rendering.
-    /// When enabled, mpv renders to a shared texture instead of swapchain backbuffer.
-    /// </summary>
-    public bool UseSharedTexture
-    {
-        get => _renderControl?.UseSharedTexture ?? false;
-        set
-        {
-            if (_renderControl != null)
-            {
-                _renderControl.UseSharedTexture = value;
-            }
-        }
-    }
-    
-    /// <summary>
-    /// Gets the shared texture handle for cross-process rendering.
-    /// </summary>
-    public IntPtr SharedTextureHandle => _renderControl?.SharedTextureHandle ?? IntPtr.Zero;
+    public IntPtr SharedTextureHandle => IntPtr.Zero;
 
     protected override void OnApplyTemplate()
     {
         _renderControl = (D3D11RenderControl)GetTemplateChild("RenderControl");
         
+        try {
+            var logPath = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\cs_debug.log";
+            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [CS] OnApplyTemplate - RenderControl Found: {_renderControl != null}\n");
+        } catch { }
+
         if (_renderControl != null)
         {
             _renderControl.RenderFrame = Render;
             _renderControl.HdrStatusChanged += OnHdrStatusChanged;
-            _renderControl.SwapChainPresented = () => Player?.RenderContext?.ReportSwap();
+            _renderControl.SwapChainPresented = () => 
+            {
+                if (_mpvGpuIsDirty)
+                {
+                    Player?.RenderContext?.ReportSwap();
+                    _mpvGpuIsDirty = false;
+                }
+            };
             
             // Initial sync request (will run once player is ready)
             _ = SyncHdrStatusAsync();
+            
+            // Set render context update callback to signal our render loop
+            _updateCallback = (ctx) => _renderControl.SignalUpdate();
         }
     }
 
@@ -172,6 +178,10 @@ public sealed partial class MpvPlayer : Control
             Player.Client.RequestLogMessage(MpvLogLevel.V);
             Player.LogMessageReceived += OnLogMessageReceived;
             await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi, colorspace: (int)_renderControl.SwapChainColorSpace);
+            
+            // Register callback AFTER RenderContext is created by InitializeDXGIAsync
+            Player.RenderContext?.SetUpdateCallback(_updateCallback, IntPtr.Zero);
+            
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
@@ -218,6 +228,10 @@ public sealed partial class MpvPlayer : Control
             
             // Note: vo is set to libmpv in InitializeDXGIAsync after gpu-next pre-init choice
             await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi, skipScripts, colorspace: (int)_renderControl.SwapChainColorSpace);
+            
+            // Register callback
+            Player.RenderContext?.SetUpdateCallback(_updateCallback, IntPtr.Zero);
+            
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
@@ -428,45 +442,39 @@ public sealed partial class MpvPlayer : Control
         // 2. We MUST render if mpv returns ANY non-zero flag (mostly Frame=1) 
         //    OR if a forced redraw is requested (resize/UI update).
         bool needsRender = (flags != 0) || _renderControl.ForceRedraw;
-
+        
         if (!needsRender)
         {
             return false;
         }
 
         IntPtr backBufferHandle = _renderControl.RenderTargetHandle;
+        
         if (backBufferHandle == IntPtr.Zero) return false;
 
-        // DIAGNOSTIC: MPV'ye gönderilen boyutları logla (sadece ForceRedraw veya ilk frame için)
-        long currentResizeId = _renderControl.ActiveResizeId;
-        if (_renderControl.ForceRedraw)
-        {
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RES_STEP_3] RenderDXGI START | ID: {currentResizeId} | Target: {_renderControl.CurrentWidth}x{_renderControl.CurrentHeight} | Render: {_renderControl.RenderWidth}x{_renderControl.RenderHeight} | SwapChain: {_renderControl.SwapChainWidth}x{_renderControl.SwapChainHeight} | UpdateContext: {updateMs:F2}ms | ForceRedraw: True");
-        }
-
-        // 3. Çizimi gerçekleştir - RenderWidth/RenderHeight SwapChain sınırlarını aşmaz
+        // 3. Çizimi gerçekleştir
         var renderSw = Stopwatch.StartNew();
-        
-        bool usingShared = UseSharedTexture && SharedTextureHandle != IntPtr.Zero;
-        if (_renderControl.ForceRedraw)
+
+        if (backBufferHandle == IntPtr.Zero ||
+            _renderControl.CurrentWidth <= 1 || _renderControl.CurrentHeight <= 1 ||
+            _renderControl.SwapChainWidth <= 1 || _renderControl.SwapChainHeight <= 1)
         {
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RES_STEP_RENDER] Path: {(usingShared ? "SHARED_TEX" : "FBO")} | SharedHandle: 0x{SharedTextureHandle:X} | BackBuffer: 0x{backBufferHandle:X}");
+            return false;
         }
         
-        if (usingShared)
-        {
-            Player.RenderDXGIShared(SharedTextureHandle, block: false);
-        }
-        else
-        {
-            Player.RenderDXGI(backBufferHandle, _renderControl.RenderWidth, _renderControl.RenderHeight, block: false);
-        }
+        // [DEBUG_RESIZE] Log MPV rendering parameters
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RENDER_MPV] Flags: {flags} | SC: {_renderControl.SwapChainWidth}x{_renderControl.SwapChainHeight} | Current: {_renderControl.CurrentWidth}x{_renderControl.CurrentHeight}");
+
+        Player.RenderDXGI(backBufferHandle, 
+                 _renderControl.SwapChainWidth, _renderControl.SwapChainHeight,
+                 _renderControl.CurrentWidth, _renderControl.CurrentHeight,
+                 block: false);
         
         var renderDuration = renderSw.Elapsed.TotalMilliseconds;
+        _mpvGpuIsDirty = true;
 
         if (_renderControl.ForceRedraw)
         {
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RES_STEP_4] RenderDXGI DONE | ID: {currentResizeId} | Took: {renderDuration:F2}ms");
             // Zorunlu çizim isteği yerine getirildi, bayrağı indir.
             _renderControl.ForceRedraw = false;
         }

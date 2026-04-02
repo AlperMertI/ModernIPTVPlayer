@@ -1914,11 +1914,26 @@ static int get_target_size(struct render_backend *ctx, mpv_render_param *params,
 {
     struct priv *p = ctx->priv;
     struct ra_tex *tex = NULL;
+    GN_LOG("GET_TARGET_SIZE: Starting wrap_fbo...");
     int err = p->context->fns->wrap_fbo(p->context, params, &tex);
-    if (err < 0) return err == MPV_ERROR_INVALID_PARAMETER ? 0 : err;
-    if (!tex) return 0;
+    if (err < 0) {
+        GN_LOG("GET_TARGET_SIZE: wrap_fbo FAILED with err=%d", err);
+        return err == MPV_ERROR_INVALID_PARAMETER ? 0 : err;
+    }
+    if (!tex) {
+        GN_LOG("GET_TARGET_SIZE: tex is NULL!");
+        return 0;
+    }
+
+    // [FIX] Always return the FULL physical texture dimensions.
+    // mpv uses these to calculate the dst rect (video placement on the surface).
+    // If we return viewport size instead, mpv scales to the wrong coordinate space
+    // and only the top-left portion of the video appears on the swapchain.
     *out_w = tex->params.w;
     *out_h = tex->params.h;
+    mpv_dxgi_fbo *fbo = get_mpv_render_param(params, MPV_RENDER_PARAM_DXGI_FBO, NULL);
+    GN_LOG("GET_TARGET_SIZE: Using Full Buffer %dx%d (fbo_ptr=%p)", *out_w, *out_h, (void*)fbo);
+
     ra_tex_free(p->context->ra_ctx->ra, &tex);
     return 0;
 }
@@ -1944,6 +1959,10 @@ static void resize(struct render_backend *ctx, struct mp_rect *src,
 {
     struct priv *p = ctx->priv;
     if (!p) return;
+    GN_LOG("RESIZE_EVENT: src=(%d,%d)-(%d,%d) | dst=(%d,%d)-(%d,%d) | osd=%dx%d",
+           src->x0, src->y0, src->x1, src->y1,
+           dst->x0, dst->y0, dst->x1, dst->y1,
+           osd->w, osd->h);
 
     if (mp_rect_equals(&p->src, src) &&
         mp_rect_equals(&p->dst, dst) &&
@@ -1979,6 +1998,9 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
     bool can_interpolate = opts->interpolation && frame->display_synced &&
                            !frame->still && frame->num_frames > 1;
     double pts_offset = can_interpolate ? frame->ideal_frame_vsync : 0;
+    
+    GN_LOG("RENDER_START: FrameNum=%d | Still=%d | Interpolate=%d", frame->num_frames, frame->still, can_interpolate);
+    
     render_params.info_callback = info_callback;
     render_params.info_priv = p;
     render_params.skip_caching_single_frame = !cache_frame;
@@ -2231,8 +2253,32 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
     GN_LOG("RENDER: Step 23: update_overlays done");
 
     // Bridge mode fix: vo_libmpv skips resize() when ctx->vo is NULL (bridge mode),
-    // leaving p->dst at {0,0,0,0}. Use actual FBO dimensions for the target crop.
-    p->dst = (struct mp_rect){0, 0, fbo_tex->params.w, fbo_tex->params.h};
+    // leaving p->dst at {0,0,0,0} and p->src at {0,0,0,0}. Use actual FBO and
+    // frame dimensions for the source/target crops so mpv scales video to fit.
+    
+    // [STABLE-CANVAS] Logical Viewport Mapping
+    // Use the render dimensions if provided by the app (Stable Canvas mode),
+    // otherwise use full texture dimensions (Physical Resize mode).
+    mpv_dxgi_fbo *fbo = get_mpv_render_param(params, MPV_RENDER_PARAM_DXGI_FBO, NULL);
+    int rw = (fbo && fbo->render_w > 0) ? fbo->render_w : fbo_tex->params.w;
+    int rh = (fbo && fbo->render_h > 0) ? fbo->render_h : fbo_tex->params.h;
+
+    // [DÜZELTME BURADA] 
+    // p->dst yalnızca mpv tarafından henüz hesaplanmamışsa (sıfırsa) doldurulur.
+    // Böylece mpv'nin hesapladığı siyah barlar (en-boy oranı) korunur ve video kırpılmaz.
+    if (mp_rect_w(p->dst) <= 0 || mp_rect_h(p->dst) <= 0) {
+        GN_LOG("RENDER: [FALLBACK] p->dst invalid, using viewport %dx%d", rw, rh);
+        p->dst = (struct mp_rect){0, 0, rw, rh};
+    }
+
+    // [FIX] Also set p->src to the full frame dimensions when it's still {0,0,0,0}.
+    // Without this, apply_crop(image, p->src, ...) gives image.crop = {0,0,0,0}
+    // and libplacebo renders the video at its native size instead of scaling to FBO.
+    if ((mp_rect_w(p->src) <= 0 || mp_rect_h(p->src) <= 0) && frame->current) {
+        GN_LOG("RENDER: [FALLBACK] p->src invalid, using frame %dx%d",
+               frame->current->w, frame->current->h);
+        p->src = (struct mp_rect){0, 0, frame->current->w, frame->current->h};
+    }
 
     GN_LOG("RENDER: Step 24: apply_crop, dst=(%d,%d)-(%d,%d) fbo=%dx%d",
            p->dst.x0, p->dst.y0, p->dst.x1, p->dst.y1, fbo_tex->params.w, fbo_tex->params.h);
@@ -2292,6 +2338,11 @@ static int render(struct render_backend *ctx, mpv_render_param *params, struct v
             struct mp_image *mpi = image->user_data;
             struct frame_priv *fp = mpi->priv;
             apply_crop(image, p->src, frame->current->w, frame->current->h);
+            GN_LOG("SRC_FRAME[%d]: crop=(%.1f,%.1f)-(%.1f,%.1f) wh=%.1fx%.1f | frame_w=%d h=%d | p_src=(%d,%d)-(%d,%d)",
+                   i, image->crop.x0, image->crop.y0, image->crop.x1, image->crop.y1,
+                   pl_rect_w(image->crop), pl_rect_h(image->crop),
+                   frame->current->w, frame->current->h,
+                   p->src.x0, p->src.y0, p->src.x1, p->src.y1);
             if (opts->blend_subs) {
                 if (frame->redraw)
                     p->osd_sync++;

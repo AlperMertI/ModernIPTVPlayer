@@ -55,6 +55,10 @@ typedef struct mpv_dxgi_fbo {
      * Internal texture width/height.
      */
     int w, h;
+    /**
+     * Logical render width/height (Viewport).
+     */
+    int render_w, render_h;
 } mpv_dxgi_fbo;
 
 /**

@@ -34,6 +34,7 @@ public class D3D11RenderControl : ContentControl
     private readonly object _renderLock = new();
     private IntPtr _frameLatencyWaitHandle = IntPtr.Zero;
     private readonly ManualResetEventSlim _resizeEvent = new(false);
+    private readonly ManualResetEventSlim _mpvUpdateEvent = new(false);
     private readonly TaskCompletionSource<bool> _hdrInitTcs = new();
     
     // Resize State
@@ -60,6 +61,14 @@ public class D3D11RenderControl : ContentControl
     private int _swapChainHeight;
     private Format _swapChainFormat = Format.FormatB8G8R8A8Unorm;
     private ColorSpaceType _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG22NoneP709;
+    private ColorSpaceType _appliedSwapChainColorSpace = (ColorSpaceType)(-1); // State Tracking
+    private float _appliedPeakLuminance = -1.0f; // State Tracking
+
+    // Stable Canvas State
+    // Stable Canvas State (Increased for 4K displays with 2.0x DPI)
+    private int _maxMonitorWidth = 4096;
+    private int _maxMonitorHeight = 2400;
+    private bool _isMonitorInfoInitialized = false;
     public ColorSpaceType SwapChainColorSpace => _swapChainColorSpace;
     private bool _isHdrEnabled = false;
     public bool IsHdrEnabled => _isHdrEnabled;
@@ -81,31 +90,7 @@ public class D3D11RenderControl : ContentControl
     public bool ForceRedraw { get; set; }
     public bool PreserveStateOnUnload { get; set; } = false;
     
-    // Shared Texture Support
-    private SharedTextureHelper _sharedTexHelper;
-    private bool _useSharedTexture = false;
-    
-    public bool UseSharedTexture 
-    { 
-        get => _useSharedTexture;
-        set 
-        {
-            if (_useSharedTexture != value)
-            {
-                _useSharedTexture = value;
-                if (value && DeviceHandle != IntPtr.Zero && CurrentWidth > 0 && CurrentHeight > 0)
-                {
-                    InitSharedTexture(CurrentWidth, CurrentHeight);
-                }
-                else if (!value)
-                {
-                    CleanupSharedTexture();
-                }
-            }
-        }
-    }
-    
-    public IntPtr SharedTextureHandle => _sharedTexHelper?.SharedHandle ?? IntPtr.Zero;
+    public IntPtr SharedTextureHandle => IntPtr.Zero;
 
     // [PERF] Animation Optimization
     private bool _isResizeSuspended = false;
@@ -134,6 +119,8 @@ public class D3D11RenderControl : ContentControl
     // DEĞİŞİKLİK: Void Action yerine, sonucun döndüğü Func kullanıyoruz
     public Func<TimeSpan, bool> RenderFrame; 
     public Action SwapChainPresented;
+    
+    public void SignalUpdate() => _mpvUpdateEvent.Set();
 
     public IntPtr DeviceHandle { get; private set; }
     public IntPtr ContextHandle { get; private set; }
@@ -141,15 +128,10 @@ public class D3D11RenderControl : ContentControl
     public Task WaitForHdrStatusAsync() => _hdrInitTcs.Task;
     
     private IntPtr _atomicBackBuffer = IntPtr.Zero;
-    public IntPtr RenderTargetHandle 
+    public unsafe IntPtr RenderTargetHandle 
     { 
         get 
         {
-            // Return shared texture if enabled and ready
-            if (_useSharedTexture && _sharedTexHelper?.IsReady == true)
-            {
-                return _sharedTexHelper.SharedTexturePtr;
-            }
             return _atomicBackBuffer;
         }
     }
@@ -268,7 +250,14 @@ public class D3D11RenderControl : ContentControl
 
     public D3D11RenderControl()
     {
-        SizeChanged += OnSizeChanged;
+        try {
+            var logPath = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\control_debug.log";
+            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [CONTROL] Constructor Start\n");
+        } catch { }
+        
+        this.Loaded += (s, e) => { };
+        this.SizeChanged += OnSizeChanged;
+        this.DefaultStyleKey = typeof(D3D11RenderControl);
         Unloaded += OnUnloaded;
         UpdateHdrStatus();
         UpdateRefreshRate();
@@ -396,24 +385,31 @@ public class D3D11RenderControl : ContentControl
     public unsafe void Initialize()
     {
         if (_disposed) return;
+        LogControl("Initialize() Called");
         UpdateRefreshRate(); // Re-check on init
 
         if (_device.Handle == null)
         {
+            LogControl("Device is NULL, creating...");
             LogSync($"Stable Native Bridge Initializing... (TargetHz: {_monitorRefreshRate})");
             try
             {
+                LogControl("Loading D3D11 API...");
                 _d3d11 ??= D3D11.GetApi();
+                LogControl("Loading DXGI API...");
                 _dxgi ??= DXGI.GetApi();
+                LogControl("APIs Loaded Successfully");
             }
             catch (Exception ex)
             {
+                LogControl($"FATAL API LOAD ERROR: {ex.Message}");
                 Debug.WriteLine($"[FATAL] Gateway API Load Failure: {ex}");
                 throw;
             }
 
             CreateDevice();
             _swapChainPanel = new SwapChainPanel();
+            _swapChainPanel.CompositionScaleChanged += (s, e) => RequestResize(force: true);
             HorizontalContentAlignment = HorizontalAlignment.Stretch;
             VerticalContentAlignment = VerticalAlignment.Stretch;
             Content = _swapChainPanel;
@@ -450,10 +446,18 @@ public class D3D11RenderControl : ContentControl
                 _hdrInitTcs.TrySetResult(true);
             }
 
-            UpdateSwapChain(); // Now create the swapchain with the correct format/colorspace
-
-            Ready?.Invoke(this, EventArgs.Empty);
-            StartRenderLoop();
+            // Initialize SwapChain ONLY if we have a valid size. 
+            // If the control is 1x1 (initial state), we'll defer to OnSizeChanged.
+            if (_targetWidth > 8 && _targetHeight > 8)
+            {
+                UpdateSwapChain(); 
+                Ready?.Invoke(this, EventArgs.Empty);
+                StartRenderLoop();
+            }
+            else
+            {
+                LogControl($"Deferred Initialization: Current Size {_targetWidth}x{_targetHeight} is too small.");
+            }
         }
     }
 
@@ -489,7 +493,7 @@ public class D3D11RenderControl : ContentControl
         
         var cycleSw = new Stopwatch();
         var stageSw = new Stopwatch();
-        IntPtr[] waitHandles = new IntPtr[2];
+        IntPtr[] waitHandles = new IntPtr[3];
         bool lastPresentWasSuccess = false; 
 
         while (!_cts.IsCancellationRequested && !_disposed)
@@ -504,15 +508,25 @@ public class D3D11RenderControl : ContentControl
             {
                 waitHandles[0] = _frameLatencyWaitHandle;
                 waitHandles[1] = _resizeEvent.WaitHandle.SafeWaitHandle.DangerousGetHandle();
+                waitHandles[2] = _mpvUpdateEvent.WaitHandle.SafeWaitHandle.DangerousGetHandle();
                 fixed (IntPtr* pHandles = waitHandles)
                 {
-                    waitResult = WaitForMultipleObjects(2, pHandles, false, 500); 
+                    waitResult = WaitForMultipleObjects(3, pHandles, false, 50); 
                 }
             }
             else
             {
-                _resizeEvent.Wait(4); // Optimized Idle Wait (1ms -> 4ms)
+                // Fallback: wait for resize or mpv update (no frame latency wait)
+                waitHandles[0] = _resizeEvent.WaitHandle.SafeWaitHandle.DangerousGetHandle();
+                waitHandles[1] = _mpvUpdateEvent.WaitHandle.SafeWaitHandle.DangerousGetHandle();
+                fixed (IntPtr* pHandles = waitHandles)
+                {
+                    waitResult = WaitForMultipleObjects(2, pHandles, false, 50);
+                }
             }
+            
+            // Reset the update event as we are about to process potentially a frame
+            _mpvUpdateEvent.Reset();
             var waitMs = (float)stageSw.Elapsed.TotalMilliseconds;
 
             // 0. POLLING SDR SLIDER removed from hot path to avoid blocking the render thread.
@@ -521,9 +535,30 @@ public class D3D11RenderControl : ContentControl
 
             var loopStamp = Stopwatch.GetTimestamp();
             stageSw.Restart();
+
+            bool didDraw = false;
+            bool needsPresent = false;
+            long resizeStartTime = 0;
+            long resizeEndTime = 0;
+            long renderStartTime = 0;
+            long renderEndTime = 0;
+            long presentStartTime = 0;
+            long presentEndTime = 0;
+            long lockWaitStart = 0;
+            long lockAcquired = 0;
+
+            // [PERF] Track lock wait time
+            lockWaitStart = Stopwatch.GetTimestamp();
+
+            // [PERF] Narrow lock scope - only protect shared data access.
+            // PresentFrame() is thread-safe and should run outside the lock
+            // to avoid blocking resize events from the UI thread.
             lock (_renderLock)
             {
-                var lockMs = (float)stageSw.Elapsed.TotalMilliseconds;
+                lockAcquired = Stopwatch.GetTimestamp();
+                double lockWaitMs = (lockAcquired - lockWaitStart) * 1000.0 / Stopwatch.Frequency;
+
+                var lockMs = (float)stageSw.ElapsedMilliseconds;
                 if (_disposed) break;
 
                 if (_resizePending)
@@ -531,70 +566,46 @@ public class D3D11RenderControl : ContentControl
                     ActiveResizeId = _pendingResizeId;
                     _resizePending = false;
                     _resizeEvent.Reset(); 
-                    
-                    LogSync($"[RESIZE-2-START] ActiveResizeId:{ActiveResizeId} | CurrentWH:{CurrentWidth}x{CurrentHeight} | SwapChainWH:{_swapChainWidth}x{_swapChainHeight}");
-                    var opSw = Stopwatch.StartNew();
+                    resizeStartTime = Stopwatch.GetTimestamp();
                     PerformResize(force: false);
-                    LogSync($"[RESIZE-2-END] Took:{opSw.Elapsed.TotalMilliseconds:F2}ms | After: CurrentWH:{CurrentWidth}x{CurrentHeight} | SwapChainWH:{_swapChainWidth}x{_swapChainHeight}");
+                    resizeEndTime = Stopwatch.GetTimestamp();
+                    double resizeMs = (resizeEndTime - resizeStartTime) * 1000.0 / Stopwatch.Frequency;
+                    double lockContentionMs = (resizeStartTime - lockAcquired) * 1000.0 / Stopwatch.Frequency;
+                    // Debug.WriteLine($"[PERF] RESIZE | lockWait:{lockWaitMs:F2}ms | lockContention:{lockContentionMs:F2}ms | resize:{resizeMs:F2}ms | total:{(resizeEndTime - lockWaitStart) * 1000.0 / Stopwatch.Frequency:F2}ms");
                 }
 
                 try
                 {
                     if (_atomicBackBuffer == IntPtr.Zero) {
+                         // [AUTOMATED RECOVERY] If backbuffer is missing, attempt to recreate swapchain
+                         // Throttled to once every 2 seconds to avoid overhead.
+                         if (_frameCounter % 120 == 0) 
+                         {
+                             Debug.WriteLine("[CTRL] Skip: No BackBuffer | ATTEMPTING RECOVERY...");
+                             // Use Task.Run to avoid deadlocking the render thread on _renderLock (which UpdateSwapChain takes)
+                             _ = Task.Run(() => { try { UpdateSwapChain(); } catch { } });
+                         }
                          continue;
                     }
 
                     // [FIX] Relaxed dimension check to avoid "stuck" render context on startup
-                    if (CurrentWidth < 1 || CurrentHeight < 1) {
+                    if (CurrentWidth <= 1 || CurrentHeight <= 1) {
+                         if (_frameCounter % 120 == 0) Debug.WriteLine($"[CTRL] Skip: Invalid Size {CurrentWidth}x{CurrentHeight}");
                          continue;
                     }
 
-                    // Shared texture mutex acquisition
-                    bool usingSharedTex = _useSharedTexture && _sharedTexHelper?.IsReady == true;
-                    if (usingSharedTex)
-                    {
-                        if (!_sharedTexHelper.AcquireMutex(100))
-                        {
-                            // Skip frame if can't acquire mutex
-                            continue;
-                        }
-                    }
 
                     stageSw.Restart();
                     var now = _stopwatch.Elapsed;
                     var delta = now - _lastFrameStamp;
                     _lastFrameStamp = now;
                     
-                    bool didDraw = RenderFrame?.Invoke(delta) ?? false;
-                    var renderMs = (float)stageSw.Elapsed.TotalMilliseconds;
+                    renderStartTime = Stopwatch.GetTimestamp();
+                    didDraw = RenderFrame?.Invoke(delta) ?? false;
+                    renderEndTime = Stopwatch.GetTimestamp();
+                    double renderMs = (renderEndTime - renderStartTime) * 1000.0 / Stopwatch.Frequency;
 
-                    // Release mutex after rendering
-                    if (usingSharedTex)
-                    {
-                        _sharedTexHelper.ReleaseMutex();
-                    }
-
-                    float presentMs = 0;
-
-                    if (didDraw || ForceRedraw)
-                    {
-                        stageSw.Restart();
-                        
-                        // Blit shared texture to backbuffer before presenting
-                        if (usingSharedTex)
-                        {
-                            BlitSharedToBackBuffer();
-                        }
-                        
-                        PresentFrame();
-                        SwapChainPresented?.Invoke();
-                        presentMs = (float)stageSw.Elapsed.TotalMilliseconds;
-                        lastPresentWasSuccess = true;
-                    }
-                    else
-                    {
-                        lastPresentWasSuccess = false;
-                    }
+                    needsPresent = didDraw || ForceRedraw;
 
                     if (_needsFirstFrameLink)
                     {
@@ -608,6 +619,40 @@ public class D3D11RenderControl : ContentControl
                     LogSync($"[FATAL] Loop Warning: {ex.Message}");
                 }
             }
+            // [PERF] Lock released - PresentFrame runs outside the lock
+            // so resize events from UI thread are not blocked.
+
+            // [PERF] Log render timing
+            if (renderEndTime > renderStartTime)
+            {
+                double lockWaitMs = (lockAcquired - lockWaitStart) * 1000.0 / Stopwatch.Frequency;
+                double renderMs = (renderEndTime - renderStartTime) * 1000.0 / Stopwatch.Frequency;
+                double lockContentionMs = (renderStartTime - lockAcquired) * 1000.0 / Stopwatch.Frequency;
+                // Debug.WriteLine($"[PERF] RENDER | lockWait:{lockWaitMs:F2}ms | lockContention:{lockContentionMs:F2}ms | mpvRender:{renderMs:F2}ms");
+            }
+
+            float presentMs = 0;
+            if (needsPresent)
+            {
+                presentStartTime = Stopwatch.GetTimestamp();
+                PresentFrame();
+                SwapChainPresented?.Invoke();
+                presentEndTime = Stopwatch.GetTimestamp();
+                presentMs = (float)((presentEndTime - presentStartTime) * 1000.0 / Stopwatch.Frequency);
+                lastPresentWasSuccess = true;
+                
+                // Reset ForceRedraw after present so it doesn't trigger every frame
+                ForceRedraw = false;
+                
+                // [PERF] Log present timing
+                double presentMsD = (presentEndTime - presentStartTime) * 1000.0 / Stopwatch.Frequency;
+                // if (presentMsD > 0.5) // Only log if notable
+                //    Debug.WriteLine($"[PERF] PRESENT | {presentMsD:F2}ms");
+            }
+            else
+            {
+                lastPresentWasSuccess = false;
+            }
         }
     }
 
@@ -615,6 +660,30 @@ public class D3D11RenderControl : ContentControl
     {
         if (_swapChain.Handle == null) return;
         try {
+            // Present the FULL swapchain buffer with uniform scaling to preserve aspect ratio.
+            // mpv already renders the video with correct aspect ratio into the buffer
+            // (including letterboxing/pillarboxing). We just need to present it
+            // at uniform scale, centered within the panel.
+            _swapChain.Handle->SetSourceSize((uint)_swapChainWidth, (uint)_swapChainHeight);
+
+            // Uniform scale: fit buffer within panel while preserving aspect ratio.
+            // The AR adjustment in PerformResize ensures the swap chain AR matches the panel,
+            // so the transform fills the panel with minimal or no gap.
+            float scaleX = _swapChainWidth > 0 ? (float)(_targetWidth / _swapChainWidth) : 1.0f;
+            float scaleY = _swapChainHeight > 0 ? (float)(_targetHeight / _swapChainHeight) : 1.0f;
+            float scale = Math.Min(scaleX, scaleY);
+
+            float offsetX = (float)((_targetWidth - _swapChainWidth * scale) / 2.0);
+            float offsetY = (float)((_targetHeight - _swapChainHeight * scale) / 2.0);
+
+            // [DEBUG_RESIZE] Log translation and scaling
+            LogSync($"[PRESENT_D3D] Target: {(_targetWidth):F1}x{(_targetHeight):F1} | SC: {_swapChainWidth}x{_swapChainHeight} | Scale: {scale:F4} | Offset: {offsetX:F1},{offsetY:F1}");
+
+            // Always update the transform — SetMatrixTransform is a cheap metadata operation.
+            // Caching caused stale positioning when the swap chain AR didn't change but the panel did.
+            var mat = new Silk.NET.Maths.Matrix3X2<float>(scale, 0, 0, scale, offsetX, offsetY);
+            _swapChain.Handle->SetMatrixTransform((Silk.NET.DXGI.Matrix3X2F*)&mat);
+
             int hr = _swapChain.Handle->Present(0, 0); 
             if (hr != 0 && hr != unchecked((int)0x887A0005)) { // Ignore DEVICE_REMOVED for log spam
                  // LogSync($"[(!!!) PRESENT_STATUS] HR: 0x{hr:X}");
@@ -624,55 +693,10 @@ public class D3D11RenderControl : ContentControl
         }
     }
     
-    // ===== SHARED TEXTURE METHODS =====
-    
-    private void InitSharedTexture(int width, int height)
-    {
-        if (DeviceHandle == IntPtr.Zero) return;
-        
-        CleanupSharedTexture();
-        
-        _sharedTexHelper = new SharedTextureHelper(DeviceHandle, ContextHandle);
-        bool isHdr = _swapChainFormat == Format.FormatR10G10B10A2Unorm;
-        
-        if (_sharedTexHelper.Create(width, height, isHdr))
-        {
-            LogSync($"[SHARED_TEX] Initialized: {width}x{height} | HDR: {isHdr}");
-        }
-        else
-        {
-            LogSync($"[SHARED_TEX] Failed to initialize");
-            _sharedTexHelper.Dispose();
-            _sharedTexHelper = null;
-        }
-    }
-    
-    private void CleanupSharedTexture()
-    {
-        if (_sharedTexHelper != null)
-        {
-            _sharedTexHelper.Dispose();
-            _sharedTexHelper = null;
-        }
-    }
-    
-    private unsafe void BlitSharedToBackBuffer()
-    {
-        if (_sharedTexHelper == null || !_sharedTexHelper.IsReady || _atomicBackBuffer == IntPtr.Zero)
-            return;
-            
-        try
-        {
-            _sharedTexHelper.CopyTo(_atomicBackBuffer);
-        }
-        catch (Exception ex)
-        {
-            LogSync($"[SHARED_TEX] Blit failed: {ex.Message}");
-        }
-    }
     
     private unsafe void CreateDevice()
     {
+        LogControl("CreateDevice() Execution START");
         uint flags = (uint)CreateDeviceFlag.BgraSupport; 
         
         // Phase 13: Enable Video Support to allow d3d11va decoder to bind to this device
@@ -713,14 +737,13 @@ public class D3D11RenderControl : ContentControl
     private unsafe void PerformResize(bool force)
     {
         if (_disposed || _device.Handle == null) return;
-        var sw = Stopwatch.StartNew();
+        long t0 = Stopwatch.GetTimestamp();
+        double freq = Stopwatch.Frequency;
 
         int width, height;
         double logW, logH, scaleX, scaleY;
         
-        // HDR status is event-driven via AdvancedColorInfoChanged and _lastHMonitor cache.
-        // No need to poll on every resize.
-
+        long tLockStart = Stopwatch.GetTimestamp();
         lock (_sizeLock)
         {
             logW = _targetWidth;
@@ -730,150 +753,172 @@ public class D3D11RenderControl : ContentControl
             width = (int)Math.Max(1, Math.Ceiling(_targetWidth * _targetScaleX));
             height = (int)Math.Max(1, Math.Ceiling(_targetHeight * _targetScaleY));
         }
-        
-        LogSync($"[RESIZE-3-COMPUTE] target:{logW:F0}x{logH:F0} | scale:{scaleX:F2}x{scaleY:F2} | computed:{width}x{height} | oldCurrent:{CurrentWidth}x{CurrentHeight} | oldSwap:{_swapChainWidth}x{_swapChainHeight} | force:{force}");
+        long t1 = Stopwatch.GetTimestamp();
+
+        if (logW <= 0 || logH <= 0 || width <= 1 || height <= 1)
+        {
+            return;
+        }
 
         bool isSignificant = _swapChain.Handle == null || width != CurrentWidth || height != CurrentHeight;
         
         if (!isSignificant && !force) {
-            LogSync($"[RESIZE-3-SKIP] Not significant and not forced");
             return;
         }
-
-        double lockTime = sw.Elapsed.TotalMilliseconds;
 
         int oldWidth = CurrentWidth;
         int oldHeight = CurrentHeight;
         CurrentWidth = width;
         CurrentHeight = height;
+        // Force redraw after resize so:
+        // 1. mpv re-renders with correct aspect ratio (play mode)
+        // 2. PresentFrame is called to update the transform (pause mode)
         ForceRedraw = true;
 
-        LogSync($"[RESIZE-4-STATE] CurrentWidth/Height set to {width}x{height} (was {oldWidth}x{oldHeight}) | ForceRedraw=true");
+        long t2 = Stopwatch.GetTimestamp();
 
         try
         {
             _frameLatencyWaitHandle = IntPtr.Zero;
+            long t3 = Stopwatch.GetTimestamp();
 
-            int deltaW = Math.Abs(width - _swapChainWidth);
-            int deltaH = Math.Abs(height - _swapChainHeight);
+            if (!_isMonitorInfoInitialized)
+                UpdateMonitorInfo();
+
+            int stableWidth = Math.Max(width, _maxMonitorWidth);
+            int stableHeight = Math.Max(height, _maxMonitorHeight);
             
-            // EXACT SIZING STRATEGY (Reverted from Elastic due to MPV constraints)
-            // 1. Check if we actually need to touch the GPU
-            bool needsRealloc = _swapChain.Handle == null || width != _swapChainWidth || height != _swapChainHeight || force;
-            
-            // 2. Throttle Logic (Only applies if we need a physical realloc)
-            long nowTicks = Stopwatch.GetTimestamp();
-            double msSinceLastPhysical = (nowTicks - _lastPhysicalResizeTicks) * 1000.0 / Stopwatch.Frequency;
-            double throttleThreshold = (1000.0 / Math.Max(30, _monitorRefreshRate)); 
-            bool throttleActive = msSinceLastPhysical < throttleThreshold;
+            // [DEBUG_RESIZE] Trace requested vs stable dimensions
+            LogSync($"[PERFORM_RESIZE] Req: {width}x{height} | Stable: {stableWidth}x{stableHeight} | Monitor: {_maxMonitorWidth}x{_maxMonitorHeight}");
 
-            if (needsRealloc && throttleActive && !force && _swapChain.Handle != null)
-            {
-                needsRealloc = false; // Skip physical resize, just stretch for this frame
-            }
+            stableWidth = (stableWidth + 255) & ~255;
+            stableHeight = (stableHeight + 255) & ~255;
 
-            string resizeMode = needsRealloc ? "PHYSICAL" : "STRETCH";
+            bool needsRealloc = _swapChain.Handle == null ||
+                              stableWidth > _swapChainWidth ||
+                              stableHeight > _swapChainHeight;
 
-            LogSync($"[RESIZE-5-DECISION] Mode:{resizeMode} | needsRealloc:{needsRealloc} | throttle:{throttleActive} | deltaW:{deltaW} | deltaH:{deltaH} | force:{force}");
-
-            double resizeBuffersTime = 0;
-            double getBufferTime = 0;
-            double flushTime = 0;
-            double releaseTime = 0;
+            long tDecision = Stopwatch.GetTimestamp();
 
             if (needsRealloc)
             {
+                // Adjust stable dimensions to match panel aspect ratio.
+                // Only done during reallocation to avoid expensive ResizeBuffers on every resize.
+                if (_targetWidth > 0 && _targetHeight > 0)
+                {
+                    double panelAR = _targetWidth / _targetHeight;
+                    double stableAR = (double)stableWidth / stableHeight;
+                    if (stableAR > panelAR + 0.001)
+                    {
+                        int adjustedHeight = (int)Math.Ceiling(stableWidth / panelAR);
+                        if (adjustedHeight <= _maxMonitorHeight * 2)
+                            stableHeight = adjustedHeight;
+                    }
+                    else if (stableAR < panelAR - 0.001)
+                    {
+                        int adjustedWidth = (int)Math.Ceiling(stableHeight * panelAR);
+                        if (adjustedWidth <= _maxMonitorWidth * 2)
+                            stableWidth = adjustedWidth;
+                    }
+                    stableWidth = (stableWidth + 255) & ~255;
+                    stableHeight = (stableHeight + 255) & ~255;
+                }
+
+                long nowTicks = Stopwatch.GetTimestamp();
                 _lastPhysicalResizeTicks = nowTicks;
-                LogSync($"[RESIZE-6-PHYSICAL-START] Reallocating to {width}x{height}");
                 
-                // 1. DRAIN
                 if (_context.Handle != null) {
                     _context.Handle->OMSetRenderTargets(0, null, null);
-                    _context.Handle->ClearState();
                 }
-                flushTime = sw.Elapsed.TotalMilliseconds - lockTime;
+                long tDrain = Stopwatch.GetTimestamp();
 
-                // 2. RELEASE
                 IntPtr oldBuffer = Interlocked.Exchange(ref _atomicBackBuffer, IntPtr.Zero);
                 if (oldBuffer != IntPtr.Zero)
                 {
                     ((IUnknown*)oldBuffer)->Release();
                 }
-                releaseTime = sw.Elapsed.TotalMilliseconds - (lockTime + flushTime);
+                long tRelease = Stopwatch.GetTimestamp();
 
                 if (_swapChain.Handle == null)
                 {
-                    CreateSwapChain(width, height);
+                    CreateSwapChain(stableWidth, stableHeight);
                 }
                 else
                 {
-                    // Try ResizeBuffers first (fast path ~0.1ms)
-                    // ClearState() ensures all backbuffer references are released
-                    var hr = _swapChain.Handle->ResizeBuffers(3, (uint)width, (uint)height, _swapChainFormat, (uint)SwapChainFlag.FrameLatencyWaitableObject);
+                    _swapChainWidth = stableWidth;
+                    _swapChainHeight = stableHeight;
+
+                    var hr = _swapChain.Handle->ResizeBuffers(2, (uint)stableWidth, (uint)stableHeight, _swapChainFormat, 0);
+                    
                     if (hr < 0) {
-                        // Fallback: recreate swapchain if ResizeBuffers fails
                         _swapChain.Dispose();
                         _swapChain = default;
-                        CreateSwapChain(width, height);
+                        CreateSwapChain(stableWidth, stableHeight);
+                    }
+                    else
+                    {
+                        _swapChainWidth = stableWidth;
+                        _swapChainHeight = stableHeight;
                     }
                 }
+                long tResizeBuffers = Stopwatch.GetTimestamp();
                 
-                // 3. COLOR SPACE
                 UpdateColorSpace();
-                
-                resizeBuffersTime = sw.Elapsed.TotalMilliseconds - (lockTime + flushTime + releaseTime);
+                long tColorSpace = Stopwatch.GetTimestamp();
 
-                // 3. RECOVER
                 if (_swapChain.Handle != null) {
                     ID3D11Texture2D* bufferRaw = null;
-                    var hr = _swapChain.Handle->GetBuffer(0, SilkMarshal.GuidPtrOf<ID3D11Texture2D>(), (void**)&bufferRaw);
-                    if (hr >= 0) {
+                    var bhr = _swapChain.Handle->GetBuffer(0, SilkMarshal.GuidPtrOf<ID3D11Texture2D>(), (void**)&bufferRaw);
+                    
+                    if (bhr >= 0 && bufferRaw != null) {
                         Interlocked.Exchange(ref _atomicBackBuffer, (IntPtr)bufferRaw);
-                        _swapChainWidth = width;
-                        _swapChainHeight = height;
+                        ((IUnknown*)bufferRaw)->AddRef();
                     }
                 }
-                getBufferTime = sw.Elapsed.TotalMilliseconds - (lockTime + flushTime + releaseTime + resizeBuffersTime);
-                
-                // 4. SHARED TEXTURE - Recreate if enabled
-                if (_useSharedTexture && needsRealloc)
-                {
-                    LogSync($"[RESIZE-7-SHAREDTEX] InitSharedTexture({width}x{height}) | useSharedTex:{_useSharedTexture}");
-                    InitSharedTexture(width, height);
-                }
-                
-                LogSync($"[RESIZE-6-PHYSICAL-END] After realloc: swapChainWH:{_swapChainWidth}x{_swapChainHeight} | sharedTexReady:{_sharedTexHelper?.IsReady}");
-            }
+                long tRecover = Stopwatch.GetTimestamp();
 
-            if (_swapChain.Handle != null)
+                UpdateWaitableObject();
+                long tWaitObj = Stopwatch.GetTimestamp();
+
+                // Debug.WriteLine($"[PERF-RAW] PHYSICAL | sizeLock:{(t1-tLockStart)*1000/freq:F3}ms | state:{(t2-t1)*1000/freq:F3}ms | zeroHandle:{(t3-t2)*1000/freq:F3}ms | decision:{(tDecision-t3)*1000/freq:F3}ms | drain:{(tDrain-tDecision)*1000/freq:F3}ms | release:{(tRelease-tDrain)*1000/freq:F3}ms | ResizeBuffers:{(tResizeBuffers-tRelease)*1000/freq:F3}ms | colorSpace:{(tColorSpace-tResizeBuffers)*1000/freq:F3}ms | recover:{(tRecover-tColorSpace)*1000/freq:F3}ms | waitObj:{(tWaitObj-tRecover)*1000/freq:F3}ms | TOTAL:{(tWaitObj-t0)*1000/freq:F3}ms");
+            }
+            else
             {
-                // ALWAYS match viewport to current logic size
-                _swapChain.Handle->SetSourceSize((uint)width, (uint)height);
-
-                var stretchX = (float)(logW / _swapChainWidth);
-                var stretchY = (float)(logH / _swapChainHeight);
-                var mat = new Silk.NET.Maths.Matrix3X2<float>(stretchX, 0, 0, stretchY, 0, 0);
-                _swapChain.Handle->SetMatrixTransform((Silk.NET.DXGI.Matrix3X2F*)&mat);
-                
-                LogSync($"[RESIZE-8-TRANSFORM] SourceSize:{width}x{height} | stretch:{stretchX:F4}x{stretchY:F4} | logW/H:{logW:F0}x{logH:F0} | swapW/H:{_swapChainWidth}x{_swapChainHeight}");
+                long tEnd = Stopwatch.GetTimestamp();
+                // Debug.WriteLine($"[PERF-RAW] STABLE | sizeLock:{(t1-tLockStart)*1000/freq:F3}ms | state:{(t2-t1)*1000/freq:F3}ms | zeroHandle:{(t3-t2)*1000/freq:F3}ms | decision:{(tDecision-t3)*1000/freq:F3}ms | TOTAL:{(tEnd-t0)*1000/freq:F3}ms");
             }
-
-            UpdateWaitableObject();
+        
             if (_swapChain.Handle != null && (IntPtr)_swapChain.Handle != _lastLinkedHandle) {
                  _needsFirstFrameLink = true;
             }
-            
-            double totalTime = sw.Elapsed.TotalMilliseconds;
-            
-            if (resizeMode == "PHYSICAL")
-            {
-                LogSync($"[RES_PERF] Mode: {resizeMode} | Total: {totalTime:F2}ms | Valid: {width}x{height} | ResBuf: {resizeBuffersTime:F2}ms");
-            }
-        
-
 
         }
         catch (Exception ex) { LogSync($"[FATAL] Resize Exception: {ex}"); }
+    }
+
+    private void LogResizeTiming(bool force, int oldW, int oldH, int newW, int newH, 
+        int bufW, int bufH,
+        double tCompute, double tState, double tDecision,
+        double tDrain, double tRelease, double tResizeBuffers, double tColorSpace, double tRecover,
+        double tTotal)
+    {
+        string mode = (tResizeBuffers > 0) ? "PHYSICAL" : "STABLE_VIEWPORT";
+        double tStateDelta = tState - tCompute;
+        double tDecisionDelta = tDecision - tState;
+        
+        Debug.WriteLine($"[PERF] RESIZE {mode} | {oldW}x{oldH}→{newW}x{newH} | buf:{bufW}x{bufH}");
+        Debug.WriteLine($"[PERF]   compute:{tCompute:F3}ms | state:{tStateDelta:F3}ms | decision:{tDecisionDelta:F3}ms");
+        if (tResizeBuffers > 0)
+        {
+            double tDrainDelta = tDrain - tDecision;
+            double tReleaseDelta = tRelease - tDrain;
+            double tResizeDelta = tResizeBuffers - tRelease;
+            double tColorDelta = tColorSpace - tResizeBuffers;
+            double tRecoverDelta = tRecover - tColorSpace;
+            double tRemainder = tTotal - tRecover;
+            Debug.WriteLine($"[PERF]   drain:{tDrainDelta:F3}ms | release:{tReleaseDelta:F3}ms | ResizeBuffers:{tResizeDelta:F3}ms | colorSpace:{tColorDelta:F3}ms | recover:{tRecoverDelta:F3}ms | remainder:{tRemainder:F3}ms");
+        }
+        Debug.WriteLine($"[PERF]   TOTAL:{tTotal:F3}ms");
     }
 
     private unsafe void UpdateWaitableObject()
@@ -889,10 +934,17 @@ public class D3D11RenderControl : ContentControl
     {
         if (_swapChain.Handle == null) return;
         
+        // [OPT] Only update DXGI state if actually changed
+        if (_appliedSwapChainColorSpace == _swapChainColorSpace && !_isHdrEnabled)
+        {
+            return; 
+        }
+
         using var sc3 = _swapChain.QueryInterface<IDXGISwapChain3>();
         if (sc3.Handle != null)
         {
             var hr = sc3.Handle->SetColorSpace1(_swapChainColorSpace);
+            _appliedSwapChainColorSpace = _swapChainColorSpace;
             LogSync($"[DXGI_COLOR_SYNC] Space: {_swapChainColorSpace} | Result: 0x{hr:X}");
         }
 
@@ -905,6 +957,12 @@ public class D3D11RenderControl : ContentControl
     private unsafe void UpdateHdrMetadata()
     {
         if (_swapChain.Handle == null) return;
+
+        // [OPT] Only update HDR metadata if physical peak actually changed
+        if (Math.Abs(_appliedPeakLuminance - _peakLuminance) < 0.1f)
+        {
+             return;
+        }
 
         using var sc4 = _swapChain.QueryInterface<IDXGISwapChain4>();
         if (sc4.Handle != null)
@@ -927,6 +985,7 @@ public class D3D11RenderControl : ContentControl
             metadata.MaxFrameAverageLightLevel = (ushort)(targetPeak * 0.9f);
 
             sc4.Handle->SetHDRMetaData(HdrMetadataType.HdrMetadataTypeHdr10, (uint)sizeof(HdrMetadataHdr10), &metadata);
+            _appliedPeakLuminance = _peakLuminance;
             
             LogSync($"[DXGI_METADATA_SIGNAL] Result: 0x0 | Peak: {targetPeak:F0} nits | BT.2020 (Standard)");
         }
@@ -934,6 +993,7 @@ public class D3D11RenderControl : ContentControl
 
     private unsafe void CreateSwapChain(int width, int height)
     {
+        LogControl($"Creating SwapChain {width}x{height}");
         if (_swapChain.Handle != null) return;
         
         if (_d3d11 == null) Initialize(); 
@@ -950,19 +1010,27 @@ public class D3D11RenderControl : ContentControl
         {
             Width = (uint)width, Height = (uint)height,
             Format = _swapChainFormat,
-            BufferCount = 3, BufferUsage = DXGI.UsageRenderTargetOutput,
-            SampleDesc = new SampleDesc(1, 0), Scaling = Scaling.Stretch,
-            SwapEffect = SwapEffect.FlipDiscard, AlphaMode = AlphaMode.Ignore,
-            Flags = (uint)SwapChainFlag.FrameLatencyWaitableObject
+            BufferCount = 2, // 2 is safer for composition
+            BufferUsage = DXGI.UsageRenderTargetOutput,
+            SampleDesc = new SampleDesc(1, 0), 
+            Scaling = Scaling.ScalingStretch, // Use Stretch combined with Matrix Transform for clipping bypass
+            SwapEffect = SwapEffect.FlipSequential, // More compatible than FlipDiscard
+            AlphaMode = AlphaMode.Ignore,
+            Flags = (uint)SwapChainFlag.FrameLatencyWaitableObject // Remove AllowTearing
         };
+
+        _swapChainWidth = width;
+        _swapChainHeight = height;
 
         IDXGISwapChain1* sc1Raw;
         var hr = dxgiFactory.Handle->CreateSwapChainForComposition((IUnknown*)_device.Handle, &desc, null, &sc1Raw);
+        LogControl($"[DXGI_SC_CREATE] HR: 0x{hr:X} ({width}x{height})");
         if (hr < 0) throw new Exception($"SC Creation Failure (0x{hr:X})");
 
         var sc1 = new ComPtr<IDXGISwapChain1>(sc1Raw);
         _swapChain = sc1.QueryInterface<IDXGISwapChain2>();
         sc1.Dispose();
+        LogControl($"[DXGI_SC_SUCCESS] Handle: {(IntPtr)_swapChain.Handle}");
     }
     
 
@@ -979,6 +1047,7 @@ public class D3D11RenderControl : ContentControl
         bool needsLinking = (handle != _lastLinkedHandle);
         _lastLinkedHandle = handle;
 
+        LogControl($"[UI_BIND_REQ] Handle: {handle:X} | NeedsLink: {needsLinking}");
         if (!needsLinking) return;
 
         long resizeIdAtEnq = ActiveResizeId;
@@ -1023,7 +1092,7 @@ public class D3D11RenderControl : ContentControl
         }
 
         if (DispatcherQueue.HasThreadAccess) Act();
-        else DispatcherQueue.TryEnqueue(Act);
+        else DispatcherQueue.TryEnqueue(DispatcherQueuePriority.High, Act);
     }
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -1073,8 +1142,6 @@ public class D3D11RenderControl : ContentControl
             _disposed = true;
             Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DestroyResources STARTED");
             
-            // Cleanup shared texture first
-            CleanupSharedTexture();
             
             Interlocked.Exchange(ref _atomicBackBuffer, IntPtr.Zero);
             if (_swapChain.Handle != null) _swapChain.Dispose();
@@ -1115,9 +1182,32 @@ public class D3D11RenderControl : ContentControl
         _resizeEvent.Set();
     }
 
-    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+    private unsafe void OnSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        RequestResize(false);
+        lock (_sizeLock)
+        {
+            _targetWidth = e.NewSize.Width;
+            _targetHeight = e.NewSize.Height;
+            _targetScaleX = _swapChainPanel?.CompositionScaleX ?? 1.0;
+            _targetScaleY = _swapChainPanel?.CompositionScaleY ?? 1.0;
+        }
+
+        // [STABLE-CANVAS RE-INIT]
+        // If we were deferred due to 1x1 size, start the loop now that we have a real size.
+        if (_targetWidth > 8 && _targetHeight > 8)
+        {
+            if (_renderTask == null && _device.Handle != null)
+            {
+                LogControl($"Deferred Initialization COMPLETE: Starting loop at {_targetWidth}x{_targetHeight}");
+                UpdateSwapChain();
+                Ready?.Invoke(this, EventArgs.Empty);
+                StartRenderLoop();
+            }
+            else
+            {
+                RequestResize();
+            }
+        }
     }
 
     // [FIX] Force immediate swap chain linking — must be called from UI thread BEFORE detaching for handoff
@@ -1131,6 +1221,48 @@ public class D3D11RenderControl : ContentControl
             _needsFirstFrameLink = false;
             LogSync("[FIX] EnsureSwapChainLinked: Forced immediate swap chain linkage.");
         }
+    }
+
+    private unsafe void UpdateMonitorInfo()
+    {
+        try
+        {
+            // Get the window handle for the current active window (closest to the app)
+            IntPtr hwnd = GetActiveWindow();
+            if (hwnd == IntPtr.Zero) hwnd = GetForegroundWindow();
+            
+            if (hwnd != IntPtr.Zero)
+            {
+                IntPtr hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                if (hMonitor != IntPtr.Zero)
+                {
+                    MONITORINFOEX info = new MONITORINFOEX();
+                    info.Size = Marshal.SizeOf(info);
+                    if (GetMonitorInfo(hMonitor, ref info))
+                    {
+                        _maxMonitorWidth = Math.Abs(info.rcMonitor.Right - info.rcMonitor.Left);
+                        _maxMonitorHeight = Math.Abs(info.rcMonitor.Bottom - info.rcMonitor.Top);
+                        
+                        // Fallback safety
+                        if (_maxMonitorWidth < 800) _maxMonitorWidth = 1920;
+                        if (_maxMonitorHeight < 600) _maxMonitorHeight = 1080;
+                        
+                        _isMonitorInfoInitialized = true;
+                        LogSync($"[MONITOR_INFO] Detected Max Resolution: {_maxMonitorWidth}x{_maxMonitorHeight}");
+                        return;
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LogSync($"[MONITOR_INFO_ERR] Failed to detect monitor: {ex.Message}");
+        }
+
+        // Default Fallbacks
+        _maxMonitorWidth = 1920;
+        _maxMonitorHeight = 1080;
+        _isMonitorInfoInitialized = true;
     }
 
     private float GetPhysicalPeakFromEdid(IntPtr hMonitor)
@@ -1254,14 +1386,22 @@ public class D3D11RenderControl : ContentControl
                     }
                 }
             }
-            
-            LogSync("[HDR_EDID_FAILED] No HDR signature found in EDID payload.");
+            return 0;
         }
-        catch (Exception ex)
-        {
-            LogSync($"[HDR_EDID_ERR] Universal Scan failed: {ex.Message}");
-        }
+        catch { }
         return 0;
+    }
+
+
+    private void LogControl(string msg)
+    {
+        try
+        {
+            var logPath = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\control_debug.log";
+            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [CONTROL] {msg}\n");
+        }
+        catch { }
+        Debug.WriteLine($"[CONTROL] {msg}");
     }
 
     private void LogSync(string message) => Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SYNC] [Thread:{Environment.CurrentManagedThreadId}] {message}");

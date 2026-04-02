@@ -295,24 +295,26 @@ public sealed partial class Player
         Marshal.FreeHGlobal(flipYPtr);
     }
 
-    public void RenderDXGI(IntPtr texture, int width, int height, bool block = true)
+    public void RenderDXGI(IntPtr texture, int width, int height, int renderWidth = 0, int renderHeight = 0, bool block = true)
     {
         var fbo = new MpvDxgiFbo
         {
             Texture = texture,
             Width = width,
-            Height = height
+            Height = height,
+            RenderWidth = renderWidth,
+            RenderHeight = renderHeight
         };
+        
+        try
+        {
+            System.IO.File.AppendAllText("C:\\Users\\ASUS\\Documents\\ModernIPTVPlayer\\cs_debug.log", 
+                $"[{DateTime.Now:HH:mm:ss.fff}] [CS-RENDER] Tex={texture} | W={width} | H={height} | RW={renderWidth} | RH={renderHeight}\n");
+        }
+        catch { }
 
         var fboPtr = Marshal.AllocHGlobal(Marshal.SizeOf(fbo));
         Marshal.StructureToPtr(fbo, fboPtr, false);
-
-        // Raw memory dump to verify C# struct layout
-        int structSize = Marshal.SizeOf(fbo);
-        byte[] raw = new byte[structSize];
-        Marshal.Copy(fboPtr, raw, 0, raw.Length);
-        Debug.WriteLine($"[FBO_DEBUG] RenderDXGI: texture=0x{texture:X} w={width} h={height} | structSize={structSize} | WidthOffset={Marshal.OffsetOf<MpvDxgiFbo>("Width")} | HeightOffset={Marshal.OffsetOf<MpvDxgiFbo>("Height")}");
-        Debug.WriteLine($"[FBO_DEBUG] Raw FBO bytes: {BitConverter.ToString(raw)}");
 
         var blockPtr = Marshal.AllocHGlobal(sizeof(int));
         Marshal.WriteInt32(blockPtr, block ? 1 : 0);

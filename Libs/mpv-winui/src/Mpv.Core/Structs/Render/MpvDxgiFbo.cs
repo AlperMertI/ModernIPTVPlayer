@@ -5,7 +5,7 @@ namespace Mpv.Core.Structs.Render;
 /// <summary>
 /// Describes a DXGI render target.
 /// </summary>
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
 public struct MpvDxgiFbo
 {
     /// <summary>
@@ -22,4 +22,14 @@ public struct MpvDxgiFbo
     /// Internal texture height.
     /// </summary>
     public int Height;
+
+    /// <summary>
+    /// Logical render width (Viewport).
+    /// </summary>
+    public int RenderWidth;
+
+    /// <summary>
+    /// Logical render height (Viewport).
+    /// </summary>
+    public int RenderHeight;
 }

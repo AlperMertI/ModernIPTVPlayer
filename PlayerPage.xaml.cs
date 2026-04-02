@@ -1497,7 +1497,6 @@ namespace ModernIPTVPlayer
         // Helper to extract ALL cookies from a CookieContainer (ignoring Domain restrictions)
         // MOVED TO MpvSetupHelper
 
-
         private async void PlayerPage_Loaded(object sender, RoutedEventArgs e)
         {
 
@@ -1509,7 +1508,7 @@ namespace ModernIPTVPlayer
             _ = Task.Run(async () => {
                 await Task.Delay(200);
                 DispatcherQueue.TryEnqueue(() => {
-                    MainGrid.Focus(FocusState.Programmatic);
+                    if (MainGrid != null) MainGrid.Focus(FocusState.Programmatic);
                 });
             });
             _isStaticMetadataFetched = false;
@@ -1519,8 +1518,6 @@ namespace ModernIPTVPlayer
             _cachedColorspace = "-";
 
             StartCursorTimer();
-
-
 
             if (!string.IsNullOrEmpty(_navigationError))
             {
@@ -1548,20 +1545,19 @@ namespace ModernIPTVPlayer
                     App.HandoffPlayer = null; 
 
                     // Phase 2: RE-ENABLE VISUALS & UNLOCK BUFFER
-                    // This performs a complete upgrade from the 'vid=no' pre-buffer state
                     try 
                     {
                         // 1. Restore Video Rendering
                         await _mpvPlayer.SetPropertyAsync("vid", "1");
 
-                        // 2. Expand Buffers for active watch (Unlock from 128MB pre-buffer)
+                        // 2. Expand Buffers for active watch
                         int mainBuffer = AppSettings.BufferSeconds;
                         await _mpvPlayer.SetPropertyAsync("cache", "yes");
                         await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
                         await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB");
                         await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "32MiB");
 
-                        // 3. Trigger Phase 2: Visual Enhancements (Scalers, Deband, etc.) via Helper
+                        // 3. Trigger Phase 2: Visual Enhancements
                         await MpvSetupHelper.ApplyVisualSettingsAsync(_mpvPlayer);
 
                         // 4. Initial Color Space Sync
@@ -1575,27 +1571,6 @@ namespace ModernIPTVPlayer
                     _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
                     _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
 
-                    // Enable shared texture mode only for gpu-next in handoff
-                    var pSettingsHandoff = AppSettings.PlayerSettings;
-                    if (pSettingsHandoff.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
-                    {
-                        try
-                        {
-                            // DISABLED: SharedTextureHelper P/Invoke is broken
-                            // _mpvPlayer.UseSharedTexture = true;
-                            Debug.WriteLine("[PlayerPage:Handoff] Shared texture DISABLED (P/Invoke broken)");
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.WriteLine($"[PlayerPage:Handoff] Failed to enable shared texture: {ex.Message}");
-                        }
-                    }
-                    else
-                    {
-                        _mpvPlayer.UseSharedTexture = false;
-                        Debug.WriteLine("[PlayerPage:Handoff] Legacy DXGI - shared texture disabled");
-                    }
-
                     _mpvPlayer.Redraw();
 
                     ApplyPrimaryColorToUi();
@@ -1606,115 +1581,68 @@ namespace ModernIPTVPlayer
                     await _mpvPlayer.SetPropertyAsync("pause", "no");
                     await _mpvPlayer.SetPropertyAsync("mute", "no");
 
-                    // 2. Buffer & Sync Verification
-
-                    // 3. Verify and Fix
-                    var pPause = await _mpvPlayer.GetPropertyAsync("pause");
-                    var pMute = await _mpvPlayer.GetPropertyAsync("mute");
+                    // 2. Verification
                     var pIdle = await _mpvPlayer.GetPropertyAsync("core-idle");
                     var pPath = await _mpvPlayer.GetPropertyAsync("path");
-                    Debug.WriteLine($"[PlayerPage:Handoff_Verify] State: Pause={pPause}, Mute={pMute}, CoreIdle={pIdle}, Path={pPath}");
 
                     if (string.IsNullOrEmpty(pPath) || pPath == "N/A")
                     {
-                        Debug.WriteLine("[PlayerPage:Handoff] Path is EMPTY or INVALID! Player lost content. Reloading URL...");
-
-                        // [OPTIMIZATION] Set start time BEFORE OpenAsync to avoid seeking delay (Handoff Recovery)
                         if (_navArgs != null && _navArgs.StartSeconds > 0)
                         {
-Debug.WriteLine($"[PlayerPage:Handoff] Setting start time for recovery: {_navArgs.StartSeconds}");
                             await _mpvPlayer.SetPropertyAsync("start", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         }
-
                         await _mpvPlayer.OpenAsync(_navArgs.Url);
-await _mpvPlayer.SetPropertyAsync("pause", "no");
+                        await _mpvPlayer.SetPropertyAsync("pause", "no");
                     }
                     else if (pIdle == "yes")
                     {
-                        // Some streams need a kick after attachment
-Debug.WriteLine("[PlayerPage:Handoff] Player is stuck idle. Retrying unpause...");
                         await _mpvPlayer.SetPropertyAsync("pause", "no");
-await Task.Delay(200);
+                        await Task.Delay(200);
                         await _mpvPlayer.SetPropertyAsync("pause", "no");
-                        _mpvPlayer.Redraw(); // Force redraw after unpause kick
+                        _mpvPlayer.Redraw();
                     }
-
-                    // Fast Start prebuffer already sought to the correct position - no need to seek again
-                    Debug.WriteLine("[PlayerPage:Handoff] Prebuffer ready, skipping seek logic");
 
                     // [RESTORE SAVED AUDIO/SUBTITLE TRACKS]
                     string contentId = !string.IsNullOrEmpty(_navArgs?.Id) ? _navArgs.Id : _streamUrl;
                     var history = HistoryManager.Instance.GetProgress(contentId);
-// pSettings already defined above
-
-// Logic: If user changed global language preferences AFTER they manually picked a track for this video,
-                    // we should respect the new global preference (override the override).
                     bool isHistoryStale = history != null && pSettings.PreferredLanguagesUpdatedAt > history.Timestamp;
 
                     if (history != null && !isHistoryStale)
                     {
                         if (!string.IsNullOrEmpty(history.AudioTrackId))
-                        {
-                            Debug.WriteLine($"[PlayerPage:Handoff] Restoring Audio Track: {history.AudioTrackId}");
-await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
-}
+                            await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
                         if (!string.IsNullOrEmpty(history.SubtitleTrackId))
-                        {
-                            Debug.WriteLine($"[PlayerPage:Handoff] Restoring Subtitle Track: {history.SubtitleTrackId}");
-await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
-}
-                    }
-                    else if (isHistoryStale)
-                    {
-                        Debug.WriteLine("[PlayerPage:Handoff] Global language preferences are newer than history. Using global settings.");
+                            await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
                     }
 
-                    // Auto-fetch addon subtitles in background for auto-restore
                     _ = AutoFetchAndRestoreAddonSubtitleAsync();
                 }
                 else
                 {
-                     // FRESH START MODE: SLOW PATH (Delay for socket safety)
+                     // FRESH START MODE
                      Debug.WriteLine("[PlayerPage] Starting Fresh Playback...");
                      Services.Streaming.StreamSlotSimulator.Instance.StopAll();
-                     // REMOVED: await Task.Delay(1200); -> Unnecessary delay
-                     await Task.Delay(50); // Minimal safety check
+                     await Task.Delay(50); 
 
                      _mpvPlayer = new MpvWinUI.MpvPlayer();
 
-                     // [GPU-NEXT Integration] Select backend based on settings
                      try 
                      {
                          var pSettings = AppSettings.PlayerSettings;
                          if (pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
                          {
                              _mpvPlayer.RenderApi = "d3d11";
-                             
-                             // Enable shared texture mode only for gpu-next
-                             // DISABLED: SharedTextureHelper P/Invoke is broken
-                             try
-                             {
-                                 // _mpvPlayer.UseSharedTexture = true;
-                                 Debug.WriteLine("[PlayerPage] Shared texture DISABLED (P/Invoke broken)");
-                             }
-                             catch (Exception ex)
-                             {
-                                 Debug.WriteLine($"[PlayerPage] Failed to enable shared texture: {ex.Message}");
-                             }
                          }
                          else
                          {
                              _mpvPlayer.RenderApi = "dxgi";
-                             _mpvPlayer.UseSharedTexture = false;
-                             Debug.WriteLine("[PlayerPage] Legacy DXGI mode - shared texture disabled");
                          }
                          Debug.WriteLine($"[PlayerPage] Selected Render API: {_mpvPlayer.RenderApi}");
                      }
                      catch (Exception ex)
                      {
                          Debug.WriteLine($"[PlayerPage] Failed to load settings for RenderApi: {ex.Message}");
-                          _mpvPlayer.RenderApi = "d3d11"; // Default to gpu-next
-                          // _mpvPlayer.UseSharedTexture = true; // DISABLED
+                          _mpvPlayer.RenderApi = "d3d11"; 
                      }
 
                      PlayerContainer.Children.Add(_mpvPlayer);
@@ -1724,10 +1652,6 @@ await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
 
                      try
                     {
-                        // OSD removal: "Bağlantı Kontrol Ediliyor" is redundant as we have a loading logo.
-                        // ShowOsd("Bağlantı Kontrol Ediliyor...");
-                        
-                        // [OPTIMIZATION] Skip probe for known fast providers to save ~1-2s
                         bool isTrusted = _streamUrl.Contains("torbox") || _streamUrl.Contains("real-debrid") || _streamUrl.Contains("alldebrid") || _streamUrl.Contains("premiumize");
                         
                         if (!isTrusted)
@@ -1741,34 +1665,23 @@ await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
                             }
                             _streamUrl = checkResult.Url;
                         }
-                        else
-                        {
-                             Debug.WriteLine("[PlayerPage] Trusted Source detected. Skipping pre-check.");
-                        }
 
-                        // Phase 2 Preparation: Let stats timer take over the target.
-                        // We DO NOT stop _logoLoadingTimer here, as it provides the crucial easing physics.
                         if (_loadingTargetProgress < 70) _loadingTargetProgress = 70; 
 
-                        // [Fix] Check if player was disposed during check
                         if (_mpvPlayer == null) return;
 
                         await MpvSetupHelper.ConfigurePlayerAsync(_mpvPlayer, _streamUrl, isSecondary: false);
                         
-                        // [FIX] Apply Buffer Settings (Same as Handoff)
                         int bufferSecs = AppSettings.BufferSeconds;
                         await _mpvPlayer.SetPropertyAsync("cache", "yes");
                         await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", bufferSecs.ToString());
                         await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
                         await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
                         
-                        // [Fix] Double check before OpenAsync
                         if (_mpvPlayer == null) return; 
 
-                        // [OPTIMIZATION] Set start time BEFORE OpenAsync to avoid seeking delay
                         if (_navArgs != null && _navArgs.StartSeconds > 0)
                         {
-                            Debug.WriteLine($"[PlayerPage] Setting start time: {_navArgs.StartSeconds}");
                             await _mpvPlayer.SetPropertyAsync("start", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
                         }
 
@@ -1807,25 +1720,11 @@ await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
                          if (history != null && !isHistoryStale)
                          {
                              if (!string.IsNullOrEmpty(history.AudioTrackId))
-                             {
-                                 Debug.WriteLine($"[PlayerPage] Restoring Audio Track: {history.AudioTrackId}");
                                  await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
-                             }
                              if (!string.IsNullOrEmpty(history.SubtitleTrackId))
-                             {
-                                 Debug.WriteLine($"[PlayerPage] Restoring Subtitle Track: {history.SubtitleTrackId}");
                                  await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
-                             }
-                         }
-                         else if (isHistoryStale)
-                         {
-                             Debug.WriteLine("[PlayerPage] Global language preferences are newer than history. Using global settings.");
                          }
 
-                        // [FRESH START SEEK LOGIC]
-                        // REMOVED: Replaced with 'start' property before OpenAsync for instant seeking.
-
-                        // Auto-fetch addon subtitles in background for auto-restore
                         _ = AutoFetchAndRestoreAddonSubtitleAsync();
 
                     }

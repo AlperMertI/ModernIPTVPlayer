@@ -1,5 +1,6 @@
 #include "config.h"
 #include <d3d11.h>
+#include <d3d11_1.h>
 #include <windows.h>
 #include <stdio.h>
 #include "mpv/render_dxgi.h"
@@ -18,20 +19,20 @@ extern void gpu_sync_trace(const char *msg);
 static FILE *wrap_log_fp = NULL;
 static void wrap_log_init(void) {
     if (!wrap_log_fp) {
-        wrap_log_fp = fopen("C:\\Users\\ASUS\\Documents\\ModernIPTVPlayer\\gn_debug.log", "a");
+        wrap_log_fp = fopen("C:\\Users\\ASUS\\Documents\\ModernIPTVPlayer\\wrap_debug.log", "a");
         if (wrap_log_fp) {
             fprintf(wrap_log_fp, "=== WRAP_FBO LOG SESSION START ===\n");
             fflush(wrap_log_fp);
         }
     }
 }
-#define WRAP_LOG(fmt, ...) do { \
-    wrap_log_init(); \
-    char _wbuf[512]; \
-    snprintf(_wbuf, sizeof(_wbuf), "[WRAP_FBO] " fmt "\n", ##__VA_ARGS__); \
-    if (wrap_log_fp) { fprintf(wrap_log_fp, "%s", _wbuf); fflush(wrap_log_fp); } \
-    OutputDebugStringA(_wbuf); \
+// [PERF] Disabled verbose WRAP_LOG - uncomment for debugging
+#define WRAP_LOG(ctx, fmt, ...) do { } while(0)
+/*
+#define WRAP_LOG(ctx, fmt, ...) do { \
+    MP_INFO(ctx, "[WRAP][TID:%u] " fmt "\n", (unsigned int)GetCurrentThreadId(), ##__VA_ARGS__); \
 } while(0)
+*/
 #include "video/out/placebo/ra_pl.h"
 #include "video/out/placebo/utils.h"
 // -------------------------
@@ -200,34 +201,37 @@ static int init_d3d11_pl(struct libmpv_gpu_context *ctx, mpv_render_param *param
     }
 
     // 3. Create libplacebo D3D11 context
-    gpu_sync_trace("INIT: Calling pl_d3d11_create (Hard Hardware Lock)...");
+    WRAP_LOG(ctx, "init_d3d11_pl: Preparing pl_d3d11_params (Heap-Alloc to avoid stack guards)");
+    
+    struct pl_d3d11_params *d3d11_params = talloc_zero(NULL, struct pl_d3d11_params);
+    d3d11_params->device = p->device;
+    d3d11_params->allow_software = false; // [CRITICAL] Prevent WARP fallback / Green Screen
 
-    const struct pl_d3d11_params d3d11_params = {
-        .device = p->device,
-        .allow_software = false, // [CRITICAL] Prevent WARP fallback / Green Screen
-    };
-    p->d3d11 = pl_d3d11_create(p->pllog, &d3d11_params);
+    WRAP_LOG(ctx, "init_d3d11_pl: Calling pl_d3d11_create...");
+    p->d3d11 = pl_d3d11_create(p->pllog, d3d11_params);
+    talloc_free(d3d11_params);
 
     if (!p->d3d11) {
-        gpu_sync_trace("INIT: FAIL - pl_d3d11_create (Feature level mismatch)");
+        WRAP_LOG(ctx, "init_d3d11_pl: FAIL - pl_d3d11_create failed (Feature level mismatch?)");
         return MPV_ERROR_GENERIC;
     }
-
-    gpu_sync_trace("INIT: SUCCESS - Hardware GPU is active");
+    WRAP_LOG(ctx, "init_d3d11_pl: SUCCESS - pl_d3d11 active (gpu:%p)", (void*)p->d3d11->gpu);
     p->gpu = p->d3d11->gpu;
 
     // 4. Create RA wrapper around pl_gpu
-    gpu_sync_trace("INIT: Calling ra_create_pl...");
+    WRAP_LOG(ctx, "init_d3d11_pl: Calling ra_create_pl...");
     struct ra *ra = ra_create_pl(p->gpu, ctx->log);
     if (!ra) {
-        gpu_sync_trace("INIT: FAIL - ra_create_pl");
+        WRAP_LOG(ctx, "init_d3d11_pl: FAIL - ra_create_pl");
         destroy_d3d11_pl(ctx);
         return MPV_ERROR_UNSUPPORTED;
     }
+    WRAP_LOG(ctx, "init_d3d11_pl: SUCCESS - ra_create_pl OK (%p)", (void*)ra);
     
     // [HWDEC INTEROP] Add native resource so d3d11va driver can find the device
     ra_add_native_resource(ra, "d3d11_device_ptr", p->device);
-    
+    WRAP_LOG(ctx, "init_d3d11_pl: Native Resource registered (Device: %p)", (void*)p->device);
+
     // 5. Setup internal context
     p->ra_ctx = talloc_zero(p, struct ra_ctx);
     p->ra_ctx->log = ctx->log;
@@ -290,26 +294,38 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
         }
         tex = (ID3D11Resource *)shared_tex;
         is_shared = true;
+        WRAP_LOG(ctx, "wrap_fbo_pl: Received Shared Texture IntPtr: %p", (void*)tex);
 
-        // [MUTEX] Try to get keyed mutex for synchronization
+        // [MUTEX] Keys are 0. The host (C#) already acquired the mutex for this thread 
+        // before calling mpv_render_context_render. 
+        // DO NOT acquire it here, as it causes a DEADLOCK.
         if (SUCCEEDED(ID3D11Resource_QueryInterface(tex, &IID_IDXGIKeyedMutex, (void **)&p->shared_mutex))) {
-            // We'll release it in done_frame_pl or if wrap fails
-            // Actually, we should only acquire it once per frame.
-            // For now, let's just acquire it here.
-            HRESULT hr_m = IDXGIKeyedMutex_AcquireSync(p->shared_mutex, 0, 100);
-            if (FAILED(hr_m)) {
-                gpu_sync_trace("MUTEX_FAIL: Failed to acquire shared mutex");
-                // Continue anyway? Or fail? Let's continue for now but log.
-            }
+             WRAP_LOG(ctx, "wrap_fbo_pl: Mutex interface queried successfully.");
+        } else {
+             WRAP_LOG(ctx, "wrap_fbo_pl: NO KeyedMutex found on this resource!");
         }
     } else {
         mpv_dxgi_fbo *fbo = get_mpv_render_param(params, MPV_RENDER_PARAM_DXGI_FBO, NULL);
-        if (!fbo || !fbo->texture)
+        if (!fbo || !fbo->texture) {
+            WRAP_LOG(ctx, "CRITICAL: No FBO or Texture pointer! ParamsPtr=%p", (void*)params);
             return MPV_ERROR_INVALID_PARAMETER;
+        }
+
         tex = (ID3D11Resource *)fbo->texture;
         w = fbo->w;
         h = fbo->h;
-        WRAP_LOG("C# sent fbo->texture=%p fbo->w=%d fbo->h=%d", (void*)fbo->texture, fbo->w, fbo->h);
+        int render_w = fbo->render_w;
+        int render_h = fbo->render_h;
+        WRAP_LOG(ctx, "wrap_fbo_pl: tex=%p w=%u h=%u | render=%dx%d", (void*)tex, w, h, render_w, render_h);
+
+        WRAP_LOG(ctx, "RAW_DATA: fbo=%p | tex=%p | w=%d | h=%d | rw=%d | rh=%d", 
+                 (void*)fbo, (void*)tex, w, h, render_w, render_h);
+
+        if (render_w > 0 && render_h > 0) {
+            WRAP_LOG(ctx, "STABLE_CANVAS: Viewport Detected -> %dx%d (Internal: %dx%d)", render_w, render_h, fbo->w, fbo->h);
+        } else {
+            WRAP_LOG(ctx, "PHYSICAL_RESIZE: No Viewport -> Using full buffer %dx%d", w, h);
+        }
     }
 
     // [DIMENSION PROBE] Identity check & dimension discovery
@@ -320,7 +336,7 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
         ID3D11Texture2D_Release(prob_tex);
     }
 
-    WRAP_LOG("Texture desc=%ux%u | using w=%d h=%d", desc.Width, desc.Height, w, h);
+    WRAP_LOG(ctx, "Texture desc=%ux%u | passed w=%d h=%d | using w=%d h=%d", desc.Width, desc.Height, w, h, w, h);
 
     if (w <= 0) w = desc.Width;
     if (h <= 0) h = desc.Height;
@@ -332,14 +348,35 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
         return 0; // Skip rendering to invalid target
     }
 
+    // [OPTIMIZATION] DiscardView (D3D11.1)
+    // Signal the driver that we don't care about previous contents of this view.
+    // This reduces memory bandwidth during ResizeBuffers cycles.
+    ID3D11DeviceContext1 *ctx1 = NULL;
+    if (SUCCEEDED(ID3D11DeviceContext_QueryInterface(p->context, &IID_ID3D11DeviceContext1, (void **)&ctx1))) {
+        // [OPTIMIZATION] Discard previous content to signal driver
+        // Signal the driver that we don't care about previous contents of this view.
+        // This reduces memory bandwidth during ResizeBuffers cycles.
+        ID3D11DeviceContext1_DiscardResource(ctx1, tex);
+        ID3D11DeviceContext1_Release(ctx1);
+    }
+
+    // [FIX] Always wrap at physical texture size.
+    // The viewport (render_w/render_h) should NOT shrink the wrap dimensions.
+    // libplacebo needs to render to the FULL texture surface.
+    // Letterboxing/scaling is handled by mpv's p->dst rect in libmpv_gpu.c.
+    int wrap_w = (int)desc.Width;
+    int wrap_h = (int)desc.Height;
+    WRAP_LOG(ctx, "WRAP_VIEWPORT: physical=%dx%d | final_wrap=%dx%d",
+             w, h, wrap_w, wrap_h);
+
     pl_tex pl_tex = pl_d3d11_wrap(p->gpu, pl_d3d11_wrap_params(
         .tex = tex,
-        .w = w, .h = h,
+        .w = wrap_w, .h = wrap_h,
         .fmt = desc.Format,
     ));
     
     if (!pl_tex) {
-         MP_ERR(ctx, "Failed to wrap D3D11 texture into pl_tex (%dx%d)!\n", w, h);
+         MP_ERR(ctx, "Failed to wrap D3D11 texture into pl_tex (%dx%d)!\n", wrap_w, wrap_h);
          return MPV_ERROR_UNSUPPORTED;
     }
 
@@ -356,7 +393,7 @@ static int wrap_fbo_pl(struct libmpv_gpu_context *ctx, mpv_render_param *params,
     // mppl_wrap_tex is the bridge helper from ra_pl.h
     *out = talloc_zero(NULL, struct ra_tex);
     if (!mppl_wrap_tex(p->ra_ctx->ra, pl_tex, *out)) {
-         gpu_sync_trace("WRAP_FAIL: mppl_wrap_tex failed");
+         WRAP_LOG(ctx, "WRAP_FAIL: mppl_wrap_tex failed");
          MP_ERR(ctx, "Failed to wrap pl_tex into ra_tex!\n");
          pl_tex_destroy(p->gpu, &pl_tex);
          if (is_shared) ID3D11Resource_Release(tex);
@@ -398,10 +435,10 @@ static void done_frame_pl(struct libmpv_gpu_context *ctx, bool ds)
 {
     struct priv_pl *p = ctx->priv;
     
-    // Release shared mutex if held
     if (p->shared_mutex) {
-        IDXGIKeyedMutex_ReleaseSync(p->shared_mutex, 0);
-        // We don't release the interface here, talloc destructor does it
+        // We don't ReleaseSync(0) here because the host (C#) does it 
+        // after render call returns.
+        ID3D11Resource_Release(p->shared_mutex);
         p->shared_mutex = NULL; 
     }
 
