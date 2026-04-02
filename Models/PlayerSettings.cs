@@ -45,14 +45,7 @@ namespace ModernIPTVPlayer.Models
         Clip
     }
 
-    public enum TargetPeak
-    {
-        Auto,
-        Sdr100,
-        Sdr203,
-        Hdr400,
-        Hdr1000
-    }
+    // TargetPeak is now handled as an integer (Nits). 0 = Auto.
 
     public enum TargetDisplayMode
     {
@@ -83,7 +76,7 @@ namespace ModernIPTVPlayer.Models
         public Scaler Scaler { get; set; } = Scaler.Spline36;
         public DebandMode Deband { get; set; } = DebandMode.No;
         public ToneMapping ToneMapping { get; set; } = ToneMapping.Spline;
-        public TargetPeak TargetPeak { get; set; } = TargetPeak.Auto;
+        public int TargetPeak { get; set; } = 0; // 0 = Auto, else Nits value
         public TargetDisplayMode TargetDisplayMode { get; set; } = TargetDisplayMode.Auto;
         public AudioChannels AudioChannels { get; set; } = AudioChannels.AutoSafe;
         public ExclusiveMode ExclusiveAudio { get; set; } = ExclusiveMode.No;
@@ -115,7 +108,7 @@ namespace ModernIPTVPlayer.Models
                     settings.Scaler = Scaler.Bilinear;
                     settings.Deband = DebandMode.No;
                     settings.ToneMapping = ToneMapping.Auto;
-                    settings.TargetPeak = TargetPeak.Auto;
+                    settings.TargetPeak = 0; // Auto
                     settings.TargetDisplayMode = TargetDisplayMode.Auto;
                     break;
 
@@ -125,7 +118,7 @@ namespace ModernIPTVPlayer.Models
                     settings.Scaler = Scaler.Spline36;
                     settings.Deband = DebandMode.No;
                     settings.ToneMapping = ToneMapping.Spline;
-                    settings.TargetPeak = TargetPeak.Auto;
+                    settings.TargetPeak = 0; // Auto
                     settings.TargetDisplayMode = TargetDisplayMode.Auto;
                     break;
 
@@ -135,7 +128,7 @@ namespace ModernIPTVPlayer.Models
                     settings.Scaler = Scaler.EwaLanczos;
                     settings.Deband = DebandMode.Yes;
                     settings.ToneMapping = ToneMapping.St2094_40;
-                    settings.TargetPeak = TargetPeak.Auto;
+                    settings.TargetPeak = 0; // Auto
                     settings.TargetDisplayMode = TargetDisplayMode.Auto;
                     break;
                     

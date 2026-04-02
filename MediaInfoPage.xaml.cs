@@ -5489,11 +5489,8 @@ namespace ModernIPTVPlayer
                 }
 
                 // 5. Buffer settings
-                int preSeconds = AppSettings.PrebufferSeconds;
-                await MediaInfoPlayer.SetPropertyAsync("cache", "yes");
-                await MediaInfoPlayer.SetPropertyAsync("cache-pause", "yes");
-                await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", preSeconds.ToString());
-                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB"); 
+                bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts"));
+                await MpvSetupHelper.ApplyBufferSettingsAsync(MediaInfoPlayer, isSecondary: true, isLive: isLive);
                 
                 Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Buffer/Seek properties set.");
 
@@ -5754,9 +5751,8 @@ namespace ModernIPTVPlayer
                             // APPLY MAIN BUFFER SETTINGS
                             try 
                             {
-                                int mainBuffer = AppSettings.BufferSeconds;
-                                await MediaInfoPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
-                                await MediaInfoPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB"); 
+                                bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts"));
+                                await MpvSetupHelper.ApplyBufferSettingsAsync(MediaInfoPlayer, isSecondary: false, isLive: isLive);
                                 await MediaInfoPlayer.SetPropertyAsync("pause", "no");
                             } catch { }
                             

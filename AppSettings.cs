@@ -187,6 +187,27 @@ namespace ModernIPTVPlayer
             set => Settings.Values[BufferSecondsKey] = value;
         }
 
+        private const string MaxBufferMegabytesKey = "MaxBufferMegabytes";
+        public static int MaxBufferMegabytes
+        {
+            get => (Settings.Values[MaxBufferMegabytesKey] as int?) ?? 256;
+            set => Settings.Values[MaxBufferMegabytesKey] = value;
+        }
+
+        private const string SeekForwardSecondsKey = "SeekForwardSeconds";
+        public static int SeekForwardSeconds
+        {
+            get => (Settings.Values[SeekForwardSecondsKey] as int?) ?? 10;
+            set => Settings.Values[SeekForwardSecondsKey] = value;
+        }
+
+        private const string SeekBackwardSecondsKey = "SeekBackwardSeconds";
+        public static int SeekBackwardSeconds
+        {
+            get => (Settings.Values[SeekBackwardSecondsKey] as int?) ?? 10;
+            set => Settings.Values[SeekBackwardSecondsKey] = value;
+        }
+
         // TMDB Settings
         private const string TmdbApiKeyKey = "TmdbApiKey";
         private const string IsTmdbEnabledKey = "IsTmdbEnabled";

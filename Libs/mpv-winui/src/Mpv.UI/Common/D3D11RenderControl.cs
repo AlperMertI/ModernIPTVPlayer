@@ -80,6 +80,20 @@ public class D3D11RenderControl : ContentControl
     public float PeakLuminance => _peakLuminance;
     public float SdrWhiteLevel => _sdrWhiteLevel;
     public float OsMaxLuminance => _osMaxLuminance;
+
+    private float _manualPeakLuminance = 0;
+    public float ManualPeakLuminance
+    {
+        get => _manualPeakLuminance;
+        set
+        {
+            if (Math.Abs(_manualPeakLuminance - value) > 1.0f)
+            {
+                _manualPeakLuminance = value;
+                UpdateHdrStatus();
+            }
+        }
+    }
     
     // Render'da kullanılacak boyutlar - her zaman SwapChain ile sınırlı
     public int RenderWidth => _swapChainWidth > 0 ? _swapChainWidth : CurrentWidth;
@@ -276,14 +290,22 @@ public class D3D11RenderControl : ContentControl
             if (hwnd == IntPtr.Zero) return;
             
             IntPtr hMonitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            bool hardwarePeakFound = false;
             
-            // 2. STATUS & BASE PEAK are now handled by SyncHdrMetadata on the UI Thread.
+            // 2. MANUAL OVERRIDE (User Settings)
+            if (_manualPeakLuminance > 0)
+            {
+                _peakLuminance = _manualPeakLuminance;
+                LogSync($"[HDR_MANUAL] User Override Active! Peak: {_peakLuminance:F1} nits.");
+            }
+            else
+            {
+                // 3. STATUS & BASE PEAK are now handled by SyncHdrMetadata on the UI Thread.
             // This method (UpdateHdrStatus) runs on the background loop and only
             // processes the EDID physics and change detection.
 
             // 3. GET PHYSICAL TRUTH FROM EDID (Hardware Level)
             // Cache check: only re-scan registry if the monitor handle changed
-            bool hardwarePeakFound = false;
             
             if (hMonitor == _lastHMonitor && _peakLuminance > 150)
             {
@@ -306,10 +328,15 @@ public class D3D11RenderControl : ContentControl
                 {
                     LogSync($"[HDR_EDID_ERR] Discovery failed: {edidEx.Message}");
                 }
+                }
             }
 
             // 4. FINAL PEAK CALIBRATION
-            if (hardwarePeakFound)
+            if (_manualPeakLuminance > 0)
+            {
+                // Already set by Manual Override
+            }
+            else if (hardwarePeakFound)
             {
                 // Physical Truth prioritized
             }
@@ -605,6 +632,12 @@ public class D3D11RenderControl : ContentControl
                     renderEndTime = Stopwatch.GetTimestamp();
                     double renderMs = (renderEndTime - renderStartTime) * 1000.0 / Stopwatch.Frequency;
 
+                    // [LEAK_DEBUG] Frame counter every 600 frames (~10s at 60fps)
+                    if (didDraw && _frameCounter % 600 == 0)
+                    {
+                        Debug.WriteLine($"[LEAK_DEBUG] Frame #{_frameCounter} | SC: {_swapChainWidth}x{_swapChainHeight} | RenderMS: {renderMs:F2}");
+                    }
+
                     needsPresent = didDraw || ForceRedraw;
 
                     if (_needsFirstFrameLink)
@@ -734,9 +767,12 @@ public class D3D11RenderControl : ContentControl
         lock (_renderLock) { PerformResize(force: true); }
     }
 
+    private static int _resizeCallCount = 0;
     private unsafe void PerformResize(bool force)
     {
         if (_disposed || _device.Handle == null) return;
+        int callId = ++_resizeCallCount;
+        Debug.WriteLine($"[LEAK_DEBUG] PerformResize #{callId} force={force} | Current={CurrentWidth}x{CurrentHeight} | SwapChain={_swapChainWidth}x{_swapChainHeight}");
         long t0 = Stopwatch.GetTimestamp();
         double freq = Stopwatch.Frequency;
 
@@ -848,6 +884,7 @@ public class D3D11RenderControl : ContentControl
                     _swapChainWidth = stableWidth;
                     _swapChainHeight = stableHeight;
 
+                    Debug.WriteLine($"[LEAK_DEBUG] ResizeBuffers #{callId}: {_swapChainWidth}x{_swapChainHeight} -> {stableWidth}x{stableHeight} (format={_swapChainFormat})");
                     var hr = _swapChain.Handle->ResizeBuffers(2, (uint)stableWidth, (uint)stableHeight, _swapChainFormat, 0);
                     
                     if (hr < 0) {

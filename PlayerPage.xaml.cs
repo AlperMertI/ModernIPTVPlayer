@@ -319,6 +319,22 @@ namespace ModernIPTVPlayer
 
             try 
             {
+                // [LEAK_HUNT] Memory tracking every 10 seconds
+                if (DateTime.Now.Second % 10 == 0)
+                {
+                    var proc = System.Diagnostics.Process.GetCurrentProcess();
+                    Debug.WriteLine($"[NATIVE_MEM] WS={proc.WorkingSet64/1024/1024}MB | Private={proc.PrivateMemorySize64/1024/1024}MB | GC={GC.GetTotalMemory(false)/1024/1024}MB | Managed_Total={AppDomain.CurrentDomain.MonitoringTotalAllocatedMemorySize/1024/1024}MB");
+
+                    // mpv internal state
+                    try {
+                        var mpvCacheDur = await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration");
+                        var mpvCacheState = await _mpvPlayer.GetPropertyAsync("demuxer-cache-state");
+                        var mpvHwdec = await _mpvPlayer.GetPropertyAsync("hwdec-current");
+                        var mpvDrops = await _mpvPlayer.GetPropertyAsync("frame-drop-count");
+                        Debug.WriteLine($"[MPV_INTERNAL] cache_dur={mpvCacheDur}s | hwdec={mpvHwdec} | drops={mpvDrops} | cache_state={mpvCacheState}");
+                    } catch { }
+                }
+
                 // Project Zero - Phase 5 Stability: 
                 // During handoff, property lookup can occasionally fail natively if the context is changing state.
                 bool isPaused = false;
@@ -411,19 +427,19 @@ namespace ModernIPTVPlayer
                     System.Diagnostics.Debug.WriteLine($"[HANDOFF_UNLOCK] Playback started at {position}s. Applying main buffer settings...");
                     
                     // Apply main buffer settings from user preferences
-                    int bufferSecs = AppSettings.BufferSeconds;
-                    await _mpvPlayer.SetPropertyAsync("cache", "yes");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", bufferSecs.ToString());
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB");
-                    await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "32MiB");
+                    bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts"));
+                    await MpvSetupHelper.ApplyBufferSettingsAsync(_mpvPlayer, false, isLive);
                     
                     _bufferUnlocked = true;
                 }
 
                 var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
-                // Fix: Default to isSeekable = true unless explicitly "no". 
-                // This prevents "Live" UI from appearing during loading/buffering.
-                bool isSeekable = (seekable != "no");
+                string cacheDurationStr = await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration");
+                double.TryParse(cacheDurationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double cacheDuration);
+
+                // Fix: Default to isSeekable = true unless explicitly "no" AND no cache is available.
+                // For live streams, mpv may report seekable="no" but we can still seek within the readahead cache.
+                bool isSeekable = (seekable != "no") || (cacheDuration > 3.0); 
 
                 // Disable Seek controls for linear streams (Live) to prevent freezing
                 RewindButton.IsEnabled = isSeekable;
@@ -748,16 +764,18 @@ namespace ModernIPTVPlayer
 
             if (e.Key == Windows.System.VirtualKey.Left)
             {
-                // Seek Backward 10s
-                ShowOsd("-10 SN");
-                await _mpvPlayer.ExecuteCommandAsync("seek", "-10", "relative");
+                // Seek Backward
+                int seekAmt = AppSettings.SeekBackwardSeconds;
+                ShowOsd($"-{seekAmt} SN");
+                await _mpvPlayer.ExecuteCommandAsync("seek", $"-{seekAmt}", "relative");
                 e.Handled = true;
             }
             else if (e.Key == Windows.System.VirtualKey.Right)
             {
-                // Seek Forward 30s
-                ShowOsd("+30 SN");
-                await _mpvPlayer.ExecuteCommandAsync("seek", "30", "relative");
+                // Seek Forward
+                int seekAmt = AppSettings.SeekForwardSeconds;
+                ShowOsd($"+{seekAmt} SN");
+                await _mpvPlayer.ExecuteCommandAsync("seek", seekAmt.ToString(), "relative");
                 e.Handled = true;
             }
             else if (e.Key == Windows.System.VirtualKey.I)
@@ -1672,11 +1690,9 @@ namespace ModernIPTVPlayer
 
                         await MpvSetupHelper.ConfigurePlayerAsync(_mpvPlayer, _streamUrl, isSecondary: false);
                         
-                        int bufferSecs = AppSettings.BufferSeconds;
-                        await _mpvPlayer.SetPropertyAsync("cache", "yes");
-                        await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", bufferSecs.ToString());
-                        await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "2000MiB");
-                        await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "100MiB");
+                        // Use centralized buffer settings instead of hardcoded 2GB
+                        bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts"));
+                        await MpvSetupHelper.ApplyBufferSettingsAsync(_mpvPlayer, false, isLive);
                         
                         if (_mpvPlayer == null) return; 
 
@@ -2021,7 +2037,7 @@ namespace ModernIPTVPlayer
         {
              if (_mpvPlayer == null || !RewindButton.IsEnabled) return;
              
-             _pendingSeekSeconds -= 10;
+             _pendingSeekSeconds -= AppSettings.SeekBackwardSeconds;
              ShowOsd($"{(_pendingSeekSeconds > 0 ? "+" : "")}{_pendingSeekSeconds} SANİYE");
              
              _seekDebounceTimer.Stop(); // Reset timer
@@ -2032,7 +2048,7 @@ namespace ModernIPTVPlayer
         {
              if (_mpvPlayer == null || !FastForwardButton.IsEnabled) return;
              
-             _pendingSeekSeconds += 30;
+             _pendingSeekSeconds += AppSettings.SeekForwardSeconds;
              ShowOsd($"{(_pendingSeekSeconds > 0 ? "+" : "")}{_pendingSeekSeconds} SANİYE");
              
              _seekDebounceTimer.Stop(); // Reset timer

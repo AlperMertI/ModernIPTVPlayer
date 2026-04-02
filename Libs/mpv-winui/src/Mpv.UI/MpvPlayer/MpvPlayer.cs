@@ -62,6 +62,12 @@ public sealed partial class MpvPlayer : Control
     public float SdrWhiteLevel => _renderControl?.SdrWhiteLevel ?? 80f;
     public float OsMaxLuminance => _renderControl?.OsMaxLuminance ?? 80f;
 
+    public float ManualPeakLuminance
+    {
+        get => _renderControl?.ManualPeakLuminance ?? 0;
+        set { if (_renderControl != null) _renderControl.ManualPeakLuminance = value; }
+    }
+
     public string PreferredToneMapping { get; set; } = "auto";
     
     public IntPtr SharedTextureHandle => IntPtr.Zero;

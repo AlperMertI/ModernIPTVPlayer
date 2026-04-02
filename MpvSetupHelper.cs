@@ -93,7 +93,7 @@ namespace ModernIPTVPlayer
                 await player.SetPropertyAsync("d3d11-output-format", "rgb10_a2");
                 await player.SetPropertyAsync("fbo-format", "rgb10_a2");
 
-                // 3. [FIT-TO-WINDOW] Force aspect ratio and zoom to ensure video
+                    // 3. [FIT-TO-WINDOW] Force aspect ratio and zoom to ensure video
                 // scales to the FBO viewport instead of rendering at native size.
                 await player.SetPropertyAsync("keepaspect", "yes");
                 await player.SetPropertyAsync("video-zoom", "0");
@@ -103,21 +103,14 @@ namespace ModernIPTVPlayer
                 await player.SetPropertyAsync("autofit-smaller", "");
             }
             
-            
             // Monitor for decoder failure and fallback to safe d3d11va
             _ = MonitorHwdecFallbackAsync(player, hwdecValue);
 
-            // 4. Buffering & Cache (Optimized for 4K)
-            await player.SetPropertyAsync("cache", "yes");
-            await player.SetPropertyAsync("cache-pause", "yes");
-            await player.SetPropertyAsync("cache-pause-wait", "1");
-            await player.SetPropertyAsync("cache-pause-initial", "yes");
-
-            // Memory caps optimized for high-bitrate 4K streaming.
-            // Phase 1 (Pre-buffer) uses 128MiB for stability.
-            await player.SetPropertyAsync("demuxer-max-bytes", isSecondary ? "128MiB" : "512MiB");
-            await player.SetPropertyAsync("demuxer-max-back-bytes", "16MiB");
-            await player.SetPropertyAsync("demuxer-readahead-secs", isSecondary ? "20" : AppSettings.BufferSeconds.ToString());
+            // 4. Buffering & Cache (Optimized for Stability)
+            // Determine if the URL looks like a live stream (heuristics)
+            bool isLikelyLive = streamUrl != null && (streamUrl.Contains("/live/") || streamUrl.Contains(".m3u8") || streamUrl.Contains(":8080") || streamUrl.Contains("/ts"));
+            
+            await ApplyBufferSettingsAsync(player, isSecondary, isLikelyLive);
 
             // Stability Overlays
             await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=30,reconnect_on_network_error=1,reconnect_on_http_error=4xx,5xx,reconnect_at_eof=1");
@@ -143,6 +136,29 @@ namespace ModernIPTVPlayer
             AppLogger.Info($"[MpvSetup] Essential Configuration (Phase 1) Complete. Secondary: {isSecondary}");
         }
 
+        public static async Task ApplyBufferSettingsAsync(MpvPlayer player, bool isSecondary, bool isLive)
+        {
+            if (player == null) return;
+
+            int maxBytesMB = isSecondary ? 128 : AppSettings.MaxBufferMegabytes;
+            int backBytesMB = isLive ? 50 : 64; // Small for live (seeking), reasonable for VOD
+            int readaheadSecs = isSecondary ? 20 : AppSettings.BufferSeconds;
+
+            await player.SetPropertyAsync("cache", "yes");
+            await player.SetPropertyAsync("cache-pause", "yes");
+            await player.SetPropertyAsync("cache-pause-wait", "1");
+            await player.SetPropertyAsync("cache-pause-initial", "yes");
+
+            await player.SetPropertyAsync("demuxer-max-bytes", $"{maxBytesMB}MiB");
+            await player.SetPropertyAsync("demuxer-max-back-bytes", $"{backBytesMB}MiB");
+            await player.SetPropertyAsync("demuxer-readahead-secs", readaheadSecs.ToString());
+
+            // ALWAYS enable seekable cache to allow manual navigation within the buffer
+            await player.SetPropertyAsync("demuxer-seekable-cache", "yes");
+
+            Debug.WriteLine($"[MpvSetup] Buffer Settings Applied: Max={maxBytesMB}MB, Back={backBytesMB}MB, Readahead={readaheadSecs}s, Live={isLive}, Secondary={isSecondary}");
+        }
+
         /// <summary>
         /// Phase 2: Applied once the user is actually watching (Handoff or direct start).
         /// Objective: Maximize visual fidelity and apply polishing effects.
@@ -151,6 +167,10 @@ namespace ModernIPTVPlayer
         {
             if (player == null) return;
             var pSettings = AppSettings.PlayerSettings;
+
+            // Phase 2: User Settings & Visuals
+            player.PreferredToneMapping = pSettings.ToneMapping.ToString().ToLower();
+            player.ManualPeakLuminance = (float)pSettings.TargetPeak;
 
             // 1. Scalers & Shaders
             string scalerValue = pSettings.Scaler switch
@@ -180,8 +200,27 @@ namespace ModernIPTVPlayer
                 _ => "auto"
             };
             await SetPropertySafeAsync(player, "tone-mapping", tmValue);
+            
+            // 3.5 Target Peak (Nits) - Manually specified nits override OS/EDID automatic calculations
+            if (pSettings.TargetPeak > 0)
+            {
+                await SetPropertySafeAsync(player, "target-peak", pSettings.TargetPeak.ToString());
+            }
+            else
+            {
+                await SetPropertySafeAsync(player, "target-peak", "auto");
+            }
 
-            // 4. Audio Polish
+            // 4. HDR Target Mode (Passthrough vs SDR Force)
+            string hintValue = pSettings.TargetDisplayMode switch
+            {
+                Models.TargetDisplayMode.SdrForce => "no",
+                Models.TargetDisplayMode.HdrPassthrough => "yes",
+                _ => "yes" // Auto
+            };
+            await SetPropertySafeAsync(player, "target-colorspace-hint", hintValue);
+
+            // 5. Audio Polish
             await SetPropertySafeAsync(player, "audio-exclusive", pSettings.ExclusiveAudio == Models.ExclusiveMode.Yes ? "yes" : "no");
             await SetPropertySafeAsync(player, "video-sync", "audio");
 

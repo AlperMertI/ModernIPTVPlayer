@@ -52,7 +52,18 @@ namespace ModernIPTVPlayer
             // Player Settings
             PrebufferToggle.IsOn = AppSettings.IsPrebufferEnabled;
             PrebufferSlider.Value = AppSettings.PrebufferSeconds;
+            PrebufferValueText.Text = AppSettings.PrebufferSeconds.ToString();
             BufferSlider.Value = AppSettings.BufferSeconds;
+            BufferSecondsValueText.Text = AppSettings.BufferSeconds.ToString();
+
+            MaxBufferSlider.Value = AppSettings.MaxBufferMegabytes;
+            MaxBufferValueText.Text = AppSettings.MaxBufferMegabytes.ToString();
+
+            SeekBackSlider.Value = AppSettings.SeekBackwardSeconds;
+            SeekBackValueText.Text = AppSettings.SeekBackwardSeconds.ToString();
+
+            SeekForwardSlider.Value = AppSettings.SeekForwardSeconds;
+            SeekForwardValueText.Text = AppSettings.SeekForwardSeconds.ToString();
             
             UpdateSliderHeaders();
 
@@ -137,6 +148,7 @@ namespace ModernIPTVPlayer
 
         private void PrebufferSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
         {
+            if (PrebufferValueText != null) PrebufferValueText.Text = ((int)e.NewValue).ToString();
             if (AppSettings.PrebufferSeconds != (int)e.NewValue)
             {
                 AppSettings.PrebufferSeconds = (int)e.NewValue;
@@ -145,9 +157,37 @@ namespace ModernIPTVPlayer
 
         private void BufferSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
         {
-             if (AppSettings.BufferSeconds != (int)e.NewValue)
+            if (BufferSecondsValueText != null) BufferSecondsValueText.Text = ((int)e.NewValue).ToString();
+            if (AppSettings.BufferSeconds != (int)e.NewValue)
             {
                 AppSettings.BufferSeconds = (int)e.NewValue;
+            }
+        }
+
+        private void MaxBufferSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+        {
+            if (MaxBufferValueText != null) MaxBufferValueText.Text = ((int)e.NewValue).ToString();
+            if (AppSettings.MaxBufferMegabytes != (int)e.NewValue)
+            {
+                AppSettings.MaxBufferMegabytes = (int)e.NewValue;
+            }
+        }
+
+        private void SeekBackSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+        {
+            if (SeekBackValueText != null) SeekBackValueText.Text = ((int)e.NewValue).ToString();
+            if (AppSettings.SeekBackwardSeconds != (int)e.NewValue)
+            {
+                AppSettings.SeekBackwardSeconds = (int)e.NewValue;
+            }
+        }
+
+        private void SeekForwardSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+        {
+            if (SeekForwardValueText != null) SeekForwardValueText.Text = ((int)e.NewValue).ToString();
+            if (AppSettings.SeekForwardSeconds != (int)e.NewValue)
+            {
+                AppSettings.SeekForwardSeconds = (int)e.NewValue;
             }
         }
 
@@ -259,8 +299,8 @@ namespace ModernIPTVPlayer
                 SetComboSelection(VoCombo, settings.VideoOutput.ToString());
                 SetComboSelection(ScalerCombo, settings.Scaler.ToString());
                 SetComboSelection(ToneMappingCombo, settings.ToneMapping.ToString());
-                SetComboSelection(TargetModeCombo, settings.TargetDisplayMode.ToString());
-                SetComboSelection(TargetPeakCombo, settings.TargetPeak.ToString());
+                SetComboSelection(HdrTargetModeCombo, settings.TargetDisplayMode.ToString());
+                TargetPeakBox.Text = settings.TargetPeak == 0 ? "" : settings.TargetPeak.ToString();
                 SetComboSelection(AudioChannelsCombo, settings.AudioChannels.ToString());
 
                 DebandToggle.IsOn = settings.Deband == Models.DebandMode.Yes;
@@ -318,8 +358,8 @@ namespace ModernIPTVPlayer
                         SetComboSelection(VoCombo, defaults.VideoOutput.ToString());
                         SetComboSelection(ScalerCombo, defaults.Scaler.ToString());
                         SetComboSelection(ToneMappingCombo, defaults.ToneMapping.ToString());
-                        SetComboSelection(TargetModeCombo, defaults.TargetDisplayMode.ToString());
-                        SetComboSelection(TargetPeakCombo, defaults.TargetPeak.ToString());
+                        SetComboSelection(HdrTargetModeCombo, defaults.TargetDisplayMode.ToString());
+                        TargetPeakBox.Text = defaults.TargetPeak == 0 ? "" : defaults.TargetPeak.ToString();
                         SetComboSelection(AudioChannelsCombo, defaults.AudioChannels.ToString());
                         DebandToggle.IsOn = defaults.Deband == Models.DebandMode.Yes;
                         ExclusiveToggle.IsOn = defaults.ExclusiveAudio == Models.ExclusiveMode.Yes;
@@ -354,10 +394,12 @@ namespace ModernIPTVPlayer
         private void CustomConfigBox_TextChanged(object sender, TextChangedEventArgs e)
         {
             if (_isUpdatingProfile) return;
-            // Delay saving or save on lost focus? For simplicity, save on change but mark as Custom immediately.
-            // TextChanged fires often, maybe don't save to disk every char, but update internal state?
-            // For now, let's just mark as custom. Actual save happens on Nav/App close or explicit action?
-            // We usually save immediately in this app.
+            OnPlayerSettingChanged();
+        }
+
+        private void TargetPeakBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_isUpdatingProfile) return;
             OnPlayerSettingChanged();
         }
         
@@ -382,6 +424,12 @@ namespace ModernIPTVPlayer
             // Save current UI state
             var settings = GetCurrentSettingsFromUI();
             SavePlayerSettings(settings);
+        }
+
+        private void HdrTargetModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_isUpdatingProfile) return;
+            OnPlayerSettingChanged();
         }
 
         private Models.PlayerSettings GetCurrentSettingsFromUI()
@@ -418,16 +466,19 @@ namespace ModernIPTVPlayer
                 settings.ToneMapping = tm;
             }
             
-             if (TargetModeCombo.SelectedItem is ComboBoxItem tmcItem &&
+             if (HdrTargetModeCombo.SelectedItem is ComboBoxItem tmcItem &&
                 Enum.TryParse(tmcItem.Tag.ToString(), out Models.TargetDisplayMode tmc))
             {
                 settings.TargetDisplayMode = tmc;
             }
 
-            if (TargetPeakCombo.SelectedItem is ComboBoxItem tpItem &&
-                Enum.TryParse(tpItem.Tag.ToString(), out Models.TargetPeak tp))
+            if (int.TryParse(TargetPeakBox.Text, out int nits))
             {
-                settings.TargetPeak = tp;
+                settings.TargetPeak = nits;
+            }
+            else
+            {
+                settings.TargetPeak = 0; // Auto
             }
 
             if (AudioChannelsCombo.SelectedItem is ComboBoxItem acItem &&

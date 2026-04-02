@@ -343,8 +343,11 @@ public sealed partial class Player
         Marshal.FreeHGlobal(blockPtr);
     }
 
+    private static int _rerunCount = 0;
     public void RerunEventLoop()
     {
+        Debug.WriteLine($"[LEAK_DEBUG] RerunEventLoop called #{++_rerunCount} | StackTrace: {new System.Diagnostics.StackTrace(1, false)}");
+
         if (_eventLoopCancellationTokenSource != null)
         {
             _eventLoopCancellationTokenSource.Cancel();
