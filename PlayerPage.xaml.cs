@@ -65,6 +65,7 @@ namespace ModernIPTVPlayer
         private string _cachedResolution = "-";
         private string _cachedFps = "-";
         private string _cachedCodec = "-";
+        private bool _isPaused = false;
 
         // ---------- SUBTITLE & SYNC STATE ----------
         private bool _isAudioDelayMode = false; // true = Audio, false = Subtitle
@@ -319,46 +320,34 @@ namespace ModernIPTVPlayer
 
             try 
             {
-                // [LEAK_HUNT] Memory tracking every 10 seconds
+                // [LEAK_HUNT] Memory tracking every 10 seconds (Improved labels)
                 if (DateTime.Now.Second % 10 == 0)
                 {
                     var proc = System.Diagnostics.Process.GetCurrentProcess();
-                    Debug.WriteLine($"[NATIVE_MEM] WS={proc.WorkingSet64/1024/1024}MB | Private={proc.PrivateMemorySize64/1024/1024}MB | GC={GC.GetTotalMemory(false)/1024/1024}MB | Managed_Total={AppDomain.CurrentDomain.MonitoringTotalAllocatedMemorySize/1024/1024}MB");
+                    long managedHeap = GC.GetTotalMemory(false);
+                    long cumulativeAlloc = AppDomain.CurrentDomain.MonitoringTotalAllocatedMemorySize;
+                    Debug.WriteLine($"[MEM_DEBUG] WS={proc.WorkingSet64/1024/1024}MB | Private={proc.PrivateMemorySize64/1024/1024}MB | Heap={managedHeap/1024/1024}MB | Cumulative_Alloc={cumulativeAlloc/1024/1024}MB");
 
-                    // mpv internal state
+                    // Periodic telemetry that isn't event-based or high frequency (container specs)
                     try {
-                        var mpvCacheDur = await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration");
-                        var mpvCacheState = await _mpvPlayer.GetPropertyAsync("demuxer-cache-state");
-                        var mpvHwdec = await _mpvPlayer.GetPropertyAsync("hwdec-current");
-                        var mpvDrops = await _mpvPlayer.GetPropertyAsync("frame-drop-count");
-                        Debug.WriteLine($"[MPV_INTERNAL] cache_dur={mpvCacheDur}s | hwdec={mpvHwdec} | drops={mpvDrops} | cache_state={mpvCacheState}");
+                        var mpvFps = await _mpvPlayer.GetPropertyAsync("container-fps");
+                        var mpvResW = await _mpvPlayer.GetPropertyAsync("video-params/res-w");
+                        var mpvResH = await _mpvPlayer.GetPropertyAsync("video-params/res-h");
+                        var mpvCodec = await _mpvPlayer.GetPropertyAsync("video-codec");
+
+                        if (!string.IsNullOrEmpty(mpvFps) && double.TryParse(mpvFps, NumberStyles.Any, CultureInfo.InvariantCulture, out double fpsVal))
+                            TxtFps.Text = fpsVal.ToString("F2");
+
+                        if (!string.IsNullOrEmpty(mpvResW) && !string.IsNullOrEmpty(mpvResH)) 
+                            TxtResolution.Text = $"{mpvResW}x{mpvResH}";
+
+                        if (!string.IsNullOrEmpty(mpvCodec) && !TxtHardware.Text.Contains($"({mpvCodec})")) 
+                            TxtHardware.Text += $" ({mpvCodec})";
                     } catch { }
                 }
 
-                // Project Zero - Phase 5 Stability: 
-                // During handoff, property lookup can occasionally fail natively if the context is changing state.
-                bool isPaused = false;
-                try { isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause"); } catch { return; }
-
-                PlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE"; // Sync with improved glyphs
-                if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE";
-
-                // ---------- INACTIVITY TIMER MANAGEMENT ----------
-                if (isPaused)
-                {
-                    if (!_inactivityTimer.IsEnabled && !_isInactivityOverlayVisible)
-                    {
-                        _pauseStartTime = DateTime.Now;
-                        _inactivityTimer.Start();
-                    }
-                }
-                else
-                {
-                    if (_inactivityTimer.IsEnabled) _inactivityTimer.Stop();
-                    if (_isInactivityOverlayVisible) HideInactivityOverlay();
-                }
-
-                // ---------- SEEKBAR & TIME LOGIC ----------
+                // ---------- SEEKBAR & TIME LOGIC & LOGO SYNC ----------
+                // These require lower-latency polling for smooth UI updates
                 string durationStr = await _mpvPlayer.GetPropertyAsync("duration");
                 string positionStr = await _mpvPlayer.GetPropertyAsync("time-pos");
                 string coreIdleStr = await _mpvPlayer.GetPropertyAsync("core-idle");
@@ -369,13 +358,11 @@ namespace ModernIPTVPlayer
                 double.TryParse(positionStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double position);
 
                 // --- LOGO LOADING SYNC LOGIC ---
-                // If the loading overlay is still visible, check if we are truly ready to play
                 if (PlayerLoadingOverlay.Visibility == Visibility.Visible)
                 {
                     bool isCoreIdle = coreIdleStr == "yes";
                     bool isBuffering = pausedForCacheStr == "yes" || seekingStr == "yes" || position < 0.1;
 
-                    // Additionally, ensure time has actually begun advancing reliably
                     bool isTimeAdvancing = position > 0.05 && !isCoreIdle && !isBuffering;
                     
                     if (isTimeAdvancing)
@@ -434,14 +421,12 @@ namespace ModernIPTVPlayer
                 }
 
                 var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
-                string cacheDurationStr = await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration");
-                double.TryParse(cacheDurationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double cacheDuration);
+                
+                // Use cached duration if possible or just use the local string for seekable check
+                double.TryParse(await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration"), NumberStyles.Any, CultureInfo.InvariantCulture, out double cacheDuration);
 
-                // Fix: Default to isSeekable = true unless explicitly "no" AND no cache is available.
-                // For live streams, mpv may report seekable="no" but we can still seek within the readahead cache.
                 bool isSeekable = (seekable != "no") || (cacheDuration > 3.0); 
-
-                // Disable Seek controls for linear streams (Live) to prevent freezing
+                
                 RewindButton.IsEnabled = isSeekable;
                 FastForwardButton.IsEnabled = isSeekable;
                 SeekSlider.IsEnabled = isSeekable;
@@ -513,7 +498,7 @@ namespace ModernIPTVPlayer
                     TimeTextBlock.Visibility = Visibility.Collapsed;
                     SeekSlider.Visibility = Visibility.Collapsed;
                     
-                    if (isPaused || _isBehind)
+                    if (_isPaused || _isBehind)
                     {
                         LiveIndicator.Fill = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray);
                         LiveText.Text = "CANLI (GERİDE)";
@@ -616,8 +601,17 @@ namespace ModernIPTVPlayer
                                 if (double.TryParse(brStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double brVal)) 
                                     bitrate = (long)brVal;
 
-                                Services.ProbeCacheService.Instance.Update(_streamUrl, _cachedResolution, simpleFps, _cachedCodec, bitrate, isHdr);
-                                Debug.WriteLine($"[PlayerPage] Metadata Updated in Global Cache for {_streamUrl} ({_cachedResolution})");
+                                if (int.TryParse(_navArgs.Id, out int streamId))
+                                {
+                                    Services.ProbeCacheService.Instance.Update(streamId, _cachedResolution, simpleFps, _cachedCodec, bitrate, isHdr);
+                                    Debug.WriteLine($"[PlayerPage] Metadata Updated in Global Cache for ID {streamId} ({_cachedResolution})");
+                                }
+                                else if (!string.IsNullOrEmpty(_streamUrl))
+                                {
+                                     // Fallback for non-numeric IDs (Stremio/VOD) if needed, 
+                                     // but our binary system is optimized for integer IDs.
+                                     Debug.WriteLine("[PlayerPage] Skipping binary cache update: Non-numeric ID.");
+                                }
                             }
                             catch (Exception ex) { Debug.WriteLine($"[PlayerPage] Global Cache Update Failed: {ex.Message}"); }
                         }
@@ -1012,6 +1006,7 @@ namespace ModernIPTVPlayer
                         // Fresh player created on this page: Full destruction is safe and required.
 
                         await _mpvPlayer.CleanupAsync();
+                        _mpvPlayer.PropertyChanged -= OnMpvPropertyChanged;
                         // _mpvPlayer.CleanupAsync() COMPLETED
                     }
                     catch (Exception ex) { Debug.WriteLine($"[LIFECYCLE] Cleanup Error: {ex}"); }
@@ -1667,6 +1662,7 @@ namespace ModernIPTVPlayer
                      _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
                      _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
                      _mpvPlayer.IsHitTestVisible = false;
+                     _mpvPlayer.PropertyChanged += OnMpvPropertyChanged;
 
                      try
                     {
@@ -3932,6 +3928,14 @@ namespace ModernIPTVPlayer
         }
         private void SetupProfessionalAnimations()
         {
+            // [PERF] High-frequency composition animations (Breathing/Glow) are 
+            // the largest source of non-video GPU usage in WinUI 3.
+            if (AppSettings.PlayerSettings.Profile == Models.PlayerProfile.Performance)
+            {
+                Debug.WriteLine("[PERF] Performance Mode: Skipping 'Alive System' UI animations.");
+                return;
+            }
+
             // 1. Ghosting Trails for Rewind/FF
             SetupHighFidelityGhosting(RewindButton, RewindIconVisual, RewindGhost1, RewindGhost2, -15f);
             SetupHighFidelityGhosting(FastForwardButton, FastForwardIconVisual, FFGhost1, FFGhost2, 15f);
@@ -4407,6 +4411,53 @@ namespace ModernIPTVPlayer
         {
             PipControls.Opacity = 0;
             // Optionally hide cursor again if desired, but user might be moving mouse out to other window
+        }
+        private void OnMpvPropertyChanged(object? sender, Mpv.Core.Structs.Client.MpvEventProperty e)
+        {
+            if (!IsPlayerActive) return;
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                switch (e.Name)
+                {
+                    case "pause":
+                        bool isPaused = Marshal.ReadInt32(e.DataPtr) == 1;
+                        _isPaused = isPaused;
+                        PlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE";
+                        if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE";
+                        
+                        if (isPaused)
+                        {
+                            if (!_inactivityTimer.IsEnabled && !_isInactivityOverlayVisible)
+                            {
+                                _pauseStartTime = DateTime.Now;
+                                _inactivityTimer.Start();
+                            }
+                        }
+                        else
+                        {
+                            _inactivityTimer.Stop();
+                            if (_isInactivityOverlayVisible) HideInactivityOverlay();
+                        }
+                        break;
+                    case "demuxer-cache-duration":
+                        double cacheDur = 0;
+                        if (e.Format == Mpv.Core.Enums.Client.MpvFormat.Double)
+                        {
+                             cacheDur = (double)Marshal.PtrToStructure(e.DataPtr, typeof(double));
+                        }
+                        TxtBuffer.Text = $"{cacheDur:F1}s";
+                        break;
+                    case "hwdec-current":
+                        string? hwdec = Marshal.PtrToStringUTF8(e.DataPtr);
+                        TxtHardware.Text = hwdec ?? "no";
+                        break;
+                    case "frame-drop-count":
+                        long drops = Marshal.ReadInt64(e.DataPtr);
+                        TxtDroppedDecoder.Text = drops.ToString();
+                        break;
+                }
+            });
         }
     }
 }

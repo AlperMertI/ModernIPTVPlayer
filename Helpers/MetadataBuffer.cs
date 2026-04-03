@@ -17,6 +17,13 @@ namespace ModernIPTVPlayer.Helpers
         private static readonly object _lock = new();
         private static long _storeCount = 0;
 
+        // PROJECT ZERO: String Interning Pool
+        // Reuses offsets for identical strings to save massive RAM & Lock contention
+        private static readonly ConcurrentDictionary<string, (int Offset, int Length)> _internPool = new();
+        private static readonly ConcurrentDictionary<(int Offset, int Length), string> _stringCache = new();
+        private const int MAX_INTERN_LENGTH = 256; // Increased to cover most titles/URLs while preventing multi-MB strings in dictionary
+        private const int MAX_CACHE_SIZE = 10000; // Limit string cache to prevent RAM bloat
+
         /// <summary>
         /// Stores a string in the UTF-8 buffer and returns its offset and length.
         /// Deduplicates common strings automatically via FastStringPool if possible.
@@ -25,15 +32,18 @@ namespace ModernIPTVPlayer.Helpers
         {
             if (string.IsNullOrEmpty(s)) return (-1, 0);
 
+            // 1. PROJECT ZERO: Reactive Interning
+            // If the string is short and already stored, just return the existing offset.
+            if (s.Length <= MAX_INTERN_LENGTH)
+            {
+                if (_internPool.TryGetValue(s, out var existing)) return existing;
+            }
+
             _storeCount++;
-            if (_storeCount % 10000 == 0)
+            if (_storeCount % 50000 == 0)
             {
                 System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] Store Count: {_storeCount}, Current Pos: {_position / 1024 / 1024}MB");
             }
-
-            // 1. Check if we need to intern the string itself before UTF8 conversion (fast check)
-            // But for zero-object, the aim is to not even have the string.
-            // However, we'll use a local pool for very common small strings (extensions, years).
 
             byte[] utf8 = Encoding.UTF8.GetBytes(s);
             int len = utf8.Length;
@@ -44,14 +54,20 @@ namespace ModernIPTVPlayer.Helpers
                 if (_position + len > _buffer.Length)
                 {
                     // Grow buffer exponentially
-                    int newSize = _buffer.Length * 2;
-                    System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] CRITICAL: Resizing buffer to {newSize / 1024 / 1024}MB (Triggered by string of length {len})");
+                    int newSize = Math.Max(_buffer.Length * 2, _position + len + 1024 * 1024);
+                    System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] CRITICAL: Resizing buffer to {newSize / 1024 / 1024}MB");
                     Array.Resize(ref _buffer, newSize);
                 }
 
                 offset = _position;
                 Buffer.BlockCopy(utf8, 0, _buffer, offset, len);
                 _position += len;
+            }
+
+            // 2. Add to Intern Pool if eligible
+            if (s.Length <= MAX_INTERN_LENGTH)
+            {
+                _internPool.TryAdd(s, (offset, len));
             }
 
             return (offset, len);
@@ -103,7 +119,23 @@ namespace ModernIPTVPlayer.Helpers
         public static string GetString(int offset, int length)
         {
             if (offset < 0 || length <= 0) return string.Empty;
-            return Encoding.UTF8.GetString(_buffer, offset, length);
+
+            var key = (offset, length);
+            if (_stringCache.TryGetValue(key, out var s)) return s;
+
+            s = Encoding.UTF8.GetString(_buffer, offset, length);
+
+            if (_stringCache.Count < MAX_CACHE_SIZE)
+            {
+                _stringCache.TryAdd(key, s);
+            }
+            else if (_stringCache.Count > MAX_CACHE_SIZE + 1000)
+            {
+                // Simple cache-clear if too big (O(1) approximation of LRU)
+                _stringCache.Clear();
+            }
+
+            return s;
         }
 
         /// <summary>
@@ -117,29 +149,41 @@ namespace ModernIPTVPlayer.Helpers
         }
 
         /// <summary>
-        /// Sets the internal buffer (useful for loading from BinaryBundle).
+        /// PROJECT ZERO: Safe Multithreaded Append.
+        /// Appends a raw buffer (e.g., from a binary bundle) to the global store without 
+        /// invalidating existing offsets. Returns the base offset where it was placed.
         /// </summary>
-        public static void SetRawBuffer(byte[] raw, int position)
+        public static int AppendRawBuffer(byte[] data, int length)
         {
+            if (data == null || length <= 0) return 0;
+            
             lock (_lock)
             {
-                _buffer = raw;
-                _position = position;
+                int baseOffset = _position;
+                if (_position + length > _buffer.Length)
+                {
+                    int newSize = Math.Max(_buffer.Length + length + 1024 * 1024, _buffer.Length * 2);
+                    System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] Appending: Resizing buffer to {newSize / 1024 / 1024}MB");
+                    Array.Resize(ref _buffer, newSize);
+                }
+
+                Buffer.BlockCopy(data, 0, _buffer, baseOffset, length);
+                _position += length;
+                return baseOffset;
             }
         }
 
         public static byte[] GetRawBuffer() => _buffer;
         public static int GetPosition() => _position;
 
-        /// <summary>
-        /// Clears all stored data.
-        /// </summary>
         public static void Reset()
         {
             lock (_lock)
             {
                 _position = 0;
-                // Don't shrink the buffer to avoid re-allocations on next use.
+                _internPool.Clear();
+                _stringCache.Clear();
+                _storeCount = 0;
             }
         }
     }

@@ -1,4 +1,4 @@
-﻿// Copyright (c) Bili Copilot. All rights reserved.
+// Copyright (c) Bili Copilot. All rights reserved.
 
 using Mpv.Core.Args;
 using Mpv.Core.Enums.Client;
@@ -153,6 +153,8 @@ public sealed partial class Player
                 ChangeState(PlaybackState.Playing);
             }
         }
+
+        PropertyChanged?.Invoke(this, property);
     }
 
     private void ChangeState(PlaybackState state)

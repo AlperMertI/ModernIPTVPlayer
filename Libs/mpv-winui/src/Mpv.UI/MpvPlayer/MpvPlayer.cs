@@ -23,6 +23,7 @@ public sealed partial class MpvPlayer : Control
     }
 
     private bool _mpvGpuIsDirty = false;
+    private bool _isDisposed = false;
     private Mpv.Core.Interop.MpvRenderContextNative.MpvRenderUpdateCallback _updateCallback;
 
     public static readonly DependencyProperty RenderApiProperty =
@@ -182,7 +183,9 @@ public sealed partial class MpvPlayer : Control
 
             if (isHdrContent)
             {
-                // [HDR10 Path] Content is 10-bit HDR.
+                // [HDR10 Path] Content is 10-bit HDR. Use 10-bit output.
+                await SetResilient("d3d11-output-format", "rgb10_a2");
+                await SetResilient("fbo-format", "rgb10_a2");
                 await SetResilient("target-peak", targetPeakNits);
                 await SetResilient("hdr-compute-peak", computePeak ? "yes" : "no");
                 
@@ -190,17 +193,22 @@ public sealed partial class MpvPlayer : Control
             }
             else
             {
-                // [SDR-on-HDR Path] Content is SDR but display is HDR.
+                // [SDR-on-HDR Path] Content is SDR but display is HDR. 
+                // We can use rgba8 for SDR content on HDR display to save GPU bandwidth.
+                await SetResilient("d3d11-output-format", "rgba8");
+                await SetResilient("fbo-format", "rgba8");
                 await SetResilient("target-peak", "auto");
                 Debug.WriteLine($"[HDR_AUTH] SDR_ON_HDR | Hint: yes | Renderer: {renderApi}");
             }
         }
         else
         {
-            // [DISPLAY_SDR] Pure SDR Path
+            // [DISPLAY_SDR] Pure SDR Path. Always use 8-bit for maximum performance.
+            await SetResilient("d3d11-output-format", "rgba8");
+            await SetResilient("fbo-format", "rgba8");
             await SetResilient("target-colorspace-hint", "no");
             await SetResilient("target-trc", "srgb");
-            Debug.WriteLine($"[HDR_AUTH] OFF | Standard SDR Path");
+            Debug.WriteLine($"[HDR_AUTH] OFF | Standard SDR Path (8-bit enabled)");
         }
     }
 
@@ -220,6 +228,7 @@ public sealed partial class MpvPlayer : Control
             
             Player.PlaybackPositionChanged += OnPositionChanged;
             Player.PlaybackStateChanged += OnStateChanged;
+            Player.PropertyChanged += OnPropertyChanged;
             _renderControl.Initialize();
             await _renderControl.WaitForHdrStatusAsync();
             Player.Client.SetProperty("vo", "libmpv");
@@ -243,8 +252,31 @@ public sealed partial class MpvPlayer : Control
         }
     }
 
+    public event EventHandler<Mpv.Core.Structs.Client.MpvEventProperty>? PropertyChanged;
+
     private void OnPositionChanged(object sender, PlaybackPositionChangedEventArgs e)
     {
+    }
+
+    public void ObserveProperty(string name, Mpv.Core.Enums.Client.MpvFormat format = Mpv.Core.Enums.Client.MpvFormat.String)
+    {
+        if (Player?.Client?.IsInitialized == true && !_isDisposed)
+        {
+            Player.Client.ObserveProperty(name, format);
+        }
+    }
+
+    public void UnObserveProperties(ulong requestId = 0)
+    {
+        if (Player?.Client?.IsInitialized == true && !_isDisposed)
+        {
+            Player.Client.UnObserveProperties(requestId);
+        }
+    }
+
+    private void OnPropertyChanged(object? sender, Mpv.Core.Structs.Client.MpvEventProperty e)
+    {
+        PropertyChanged?.Invoke(this, e);
     }
 
     public void Play()
@@ -269,6 +301,7 @@ public sealed partial class MpvPlayer : Control
 
             Player.PlaybackPositionChanged += OnPositionChanged;
             Player.PlaybackStateChanged += OnStateChanged;
+            Player.PropertyChanged += OnPropertyChanged;
             _renderControl.Initialize();
             await _renderControl.WaitForHdrStatusAsync();
             Player.Client.RequestLogMessage(MpvLogLevel.V);
@@ -292,7 +325,7 @@ public sealed partial class MpvPlayer : Control
 
     public async Task SetPropertyAsync<T>(string name, T value)
     {
-        if (Player == null || value == null) return;
+        if (Player == null || value == null || _isDisposed) return;
         
         // Ensure decimal values ALWAYS use '.' (dot) regardless of system language.
         string valStr = value is IFormattable formattable
@@ -334,7 +367,7 @@ public sealed partial class MpvPlayer : Control
 
     public async Task<string> GetPropertyAsync(string name)
     {
-        if (Player == null) return "N/A";
+        if (Player == null || _isDisposed) return "N/A";
         try
         {
             return await Task.Run(() => Player.Client.GetPropertyToString(name));
@@ -348,7 +381,7 @@ public sealed partial class MpvPlayer : Control
 
     public async Task<bool> GetPropertyBoolAsync(string name)
     {
-        if (Player == null) return false;
+        if (Player == null || _isDisposed) return false;
         try
         {
             return await Task.Run(() => Player.Client.GetPropertyToBoolean(name));
@@ -362,7 +395,7 @@ public sealed partial class MpvPlayer : Control
 
     public async Task<long> GetPropertyLongAsync(string name)
     {
-        if (Player == null) return -1;
+        if (Player == null || _isDisposed) return -1;
         try
         {
             return await Task.Run(() => Player.Client.GetPropertyToLong(name));
@@ -406,6 +439,9 @@ public sealed partial class MpvPlayer : Control
 
     public async Task CleanupAsync()
     {
+        if (_isDisposed) return;
+        _isDisposed = true;
+
         // 1. Stop the Render Loop FIRST to prevent access violations during disposal
         if (_renderControl != null)
         {

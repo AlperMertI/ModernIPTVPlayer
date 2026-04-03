@@ -693,29 +693,26 @@ public class D3D11RenderControl : ContentControl
     {
         if (_swapChain.Handle == null) return;
         try {
-            // Present the FULL swapchain buffer with uniform scaling to preserve aspect ratio.
-            // mpv already renders the video with correct aspect ratio into the buffer
-            // (including letterboxing/pillarboxing). We just need to present it
-            // at uniform scale, centered within the panel.
             _swapChain.Handle->SetSourceSize((uint)_swapChainWidth, (uint)_swapChainHeight);
 
-            // Uniform scale: fit buffer within panel while preserving aspect ratio.
-            // The AR adjustment in PerformResize ensures the swap chain AR matches the panel,
-            // so the transform fills the panel with minimal or no gap.
-            float scaleX = _swapChainWidth > 0 ? (float)(_targetWidth / _swapChainWidth) : 1.0f;
-            float scaleY = _swapChainHeight > 0 ? (float)(_targetHeight / _swapChainHeight) : 1.0f;
-            float scale = Math.Min(scaleX, scaleY);
+            // [PERF] Skip matrix transform when swapchain matches panel exactly.
+            // This avoids an unnecessary DWM GPU scaling pass.
+            if (_swapChainWidth == _targetWidth && _swapChainHeight == _targetHeight)
+            {
+                _swapChain.Handle->SetMatrixTransform(null);
+            }
+            else
+            {
+                float scaleX = _swapChainWidth > 0 ? (float)(_targetWidth / _swapChainWidth) : 1.0f;
+                float scaleY = _swapChainHeight > 0 ? (float)(_targetHeight / _swapChainHeight) : 1.0f;
+                float scale = Math.Min(scaleX, scaleY);
 
-            float offsetX = (float)((_targetWidth - _swapChainWidth * scale) / 2.0);
-            float offsetY = (float)((_targetHeight - _swapChainHeight * scale) / 2.0);
+                float offsetX = (float)((_targetWidth - _swapChainWidth * scale) / 2.0);
+                float offsetY = (float)((_targetHeight - _swapChainHeight * scale) / 2.0);
 
-            // [DEBUG_RESIZE] Log translation and scaling
-
-
-            // Always update the transform — SetMatrixTransform is a cheap metadata operation.
-            // Caching caused stale positioning when the swap chain AR didn't change but the panel did.
-            var mat = new Silk.NET.Maths.Matrix3X2<float>(scale, 0, 0, scale, offsetX, offsetY);
-            _swapChain.Handle->SetMatrixTransform((Silk.NET.DXGI.Matrix3X2F*)&mat);
+                var mat = new Silk.NET.Maths.Matrix3X2<float>(scale, 0, 0, scale, offsetX, offsetY);
+                _swapChain.Handle->SetMatrixTransform((Silk.NET.DXGI.Matrix3X2F*)&mat);
+            }
 
             int hr = _swapChain.Handle->Present(0, 0); 
             if (hr != 0 && hr != unchecked((int)0x887A0005)) { // Ignore DEVICE_REMOVED for log spam
@@ -821,11 +818,14 @@ public class D3D11RenderControl : ContentControl
             if (!_isMonitorInfoInitialized)
                 UpdateMonitorInfo();
 
-            int stableWidth = Math.Max(width, _maxMonitorWidth);
-            int stableHeight = Math.Max(height, _maxMonitorHeight);
+            // [PERF] Size swapchain to actual window dimensions.
+            // The 256-pixel rounding below provides natural resize headroom.
+            // No extra margin needed -- window can never exceed display resolution.
+            int stableWidth = Math.Max((int)width, 256);
+            int stableHeight = Math.Max((int)height, 256);
             
             // [DEBUG_RESIZE] Trace requested vs stable dimensions
-            LogSync($"[PERFORM_RESIZE] Req: {width}x{height} | Stable: {stableWidth}x{stableHeight} | Monitor: {_maxMonitorWidth}x{_maxMonitorHeight}");
+            LogSync($"[PERFORM_RESIZE] Req: {width}x{height} | Stable: {stableWidth}x{stableHeight} | Monitor: {_maxMonitorWidth}x{_maxMonitorHeight} | Margin: 15%");
 
             stableWidth = (stableWidth + 255) & ~255;
             stableHeight = (stableHeight + 255) & ~255;
@@ -1051,7 +1051,7 @@ public class D3D11RenderControl : ContentControl
             BufferUsage = DXGI.UsageRenderTargetOutput,
             SampleDesc = new SampleDesc(1, 0), 
             Scaling = Scaling.ScalingStretch, // Use Stretch combined with Matrix Transform for clipping bypass
-            SwapEffect = SwapEffect.FlipSequential, // More compatible than FlipDiscard
+            SwapEffect = SwapEffect.FlipDiscard, // Enables MPO and minimum present latency
             AlphaMode = AlphaMode.Ignore,
             Flags = (uint)SwapChainFlag.FrameLatencyWaitableObject // Remove AllowTearing
         };

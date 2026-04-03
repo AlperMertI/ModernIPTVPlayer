@@ -15,6 +15,8 @@ namespace ModernIPTVPlayer
     {
         private readonly object _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
+        [JsonIgnore]
+        public bool IsLoading { get; set; } = false;
 
         // Compact storage (Offsets + Lengths)
         private int _nameOffset, _nameLen;
@@ -139,13 +141,15 @@ namespace ModernIPTVPlayer
 
         public void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         {
+            if (IsLoading) return; // Suppress during bulk load
+
             _globalPropertyChangedCount++;
             if (_globalPropertyChangedCount % 5000 == 0)
             {
                 System.Diagnostics.Debug.WriteLine($"[VodStream] Property Change Count: {_globalPropertyChangedCount}, Property: {name}");
             }
 
-            if (PropertyChanged == null) return; // Project Zero Fix: Don't enqueue if no one's listening (prevents RAM bloat during load)
+            if (PropertyChanged == null) return; 
 
             var queue = App.MainWindow?.DispatcherQueue;
             if (queue == null)
@@ -339,44 +343,49 @@ namespace ModernIPTVPlayer
         public override VodStream Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             if (reader.TokenType != JsonTokenType.StartObject) return null;
-            var stream = new VodStream();
-            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            var stream = new VodStream { IsLoading = true };
+            try
             {
-                if (reader.TokenType != JsonTokenType.PropertyName) continue;
-                string propName = reader.GetString();
-                reader.Read();
-
-                if (reader.TokenType == JsonTokenType.Null) continue;
-
-                switch (propName)
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
                 {
-                    case "name":
-                        stream.Name = reader.GetString(); // MetadataBuffer internally handles this through property setter
-                        break;
-                    case "stream_id":
-                        stream.StreamId = reader.GetInt32();
-                        break;
-                    case "stream_icon":
-                        stream.IconUrl = reader.GetString();
-                        break;
-                    case "container_extension":
-                        stream.ContainerExtension = FastStringPool.Intern(reader.GetString());
-                        break;
-                    case "category_id":
-                        stream.CategoryId = FastStringPool.Intern(reader.GetString());
-                        break;
-                    case "imdb_id":
-                        stream.ImdbId = reader.GetString();
-                        break;
-                    case "rating":
-                        stream.RatingRaw = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
-                        break;
-                    case "added":
-                        stream.DateAdded = FastStringPool.Intern(reader.GetString());
-                        break;
-                    // Other fields can be handled by standard deserialization if we don't care as much about them
-                    // or we can add them here for 100% control.
+                    if (reader.TokenType != JsonTokenType.PropertyName) continue;
+                    string propName = reader.GetString();
+                    reader.Read();
+
+                    if (reader.TokenType == JsonTokenType.Null) continue;
+
+                    switch (propName)
+                    {
+                        case "name":
+                            stream.Name = reader.GetString(); // MetadataBuffer internally handles this through property setter
+                            break;
+                        case "stream_id":
+                            stream.StreamId = reader.GetInt32();
+                            break;
+                        case "stream_icon":
+                            stream.IconUrl = reader.GetString();
+                            break;
+                        case "container_extension":
+                            stream.ContainerExtension = FastStringPool.Intern(reader.GetString());
+                            break;
+                        case "category_id":
+                            stream.CategoryId = FastStringPool.Intern(reader.GetString());
+                            break;
+                        case "imdb_id":
+                            stream.ImdbId = reader.GetString();
+                            break;
+                        case "rating":
+                            stream.RatingRaw = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
+                            break;
+                        case "added":
+                            stream.DateAdded = FastStringPool.Intern(reader.GetString());
+                            break;
+                    }
                 }
+            }
+            finally
+            {
+                stream.IsLoading = false;
             }
             return stream;
         }

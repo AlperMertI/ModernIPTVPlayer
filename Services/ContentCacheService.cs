@@ -15,6 +15,7 @@ using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Services.Iptv; // NEW
 using Windows.Storage;
 using ModernIPTVPlayer;
+using System.Runtime.InteropServices;
 
 namespace ModernIPTVPlayer.Services
 {
@@ -259,7 +260,17 @@ namespace ModernIPTVPlayer.Services
             });
         }
 
-        public async Task SyncPlaylistAsync(LoginParams login)
+        public Task SyncPlaylistAsync(LoginParams login)
+        {
+            return SyncInternalAsync(login, force: false);
+        }
+
+        public Task SyncNowAsync(LoginParams login)
+        {
+            return SyncInternalAsync(login, force: true);
+        }
+
+        private async Task SyncInternalAsync(LoginParams login, bool force)
         {
             if (login == null) { AppLogger.Warn("[ContentCache] Sync: null login"); return; }
             if (string.IsNullOrEmpty(login.Host)) { AppLogger.Warn("[ContentCache] Sync: No host for Xtream login"); return; }
@@ -270,10 +281,10 @@ namespace ModernIPTVPlayer.Services
             var lastVod = AppSettings.LastVodCacheTime;
             var lastSeries = AppSettings.LastSeriesCacheTime;
             
-            bool needsVod = (DateTime.Now - lastVod) > interval;
-            bool needsSeries = (DateTime.Now - lastSeries) > interval;
+            bool needsVod = force || (DateTime.Now - lastVod) > interval;
+            bool needsSeries = force || (DateTime.Now - lastSeries) > interval;
             
-            AppLogger.Info($"[ContentCache] Sync Check: playlist={playlistId}, lastVod={lastVod}, lastSeries={lastSeries}, interval={interval.TotalMinutes}m, needsVod={needsVod}, needsSeries={needsSeries}");
+            AppLogger.Info($"[ContentCache] Sync Check: playlist={playlistId}, force={force}, lastVod={lastVod}, lastSeries={lastSeries}, interval={interval.TotalMinutes}m, needsVod={needsVod}, needsSeries={needsSeries}");
 
             if (needsVod || needsSeries)
             {
@@ -345,6 +356,7 @@ namespace ModernIPTVPlayer.Services
             }
 
             string fileName = $"cache_{safeId}_{category}.json.gz";
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             await _diskSemaphore.WaitAsync();
             try
             {
@@ -361,7 +373,8 @@ namespace ModernIPTVPlayer.Services
                 if (result != null)
                 {
                     _streamListsCache[cacheKey] = result;
-                    AppLogger.Info($"[ContentCache] Loaded {result.Count} {category} items from {fileName}");
+                    sw.Stop();
+                    AppLogger.Info($"[ContentCache] Loaded {result.Count} {category} items from {fileName} in {sw.ElapsedMilliseconds}ms");
                 }
                 
                 return result;
@@ -398,17 +411,11 @@ namespace ModernIPTVPlayer.Services
                 writer.Write(index.VodHash ?? "");
                 writer.Write(index.SeriesHash ?? "");
 
-                // 2. Metadata Buffer (Shared Storage)
-                byte[] rawBuffer = MetadataBuffer.GetRawBuffer();
-                int pos = MetadataBuffer.GetPosition();
-                writer.Write(pos);
-                writer.Write(rawBuffer, 0, pos);
-
                 // 3. Indices
                 WriteBinaryIndex(writer, index.ImdbIndex);
                 WriteBinaryIndex(writer, index.TokenIndex);
 
-                AppLogger.Info($"[BinarySave] Index saved to {fileName}. Buffer Size: {pos} bytes.");
+                AppLogger.Info($"[BinarySave] Index saved to {fileName}.");
             }
             catch (Exception ex) { AppLogger.Error("[BinarySave] FAILED", ex); }
             finally { _diskSemaphore.Release(); }
@@ -450,12 +457,6 @@ namespace ModernIPTVPlayer.Services
 
                 if (vHash != vodHash || sHash != seriesHash) return (false, null);
 
-                // 2. Metadata Buffer
-                int bufferPos = reader.ReadInt32();
-                byte[] buffer = new byte[bufferPos + 1024 * 1024]; // Give some headroom
-                reader.Read(buffer, 0, bufferPos);
-                MetadataBuffer.SetRawBuffer(buffer, bufferPos);
-
                 // 3. Indices (Fast Load)
                 var imdbRun = ReadBinaryIndex(reader, vods, series);
                 var tokenRun = ReadBinaryIndex(reader, vods, series);
@@ -492,8 +493,179 @@ namespace ModernIPTVPlayer.Services
             return dict;
         }
 
+        // ==========================================
+        // PROJECT ZERO - BINARY STREAM BUNDLE (LIVE)
+        // ==========================================
+
+        public async Task SaveLiveStreamsBinaryAsync(string playlistId, List<LiveStream> streams)
+        {
+            string fileName = $"cache_{playlistId}_live_streams.bin.gz";
+            await _diskSemaphore.WaitAsync();
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                using var fileStream = await folder.OpenStreamForWriteAsync(fileName, CreationCollisionOption.ReplaceExisting);
+                using var buffered = new BufferedStream(fileStream, 1 * 1024 * 1024); // 1MB buffer
+                using var gzip = new GZipStream(buffered, CompressionLevel.Fastest);
+                using var writer = new BinaryWriter(gzip, Encoding.UTF8);
+
+                // 1. Header
+                writer.Write(0x4256494C); // Magic: "LIVB"
+                writer.Write(2); // Version 2 (Bulk)
+                
+                // 2. Metadata Buffer (Strings)
+                byte[] rawBuffer = MetadataBuffer.GetRawBuffer();
+                int bufferPos = MetadataBuffer.GetPosition();
+                writer.Write(bufferPos);
+                writer.Write(rawBuffer, 0, bufferPos);
+
+                // 3. Streams (PROJECT ZERO: Bulk Write)
+                writer.Write(streams.Count);
+                
+                // Extract structs into a contiguous array for bulk writing
+                var dataArray = new LiveStreamData[streams.Count];
+                for (int i = 0; i < streams.Count; i++) dataArray[i] = streams[i].ToData();
+                
+                // Write the entire struct array as one raw byte blob
+                byte[] structBytes = MemoryMarshal.AsBytes(dataArray.AsSpan()).ToArray();
+                writer.Write(structBytes.Length);
+                writer.Write(structBytes);
+
+                AppLogger.Info($"[BinarySave] Live Streams saved. Items: {streams.Count}, Buffer: {bufferPos} bytes.");
+            }
+            catch (Exception ex) { AppLogger.Error("[BinarySave] LIVE FAILED", ex); }
+            finally { _diskSemaphore.Release(); }
+        }
+
+        public async Task<List<LiveStream>> LoadLiveStreamsBinaryAsync(string playlistId)
+        {
+            string fileName = $"cache_{playlistId}_live_streams.bin.gz";
+            await _diskSemaphore.WaitAsync();
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                var item = await folder.TryGetItemAsync(fileName);
+                if (item == null) return null;
+
+                using var stream = await folder.OpenStreamForReadAsync(fileName);
+                using var buffered = new BufferedStream(stream, 1 * 1024 * 1024); // 1MB buffer
+                using var gzip = new GZipStream(buffered, CompressionMode.Decompress);
+                using var reader = new BinaryReader(gzip, Encoding.UTF8);
+
+                // Magic Check (int is faster than string)
+                int magic = reader.ReadInt32();
+                if (magic != 0x4256494C) return null;
+                int version = reader.ReadInt32();
+
+                // 1. Metadata Buffer
+                int bufferPos = reader.ReadInt32();
+                byte[] buffer = reader.ReadBytes(bufferPos); // Fixed: Guaranteed full read
+                int baseOffset = MetadataBuffer.AppendRawBuffer(buffer, bufferPos);
+
+                // 2. Streams (PROJECT ZERO: Sync Parsing to allow Span/Casting)
+                int count = reader.ReadInt32();
+                byte[]? structBytes = null;
+                if (version >= 2)
+                {
+                    int structBytesLen = reader.ReadInt32();
+                    structBytes = reader.ReadBytes(structBytesLen);
+                }
+
+                var results = ParseLiveStreamDataBulk(structBytes, count, version, reader, baseOffset);
+
+                AppLogger.Info($"[BinaryLoad] Live Streams loaded. Items: {results?.Count ?? 0}");
+                return results;
+            }
+            catch (Exception ex) 
+            { 
+                AppLogger.Error("[BinaryLoad] LIVE FAILED", ex); 
+                return null;
+            }
+            finally { _diskSemaphore.Release(); }
+        }
+
+        private static List<LiveStream> ParseLiveStreamDataBulk(byte[]? structBytes, int count, int version, BinaryReader reader, int baseOffset)
+        {
+            var results = new List<LiveStream>(count);
+            if (version >= 2 && structBytes != null)
+            {
+                // Instant conversion from bytes to typed structs
+                ReadOnlySpan<LiveStreamData> dataSpan = MemoryMarshal.Cast<byte, LiveStreamData>(structBytes);
+                for (int i = 0; i < count; i++)
+                {
+                    var s = new LiveStream();
+                    s.LoadFromData(dataSpan[i], baseOffset);
+                    results.Add(s);
+                }
+            }
+            else
+            {
+                // Fallback for V1 (Legacy)
+                for (int i = 0; i < count; i++)
+                {
+                    var s = new LiveStream();
+                    var data = new LiveStreamData();
+                    data.StreamId = reader.ReadInt32();
+                    data.NameOff = reader.ReadInt32(); data.NameLen = reader.ReadInt32();
+                    data.IconOff = reader.ReadInt32(); data.IconLen = reader.ReadInt32();
+                    data.ImdbOff = reader.ReadInt32(); data.ImdbLen = reader.ReadInt32();
+                    data.DescOff = reader.ReadInt32(); data.DescLen = reader.ReadInt32();
+                    data.BgOff = reader.ReadInt32(); data.BgLen = reader.ReadInt32();
+                    data.GenreOff = reader.ReadInt32(); data.GenreLen = reader.ReadInt32();
+                    data.CastOff = reader.ReadInt32(); data.CastLen = reader.ReadInt32();
+                    data.DirOff = reader.ReadInt32(); data.DirLen = reader.ReadInt32();
+                    data.TrailOff = reader.ReadInt32(); data.TrailLen = reader.ReadInt32();
+                    data.YearOff = reader.ReadInt32(); data.YearLen = reader.ReadInt32();
+                    data.ExtOff = reader.ReadInt32(); data.ExtLen = reader.ReadInt32();
+                    data.CatOff = reader.ReadInt32(); data.CatLen = reader.ReadInt32();
+                    data.RatOff = reader.ReadInt32(); data.RatLen = reader.ReadInt32();
+                    s.LoadFromData(data);
+                    results.Add(s);
+                }
+            }
+            return results;
+        }
+
+        /// <summary>
+        /// Highly Optimized JSON to Binary Migration.
+        /// Uses Utf8JsonReader to avoid creating 50k objects in memory.
+        /// </summary>
+        public async Task<List<LiveStream>> MigrateLiveStreamsJsonToBinaryAsync(string playlistId)
+        {
+            string jsonFileName = $"cache_{playlistId}_live_streams.json.gz";
+            var folder = ApplicationData.Current.LocalFolder;
+            var item = await folder.TryGetItemAsync(jsonFileName);
+            if (item == null) return null;
+
+            AppLogger.Info($"[Migrate] Starting JSON to Binary migration for {playlistId}...");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            try
+            {
+                // We'll use the existing LoadCacheAsync just for the first time to get the objects,
+                // but we'll IMMEDIATELY save them to binary.
+                var streams = await LoadCacheAsync<LiveStream>(playlistId, "live_streams");
+                if (streams != null && streams.Count > 0)
+                {
+                    await SaveLiveStreamsBinaryAsync(playlistId, streams);
+                    sw.Stop();
+                    AppLogger.Info($"[Migrate] Migration complete in {sw.ElapsedMilliseconds}ms. {streams.Count} items.");
+                    return streams;
+                }
+            }
+            catch (Exception ex) { AppLogger.Error("[Migrate] FAILED", ex); }
+            return null;
+        }
+
         public async Task SaveCacheAsync<T>(string playlistId, string category, List<T> data)
         {
+            // PROJECT ZERO: Special handling for Live Streams (Binary Bundle)
+            if (category == "live_streams" && data is List<LiveStream> liveStreams)
+            {
+                await SaveLiveStreamsBinaryAsync(playlistId, liveStreams);
+                // Also save JSON as fallback/for migration during transition
+            }
+
             string safeId = GetSafePlaylistId(playlistId);
             string fileName = $"cache_{safeId}_{category}.json.gz";
             try
@@ -668,12 +840,16 @@ namespace ModernIPTVPlayer.Services
             try
             {
                 _memoryCache.Clear(); // Clear RAM
+                _streamListsCache.Clear(); // [FIX] Reset RAM streams cache
+                MetadataBuffer.Reset(); // [FIX] Clear Project Zero global buffer
 
                 var folder = ApplicationData.Current.LocalFolder;
                 var files = await folder.GetFilesAsync();
                 foreach (var file in files)
                 {
-                    if (file.Name.StartsWith("cache_") && (file.Name.EndsWith(".json.gz") || file.Name.EndsWith(".hash")))
+                    // [FIX] Now properly includes .bin.gz files (Project Zero)
+                    if (file.Name.StartsWith("cache_") && 
+                       (file.Name.EndsWith(".json.gz") || file.Name.EndsWith(".hash") || file.Name.EndsWith(".bin.gz")))
                     {
                         await file.DeleteAsync();
                     }

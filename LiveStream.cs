@@ -15,28 +15,96 @@ namespace ModernIPTVPlayer
         Unstable
     }
 
+    /// <summary>
+    /// Blittable struct for high-speed Binary I/O.
+    /// No strings, no objects, just raw memory.
+    /// </summary>
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, Pack = 1)]
+    public struct LiveStreamData
+    {
+        public int StreamId;
+        public int NameOff, NameLen;
+        public int IconOff, IconLen;
+        public int ImdbOff, ImdbLen;
+        public int DescOff, DescLen;
+        public int BgOff, BgLen;
+        public int GenreOff, GenreLen;
+        public int CastOff, CastLen;
+        public int DirOff, DirLen;
+        public int TrailOff, TrailLen;
+        public int YearOff, YearLen;
+        public int ExtOff, ExtLen;
+        public int CatOff, CatLen;
+        public int RatOff, RatLen;
+    }
+
     public class LiveStream : INotifyPropertyChanged, IMediaStream
     {
-        private readonly object _metaLock = new();
+        private object? _metaLock;
+        private object MetaLock => _metaLock ??= new object();
         public int MetadataPriority { get; set; } = 0;
+        [JsonIgnore]
+        public bool IsLoading { get; set; } = false;
         
         // IMediaStream Implementation
         public int Id => StreamId;
         
         // Compact storage (Offsets + Lengths)
-        private int _nameOff, _nameLen;
-        private int _iconOff, _iconLen;
-        private int _imdbOff, _imdbLen;
-        private int _descOff, _descLen;
-        private int _bgOff, _bgLen;
-        private int _genreOff, _genreLen;
-        private int _castOff, _castLen;
-        private int _dirOff, _dirLen;
-        private int _trailOff, _trailLen;
-        private int _yearOff, _yearLen;
-        private int _extOff, _extLen;
-        private int _catOff, _catLen;
-        private int _ratOff, _ratLen;
+        private int _nameOff = -1, _nameLen = 0;
+        private int _iconOff = -1, _iconLen = 0;
+        private int _imdbOff = -1, _imdbLen = 0;
+        private int _descOff = -1, _descLen = 0;
+        private int _bgOff = -1, _bgLen = 0;
+        private int _genreOff = -1, _genreLen = 0;
+        private int _castOff = -1, _castLen = 0;
+        private int _dirOff = -1, _dirLen = 0;
+        private int _trailOff = -1, _trailLen = 0;
+        private int _yearOff = -1, _yearLen = 0;
+        private int _extOff = -1, _extLen = 0;
+        private int _catOff = -1, _catLen = 0;
+        private int _ratOff = -1, _ratLen = 0;
+
+        /// <summary>
+        /// PROJECT ZERO: Zero-Allocation Fast Initialization.
+        /// Bypasses property setters to avoid re-storing strings in MetadataBuffer.
+        /// </summary>
+        public void LoadFromData(LiveStreamData data, int baseOffset = 0)
+        {
+            this.StreamId = data.StreamId;
+            this._nameOff = data.NameOff + baseOffset; this._nameLen = data.NameLen;
+            this._iconOff = data.IconOff + baseOffset; this._iconLen = data.IconLen;
+            this._imdbOff = data.ImdbOff + baseOffset; this._imdbLen = data.ImdbLen;
+            this._descOff = data.DescOff + baseOffset; this._descLen = data.DescLen;
+            this._bgOff = data.BgOff + baseOffset; this._bgLen = data.BgLen;
+            this._genreOff = data.GenreOff + baseOffset; this._genreLen = data.GenreLen;
+            this._castOff = data.CastOff + baseOffset; this._castLen = data.CastLen;
+            this._dirOff = data.DirOff + baseOffset; this._dirLen = data.DirLen;
+            this._trailOff = data.TrailOff + baseOffset; this._trailLen = data.TrailLen;
+            this._yearOff = data.YearOff + baseOffset; this._yearLen = data.YearLen;
+            this._extOff = data.ExtOff + baseOffset; this._extLen = data.ExtLen;
+            this._catOff = data.CatOff + baseOffset; this._catLen = data.CatLen;
+            this._ratOff = data.RatOff + baseOffset; this._ratLen = data.RatLen;
+        }
+
+        /// <summary>
+        /// PROJECT ZERO: Fast Data Extraction.
+        /// </summary>
+        public LiveStreamData ToData() => new LiveStreamData {
+            StreamId = this.StreamId,
+            NameOff = _nameOff, NameLen = _nameLen,
+            IconOff = _iconOff, IconLen = _iconLen,
+            ImdbOff = _imdbOff, ImdbLen = _imdbLen,
+            DescOff = _descOff, DescLen = _descLen,
+            BgOff = _bgOff, BgLen = _bgLen,
+            GenreOff = _genreOff, GenreLen = _genreLen,
+            CastOff = _castOff, CastLen = _castLen,
+            DirOff = _dirOff, DirLen = _dirLen,
+            TrailOff = _trailOff, TrailLen = _trailLen,
+            YearOff = _yearOff, YearLen = _yearLen,
+            ExtOff = _extOff, ExtLen = _extLen,
+            CatOff = _catOff, CatLen = _catLen,
+            RatOff = _ratOff, RatLen = _ratLen
+        };
 
         [JsonPropertyName("imdb_id")]
         public string? ImdbId 
@@ -108,6 +176,8 @@ namespace ModernIPTVPlayer
 
         public void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
+            if (IsLoading) return; // Suppress during bulk load
+
             var queue = App.MainWindow?.DispatcherQueue;
             if (queue == null)
             {
@@ -320,7 +390,7 @@ namespace ModernIPTVPlayer
         {
             if (unified == null) return;
             
-            lock (_metaLock)
+            lock (MetaLock)
             {
                 bool isDowngrade = unified.PriorityScore < this.MetadataPriority;
                 Models.Metadata.MetadataSync.Sync(this, unified, isDowngrade);

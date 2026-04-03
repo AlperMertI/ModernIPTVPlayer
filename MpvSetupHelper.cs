@@ -69,13 +69,26 @@ namespace ModernIPTVPlayer
             await player.SetPropertyAsync("gpu-api", "d3d11");
             await player.SetPropertyAsync("gpu-context", "d3d11");
 
+            // [GPU_PROFILING] Enable per-pass GPU timer queries for precise bottleneck identification
+            await player.SetPropertyAsync("gpu-timer-query", "yes");
+
             await player.SetPropertyAsync("d3d11va-zero-copy", zeroCopy ? "yes" : "no");
             await player.SetPropertyAsync("vd-lavc-dr", zeroCopy ? "yes" : "no");
             
-            // [LATENCY-FIX] Stable Canvas & Viewport Rendering Config
-            // 1. High-Performance 10-bit Output (Saves 50% VRAM Bandwidth vs rgba16f)
-            await player.SetPropertyAsync("d3d11-output-format", "rgb10_a2");
-            await player.SetPropertyAsync("fbo-format", "rgb10_a2");
+            // [DYNAMIC] 10-bit/8-bit switching is now handled by MpvPlayer.SyncHdrStatusAsync
+            // to ensure optimal GPU usage based on content.
+            // await player.SetPropertyAsync("d3d11-output-format", "rgb10_a2");
+            // await player.SetPropertyAsync("fbo-format", "rgb10_a2");
+
+            if (pSettings.Profile == Models.PlayerProfile.Performance)
+            {
+                // Extreme Performance Overrides for 4K/Nvidia
+                await player.SetPropertyAsync("correct-downscaling", "no");
+                await player.SetPropertyAsync("linear-downscaling", "no");
+                await player.SetPropertyAsync("sigmoid-upscaling", "no");
+                await player.SetPropertyAsync("vd-lavc-fast", "yes");
+                await player.SetPropertyAsync("dither", "no");
+            }
 
             if (pSettings.VideoOutput == Models.VideoOutput.GpuNext)
             {
@@ -108,6 +121,17 @@ namespace ModernIPTVPlayer
             bool isLikelyLive = streamUrl != null && (streamUrl.Contains("/live/") || streamUrl.Contains(".m3u8") || streamUrl.Contains(":8080") || streamUrl.Contains("/ts"));
             
             await ApplyBufferSettingsAsync(player, isSecondary, isLikelyLive);
+            
+            // [TELEMETRY] Enable real-time property observation for UI synchronization
+            // This eliminates the need for periodic polling in StatsTimer_Tick
+            if (!isSecondary)
+            {
+                player.ObserveProperty("core-idle", Mpv.Core.Enums.Client.MpvFormat.Flag);
+                player.ObserveProperty("demuxer-cache-duration", Mpv.Core.Enums.Client.MpvFormat.Double);
+                player.ObserveProperty("hwdec-current", Mpv.Core.Enums.Client.MpvFormat.String);
+                player.ObserveProperty("frame-drop-count", Mpv.Core.Enums.Client.MpvFormat.Int64);
+                player.ObserveProperty("pause", Mpv.Core.Enums.Client.MpvFormat.Flag);
+            }
 
             // Stability Overlays
             await SetPropertySafeAsync(player, "demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=30,reconnect_on_network_error=1,reconnect_on_http_error=4xx,5xx,reconnect_at_eof=1");

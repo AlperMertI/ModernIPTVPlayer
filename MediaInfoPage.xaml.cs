@@ -7236,9 +7236,9 @@ namespace ModernIPTVPlayer
                 BadgeSDR.Visibility = Visibility.Collapsed;
                 BadgeCodecContainer.Visibility = Visibility.Collapsed;
 
-                // 1. Check Cache
+                // 1. Check ID-Based Binary Cache (v2.4)
                 await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
-                if (Services.ProbeCacheService.Instance.Get(url) is Services.ProbeData cached)
+                if (Services.ProbeCacheService.Instance.Get(_item.Id) is Services.ProbeData cached)
                 {
                     Services.CacheLogger.Success(Services.CacheLogger.Category.MediaInfo, "Badges Cache Hit", url);
 
@@ -7286,7 +7286,7 @@ namespace ModernIPTVPlayer
                 else
                 {
                     Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "DEDICATED PROBE: Starting prober service", url);
-                    probeResult = await Services.StreamProberService.Instance.ProbeAsync(url, token);
+                    probeResult = await Services.StreamProberService.Instance.ProbeAsync(_item.Id, url, token);
                 }
 
                 if (token.IsCancellationRequested) return;
@@ -7296,7 +7296,7 @@ namespace ModernIPTVPlayer
                     // Manual cache update for SMART PROBE if needed
                     if (MediaInfoPlayer != null && _prebufferUrl == url)
                     {
-                        Services.ProbeCacheService.Instance.Update(url, probeResult.Resolution, probeResult.Fps, probeResult.Codec, probeResult.Bitrate, probeResult.IsHdr);
+                        Services.ProbeCacheService.Instance.Update(_item.Id, probeResult.Resolution, probeResult.Fps, probeResult.Codec, probeResult.Bitrate, probeResult.IsHdr);
                     }
 
                     var probeData = new Services.ProbeData

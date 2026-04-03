@@ -27,6 +27,8 @@ public sealed partial class Player
 
     public event EventHandler? Destroyed;
 
+    public event EventHandler<Structs.Client.MpvEventProperty>? PropertyChanged;
+
     public MpvClientNative Client { get; }
 
     public MpvRenderContextNative? RenderContext { get; private set; }

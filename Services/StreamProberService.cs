@@ -73,10 +73,10 @@ namespace ModernIPTVPlayer.Services
             }
         }
 
-        public async Task<ProbeResult> ProbeAsync(string url, CancellationToken ct = default)
+        public async Task<ProbeResult> ProbeAsync(int streamId, string url, CancellationToken ct = default)
         {
             // 1. Check Cache First
-            var cached = ProbeCacheService.Instance.Get(url);
+            var cached = ProbeCacheService.Instance.Get(streamId);
             if (cached != null)
             {
                 return new ProbeResult
@@ -245,7 +245,7 @@ namespace ModernIPTVPlayer.Services
                 if (result.Success)
                 {
                     // Update Cache
-                    ProbeCacheService.Instance.Update(url, result.Resolution, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
+                    ProbeCacheService.Instance.Update(streamId, result.Resolution, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
                 }
 
                 return result;

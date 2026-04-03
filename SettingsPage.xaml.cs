@@ -201,14 +201,16 @@ namespace ModernIPTVPlayer
 
         private async void BtnRefreshNow_Click(object sender, RoutedEventArgs e)
         {
-            // Fire event from ContentCacheService? Or just signal via App?
-            // Since we haven't implemented a global 'ForceUpdate' pipeline yet, we'll placeholder this.
-            // Ideally, we should expose a method in App or MainWindow.
+            var login = App.CurrentLogin;
+            if (login == null) return;
+
+            BtnRefreshNow.IsEnabled = false;
+            ShowStatus("Yenileme Başlatıldı...");
             
-            // For now, let's assume we can trigger it via a static event in App or just show a message
-            ShowStatus("Güncelleme isteği gönderildi (Henüz Aktif Değil).");
-            
-            // TODO: Hook this to XtreamService.ForceUpdate() when refactoring pages.
+            await Services.ContentCacheService.Instance.SyncNowAsync(login);
+
+            ShowStatus("İçerik başarıyla güncellendi.");
+            BtnRefreshNow.IsEnabled = true;
         }
 
         private async void BtnClearProbe_Click(object sender, RoutedEventArgs e)

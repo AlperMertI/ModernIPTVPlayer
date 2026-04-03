@@ -19,11 +19,14 @@ namespace ModernIPTVPlayer
 
         // Bit-packed flags (1: IsFavorite, 2: IsHdr, 4: IsProbing, 8: IsOnline (null as false), 16: IsAvailableOnIptv)
         private byte _bitFlags = 16;
+        [JsonIgnore]
+        public bool IsLoading { get; set; } = false;
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 
         public void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         {
-            if (PropertyChanged == null) return; // Project Zero Fix: Don't enqueue if no one's listening (prevents RAM bloat during load)
+            if (IsLoading) return; // Suppress during bulk load
+            if (PropertyChanged == null) return; 
 
             var queue = App.MainWindow?.DispatcherQueue;
             if (queue == null)
@@ -348,52 +351,58 @@ namespace ModernIPTVPlayer
     {
         public override SeriesStream Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
-            if (reader.TokenType != JsonTokenType.StartObject) return null;
-            var stream = new SeriesStream();
-            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            var stream = new SeriesStream { IsLoading = true };
+            try
             {
-                if (reader.TokenType != JsonTokenType.PropertyName) continue;
-                string propName = reader.GetString();
-                reader.Read();
-
-                if (reader.TokenType == JsonTokenType.Null) continue;
-
-                switch (propName)
+                while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
                 {
-                    case "name":
-                        stream.Name = reader.GetString();
-                        break;
-                    case "series_id":
-                        stream.SeriesId = reader.GetInt32();
-                        break;
-                    case "cover":
-                        stream.Cover = reader.GetString();
-                        break;
-                    case "plot":
-                        stream.Plot = reader.GetString();
-                        break;
-                    case "cast":
-                        stream.Cast = reader.GetString();
-                        break;
-                    case "genre":
-                        stream.Genre = FastStringPool.Intern(reader.GetString());
-                        break;
-                    case "category_id":
-                        stream.CategoryId = FastStringPool.Intern(reader.GetString());
-                        break;
-                    case "imdb_id":
-                        stream.ImdbId = reader.GetString();
-                        break;
-                    case "rating":
-                        stream.RatingRaw = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
-                        break;
-                    case "releaseDate":
-                        stream.ReleaseDate = FastStringPool.Intern(reader.GetString());
-                        break;
-                    case "air_date":
-                        stream.AirDate = FastStringPool.Intern(reader.GetString());
-                        break;
+                    if (reader.TokenType != JsonTokenType.PropertyName) continue;
+                    string propName = reader.GetString();
+                    reader.Read();
+
+                    if (reader.TokenType == JsonTokenType.Null) continue;
+
+                    switch (propName)
+                    {
+                        case "name":
+                            stream.Name = reader.GetString();
+                            break;
+                        case "series_id":
+                            stream.SeriesId = reader.GetInt32();
+                            break;
+                        case "cover":
+                            stream.Cover = reader.GetString();
+                            break;
+                        case "plot":
+                            stream.Plot = reader.GetString();
+                            break;
+                        case "cast":
+                            stream.Cast = reader.GetString();
+                            break;
+                        case "genre":
+                            stream.Genre = FastStringPool.Intern(reader.GetString());
+                            break;
+                        case "category_id":
+                            stream.CategoryId = FastStringPool.Intern(reader.GetString());
+                            break;
+                        case "imdb_id":
+                            stream.ImdbId = reader.GetString();
+                            break;
+                        case "rating":
+                            stream.RatingRaw = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
+                            break;
+                        case "releaseDate":
+                            stream.ReleaseDate = FastStringPool.Intern(reader.GetString());
+                            break;
+                        case "air_date":
+                            stream.AirDate = FastStringPool.Intern(reader.GetString());
+                            break;
+                    }
                 }
+            }
+            finally
+            {
+                stream.IsLoading = false;
             }
             return stream;
         }

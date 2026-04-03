@@ -250,7 +250,7 @@ namespace ModernIPTVPlayer
         // ==========================================
         // DATA LOADING
         // ==========================================
-        private async Task LoadXtreamCategoriesAsync()
+        private async Task LoadXtreamCategoriesAsync(bool ignoreCache = false)
         {
             try
             {
@@ -264,30 +264,56 @@ namespace ModernIPTVPlayer
                 string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
 
                 // -------------------------------------------------------------
-                // 1. CACHE STRATEGY: Try Load from Disk First
+                // 1. CACHE STRATEGY: Project Zero Binary Bundle (Insanely Fast)
                 // -------------------------------------------------------------
-                var cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, "live_cats");
-                var cachedStreams = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "live_streams");
+                List<LiveCategory> cachedCats = null;
+                List<LiveStream> cachedStreams = null;
+                bool cacheLoaded = false;
+                var swLoad = System.Diagnostics.Stopwatch.StartNew();
 
-                bool cacheLoaded = (cachedCats != null && cachedStreams != null && cachedCats.Count > 0);
+                if (!ignoreCache)
+                {
+                    cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, "live_cats");
+                    cachedStreams = await Services.ContentCacheService.Instance.LoadLiveStreamsBinaryAsync(playlistId);
+
+                    if (cachedStreams == null)
+                    {
+                        cachedStreams = await Services.ContentCacheService.Instance.MigrateLiveStreamsJsonToBinaryAsync(playlistId);
+                    }
+
+                    cacheLoaded = (cachedCats != null && cachedStreams != null && cachedCats.Count > 0);
+                }
 
                 if (cacheLoaded)
                 {
-                    System.Diagnostics.Debug.WriteLine("[LiveTVPage] Loaded from Cache!");
-                    _allCategories = cachedCats;
-                    _allChannels = cachedStreams; // Raw list, but we need to re-link
+                    swLoad.Stop();
+                    System.Diagnostics.Debug.WriteLine($"[LiveTVPage] PROJECT ZERO BINARY LOAD OK! Total: {swLoad.ElapsedMilliseconds}ms");
+                    
+                    // NEW v2.4: Initialize the ID-based Binary Probe Cache for this playlist
+                    await Services.ProbeCacheService.Instance.InitializeForPlaylistAsync(playlistId);
 
-                    // Hydrate Metadata from ProbeCache
+                    _allCategories = cachedCats;
+                    _allChannels = cachedStreams; // Raw list
+                    
+                    // 1. FAST RE-HYDRATION: Build URLs for all channels (Binary doesn't store them)
+                    // This is essential for ProbeCache and playback!
+                    Parallel.ForEach(_allChannels, s => 
+                    {
+                        string ext = string.IsNullOrEmpty(s.ContainerExtension) ? "ts" : s.ContainerExtension;
+                        s.StreamUrl = $"{baseUrl}/live/{username}/{password}/{s.StreamId}.{ext}";
+                    });
+
+                    // 2. Hydrate Metadata from ID-Based ProbeCache (Fastest - No URLs needed!)
                     foreach (var s in _allChannels)
                     {
-                        if (Services.ProbeCacheService.Instance.Get(s.StreamUrl) is Services.ProbeData pd)
+                        if (Services.ProbeCacheService.Instance.Get(s.StreamId) is Services.ProbeData pd)
                         {
                             s.Resolution = pd.Resolution;
                             s.Codec = pd.Codec;
                             s.Bitrate = pd.Bitrate;
                             s.Fps = pd.Fps;
                             s.IsHdr = pd.IsHdr;
-                            s.IsOnline = true; // Cached implies it was online recently
+                            s.IsOnline = true; 
                         }
                     }
 
@@ -359,10 +385,10 @@ namespace ModernIPTVPlayer
                         // Wait for Probe Cache to be ready (Race Condition fix)
                         await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
                         
-                        // Hydrate Metadata from ProbeCache (Network Path)
+                        // Hydrate Metadata from ID-Based ProbeCache (Network Path v2.4)
                         foreach (var s in _allChannels)
                         {
-                            if (Services.ProbeCacheService.Instance.Get(s.StreamUrl) is Services.ProbeData pd)
+                            if (Services.ProbeCacheService.Instance.Get(s.StreamId) is Services.ProbeData pd)
                             {
                                 s.Resolution = pd.Resolution;
                                 s.Codec = pd.Codec;
@@ -405,7 +431,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private async Task LoadM3uAsync(string? url)
+        private async Task LoadM3uAsync(string? url, bool ignoreCache = false)
         {
             // Similar logic for M3U...
              if (string.IsNullOrEmpty(url)) return;
@@ -478,11 +504,19 @@ namespace ModernIPTVPlayer
                 }
                 else if (!trimLine.StartsWith("#") && currentName != null && !string.IsNullOrEmpty(trimLine))
                 {
-                    if (!result.ContainsKey(currentGroup!))
-                        result[currentGroup!] = new LiveCategory { CategoryName = currentGroup! };
+                    // Generate a stable ID from the URL hash for M3U
+                    int m3uId = 0;
+                    if (!string.IsNullOrEmpty(trimLine))
+                    {
+                        // Use a basic stable hash instead of .GetHashCode() which is not stable in .NET Core
+                        uint hash = 0;
+                        foreach (char c in trimLine) hash = hash * 31 + c;
+                        m3uId = (int)(hash & 0x7FFFFFFF);
+                    }
 
                     result[currentGroup!].Channels.Add(new LiveStream
                     {
+                        StreamId = m3uId,
                         Name = currentName,
                         StreamUrl = trimLine,
                         IconUrl = currentLogo
@@ -943,12 +977,24 @@ namespace ModernIPTVPlayer
             _recentChannels.Clear();
             foreach (var item in historyItems)
             {
-                _recentChannels.Add(new LiveStream
+                // CRITICAL FIX: Find the matching channel in the main list to use the CORRECT MetadataBuffer offsets
+                var match = _allChannels?.FirstOrDefault(c => c.StreamId.ToString() == item.Id || c.Name == item.Title);
+                
+                if (match != null)
                 {
-                    Name = item.Title,
-                    StreamUrl = item.StreamUrl,
-                    IconUrl = item.PosterUrl
-                });
+                    _recentChannels.Add(match);
+                }
+                else
+                {
+                    // Fallback to orphaned object if not found (names might be broken)
+                    _recentChannels.Add(new LiveStream
+                    {
+                        StreamId = int.TryParse(item.Id, out var id) ? id : 0,
+                        Name = item.Title,
+                        StreamUrl = item.StreamUrl,
+                        IconUrl = item.PosterUrl
+                    });
+                }
             }
 
             RecentListView.ItemsSource = _recentChannels;
@@ -987,8 +1033,8 @@ namespace ModernIPTVPlayer
                 // Clear existing metadata and physical cache for these specific URLs to force a fresh scan
                 foreach (var stream in currentList)
                 {
-                    // Remove from Physical Cache
-                    Services.ProbeCacheService.Instance.Remove(stream.StreamUrl);
+                    // Remove from ID-Based Physical Cache (v2.4)
+                    Services.ProbeCacheService.Instance.Remove(stream.StreamId);
 
                     // Reset UI State
                     stream.Resolution = "";
@@ -1080,8 +1126,8 @@ namespace ModernIPTVPlayer
                     {
                         DispatcherQueue.TryEnqueue(() => item.IsProbing = true);
 
-                        // OPTIMIZATION: Check Cache explicitly to skip throttle
-                        if (Services.ProbeCacheService.Instance.Get(item.StreamUrl) is Services.ProbeData cached)
+                        // OPTIMIZATION: Check ID-Based Cache explicitly to skip throttle (v2.4)
+                        if (Services.ProbeCacheService.Instance.Get(item.StreamId) is Services.ProbeData cached)
                         {
                             DispatcherQueue.TryEnqueue(() => 
                             {
@@ -1097,7 +1143,7 @@ namespace ModernIPTVPlayer
                         }
 
                         // Process (This takes ~0.5s - 1.5s)
-                        var result = await Services.StreamProberService.Instance.ProbeAsync(item.StreamUrl, ct);
+                        var result = await Services.StreamProberService.Instance.ProbeAsync(item.StreamId, item.StreamUrl, ct);
 
                         DispatcherQueue.TryEnqueue(() => 
                         {
@@ -1141,7 +1187,7 @@ namespace ModernIPTVPlayer
 
         private async void RefreshButton_Click(object sender, RoutedEventArgs e)
         {
-            // Reload Data
+            // Reload Data - Forcing network fetch
             _allCategories.Clear();
             _allChannels.Clear();
             
@@ -1149,11 +1195,11 @@ namespace ModernIPTVPlayer
             {
                 if (!string.IsNullOrEmpty(_loginInfo.Host) && !string.IsNullOrEmpty(_loginInfo.Username))
                 {
-                    await LoadXtreamCategoriesAsync();
+                    await LoadXtreamCategoriesAsync(ignoreCache: true);
                 }
                 else
                 {
-                     await LoadM3uAsync(_loginInfo.PlaylistUrl);
+                     await LoadM3uAsync(_loginInfo.PlaylistUrl, ignoreCache: true);
                 }
             }
         }
@@ -1169,7 +1215,7 @@ namespace ModernIPTVPlayer
                 try
                 {
                     stream.IsProbing = true;
-                    var result = await Services.StreamProberService.Instance.ProbeAsync(stream.StreamUrl, ct: default);
+                    var result = await Services.StreamProberService.Instance.ProbeAsync(stream.StreamId, stream.StreamUrl, ct: default);
                     
                     stream.Resolution = result.Resolution;
                     stream.Fps = result.Fps;

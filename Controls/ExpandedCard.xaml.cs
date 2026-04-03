@@ -1092,9 +1092,8 @@ namespace ModernIPTVPlayer.Controls
 
             try
             {
-                // 1. Check Cache
-                var cached = Services.ProbeCacheService.Instance.Get(url);
-                if (cached != null)
+                // 1. Check ID-Based Cache (v2.4)
+                if (Services.ProbeCacheService.Instance.Get(stream.Id) is Services.ProbeData cached)
                 {
                     Services.CacheLogger.Success(Services.CacheLogger.Category.Probe, "ExpandedCard Cache Hit", url);
                     if (loadNonce == _loadNonce)
@@ -1112,10 +1111,10 @@ namespace ModernIPTVPlayer.Controls
                 // The task is to ensure we DON'T use old data if URL changed.
                 // Since Get(url) returned null, we are good. 
 
-                // 3. Probe Network
+                // 3. Probe Network (v2.4: ID-based)
                 SetProbing(stream, true);
                 Services.CacheLogger.Info(Services.CacheLogger.Category.Probe, "Probing Network (ExpandedCard - libmpv)", url);
-                var result = await Services.StreamProberService.Instance.ProbeAsync(url);
+                var result = await Services.StreamProberService.Instance.ProbeAsync(stream.Id, url);
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Probe COMPLETED for {url}. Success: {result.Success}, Res: {result.Resolution}");
                 
                 if (result.Success)

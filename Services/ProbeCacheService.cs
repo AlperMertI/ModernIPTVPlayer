@@ -24,8 +24,9 @@ namespace ModernIPTVPlayer.Services
         private static ProbeCacheService _instance;
         public static ProbeCacheService Instance => _instance ??= new ProbeCacheService();
 
-        private ConcurrentDictionary<string, ProbeData> _cache = new();
-        private const string CacheFileName = "ProbeCache.json.gz";
+        private ConcurrentDictionary<int, ProbeData> _cache = new();
+        private string _currentPlaylistId = "default";
+        
         private const int TTL_DAYS = 3;
         private bool _isDirty = false;
         private DateTime _lastSaveTime = DateTime.MinValue;
@@ -41,48 +42,44 @@ namespace ModernIPTVPlayer.Services
         private ProbeCacheService()
         {
             _saveTimer = new System.Threading.Timer(async _ => await SaveIfDirtyAsync(), null, -1, -1);
-            _ = InitializeAsync();
         }
 
-        private async Task InitializeAsync()
+        public async Task InitializeForPlaylistAsync(string playlistId)
         {
+            if (_currentPlaylistId == playlistId && _isLoaded) return;
+            
+            await SaveIfDirtyAsync(); // Save old one before switching
+            _currentPlaylistId = playlistId;
+            _cache.Clear();
             await LoadCacheAsync();
             _isLoaded = true;
-            _initTcs.TrySetResult(true);
+            
+            if (!_initTcs.Task.IsCompleted)
+                _initTcs.TrySetResult(true);
         }
 
         public Task EnsureLoadedAsync() => _initTcs.Task;
 
-        public ProbeData Get(string url)
+        public ProbeData Get(int streamId)
         {
-            if (!_isLoaded)
-            {
-                // Only log once to avoid spam (race condition is common during list rendering)
-                if (!_warnedBeforeLoad) {
-                    CacheLogger.Warning(CacheLogger.Category.Probe, "Get called before load (Suppressed subsequent)", url);
-                    _warnedBeforeLoad = true;
-                }
-            }
+            if (!_isLoaded) return null;
 
-            if (_cache.TryGetValue(url, out var data))
+            if (_cache.TryGetValue(streamId, out var data))
             {
                 // Check TTL
                 if ((DateTime.Now - data.LastUpdated).TotalDays > TTL_DAYS)
                 {
-                    _cache.TryRemove(url, out _);
+                    _cache.TryRemove(streamId, out _);
                     _isDirty = true;
-                    CacheLogger.Info(CacheLogger.Category.Probe, "Expired Entry Removed", url);
                     return null;
                 }
                 
-                // Don't log every hit to avoid spam, or log as verbose if needed
-                // CacheLogger.Success(CacheLogger.Category.Probe, "Cache HIT", url); 
                 return data;
             }
             return null;
         }
 
-        public void Update(string url, string res, string fps, string codec, long bitrate, bool isHdr)
+        public void Update(int streamId, string res, string fps, string codec, long bitrate, bool isHdr)
         {
             var data = new ProbeData
             {
@@ -94,10 +91,10 @@ namespace ModernIPTVPlayer.Services
                 LastUpdated = DateTime.Now
             };
 
-            _cache[url] = data;
+            _cache[streamId] = data;
             _isDirty = true;
             
-            CacheLogger.Success(CacheLogger.Category.Probe, "Cache Updated", $"{res} | {codec} | HDR:{isHdr} | {url}");
+            CacheLogger.Success(CacheLogger.Category.Probe, "Cache Updated", $"{res} | ID: {streamId}");
 
             // Debounce save: Reset timer to fire in 5 seconds
             _saveTimer.Change(5000, -1);
@@ -105,76 +102,80 @@ namespace ModernIPTVPlayer.Services
 
         private async Task LoadCacheAsync()
         {
+            string fileName = $"cache_{_currentPlaylistId}_probe.bin.gz";
             try
             {
                 var folder = ApplicationData.Current.LocalFolder;
-                var item = await folder.TryGetItemAsync(CacheFileName);
-                if (item == null) 
+                var item = await folder.TryGetItemAsync(fileName);
+                if (item == null) return;
+
+                using var stream = await folder.OpenStreamForReadAsync(fileName);
+                using var buffered = new BufferedStream(stream, 128 * 1024);
+                using var gzip = new GZipStream(buffered, CompressionMode.Decompress);
+                using var reader = new BinaryReader(gzip, System.Text.Encoding.UTF8);
+                
+                int magic = reader.ReadInt32();
+                if (magic != 0x50524231) // Magic: PRB1
                 {
-                    CacheLogger.Info(CacheLogger.Category.Probe, "No cache file found, starting fresh.");
+                    CacheLogger.Warning(CacheLogger.Category.Probe, "Invalid magic, skipping cache load.");
                     return;
                 }
 
-                using var stream = await folder.OpenStreamForReadAsync(CacheFileName);
-                using var gzip = new GZipStream(stream, CompressionMode.Decompress);
-                
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var loaded = await JsonSerializer.DeserializeAsync<Dictionary<string, ProbeData>>(gzip, options);
-                
-                if (loaded != null)
+                int count = reader.ReadInt32();
+                for (int i = 0; i < count; i++)
                 {
-                    _cache = new ConcurrentDictionary<string, ProbeData>(loaded);
-                    CacheLogger.Info(CacheLogger.Category.Probe, "Loaded", $"{_cache.Count} entries.");
+                    int id = reader.ReadInt32();
+                    var data = new ProbeData
+                    {
+                        Resolution = reader.ReadString(),
+                        Fps = reader.ReadString(),
+                        Codec = reader.ReadString(),
+                        Bitrate = reader.ReadInt64(),
+                        IsHdr = reader.ReadBoolean(),
+                        LastUpdated = DateTime.FromBinary(reader.ReadInt64())
+                    };
+                    _cache[id] = data;
                 }
+                
+                CacheLogger.Info(CacheLogger.Category.Probe, "Loaded Binary Cache", $"{_cache.Count} entries for {_currentPlaylistId}");
             }
             catch (Exception ex)
             {
-                CacheLogger.Error(CacheLogger.Category.Probe, "Load Failed", ex.Message);
-                
-                // If corrupted (JsonException), delete it to start fresh
-                if (ex is JsonException || ex is InvalidDataException)
-                {
-                    try
-                    {
-                        var folder = ApplicationData.Current.LocalFolder;
-                        var item = await folder.TryGetItemAsync(CacheFileName);
-                        if (item != null)
-                        {
-                            await item.DeleteAsync();
-                            CacheLogger.Warning(CacheLogger.Category.Probe, "Corrupted cache file deleted.");
-                        }
-                    }
-                    catch { /* Ignore delete error */ }
-                }
-                
-                // Ensure TCS is set even on error so we don't block forever
-            }
-            finally
-            {
-                 // Safety net: If InitializeAsync crashes before this, we are in trouble, 
-                 // but LoadCacheAsync is called by it. Ideally InitializeAsync ensures this invalidation.
+                CacheLogger.Error(CacheLogger.Category.Probe, "Binary Load Failed", ex.Message);
             }
         }
 
         private async Task SaveIfDirtyAsync()
         {
-            if (!_isDirty) return;
-            if ((DateTime.Now - _lastSaveTime).TotalSeconds < 5) return; // Debounce check safety
+            if (!_isDirty || _cache.IsEmpty) return;
+            if ((DateTime.Now - _lastSaveTime).TotalSeconds < 5) return; 
 
+            string fileName = $"cache_{_currentPlaylistId}_probe.bin.gz";
             try
             {
-                // Snapshot for thread safety
-                var snapshot = new Dictionary<string, ProbeData>(_cache);
-                
                 var folder = ApplicationData.Current.LocalFolder;
-                using var stream = await folder.OpenStreamForWriteAsync(CacheFileName, CreationCollisionOption.ReplaceExisting);
-                using var gzip = new GZipStream(stream, CompressionLevel.Fastest);
+                using var stream = await folder.OpenStreamForWriteAsync(fileName, CreationCollisionOption.ReplaceExisting);
+                using var buffered = new BufferedStream(stream, 128 * 1024);
+                using var gzip = new GZipStream(buffered, CompressionLevel.Fastest);
+                using var writer = new BinaryWriter(gzip, System.Text.Encoding.UTF8);
                 
-                await JsonSerializer.SerializeAsync(gzip, snapshot);
+                writer.Write(0x50524231); // Magic: PRB1
+                writer.Write(_cache.Count);
+                
+                foreach (var kvp in _cache)
+                {
+                    writer.Write(kvp.Key);
+                    writer.Write(kvp.Value.Resolution ?? "");
+                    writer.Write(kvp.Value.Fps ?? "");
+                    writer.Write(kvp.Value.Codec ?? "");
+                    writer.Write(kvp.Value.Bitrate);
+                    writer.Write(kvp.Value.IsHdr);
+                    writer.Write(kvp.Value.LastUpdated.ToBinary());
+                }
                 
                 _isDirty = false;
                 _lastSaveTime = DateTime.Now;
-                CacheLogger.Info(CacheLogger.Category.Probe, "Saved to Disk", $"{snapshot.Count} entries.");
+                CacheLogger.Info(CacheLogger.Category.Probe, "Persistent Binary Save", $"{_cache.Count} entries.");
             }
             catch (Exception ex)
             {
@@ -185,22 +186,22 @@ namespace ModernIPTVPlayer.Services
         // Manual Flush
         public async Task FlushAsync() => await SaveIfDirtyAsync();
 
-        public void Remove(string url)
+        public void Remove(int streamId)
         {
-            if (_cache.TryRemove(url, out _))
+            if (_cache.TryRemove(streamId, out _))
             {
                 _isDirty = true;
                 _saveTimer.Change(5000, -1);
             }
         }
 
-        public void PruneOrphans(HashSet<string> validUrls)
+        public void PruneOrphans(HashSet<int> validIds)
         {
             var keys = _cache.Keys;
             int removed = 0;
             foreach (var key in keys)
             {
-                if (!validUrls.Contains(key))
+                if (!validIds.Contains(key))
                 {
                     if (_cache.TryRemove(key, out _))
                     {
