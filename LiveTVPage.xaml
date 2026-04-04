@@ -8,6 +8,7 @@
     xmlns:controls="using:ModernIPTVPlayer.Controls"
     xmlns:converters="using:ModernIPTVPlayer.Converters"
     xmlns:mpv="using:MpvWinUI"
+    xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
     mc:Ignorable="d"
     NavigationCacheMode="Enabled"
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
@@ -339,7 +340,7 @@
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="local:LiveStream">
-                                <Grid Width="170" Height="120" CornerRadius="12" 
+                                    <Grid Width="170" Height="120" CornerRadius="12" 
                                       Background="#1AFFFFFF" 
                                       BorderBrush="#1FFFFFFF" BorderThickness="1"
                                       Padding="12">
@@ -358,6 +359,13 @@
                                                FontSize="13" Foreground="White" FontWeight="Medium"
                                                MaxLines="1" TextTrimming="CharacterEllipsis" 
                                                HorizontalAlignment="Center" Margin="0,8,0,0"/>
+
+                                    <Grid.ContextFlyout>
+                                        <MenuFlyout>
+                                            <MenuFlyoutItem Text="Görüntü Kalitesini Kontrol Et (Analiz)" Icon="Video" Click="CheckQuality_Click" Tag="{x:Bind}"/>
+                                            <MenuFlyoutItem Text="Yayın URL'sini Kopyala" Icon="Copy" Click="CopyUrl_Click" Tag="{x:Bind}"/>
+                                        </MenuFlyout>
+                                    </Grid.ContextFlyout>
                                 </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>
@@ -500,6 +508,7 @@
                             <Grid.ContextFlyout>
                                 <MenuFlyout>
                                     <MenuFlyoutItem Text="Görüntü Kalitesini Kontrol Et (Analiz)" Icon="Video" Click="CheckQuality_Click" Tag="{x:Bind}"/>
+                                    <MenuFlyoutItem Text="Yayın URL'sini Kopyala" Icon="Copy" Click="CopyUrl_Click" Tag="{x:Bind}"/>
                                 </MenuFlyout>
                             </Grid.ContextFlyout>
                         </Grid>
@@ -549,5 +558,14 @@
                 </Grid>
             </SplitView.Content>
         </SplitView>
+
+        <!-- InfoBar for notifications -->
+        <muxc:InfoBar x:Name="NotificationInfoBar" 
+                      IsOpen="False" 
+                      Severity="Success" 
+                      Message="URL panoya kopyalandı."
+                      VerticalAlignment="Top" 
+                      HorizontalAlignment="Stretch" 
+                      Canvas.ZIndex="9999"/>
     </Grid>
 </Page>

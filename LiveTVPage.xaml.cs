@@ -10,6 +10,7 @@ using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.System;
+using Windows.ApplicationModel.DataTransfer;
 using Microsoft.UI.Xaml.Media.Imaging;
 using MpvWinUI;
 using ModernIPTVPlayer.Services;
@@ -1231,6 +1232,31 @@ namespace ModernIPTVPlayer
             }
         }
 
+
+        private void CopyUrl_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuFlyoutItem item && item.Tag is LiveStream stream)
+            {
+                if (string.IsNullOrEmpty(stream.StreamUrl)) return;
+                
+                var dataPackage = new DataPackage();
+                dataPackage.RequestedOperation = DataPackageOperation.Copy;
+                dataPackage.SetText(stream.StreamUrl);
+                Clipboard.SetContent(dataPackage);
+
+                // Show notification
+                NotificationInfoBar.IsOpen = true;
+                
+                // Auto-close after 3 seconds
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+                timer.Tick += (s, args) =>
+                {
+                    NotificationInfoBar.IsOpen = false;
+                    timer.Stop();
+                };
+                timer.Start();
+            }
+        }
 
         private void ToggleSidebar_Click(object sender, RoutedEventArgs e)
         {
