@@ -3554,7 +3554,7 @@ namespace ModernIPTVPlayer
                 var addons = StremioAddonManager.Instance.GetAddonsWithManifests()
                     .Where(a => a.Manifest != null && 
                                 a.Manifest.Resources != null &&
-                                a.Manifest.Resources.Any(r => r.ToString().Contains("subtitles")))
+                                a.Manifest.Resources.Any(r => r.Name != null && r.Name.Contains("subtitles", StringComparison.OrdinalIgnoreCase)))
                     .ToList();
 
                 if (!addons.Any())

@@ -51,6 +51,8 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("idPrefixes")]
         public List<string> IdPrefixes { get; set; }
 
+        public override string ToString() => Name ?? "Unknown Resource";
+
         // Logic to handle if resource is just a string during deserialization
         public static implicit operator StremioResource(string name) => new StremioResource { Name = name };
     }
