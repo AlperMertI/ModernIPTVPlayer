@@ -40,12 +40,18 @@ public class D3D11RenderControl : ContentControl
     // Resize State
     private readonly object _sizeLock = new();
     private bool _resizePending = false;
+    private bool _pendingResizeForce = false;
     private bool _disposed = false;
     private double _targetWidth, _targetHeight;
     private double _targetScaleX = 1.0, _targetScaleY = 1.0;
     private long _lastSizeChangedTicks;
     private long _lastPhysicalResizeTicks = 0; // Throttle for animations
     private bool _needsFirstFrameLink = false;
+
+    // [RESIZE OPTIMIZATION] Debounce-based resize start/end detection
+    private bool _isResizing = false;
+    private DispatcherQueueTimer? _resizeDebounceTimer;
+    private const int RESIZE_DEBOUNCE_MS = 300; // Time after last SizeChanged to consider resize complete
 
     // Performance Tracking
     private long _resizeIdCounter = 0;
@@ -437,14 +443,22 @@ public class D3D11RenderControl : ContentControl
             CreateDevice();
             _swapChainPanel = new SwapChainPanel();
             _swapChainPanel.CompositionScaleChanged += (s, e) => RequestResize(force: true);
+            this.Loaded += (s, e) => 
+            {
+                if (this.XamlRoot != null)
+                {
+                    this.XamlRoot.Changed += (r, args) => RequestResize(force: true);
+                }
+            };
             HorizontalContentAlignment = HorizontalAlignment.Stretch;
             VerticalContentAlignment = VerticalAlignment.Stretch;
             Content = _swapChainPanel;
 
             _targetWidth = ActualWidth;
             _targetHeight = ActualHeight;
-            _targetScaleX = _swapChainPanel.CompositionScaleX;
-            _targetScaleY = _swapChainPanel.CompositionScaleY;
+            // [CRITICAL FIX] WinUI 3 SwapChainPanel.CompositionScaleX always returns 1.0.
+            _targetScaleX = this.XamlRoot?.RasterizationScale ?? 1.0;
+            _targetScaleY = this.XamlRoot?.RasterizationScale ?? 1.0;
 
             // Initialize SwapChain AFTER we have a chance to sync HDR metadata 
             // (PerformResize will call UpdateHdrStatus but we'll call it again below)
@@ -485,6 +499,12 @@ public class D3D11RenderControl : ContentControl
             {
                 LogControl($"Deferred Initialization: Current Size {_targetWidth}x{_targetHeight} is too small.");
             }
+
+            // [RESIZE OPTIMIZATION] Initialize debounce timer for resize start/end detection
+            _resizeDebounceTimer = DispatcherQueue.CreateTimer();
+            _resizeDebounceTimer.Interval = TimeSpan.FromMilliseconds(RESIZE_DEBOUNCE_MS);
+            _resizeDebounceTimer.Tick += OnResizeDebounceTimerTick;
+            _resizeDebounceTimer.Stop();
         }
     }
 
@@ -592,9 +612,11 @@ public class D3D11RenderControl : ContentControl
                 {
                     ActiveResizeId = _pendingResizeId;
                     _resizePending = false;
+                    bool force = _pendingResizeForce;
+                    _pendingResizeForce = false;
                     _resizeEvent.Reset(); 
                     resizeStartTime = Stopwatch.GetTimestamp();
-                    PerformResize(force: false);
+                    PerformResize(force: force);
                     resizeEndTime = Stopwatch.GetTimestamp();
                     double resizeMs = (resizeEndTime - resizeStartTime) * 1000.0 / Stopwatch.Frequency;
                     double lockContentionMs = (resizeStartTime - lockAcquired) * 1000.0 / Stopwatch.Frequency;
@@ -695,14 +717,32 @@ public class D3D11RenderControl : ContentControl
         try {
             _swapChain.Handle->SetSourceSize((uint)_swapChainWidth, (uint)_swapChainHeight);
 
-            // [PERF] Skip matrix transform when swapchain matches panel exactly.
-            // This avoids an unnecessary DWM GPU scaling pass.
-            if (_swapChainWidth == _targetWidth && _swapChainHeight == _targetHeight)
+            bool exactMatch = _swapChainWidth == (int)_targetWidth && _swapChainHeight == (int)_targetHeight;
+
+            if (exactMatch)
             {
-                _swapChain.Handle->SetMatrixTransform(null);
+                // [PERF] 1:1 Pixel Mapping — swapchain matches panel exactly.
+                // Set EXACT inverse scale of the RasterizationScale to cancel DWM upscaling.
+                // If DPI is 200%, the inverse scale is 0.5. DWM cancels out the 0.5 with its own 2.0 upscale,
+                // resulting in a flawless 1:1 direct pixel copy (0% 3D GPU usage for stretching).
+                float invScaleX = _targetScaleX > 0 ? (float)(1.0 / _targetScaleX) : 1.0f;
+                float invScaleY = _targetScaleY > 0 ? (float)(1.0 / _targetScaleY) : 1.0f;
+
+                if (Math.Abs(invScaleX - 1.0f) < 0.001f && Math.Abs(invScaleY - 1.0f) < 0.001f)
+                {
+                    _swapChain.Handle->SetMatrixTransform(null);
+                }
+                else
+                {
+                    var mat = new Silk.NET.Maths.Matrix3X2<float>(invScaleX, 0, 0, invScaleY, 0, 0);
+                    _swapChain.Handle->SetMatrixTransform((Silk.NET.DXGI.Matrix3X2F*)&mat);
+                }
             }
             else
             {
+                // [RESIZE MODE] Swapchain != panel — uniform scale + centering to preserve aspect ratio.
+                // mpv renders video with correct AR into the swapchain buffer.
+                // We fit the buffer within the panel at uniform scale, centered.
                 float scaleX = _swapChainWidth > 0 ? (float)(_targetWidth / _swapChainWidth) : 1.0f;
                 float scaleY = _swapChainHeight > 0 ? (float)(_targetHeight / _swapChainHeight) : 1.0f;
                 float scale = Math.Min(scaleX, scaleY);
@@ -769,7 +809,7 @@ public class D3D11RenderControl : ContentControl
     {
         if (_disposed || _device.Handle == null) return;
         int callId = ++_resizeCallCount;
-        Debug.WriteLine($"[LEAK_DEBUG] PerformResize #{callId} force={force} | Current={CurrentWidth}x{CurrentHeight} | SwapChain={_swapChainWidth}x{_swapChainHeight}");
+        Debug.WriteLine($"[LEAK_DEBUG] PerformResize #{callId} force={force} | Current={CurrentWidth}x{CurrentHeight} | SwapChain={_swapChainWidth}x{_swapChainHeight} | isResizing={_isResizing}");
         long t0 = Stopwatch.GetTimestamp();
         double freq = Stopwatch.Frequency;
 
@@ -818,48 +858,57 @@ public class D3D11RenderControl : ContentControl
             if (!_isMonitorInfoInitialized)
                 UpdateMonitorInfo();
 
-            // [PERF] Size swapchain to actual window dimensions.
-            // The 256-pixel rounding below provides natural resize headroom.
-            // No extra margin needed -- window can never exceed display resolution.
-            int stableWidth = Math.Max((int)width, 256);
-            int stableHeight = Math.Max((int)height, 256);
-            
-            // [DEBUG_RESIZE] Trace requested vs stable dimensions
-            LogSync($"[PERFORM_RESIZE] Req: {width}x{height} | Stable: {stableWidth}x{stableHeight} | Monitor: {_maxMonitorWidth}x{_maxMonitorHeight} | Margin: 15%");
+            // [RESIZE OPTIMIZATION] Determine target swapchain size based on resize state
+            int stableWidth, stableHeight;
+            bool needsRealloc;
 
-            stableWidth = (stableWidth + 255) & ~255;
-            stableHeight = (stableHeight + 255) & ~255;
-
-            bool needsRealloc = _swapChain.Handle == null ||
-                              stableWidth > _swapChainWidth ||
-                              stableHeight > _swapChainHeight;
+            if (_isResizing)
+            {
+                // [RESIZE MODE] Swapchain = panel size (both grow and shrink).
+                // Throttle: skip ResizeBuffers if less than 100ms since last one.
+                stableWidth = (int)width;
+                stableHeight = (int)height;
+                
+                long nowTicks = Stopwatch.GetTimestamp();
+                double elapsedMs = (nowTicks - _lastPhysicalResizeTicks) * 1000.0 / Stopwatch.Frequency;
+                bool throttleActive = _lastPhysicalResizeTicks > 0 && elapsedMs < 100;
+                
+                if (throttleActive)
+                {
+                    // Throttle active — keep current swapchain, matrix transform handles scaling
+                    stableWidth = _swapChainWidth;
+                    stableHeight = _swapChainHeight;
+                    needsRealloc = false;
+                    LogSync($"[PERFORM_RESIZE] RESIZE MODE | Req: {width}x{height} | SC: {_swapChainWidth}x{_swapChainHeight} | THROTTLED ({elapsedMs:F0}ms)");
+                }
+                else
+                {
+                    // Throttle passed — ResizeBuffers if size changed
+                    needsRealloc = _swapChain.Handle == null ||
+                                  stableWidth != _swapChainWidth ||
+                                  stableHeight != _swapChainHeight;
+                    
+                    LogSync($"[PERFORM_RESIZE] RESIZE MODE | Req: {width}x{height} | Target: {stableWidth}x{stableHeight} | SC: {_swapChainWidth}x{_swapChainHeight} | Realloc: {needsRealloc}");
+                }
+            }
+            else
+            {
+                // [NORMAL MODE] Exact window dimensions for 1:1 pixel mapping
+                stableWidth = Math.Max((int)width, 8);
+                stableHeight = Math.Max((int)height, 8);
+                
+                // Only realloc if size actually changed
+                needsRealloc = _swapChain.Handle == null ||
+                              stableWidth != _swapChainWidth ||
+                              stableHeight != _swapChainHeight;
+                
+                LogSync($"[PERFORM_RESIZE] NORMAL MODE | Req: {width}x{height} | SC: {_swapChainWidth}x{_swapChainHeight} | Realloc: {needsRealloc}");
+            }
 
             long tDecision = Stopwatch.GetTimestamp();
 
             if (needsRealloc)
             {
-                // Adjust stable dimensions to match panel aspect ratio.
-                // Only done during reallocation to avoid expensive ResizeBuffers on every resize.
-                if (_targetWidth > 0 && _targetHeight > 0)
-                {
-                    double panelAR = _targetWidth / _targetHeight;
-                    double stableAR = (double)stableWidth / stableHeight;
-                    if (stableAR > panelAR + 0.001)
-                    {
-                        int adjustedHeight = (int)Math.Ceiling(stableWidth / panelAR);
-                        if (adjustedHeight <= _maxMonitorHeight * 2)
-                            stableHeight = adjustedHeight;
-                    }
-                    else if (stableAR < panelAR - 0.001)
-                    {
-                        int adjustedWidth = (int)Math.Ceiling(stableHeight * panelAR);
-                        if (adjustedWidth <= _maxMonitorWidth * 2)
-                            stableWidth = adjustedWidth;
-                    }
-                    stableWidth = (stableWidth + 255) & ~255;
-                    stableHeight = (stableHeight + 255) & ~255;
-                }
-
                 long nowTicks = Stopwatch.GetTimestamp();
                 _lastPhysicalResizeTicks = nowTicks;
                 
@@ -1267,8 +1316,10 @@ public class D3D11RenderControl : ContentControl
             oldH = _targetHeight;
             _targetWidth = ActualWidth;
             _targetHeight = ActualHeight;
-            _targetScaleX = _swapChainPanel.CompositionScaleX;
-            _targetScaleY = _swapChainPanel.CompositionScaleY;
+            // [CRITICAL FIX] WinUI 3 SwapChainPanel.CompositionScaleX always returns 1.0.
+            // We MUST use XamlRoot.RasterizationScale to get the physical DPI multiplier.
+            _targetScaleX = this.XamlRoot?.RasterizationScale ?? 1.0;
+            _targetScaleY = this.XamlRoot?.RasterizationScale ?? 1.0;
             scaleX = _targetScaleX;
             scaleY = _targetScaleY;
         }
@@ -1276,6 +1327,7 @@ public class D3D11RenderControl : ContentControl
         LogSync($"[RESIZE-1-REQ] ID:{id} | old:{(int)oldW}x{(int)oldH} | new:{(int)_targetWidth}x{(int)_targetHeight} | scale:{scaleX:F2}x{scaleY:F2} | force:{force} | suspended:{_isResizeSuspended}");
 
         _pendingResizeId = id;
+        _pendingResizeForce = force;
         _resizePending = true;
         _resizeEvent.Set();
     }
@@ -1286,8 +1338,8 @@ public class D3D11RenderControl : ContentControl
         {
             _targetWidth = e.NewSize.Width;
             _targetHeight = e.NewSize.Height;
-            _targetScaleX = _swapChainPanel?.CompositionScaleX ?? 1.0;
-            _targetScaleY = _swapChainPanel?.CompositionScaleY ?? 1.0;
+            _targetScaleX = this.XamlRoot?.RasterizationScale ?? 1.0;
+            _targetScaleY = this.XamlRoot?.RasterizationScale ?? 1.0;
         }
 
         // [STABLE-CANVAS RE-INIT]
@@ -1306,6 +1358,38 @@ public class D3D11RenderControl : ContentControl
                 RequestResize();
             }
         }
+
+        // [RESIZE OPTIMIZATION] Debounce-based resize start/end detection
+        SetupResizeDebounceTimer();
+    }
+
+    private unsafe void SetupResizeDebounceTimer()
+    {
+        if (_disposed || _device.Handle == null) return;
+
+        // First size change after idle = resize START
+        if (!_isResizing)
+        {
+            _isResizing = true;
+            LogSync($"[RESIZE-OPT] RESIZE STARTED — switching to monitor-sized swapchain");
+            // Trigger immediate resize to monitor size
+            RequestResize(force: true);
+        }
+
+        // Reset debounce timer
+        _resizeDebounceTimer?.Stop();
+        _resizeDebounceTimer?.Start();
+    }
+
+    private void OnResizeDebounceTimerTick(object sender, object e)
+    {
+        if (_disposed) return;
+
+        _resizeDebounceTimer?.Stop();
+        _isResizing = false;
+        LogSync($"[RESIZE-OPT] RESIZE ENDED — switching to 1:1 pixel mapping");
+        // Trigger resize to final window size
+        RequestResize(force: true);
     }
 
     // [FIX] Force immediate swap chain linking — must be called from UI thread BEFORE detaching for handoff
