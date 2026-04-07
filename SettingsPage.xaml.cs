@@ -292,6 +292,9 @@ namespace ModernIPTVPlayer
             {
                 var settings = AppSettings.PlayerSettings;
 
+                // Set Engine
+                SetComboSelection(PlayerEngineCombo, settings.Engine.ToString());
+
                 // Set Profile
                 SetComboSelection(PlayerProfileCombo, settings.Profile.ToString());
                 UpdateProfileDescription(settings.Profile);
@@ -439,6 +442,12 @@ namespace ModernIPTVPlayer
         private Models.PlayerSettings GetCurrentSettingsFromUI()
         {
             var settings = new Models.PlayerSettings();
+
+            if (PlayerEngineCombo.SelectedItem is ComboBoxItem eItem &&
+                Enum.TryParse(eItem.Tag.ToString(), out Models.PlayerEngine engine))
+            {
+                settings.Engine = engine;
+            }
 
             if (PlayerProfileCombo.SelectedItem is ComboBoxItem pItem &&
                 Enum.TryParse(pItem.Tag.ToString(), out Models.PlayerProfile p))

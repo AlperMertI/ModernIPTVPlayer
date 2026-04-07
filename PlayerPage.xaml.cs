@@ -40,6 +40,11 @@ namespace ModernIPTVPlayer
     {
 
         private MpvPlayer? _mpvPlayer;
+        private Windows.Media.Playback.MediaPlayer? _nativeMediaPlayer;
+        private Windows.Media.Streaming.Adaptive.AdaptiveMediaSource? _adaptiveMediaSource;
+        private ulong _downloadSpeedBytes;
+        private DateTime _downloadSpeedWindowStart = DateTime.MinValue;
+        private ulong _downloadSpeedWindowBytes;
         private Compositor _compositor;
         private bool _useMpvPlayer = true;
         private string _streamUrl = string.Empty;
@@ -159,6 +164,9 @@ namespace ModernIPTVPlayer
         private string? _primaryColorHex;
         private EpisodeItem _nextEpisode;
 
+        private DispatcherTimer _resizeDebounceTimer;
+        private bool _isResizingWindow = false;
+
         public PlayerPage()
         {
             this.InitializeComponent();
@@ -171,6 +179,11 @@ namespace ModernIPTVPlayer
             this.Loaded += PlayerPage_Loaded;
             // Hide default back button since we have a custom one and pane is closed
             // But navigation service back requests still need handling in MainWindow
+
+            // Resize optimizations
+            _resizeDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+            _resizeDebounceTimer.Tick += ResizeDebounceTimer_Tick;
+            this.SizeChanged += PlayerPage_SizeChanged;
 
             _statsTimer = new DispatcherTimer();
             _statsTimer.Interval = TimeSpan.FromMilliseconds(500);
@@ -330,40 +343,67 @@ namespace ModernIPTVPlayer
 
                     // Periodic telemetry that isn't event-based or high frequency (container specs)
                     try {
-                        var mpvFps = await _mpvPlayer.GetPropertyAsync("container-fps");
-                        var mpvResW = await _mpvPlayer.GetPropertyAsync("video-params/res-w");
-                        var mpvResH = await _mpvPlayer.GetPropertyAsync("video-params/res-h");
-                        var mpvCodec = await _mpvPlayer.GetPropertyAsync("video-codec");
+                        if (_mpvPlayer != null)
+                        {
+                            var mpvFps = await _mpvPlayer.GetPropertyAsync("container-fps");
+                            var mpvResW = await _mpvPlayer.GetPropertyAsync("video-params/res-w");
+                            var mpvResH = await _mpvPlayer.GetPropertyAsync("video-params/res-h");
+                            var mpvCodec = await _mpvPlayer.GetPropertyAsync("video-codec");
 
-                        if (!string.IsNullOrEmpty(mpvFps) && double.TryParse(mpvFps, NumberStyles.Any, CultureInfo.InvariantCulture, out double fpsVal))
-                            TxtFps.Text = fpsVal.ToString("F2");
+                            if (!string.IsNullOrEmpty(mpvFps) && double.TryParse(mpvFps, NumberStyles.Any, CultureInfo.InvariantCulture, out double fpsVal))
+                                TxtFps.Text = fpsVal.ToString("F2");
 
-                        if (!string.IsNullOrEmpty(mpvResW) && !string.IsNullOrEmpty(mpvResH)) 
-                            TxtResolution.Text = $"{mpvResW}x{mpvResH}";
+                            if (!string.IsNullOrEmpty(mpvResW) && !string.IsNullOrEmpty(mpvResH)) 
+                                TxtResolution.Text = $"{mpvResW}x{mpvResH}";
 
-                        if (!string.IsNullOrEmpty(mpvCodec) && !TxtHardware.Text.Contains($"({mpvCodec})")) 
-                            TxtHardware.Text += $" ({mpvCodec})";
+                            if (!string.IsNullOrEmpty(mpvCodec) && !TxtHardware.Text.Contains($"({mpvCodec})")) 
+                                TxtHardware.Text += $" ({mpvCodec})";
+                        }
                     } catch { }
                 }
 
                 // ---------- SEEKBAR & TIME LOGIC & LOGO SYNC ----------
                 // These require lower-latency polling for smooth UI updates
-                string durationStr = await _mpvPlayer.GetPropertyAsync("duration");
-                string positionStr = await _mpvPlayer.GetPropertyAsync("time-pos");
-                string coreIdleStr = await _mpvPlayer.GetPropertyAsync("core-idle");
-                string pausedForCacheStr = await _mpvPlayer.GetPropertyAsync("paused-for-cache");
-                string seekingStr = await _mpvPlayer.GetPropertyAsync("seeking");
-                
-                double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double duration);
-                double.TryParse(positionStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double position);
+                string durationStr = "0", positionStr = "0", coreIdleStr = "no", pausedForCacheStr = "no", seekingStr = "no";
+                double duration = 0, position = 0;
+
+                if (_useMpvPlayer && _mpvPlayer != null)
+                {
+                    durationStr = await _mpvPlayer.GetPropertyAsync("duration");
+                    positionStr = await _mpvPlayer.GetPropertyAsync("time-pos");
+                    coreIdleStr = await _mpvPlayer.GetPropertyAsync("core-idle");
+                    pausedForCacheStr = await _mpvPlayer.GetPropertyAsync("paused-for-cache");
+                    seekingStr = await _mpvPlayer.GetPropertyAsync("seeking");
+                    
+                    double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out duration);
+                    double.TryParse(positionStr, NumberStyles.Any, CultureInfo.InvariantCulture, out position);
+                }
+                else if (!_useMpvPlayer && _nativeMediaPlayer?.PlaybackSession != null)
+                {
+                    var sess = _nativeMediaPlayer.PlaybackSession;
+                    duration = sess.NaturalDuration.TotalSeconds;
+                    position = sess.Position.TotalSeconds;
+                    coreIdleStr = sess.PlaybackState != Windows.Media.Playback.MediaPlaybackState.Playing ? "yes" : "no";
+                    pausedForCacheStr = sess.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Buffering ? "yes" : "no";
+                    // Native player uses a built in buffering UI but we sync it
+                }
 
                 // --- LOGO LOADING SYNC LOGIC ---
                 if (PlayerLoadingOverlay.Visibility == Visibility.Visible)
                 {
-                    bool isCoreIdle = coreIdleStr == "yes";
-                    bool isBuffering = pausedForCacheStr == "yes" || seekingStr == "yes" || position < 0.1;
-
-                    bool isTimeAdvancing = position > 0.05 && !isCoreIdle && !isBuffering;
+                    bool isTimeAdvancing = false;
+                    
+                    if (_useMpvPlayer)
+                    {
+                        bool isCoreIdle = coreIdleStr == "yes";
+                        bool isBuffering = pausedForCacheStr == "yes" || seekingStr == "yes" || position < 0.1;
+                        isTimeAdvancing = position > 0.05 && !isCoreIdle && !isBuffering;
+                    }
+                    else if (_nativeMediaPlayer?.PlaybackSession != null)
+                    {
+                        // Native player might not advance Position immediately for some live streams
+                        isTimeAdvancing = _nativeMediaPlayer.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Playing;
+                    }
                     
                     if (isTimeAdvancing)
                     {
@@ -372,29 +412,49 @@ namespace ModernIPTVPlayer
                     }
                     else if (_loadingTargetProgress != 100)
                     {
-                        // Phase 2: MPV opened, reading cache fill status (0-100)
-                        string bufferingStateStr = await _mpvPlayer.GetPropertyAsync("cache-buffering-state");
-                        
-                        if (seekingStr == "yes")
+                        if (_useMpvPlayer && _mpvPlayer != null)
                         {
-                            // Reset visually during seek
-                            _loadingTargetProgress = 70;
-                            _fakeLogoProgress = 70;
-                        }
-                        else if (double.TryParse(bufferingStateStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double bufferPercentage))
-                        {
-                            // Map MPV's 0-100% buffer fill to our UI's target range (70-100%)
-                            // We set the TARGET, and the _logoLoadingTimer handles smoothing the visual progress
-                            double newTarget = 70.0 + (bufferPercentage * 0.30);
+                            // Phase 2: MPV opened, reading cache fill status (0-100)
+                            string bufferingStateStr = await _mpvPlayer.GetPropertyAsync("cache-buffering-state");
                             
-                            // During a seek or cache drop, occasionally the buffer % genuinely falls.
-                            // Set target to exactly what MPV reports. _logoLoadingTimer handles smoothness.
-                            _loadingTargetProgress = newTarget;
+                            if (seekingStr == "yes")
+                            {
+                                // Reset visually during seek
+                                _loadingTargetProgress = 70;
+                                _fakeLogoProgress = 70;
+                            }
+                            else if (double.TryParse(bufferingStateStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double bufferPercentage))
+                            {
+                                // Map MPV's 0-100% buffer fill to our UI's target range (70-100%)
+                                // We set the TARGET, and the _logoLoadingTimer handles smoothing the visual progress
+                                double newTarget = 70.0 + (bufferPercentage * 0.30);
+                                
+                                // During a seek or cache drop, occasionally the buffer % genuinely falls.
+                                // Set target to exactly what MPV reports. _logoLoadingTimer handles smoothness.
+                                _loadingTargetProgress = newTarget;
+                            }
+                            else
+                            {
+                                 // If buffering state isn't available but we are loading, nudge it slightly
+                                 if (_loadingTargetProgress < 90) _loadingTargetProgress += 1;
+                            }
+                        }
+                        else if (!_useMpvPlayer && _nativeMediaPlayer?.PlaybackSession != null)
+                        {
+                            if (seekingStr == "yes")
+                            {
+                                _loadingTargetProgress = 70;
+                                _fakeLogoProgress = 70;
+                            }
+                            else
+                            {
+                                double bufferPercentage = _nativeMediaPlayer.PlaybackSession.BufferingProgress * 100.0; // 0.0 to 1.0 mapped to 0-100
+                                _loadingTargetProgress = 70.0 + (bufferPercentage * 0.30);
+                            }
                         }
                         else
                         {
-                             // If buffering state isn't available but we are loading, nudge it slightly
-                             if (_loadingTargetProgress < 90) _loadingTargetProgress += 1;
+                            if (_loadingTargetProgress < 90) _loadingTargetProgress += 1;
                         }
                     }
                 }
@@ -420,10 +480,19 @@ namespace ModernIPTVPlayer
                     _bufferUnlocked = true;
                 }
 
-                var seekable = await _mpvPlayer.GetPropertyAsync("seekable");
-                
-                // Use cached duration if possible or just use the local string for seekable check
-                double.TryParse(await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration"), NumberStyles.Any, CultureInfo.InvariantCulture, out double cacheDuration);
+                string seekable = "no";
+                double cacheDuration = 0;
+
+                if (_useMpvPlayer && _mpvPlayer != null)
+                {
+                    seekable = await _mpvPlayer.GetPropertyAsync("seekable");
+                    double.TryParse(await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration"), NumberStyles.Any, CultureInfo.InvariantCulture, out cacheDuration);
+                }
+                else if (!_useMpvPlayer && _nativeMediaPlayer?.PlaybackSession != null)
+                {
+                    seekable = _nativeMediaPlayer.PlaybackSession.CanSeek ? "yes" : "no";
+                    cacheDuration = 10.0; // Assume okay for native
+                }
 
                 bool isSeekable = (seekable != "no") || (cacheDuration > 3.0); 
                 
@@ -436,7 +505,15 @@ namespace ModernIPTVPlayer
                 // Removed redundant "Live Detection Logic" block (lines 87-102) to avoid flickering
                 // and rely on the robust "isLikelyLive" check below.
                 
-                string fileFormat = await _mpvPlayer.GetPropertyAsync("file-format");
+                string fileFormat = "";
+                if (_useMpvPlayer && _mpvPlayer != null)
+                {
+                    fileFormat = await _mpvPlayer.GetPropertyAsync("file-format");
+                }
+                else
+                {
+                    fileFormat = _streamUrl != null && _streamUrl.EndsWith(".ts") ? "mpegts" : "mp4";
+                }
                 
                 bool isMpegTs = (fileFormat == "mpegts");
 
@@ -519,101 +596,116 @@ namespace ModernIPTVPlayer
 
                 if (shouldRefreshMetadata)
                 {
-                    // Resolution consolidation
-                    var wSize = await _mpvPlayer.GetPropertyAsync("video-params/w");
-                    var hSize = await _mpvPlayer.GetPropertyAsync("video-params/h");
-                    
-                    if (!string.IsNullOrEmpty(wSize) && wSize != "N/A" && wSize != "0")
+                    if (_useMpvPlayer && _mpvPlayer != null)
                     {
-                        string newRes = $"{wSize}x{hSize}";
+                        // Resolution consolidation
+                        var wSize = await _mpvPlayer.GetPropertyAsync("video-params/w");
+                        var hSize = await _mpvPlayer.GetPropertyAsync("video-params/h");
                         
-                        // FPS consolidation
-                        var fpsValStr = await _mpvPlayer.GetPropertyAsync("estimated-fps");
-                        if (string.IsNullOrEmpty(fpsValStr) || fpsValStr == "N/A") fpsValStr = await _mpvPlayer.GetPropertyAsync("container-fps");
-                        
-                        string newFps = "- fps";
-                        if (double.TryParse(fpsValStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double fv))
+                        if (!string.IsNullOrEmpty(wSize) && wSize != "N/A" && wSize != "0")
                         {
-                            newFps = $"{fv:F2} fps";
-                        }
+                            string newRes = $"{wSize}x{hSize}";
+                            
+                            // FPS consolidation
+                            var fpsValStr = await _mpvPlayer.GetPropertyAsync("estimated-fps");
+                            if (string.IsNullOrEmpty(fpsValStr) || fpsValStr == "N/A") fpsValStr = await _mpvPlayer.GetPropertyAsync("container-fps");
+                            
+                            string newFps = "- fps";
+                            if (double.TryParse(fpsValStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double fv))
+                            {
+                                newFps = $"{fv:F2} fps";
+                            }
 
-                        // If something meaningful changed or it's the first fetch, update UI and CACHE
-                        if (newRes != _cachedResolution || newFps != _cachedFps || !_isStaticMetadataFetched)
+                            // If something meaningful changed or it's the first fetch, update UI and CACHE
+                            if (newRes != _cachedResolution || newFps != _cachedFps || !_isStaticMetadataFetched)
+                            {
+                                _cachedResolution = newRes;
+                                _cachedFps = newFps;
+                                if (_nativeMonitorFps > 0) _cachedFps += $" / {_nativeMonitorFps}Hz";
+
+                                // Codec (Video & Audio)
+                                string rawCodec = await _mpvPlayer.GetPropertyAsync("video-codec");
+                                _cachedCodec = GetShortCodecName(rawCodec);
+
+                                string audioCodec = await _mpvPlayer.GetPropertyAsync("audio-codec");
+                                string audioChannels = await _mpvPlayer.GetPropertyAsync("audio-params/hr-channels");
+                                if (string.IsNullOrEmpty(audioChannels) || audioChannels == "N/A")
+                                    audioChannels = await _mpvPlayer.GetPropertyAsync("audio-out-params/channels");
+                                
+                                _cachedAudio = $"{GetShortCodecName(audioCodec).ToUpper()} ({audioChannels})";
+                                
+                                _cachedColorspace = await _mpvPlayer.GetPropertyAsync("video-params/colormatrix");
+                                if (string.IsNullOrEmpty(_cachedColorspace) || _cachedColorspace == "N/A") _cachedColorspace = "-";
+
+                                // HDR / Tone Mapping
+                                string hdrStatus = await _mpvPlayer.GetPropertyAsync("video-out-params/sig-peak");
+                                string gamma = await _mpvPlayer.GetPropertyAsync("video-out-params/gamma");
+                                if (!string.IsNullOrEmpty(hdrStatus) && hdrStatus != "N/A" && double.TryParse(hdrStatus, NumberStyles.Any, CultureInfo.InvariantCulture, out double peak) && peak > 1.0)
+                                {
+                                    int nits = (int)Math.Round(peak * 203.0);
+                                    string activeTm = await _mpvPlayer.GetPropertyAsync("tone-mapping");
+                                    _cachedHdr = $"HDR ({nits} nits) - {activeTm.ToUpper()}";
+                                }
+                                else
+                                {
+                                    _cachedHdr = $"SDR ({gamma})";
+                                }
+
+                                ApplyMetadataToUI(true);
+                            }
+                        }
+                    }
+                    else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                    {
+                        var session = _nativeMediaPlayer.PlaybackSession;
+                        var wSize = session.NaturalVideoWidth;
+                        var hSize = session.NaturalVideoHeight;
+                        
+                        if (wSize > 0 && !_isStaticMetadataFetched)
                         {
+                            string newRes = $"{wSize}x{hSize}";
+                            
+                            // Polling fallback (if event missed)
+                            string newFps = "- fps";
+                            string newCodec = "NATIVE";
+                            string newAudio = "NATIVE";
+                            string newHdr = "SDR/HDR (Native)";
+
+                            try 
+                            {
+                                if (_nativeMediaPlayer.Source is Windows.Media.Playback.MediaPlaybackItem item)
+                                {
+                                    if (item.VideoTracks.Count > 0)
+                                    {
+                                        var videoProps = item.VideoTracks[0].GetEncodingProperties();
+                                        if (videoProps.FrameRate.Denominator > 0)
+                                        {
+                                            double fv = (double)videoProps.FrameRate.Numerator / videoProps.FrameRate.Denominator;
+                                            newFps = $"{fv:F2} fps";
+                                        }
+                                        newCodec = GetShortCodecName(videoProps.Subtype);
+                                        
+                                        if (videoProps.Subtype.Contains("HEVC") || videoProps.Subtype.Contains("HVC1"))
+                                             newHdr = "HDR Ready (Native)";
+                                    }
+                                    if (item.AudioTracks.Count > 0)
+                                    {
+                                        var audioProps = item.AudioTracks[0].GetEncodingProperties();
+                                        newAudio = $"{GetShortCodecName(audioProps.Subtype).ToUpper()} ({audioProps.ChannelCount}ch)";
+                                    }
+                                }
+                            } catch { }
+
                             _cachedResolution = newRes;
                             _cachedFps = newFps;
                             if (_nativeMonitorFps > 0) _cachedFps += $" / {_nativeMonitorFps}Hz";
-
-                            // Codec (Video & Audio)
-                            string rawCodec = await _mpvPlayer.GetPropertyAsync("video-codec");
-                            _cachedCodec = GetShortCodecName(rawCodec);
-
-                            string audioCodec = await _mpvPlayer.GetPropertyAsync("audio-codec");
-                            string audioChannels = await _mpvPlayer.GetPropertyAsync("audio-params/hr-channels");
-                            if (string.IsNullOrEmpty(audioChannels) || audioChannels == "N/A")
-                                audioChannels = await _mpvPlayer.GetPropertyAsync("audio-out-params/channels");
                             
-                            _cachedAudio = $"{GetShortCodecName(audioCodec).ToUpper()} ({audioChannels})";
+                            _cachedCodec = newCodec;
+                            _cachedAudio = newAudio;
+                            _cachedColorspace = "AUTO";
+                            _cachedHdr = newHdr;
                             
-                            _cachedColorspace = await _mpvPlayer.GetPropertyAsync("video-params/colormatrix");
-                            if (string.IsNullOrEmpty(_cachedColorspace) || _cachedColorspace == "N/A") _cachedColorspace = "-";
-
-                            // HDR / Tone Mapping
-                            string hdrStatus = await _mpvPlayer.GetPropertyAsync("video-out-params/sig-peak");
-                            string gamma = await _mpvPlayer.GetPropertyAsync("video-out-params/gamma");
-                            if (!string.IsNullOrEmpty(hdrStatus) && hdrStatus != "N/A" && double.TryParse(hdrStatus, NumberStyles.Any, CultureInfo.InvariantCulture, out double peak) && peak > 1.0)
-                            {
-                                int nits = (int)Math.Round(peak * 203.0);
-                                string activeTm = await _mpvPlayer.GetPropertyAsync("tone-mapping");
-                                _cachedHdr = $"HDR ({nits} nits) - {activeTm.ToUpper()}";
-                            }
-                            else
-                            {
-                                _cachedHdr = $"SDR ({gamma})";
-                            }
-
-                            // Update UI
-                            TxtResolution.Text = _cachedResolution;
-                            TxtFps.Text = _cachedFps;
-                            TxtCodec.Text = _cachedCodec.ToUpper();
-                            TxtAudioCodec.Text = _cachedAudio;
-                            TxtColorspace.Text = _cachedColorspace;
-                            TxtHdr.Text = _cachedHdr;
-                            
-                            PillResolution.Text = _cachedResolution;
-                            PillFps.Text = _cachedFps;
-                            PillCodec.Text = _cachedCodec;
-
-                            _isStaticMetadataFetched = true;
-                            ShowInfoPills();
-            {
-                // We no longer call StopLogoLoading here. It is handled organically by the StatsTimer
-                // when MPV reports it is actually ready.
-            }                  // [CACHE UPDATE] Update global cache with real playback data
-                            try 
-                            {
-                                bool isHdr = _cachedHdr.Contains("HDR");
-                                string simpleFps = _cachedFps.Split(' ')[0] + " fps";
-                                
-                                // Fetch real-time bitrate from demuxer if possible, or use current video-bitrate
-                                string brStr = await _mpvPlayer.GetPropertyAsync("video-bitrate");
-                                long bitrate = 0;
-                                if (double.TryParse(brStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double brVal)) 
-                                    bitrate = (long)brVal;
-
-                                if (int.TryParse(_navArgs.Id, out int streamId))
-                                {
-                                    Services.ProbeCacheService.Instance.Update(streamId, _cachedResolution, simpleFps, _cachedCodec, bitrate, isHdr);
-                                    Debug.WriteLine($"[PlayerPage] Metadata Updated in Global Cache for ID {streamId} ({_cachedResolution})");
-                                }
-                                else if (!string.IsNullOrEmpty(_streamUrl))
-                                {
-                                     // Fallback for non-numeric IDs (Stremio/VOD) if needed, 
-                                     // but our binary system is optimized for integer IDs.
-                                     Debug.WriteLine("[PlayerPage] Skipping binary cache update: Non-numeric ID.");
-                                }
-                            }
-                            catch (Exception ex) { Debug.WriteLine($"[PlayerPage] Global Cache Update Failed: {ex.Message}"); }
+                            ApplyMetadataToUI(false);
                         }
                     }
                 }
@@ -621,63 +713,117 @@ namespace ModernIPTVPlayer
                 if (StatsOverlay.Visibility == Visibility.Visible)
                 {
                     // 2. Dynamic Metadata (Always poll when visible)
-                    var bitrate = await _mpvPlayer.GetPropertyAsync("video-bitrate");
-                    TxtBitrate.Text = FormatBitrate(bitrate);
-                    
-                    // Improved speed detection: Real-time network activity
-                    // Probe showed 'cache-speed' is the working property for this environment
-                    long speedVal = await GetPropertyLongSafe("cache-speed");
-                    TxtSpeed.Text = FormatSpeedLong(speedVal);
-
-                    var hwdec = await _mpvPlayer.GetPropertyAsync("hwdec-current");
-                    var vo = await _mpvPlayer.GetPropertyAsync("vo-configured");
-                    TxtHardware.Text = (hwdec != "no" && !string.IsNullOrEmpty(hwdec)) ? $"{hwdec.ToUpper()} ({vo})" : $"SOFTWARE ({vo})";
-                    TxtRenderer.Text = _mpvPlayer.RenderApi == "d3d11" ? "GPU-NEXT (Placebo)" : "GPU (Legacy DXGI)";
-                    TxtAppliedPeak.Text = _mpvPlayer.AppliedPeak > 0 ? $"{_mpvPlayer.AppliedPeak:F0} nits" : "-";
-                    TxtSdrWhite.Text = _mpvPlayer.SdrWhiteLevel > 0 ? $"{_mpvPlayer.SdrWhiteLevel:F0} nits" : "-";
-
-                    // Drops & AV Sync
-                    try 
+                    if (_useMpvPlayer && _mpvPlayer != null)
                     {
-                        // Some MPV versions use frame-drop-count directly for total drops
-                        long decDrops = await GetPropertyLongSafe("frame-drop-count");
-                        if (decDrops < 0) decDrops = await GetPropertyLongSafe("vo-drop-frame-count");
-                        if (decDrops < 0) decDrops = await GetPropertyLongSafe("decoder-frame-drop-count");
+                        RowAppliedPeak.Visibility = Visibility.Visible;
+                        RowSdrWhite.Visibility = Visibility.Visible;
+                        RowSpeed.Visibility = Visibility.Visible;
+                        RowBitrate.Visibility = Visibility.Visible;
+                        RowAvSync.Visibility = Visibility.Visible;
+                        RowDropped.Visibility = Visibility.Visible;
+
+                        var bitrate = await _mpvPlayer.GetPropertyAsync("video-bitrate");
+                        TxtBitrate.Text = FormatBitrate(bitrate);
                         
-                        string avSync = await _mpvPlayer.GetPropertyAsync("avsync");
-                        string buffDur = await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration");
+                        long speedVal = await GetPropertyLongSafe("cache-speed");
+                        TxtSpeed.Text = FormatSpeedLong(speedVal);
 
-                        // Drops
-                        TxtDroppedDecoder.Text = decDrops >= 0 ? $"{decDrops}" : "0";
+                        var hwdec = await _mpvPlayer.GetPropertyAsync("hwdec-current");
+                        var vo = await _mpvPlayer.GetPropertyAsync("vo-configured");
+                        TxtHardware.Text = (hwdec != "no" && !string.IsNullOrEmpty(hwdec)) ? $"{hwdec.ToUpper()} ({vo})" : $"SOFTWARE ({vo})";
+                        TxtRenderer.Text = _mpvPlayer.RenderApi == "d3d11" ? "GPU-NEXT (Placebo)" : "GPU (Legacy DXGI)";
+                        TxtAppliedPeak.Text = _mpvPlayer.AppliedPeak > 0 ? $"{_mpvPlayer.AppliedPeak:F0} nits" : "-";
+                        TxtSdrWhite.Text = _mpvPlayer.SdrWhiteLevel > 0 ? $"{_mpvPlayer.SdrWhiteLevel:F0} nits" : "-";
 
-                        // AV Sync
-                        if (double.TryParse(avSync, NumberStyles.Any, CultureInfo.InvariantCulture, out double avVal))
+                        // Drops & AV Sync
+                        try 
                         {
-                             TxtAvSync.Text = $"{avVal * 1000:F1} ms"; // Show in ms
-                             TxtAvSync.Foreground = (Math.Abs(avVal) > 0.1) 
-                                 ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange) 
-                                 : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White);
-                        }
-                        else
-                        {
-                             TxtAvSync.Text = "-";
-                        }
+                            long decDrops = await GetPropertyLongSafe("frame-drop-count");
+                            if (decDrops < 0) decDrops = await GetPropertyLongSafe("vo-drop-frame-count");
+                            if (decDrops < 0) decDrops = await GetPropertyLongSafe("decoder-frame-drop-count");
+                            
+                            string avSync = await _mpvPlayer.GetPropertyAsync("avsync");
+                            string buffDur = await _mpvPlayer.GetPropertyAsync("demuxer-cache-duration");
 
-                        // Buffer
-                        if (double.TryParse(buffDur, NumberStyles.Any, CultureInfo.InvariantCulture, out double buffVal))
-                        {
-                             TxtBuffer.Text = $"{buffVal:F1}s";
+                            TxtDroppedDecoder.Text = decDrops >= 0 ? $"{decDrops}" : "0";
+
+                            if (double.TryParse(avSync, NumberStyles.Any, CultureInfo.InvariantCulture, out double avVal))
+                            {
+                                 TxtAvSync.Text = $"{avVal * 1000:F1} ms"; // Show in ms
+                                 TxtAvSync.Foreground = (Math.Abs(avVal) > 0.1) 
+                                     ? new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange) 
+                                     : new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White);
+                            }
+                            else
+                            {
+                                 TxtAvSync.Text = "-";
+                            }
+
+                            if (double.TryParse(buffDur, NumberStyles.Any, CultureInfo.InvariantCulture, out double buffVal))
+                            {
+                                 TxtBuffer.Text = $"{buffVal:F1}s";
+                            }
+                            else
+                            {
+                                 TxtBuffer.Text = "0s";
+                            }
                         }
-                        else
+                        catch (Exception)
                         {
-                             TxtBuffer.Text = "0s";
+                            TxtDroppedDecoder.Text = "-";
+                            TxtAvSync.Text = "-";
+                            TxtBuffer.Text = "-";
                         }
                     }
-                    catch (Exception)
+                    else if (!_useMpvPlayer && _nativeMediaPlayer != null)
                     {
-                        TxtDroppedDecoder.Text = "-";
-                        TxtAvSync.Text = "-";
-                        TxtBuffer.Text = "-";
+                        var session = _nativeMediaPlayer.PlaybackSession;
+                        
+                        RowAppliedPeak.Visibility = Visibility.Collapsed;
+                        RowSdrWhite.Visibility = Visibility.Collapsed;
+                        RowAvSync.Visibility = Visibility.Collapsed;
+                        RowDropped.Visibility = Visibility.Collapsed;
+
+                        if (_adaptiveMediaSource != null)
+                        {
+                            ulong speedBytes;
+                            lock (this) { speedBytes = _downloadSpeedBytes; }
+                            if (speedBytes > 0)
+                            {
+                                double mbps = (speedBytes * 8.0) / 1000000.0;
+                                TxtSpeed.Text = $"{mbps:F1} Mbps";
+                            }
+                            else
+                            {
+                                TxtSpeed.Text = "-";
+                            }
+                            RowSpeed.Visibility = Visibility.Visible;
+
+                            ulong downloadBitrate = _adaptiveMediaSource.CurrentDownloadBitrate;
+                            if (downloadBitrate > 0)
+                            {
+                                double brMbps = downloadBitrate / 1000000.0;
+                                TxtBitrate.Text = $"{brMbps:F1} Mbps";
+                            }
+                            else
+                            {
+                                TxtBitrate.Text = "-";
+                            }
+                            RowBitrate.Visibility = Visibility.Visible;
+
+                            TxtHardware.Text = "HARDWARE";
+                        }
+                        else
+                        {
+                            RowSpeed.Visibility = Visibility.Collapsed;
+                            RowBitrate.Visibility = Visibility.Collapsed;
+                            TxtHardware.Text = "HARDWARE";
+                        }
+
+                        TxtRenderer.Text = "GPU (DirectComposition/Native)";
+                        
+                        double buffPct = session.BufferingProgress * 100.0;
+                        TxtBuffer.Text = buffPct > 0 ? $"{buffPct:F1}%" : "0%";
                     }
                 }
             }
@@ -751,10 +897,67 @@ namespace ModernIPTVPlayer
             }
         }
 
+        private async void ApplyMetadataToUI(bool isMpv)
+        {
+            // Update UI
+            TxtResolution.Text = _cachedResolution;
+            TxtFps.Text = _cachedFps;
+            TxtCodec.Text = _cachedCodec.ToUpper();
+            TxtAudioCodec.Text = _cachedAudio;
+            TxtColorspace.Text = _cachedColorspace;
+            TxtHdr.Text = _cachedHdr;
+            
+            PillResolution.Text = _cachedResolution;
+            PillFps.Text = _cachedFps;
+            PillCodec.Text = _cachedCodec;
+
+            _isStaticMetadataFetched = true;
+            ShowInfoPills();
+
+            // [CACHE UPDATE] Update global cache with real playback data
+            try 
+            {
+                bool isHdr = _cachedHdr.Contains("HDR");
+                string simpleFps = _cachedFps.Split(' ')[0] + " fps";
+                
+                long bitrate = 0;
+                if (isMpv && _mpvPlayer != null)
+                {
+                    string brStr = await _mpvPlayer.GetPropertyAsync("video-bitrate");
+                    if (double.TryParse(brStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double brVal)) 
+                        bitrate = (long)brVal;
+                }
+
+                if (_navArgs != null && int.TryParse(_navArgs.Id, out int streamId))
+                {
+                    Services.ProbeCacheService.Instance.Update(streamId, _cachedResolution, simpleFps, _cachedCodec, bitrate, isHdr);
+                    Debug.WriteLine($"[PlayerPage] Metadata Updated in Global Cache for ID {streamId} ({_cachedResolution})");
+                }
+            }
+            catch (Exception ex) { Debug.WriteLine($"[PlayerPage] Global Cache Update Failed: {ex.Message}"); }
+        }
+
         protected override async void OnKeyDown(KeyRoutedEventArgs e)
         {
             base.OnKeyDown(e);
-            if (_mpvPlayer == null) return;
+            
+            if (e.Key == Windows.System.VirtualKey.Space)
+            {
+                TogglePlayPause();
+                e.Handled = true;
+                return;
+            }
+
+            if (e.Key == Windows.System.VirtualKey.S)
+            {
+                // Toggle Custom Stats Overlay
+                StatsOverlay.Visibility = StatsOverlay.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+                e.Handled = true;
+                return;
+            }
+
+            // The following keybindings are strictly MPV commands. We disable them for Native Player for now.
+            if (!_useMpvPlayer || _mpvPlayer == null) return;
 
             if (e.Key == Windows.System.VirtualKey.Left)
             {
@@ -879,9 +1082,23 @@ namespace ModernIPTVPlayer
 
         private async void TogglePlayPause()
         {
-            if (_mpvPlayer == null) return;
-            bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
-            await _mpvPlayer.SetPropertyAsync("pause", isPaused ? "no" : "yes");
+            if (_useMpvPlayer)
+            {
+                if (_mpvPlayer == null) return;
+                bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
+                await _mpvPlayer.SetPropertyAsync("pause", isPaused ? "no" : "yes");
+            }
+            else if (_nativeMediaPlayer != null)
+            {
+                if (_nativeMediaPlayer.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Playing)
+                    _nativeMediaPlayer.Pause();
+                else
+                    _nativeMediaPlayer.Play();
+                
+                bool isNowPaused = _nativeMediaPlayer.PlaybackSession.PlaybackState != Windows.Media.Playback.MediaPlaybackState.Playing;
+                PlayPauseIcon.Glyph = isNowPaused ? "\uF8AE" : "\uF5B0";
+                if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = isNowPaused ? "\uF8AE" : "\uF5B0";
+            }
             
             // Logic is now handled reactively in StatsTimer_Tick
             
@@ -1017,6 +1234,11 @@ namespace ModernIPTVPlayer
             {
                 MediaFoundationPlayer.MediaPlayer.Pause();
                 MediaFoundationPlayer.Source = null;
+                if (_adaptiveMediaSource != null)
+                {
+                    _adaptiveMediaSource.DownloadCompleted -= AdaptiveSource_DownloadCompleted;
+                    _adaptiveMediaSource = null;
+                }
             }
 
         }
@@ -1057,7 +1279,7 @@ namespace ModernIPTVPlayer
 
         private void InactivityTimer_Tick(object sender, object e)
         {
-            if (_mpvPlayer == null) return;
+            if ((_useMpvPlayer && _mpvPlayer == null) || (!_useMpvPlayer && _nativeMediaPlayer == null)) return;
 
             var idleTime = (DateTime.Now - _pauseStartTime).TotalSeconds;
             if (idleTime >= 30 && !_isInactivityOverlayVisible)
@@ -1073,7 +1295,7 @@ namespace ModernIPTVPlayer
             InactivityOverlay.Visibility = Visibility.Visible;
             
             // Apply blur immediately before any potential await delays (e.g. metadata fetching)
-            if (_mpvPlayer != null)
+            if (_useMpvPlayer && _mpvPlayer != null)
             {
                 _ = _mpvPlayer.ExecuteCommandAsync("vf", "add", "@inact:gblur=sigma=15");
             }
@@ -1104,8 +1326,17 @@ namespace ModernIPTVPlayer
 
                 if (_navArgs.Type == "movie")
                 {
-                    string durationStr = await _mpvPlayer.GetPropertyAsync("duration");
-                    double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double duration);
+                    double duration = 0;
+                    if (_useMpvPlayer && _mpvPlayer != null)
+                    {
+                        string durationStr = await _mpvPlayer.GetPropertyAsync("duration");
+                        double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out duration);
+                    }
+                    else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                    {
+                        duration = _nativeMediaPlayer.PlaybackSession.NaturalDuration.TotalSeconds;
+                    }
+                    
                     TimeSpan tDur = TimeSpan.FromSeconds(duration);
                     InactivityDuration.Text = tDur.TotalHours >= 1 ? $"{tDur.Hours}s {tDur.Minutes}dk" : $"{tDur.Minutes}dk";
                     InactivityChapterInfo.Visibility = Visibility.Collapsed;
@@ -1222,11 +1453,22 @@ namespace ModernIPTVPlayer
         {
             if (!_isInactivityOverlayVisible) return;
             
-            string posStr = await _mpvPlayer.GetPropertyAsync("time-pos");
-            string durStr = await _mpvPlayer.GetPropertyAsync("duration");
+            double pos = 0;
+            double dur = 0;
             
-            double.TryParse(posStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double pos);
-            double.TryParse(durStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double dur);
+            if (_useMpvPlayer && _mpvPlayer != null)
+            {
+                string posStr = await _mpvPlayer.GetPropertyAsync("time-pos");
+                string durStr = await _mpvPlayer.GetPropertyAsync("duration");
+                
+                double.TryParse(posStr, NumberStyles.Any, CultureInfo.InvariantCulture, out pos);
+                double.TryParse(durStr, NumberStyles.Any, CultureInfo.InvariantCulture, out dur);
+            }
+            else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+            {
+                pos = _nativeMediaPlayer.PlaybackSession.Position.TotalSeconds;
+                dur = _nativeMediaPlayer.PlaybackSession.NaturalDuration.TotalSeconds;
+            }
             
             if (dur > 0)
             {
@@ -1256,7 +1498,7 @@ namespace ModernIPTVPlayer
             
             _isInactivityOverlayVisible = false;
             
-            if (_mpvPlayer != null)
+            if (_useMpvPlayer && _mpvPlayer != null)
             {
                 _ = _mpvPlayer.ExecuteCommandAsync("vf", "remove", "@inact");
             }
@@ -1541,6 +1783,8 @@ namespace ModernIPTVPlayer
 
             StartLogoLoading();
 
+            _useMpvPlayer = AppSettings.PlayerSettings.Engine == Models.PlayerEngine.Mpv;
+
             if (_useMpvPlayer)
             {
                 MediaFoundationPlayer.Visibility = Visibility.Collapsed;
@@ -1756,16 +2000,192 @@ namespace ModernIPTVPlayer
             }
             else
             {
+                // NATIVE MEDIA FOUNDATION PIPELINE
+                Debug.WriteLine("[PlayerPage] Starting Native Media Foundation Pipeline...");
+
+                // Prevent MPV from running in the background and throwing "render_context not being called" errors
+                if (App.HandoffPlayer != null)
+                {
+                    try 
+                    { 
+                        _ = App.HandoffPlayer.SetPropertyAsync("pause", "yes");
+                        _ = App.HandoffPlayer.SetPropertyAsync("vid", "no");
+                        _ = App.HandoffPlayer.SetPropertyAsync("aid", "no");
+                    } catch {}
+                    
+                    App.HandoffPlayer = null;
+                }
+
                 MediaFoundationPlayer.Visibility = Visibility.Visible;
+                PlayerContainer.Visibility = Visibility.Collapsed;
+                MediaFoundationPlayer.AreTransportControlsEnabled = false; // We use our own UI
+                
+                if (_nativeMediaPlayer == null)
+                {
+                    _nativeMediaPlayer = new Windows.Media.Playback.MediaPlayer();
+                    // Advanced Optimizations
+                    _nativeMediaPlayer.RealTimePlayback = true; // Minimum latency for Live/IPTV
+                    _nativeMediaPlayer.SystemMediaTransportControls.IsEnabled = true; // SMTC Kernel Priority
+                    // MediaFailed -> Fallback to MPV
+                    _nativeMediaPlayer.MediaFailed += MediaPlayer_MediaFailed;
+                    _nativeMediaPlayer.MediaOpened += NativePlayer_MediaOpened;
+                    
+                    MediaFoundationPlayer.SetMediaPlayer(_nativeMediaPlayer);
+                }
+
                 try
                 {
-                    MediaFoundationPlayer.Source = MediaSource.CreateFromUri(new Uri(_streamUrl));
+                    var adaptiveResult = await Windows.Media.Streaming.Adaptive.AdaptiveMediaSource.CreateFromUriAsync(new Uri(_streamUrl));
+                    if (adaptiveResult.Status == Windows.Media.Streaming.Adaptive.AdaptiveMediaSourceCreationStatus.Success)
+                    {
+                        _adaptiveMediaSource = adaptiveResult.MediaSource;
+                        _adaptiveMediaSource.DownloadCompleted += AdaptiveSource_DownloadCompleted;
+                        var source = Windows.Media.Core.MediaSource.CreateFromAdaptiveMediaSource(_adaptiveMediaSource);
+                        var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                        _nativeMediaPlayer.Source = item;
+                        _nativeMediaPlayer.Play();
+                    }
+                    else
+                    {
+                        Debug.WriteLine($"[PlayerPage] AdaptiveMediaSource creation failed: {adaptiveResult.Status}, falling back to MediaSource");
+                        var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(_streamUrl));
+                        var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                        _nativeMediaPlayer.Source = item;
+                        _nativeMediaPlayer.Play();
+                    }
+                    
+                    _statsTimer?.Start();
+                    SetupProfessionalAnimations();
+                    ApplyPrimaryColorToUi();
+                    Services.SleepPreventionService.PreventSleep();
+
+                    // Optional: Setup timed metadata for subtitles if Addons provide `.srt`
+                    _ = AutoFetchAndRestoreAddonSubtitleAsync();
                 }
                 catch (Exception ex)
                 {
-                    await ShowMessageDialog("Oynatıcı Hatası", $"Video yüklenemedi. \n\nHata: {ex.Message}");
+                    Debug.WriteLine($"[PlayerPage] Native Media Error: {ex.Message}");
+                    TriggerMpvFallback();
                 }
             }
+        }
+
+
+        private async void MediaPlayer_MediaFailed(Windows.Media.Playback.MediaPlayer sender, Windows.Media.Playback.MediaPlayerFailedEventArgs args)
+        {
+            var msg = args.ErrorMessage;
+            Debug.WriteLine($"[PlayerPage] Native Media Failed: {msg}. Falling back to MPV.");
+            DispatcherQueue.TryEnqueue(() => 
+            {
+                TriggerMpvFallback();
+            });
+        }
+
+        private void NativePlayer_MediaOpened(Windows.Media.Playback.MediaPlayer sender, object args)
+        {
+            DispatcherQueue.TryEnqueue(() => 
+            {
+                Debug.WriteLine("[PlayerPage] Native Media Opened. Stopping Loading Overlay.");
+                StopLogoLoading();
+
+                // Sync Static Metadata for Native
+                try 
+                {
+                    var session = sender.PlaybackSession;
+                    var wSize = session.NaturalVideoWidth;
+                    var hSize = session.NaturalVideoHeight;
+                    
+                    if (wSize > 0)
+                    {
+                        _cachedResolution = $"{wSize}x{hSize}";
+                        
+                        if (sender.Source is Windows.Media.Playback.MediaPlaybackItem item)
+                        {
+                            if (item.VideoTracks.Count > 0)
+                            {
+                                var videoProps = item.VideoTracks[0].GetEncodingProperties();
+                                if (videoProps.FrameRate.Denominator > 0)
+                                {
+                                    double fv = (double)videoProps.FrameRate.Numerator / videoProps.FrameRate.Denominator;
+                                    _cachedFps = $"{fv:F2} fps";
+                                    if (_nativeMonitorFps > 0) _cachedFps += $" / {_nativeMonitorFps}Hz";
+                                }
+                                _cachedCodec = GetShortCodecName(videoProps.Subtype);
+                                
+                                if (videoProps.Subtype.Contains("HEVC") || videoProps.Subtype.Contains("HVC1"))
+                                    _cachedHdr = "HDR Ready (Native)";
+                                else
+                                    _cachedHdr = "SDR (Native)";
+                            }
+                            
+                            if (item.AudioTracks.Count > 0)
+                            {
+                                var audioProps = item.AudioTracks[0].GetEncodingProperties();
+                                _cachedAudio = $"{GetShortCodecName(audioProps.Subtype).ToUpper()} ({audioProps.ChannelCount}ch)";
+                            }
+                        }
+                        
+                        _cachedColorspace = "AUTO";
+                        ApplyMetadataToUI(false);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[PlayerPage] Native Metadata Fetch Error: {ex.Message}");
+                }
+            });
+        }
+
+        private void AdaptiveSource_DownloadCompleted(Windows.Media.Streaming.Adaptive.AdaptiveMediaSource sender, Windows.Media.Streaming.Adaptive.AdaptiveMediaSourceDownloadCompletedEventArgs args)
+        {
+            ulong? bytes = args.ResourceByteRangeLength;
+            if (!bytes.HasValue || bytes.Value == 0) return;
+            ulong downloadedBytes = bytes.Value;
+
+            lock (this)
+            {
+                var now = DateTime.Now;
+                if (_downloadSpeedWindowStart == DateTime.MinValue)
+                {
+                    _downloadSpeedWindowStart = now;
+                    _downloadSpeedWindowBytes = downloadedBytes;
+                }
+                else
+                {
+                    var elapsed = (now - _downloadSpeedWindowStart).TotalSeconds;
+                    if (elapsed > 5.0)
+                    {
+                        _downloadSpeedWindowStart = now;
+                        _downloadSpeedWindowBytes = 0;
+                    }
+                    _downloadSpeedWindowBytes += downloadedBytes;
+                    elapsed = (now - _downloadSpeedWindowStart).TotalSeconds;
+                    if (elapsed > 0)
+                    {
+                        _downloadSpeedBytes = (ulong)(_downloadSpeedWindowBytes / elapsed);
+                    }
+                }
+            }
+        }
+
+        private void TriggerMpvFallback()
+        {
+            if (_useMpvPlayer) return; // Already in MPV
+            ShowOsd("Native Oynatıcı desteklemiyor, MPV ile deneniyor...");
+            _useMpvPlayer = true;
+            AppSettings.PlayerSettings.Engine = Models.PlayerEngine.Mpv; // Force toggle
+            
+            // Clean up native player
+            if (_nativeMediaPlayer != null)
+            {
+                _nativeMediaPlayer.Pause();
+                _nativeMediaPlayer.Source = null;
+            }
+            MediaFoundationPlayer.Visibility = Visibility.Collapsed;
+
+            // Restart playback flow
+            _isPageLoaded = false;
+            PlayerPage_Loaded(this, new RoutedEventArgs());
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
@@ -1933,11 +2353,18 @@ namespace ModernIPTVPlayer
         private async void SeekSlider_PointerReleased(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {
             e.Handled = true;
-            if (_mpvPlayer == null) return;
             _isDragging = false;
             _lastSeekTime = DateTime.Now;
             var val = SeekSlider.Value;
-            await _mpvPlayer.ExecuteCommandAsync("seek", val.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
+            
+            if (_useMpvPlayer && _mpvPlayer != null)
+            {
+                await _mpvPlayer.ExecuteCommandAsync("seek", val.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
+            }
+            else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+            {
+                _nativeMediaPlayer.PlaybackSession.Position = TimeSpan.FromSeconds(val);
+            }
         }
 
         private void SeekSlider_PointerCaptureLost(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -1949,7 +2376,7 @@ namespace ModernIPTVPlayer
         private async void SeekSlider_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
         {
              e.Handled = true;
-             if (_mpvPlayer != null && SeekSlider.ActualWidth > 0)
+             if (SeekSlider.ActualWidth > 0)
              {
                  var pos = e.GetPosition(SeekSlider);
                  var ratio = pos.X / SeekSlider.ActualWidth;
@@ -1957,7 +2384,14 @@ namespace ModernIPTVPlayer
                  SeekSlider.Value = newVal;
 
                  _lastSeekTime = DateTime.Now;
-                 await _mpvPlayer.ExecuteCommandAsync("seek", newVal.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
+                 if (_useMpvPlayer && _mpvPlayer != null)
+                 {
+                     await _mpvPlayer.ExecuteCommandAsync("seek", newVal.ToString(System.Globalization.CultureInfo.InvariantCulture), "absolute");
+                 }
+                 else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                 {
+                     _nativeMediaPlayer.PlaybackSession.Position = TimeSpan.FromSeconds(newVal);
+                 }
              }
         }
 
@@ -2031,7 +2465,9 @@ namespace ModernIPTVPlayer
 
         private async void RewindButton_Click(object sender, RoutedEventArgs e)
         {
-             if (_mpvPlayer == null || !RewindButton.IsEnabled) return;
+             if (!RewindButton.IsEnabled) return;
+             if (_useMpvPlayer && _mpvPlayer == null) return;
+             if (!_useMpvPlayer && _nativeMediaPlayer == null) return;
              
              _pendingSeekSeconds -= AppSettings.SeekBackwardSeconds;
              ShowOsd($"{(_pendingSeekSeconds > 0 ? "+" : "")}{_pendingSeekSeconds} SANİYE");
@@ -2042,7 +2478,9 @@ namespace ModernIPTVPlayer
 
         private async void FastForwardButton_Click(object sender, RoutedEventArgs e)
         {
-             if (_mpvPlayer == null || !FastForwardButton.IsEnabled) return;
+             if (!FastForwardButton.IsEnabled) return;
+             if (_useMpvPlayer && _mpvPlayer == null) return;
+             if (!_useMpvPlayer && _nativeMediaPlayer == null) return;
              
              _pendingSeekSeconds += AppSettings.SeekForwardSeconds;
              ShowOsd($"{(_pendingSeekSeconds > 0 ? "+" : "")}{_pendingSeekSeconds} SANİYE");
@@ -2054,7 +2492,7 @@ namespace ModernIPTVPlayer
         private async void SeekDebounceTimer_Tick(object? sender, object e)
         {
              _seekDebounceTimer.Stop();
-             if (_pendingSeekSeconds == 0 || _mpvPlayer == null) return;
+             if (_pendingSeekSeconds == 0) return;
 
              try
              {
@@ -2064,9 +2502,17 @@ namespace ModernIPTVPlayer
                  if (seekVal < 0) _isBehind = true;
 
                  ShowOsd($"GİDİLİYOR: {(seekVal > 0 ? "+" : "")}{seekVal}sn");
-                 await LogStatus($"PRE-DEBOUNCE-SEEK({seekVal})");
-                 await _mpvPlayer.ExecuteCommandAsync("seek", seekVal.ToString(), "relative");
-                 await LogStatus($"POST-DEBOUNCE-SEEK({seekVal})");
+                 
+                 if (_useMpvPlayer && _mpvPlayer != null)
+                 {
+                     await LogStatus($"PRE-DEBOUNCE-SEEK({seekVal})");
+                     await _mpvPlayer.ExecuteCommandAsync("seek", seekVal.ToString(), "relative");
+                     await LogStatus($"POST-DEBOUNCE-SEEK({seekVal})");
+                 }
+                 else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                 {
+                     _nativeMediaPlayer.PlaybackSession.Position += TimeSpan.FromSeconds(seekVal);
+                 }
              }
              catch { }
         }
@@ -2506,23 +2952,43 @@ namespace ModernIPTVPlayer
 
         private async void AspectRatioButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_mpvPlayer == null) return;
+            if (_mpvPlayer == null && _nativeMediaPlayer == null) return;
 
             _currentAspectIndex = (_currentAspectIndex + 1) % _aspectRatios.Length;
             string newAspect = _aspectRatios[_currentAspectIndex];
             string aspectName = _aspectNames[_currentAspectIndex];
 
-            if (newAspect == "fill")
+            if (_useMpvPlayer && _mpvPlayer != null)
             {
-                 // Stretch to fill (No crop, no black bars, distorts image)
-                 await _mpvPlayer.SetPropertyAsync("keepaspect", "no");
+                if (newAspect == "fill")
+                {
+                     // Stretch to fill (No crop, no black bars, distorts image)
+                     await _mpvPlayer.SetPropertyAsync("keepaspect", "no");
+                }
+                else
+                {
+                     // Standard Aspect Ratio override
+                     await _mpvPlayer.SetPropertyAsync("keepaspect", "yes");
+                     await _mpvPlayer.SetPropertyAsync("panscan", "0.0"); 
+                     await _mpvPlayer.SetPropertyAsync("video-aspect-override", newAspect);
+                }
             }
-            else
+            else if (!_useMpvPlayer && _nativeMediaPlayer != null)
             {
-                 // Standard Aspect Ratio override
-                 await _mpvPlayer.SetPropertyAsync("keepaspect", "yes");
-                 await _mpvPlayer.SetPropertyAsync("panscan", "0.0"); 
-                 await _mpvPlayer.SetPropertyAsync("video-aspect-override", newAspect);
+                if (newAspect == "fill")
+                {
+                    MediaFoundationPlayer.Stretch = Microsoft.UI.Xaml.Media.Stretch.Fill;
+                }
+                else if (newAspect == "2.35:1")
+                {
+                    // Approximate Cinema aspect ratio by cropping top/bottom slightly
+                    MediaFoundationPlayer.Stretch = Microsoft.UI.Xaml.Media.Stretch.UniformToFill;
+                }
+                else
+                {
+                    // Auto, 16:9, 4:3 default to Uniform for native
+                    MediaFoundationPlayer.Stretch = Microsoft.UI.Xaml.Media.Stretch.Uniform;
+                }
             }
             
             ShowOsd($"Görüntü: {aspectName}");
@@ -2531,60 +2997,71 @@ namespace ModernIPTVPlayer
         // ---------- VOLUME CONTROL ----------
         private async void VolumeSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
         {
-            if (_mpvPlayer == null) return;
-
             double val = e.NewValue;
 
-
-            // Auto-unmute if dragging
-            await _mpvPlayer.SetPropertyAsync("mute", "no");
-            await _mpvPlayer.SetPropertyAsync("volume", val.ToString(CultureInfo.InvariantCulture));
+            if (_useMpvPlayer && _mpvPlayer != null)
+            {
+                // Auto-unmute if dragging
+                await _mpvPlayer.SetPropertyAsync("mute", "no");
+                await _mpvPlayer.SetPropertyAsync("volume", val.ToString(CultureInfo.InvariantCulture));
+            }
+            else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+            {
+                _nativeMediaPlayer.IsMuted = false;
+                _nativeMediaPlayer.Volume = val / 100.0;
+            }
 
             UpdateVolumeIcon(val, false);
         }
 
         private async void MuteButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_mpvPlayer == null) return;
-
-            // Simple toggle logic
-            // We assume Current State based on Icon for speed, or fetch property
-            // Fetching property is safer.
-            string muteState = await _mpvPlayer.GetPropertyAsync("mute");
-            bool isMuted = (muteState == "yes");
-
-            if (isMuted)
+            if (_useMpvPlayer && _mpvPlayer != null)
             {
-                // Unmute
-                await _mpvPlayer.SetPropertyAsync("mute", "no");
-                UpdateVolumeIcon(VolumeSlider.Value, false);
+                string muteState = await _mpvPlayer.GetPropertyAsync("mute");
+                bool isMuted = (muteState == "yes");
+
+                if (isMuted)
+                {
+                    // Unmute
+                    await _mpvPlayer.SetPropertyAsync("mute", "no");
+                    UpdateVolumeIcon(VolumeSlider.Value, false);
+                }
+                else
+                {
+                    // Mute
+                    await _mpvPlayer.SetPropertyAsync("mute", "yes");
+                    UpdateVolumeIcon(VolumeSlider.Value, true);
+                }
             }
-            else
+            else if (!_useMpvPlayer && _nativeMediaPlayer != null)
             {
-                // Mute
-                await _mpvPlayer.SetPropertyAsync("mute", "yes");
-                UpdateVolumeIcon(VolumeSlider.Value, true);
+                _nativeMediaPlayer.IsMuted = !_nativeMediaPlayer.IsMuted;
+                UpdateVolumeIcon(VolumeSlider.Value, _nativeMediaPlayer.IsMuted);
             }
         }
 
         private void UpdateVolumeIcon(double volume, bool isMuted)
         {
             // Main Button: Status Indicator (What is the current state?)
-            if (isMuted || volume == 0)
+            if (VolumeIcon != null)
             {
-                VolumeIcon.Glyph = "\uE74F"; // Mute Cross
-            }
-            else if (volume < 33)
-            {
-                VolumeIcon.Glyph = "\uE993"; // Volume1 (Thin waves)
-            }
-            else if (volume < 66)
-            {
-                VolumeIcon.Glyph = "\uE994"; // Volume2 (Semi-waves)
-            }
-            else
-            {
-                VolumeIcon.Glyph = "\uE995"; // Volume3 (Full waves)
+                if (isMuted || volume == 0)
+                {
+                    VolumeIcon.Glyph = "\uE74F"; // Mute Cross
+                }
+                else if (volume < 33)
+                {
+                    VolumeIcon.Glyph = "\uE993"; // Volume1 (Thin waves)
+                }
+                else if (volume < 66)
+                {
+                    VolumeIcon.Glyph = "\uE994"; // Volume2 (Semi-waves)
+                }
+                else
+                {
+                    VolumeIcon.Glyph = "\uE995"; // Volume3 (Full waves)
+                }
             }
 
             // Overlay Mute Button: Action Indicator (What will happen when clicked?)
@@ -2592,12 +3069,12 @@ namespace ModernIPTVPlayer
             // If Sound -> Show Cross (Mute)
             if (isMuted || volume == 0)
             {
-                 MuteIcon.Glyph = "\uE767"; // Volume Icon (Speaker) -> Unmute
+                 if (MuteIcon != null) MuteIcon.Glyph = "\uE767"; // Volume Icon (Speaker) -> Unmute
                  if (PipMuteIcon != null) PipMuteIcon.Glyph = "\uE767";
             }
             else
             {
-                 MuteIcon.Glyph = "\uE74F"; // Mute Icon (Cross) -> Mute
+                 if (MuteIcon != null) MuteIcon.Glyph = "\uE74F"; // Mute Icon (Cross) -> Mute
                  if (PipMuteIcon != null) PipMuteIcon.Glyph = "\uE74F";
             }
         }
@@ -2624,19 +3101,30 @@ namespace ModernIPTVPlayer
 
         private async void PlayPauseButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_mpvPlayer == null) return;
-            try
+            if (_useMpvPlayer)
             {
-                // Toggle Pause
-                bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
-                bool newState = !isPaused;
-                await _mpvPlayer.SetPropertyAsync("pause", newState ? "yes" : "no");
-                
-                // Update Icon: If paused(true) -> Show Play Icon, If playing(false) -> Show Pause Icon
-                PlayPauseIcon.Glyph = newState ? "\uF5B0" : "\uF8AE"; // PlaySolid / PauseSolid
-                if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = newState ? "\uF5B0" : "\uF8AE";
+                if (_mpvPlayer == null) return;
+                try
+                {
+                    bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
+                    bool newState = !isPaused;
+                    await _mpvPlayer.SetPropertyAsync("pause", newState ? "yes" : "no");
+                    PlayPauseIcon.Glyph = newState ? "\uF5B0" : "\uF8AE";
+                    if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = newState ? "\uF5B0" : "\uF8AE";
+                }
+                catch { }
             }
-            catch { }
+            else if (_nativeMediaPlayer != null)
+            {
+                if (_nativeMediaPlayer.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Playing)
+                    _nativeMediaPlayer.Pause();
+                else
+                    _nativeMediaPlayer.Play();
+
+                bool isNowPaused = _nativeMediaPlayer.PlaybackSession.PlaybackState != Windows.Media.Playback.MediaPlaybackState.Playing;
+                PlayPauseIcon.Glyph = isNowPaused ? "\uF8AE" : "\uF5B0";
+                if (PipPlayPauseIcon != null) PipPlayPauseIcon.Glyph = isNowPaused ? "\uF8AE" : "\uF5B0";
+            }
         }
 
         // ---------- GESTURE & POINTER LOGIC ----------
@@ -2832,6 +3320,52 @@ namespace ModernIPTVPlayer
             {
                 SetControlsVisibility(Visibility.Collapsed);
             }
+        }
+
+        private void PlayerPage_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (!_isResizingWindow)
+            {
+                _isResizingWindow = true;
+                // Sürükleme başladığında ağır XAML UI bileşenlerini gizleyerek kasıntıyı önle
+                SetControlsVisibility(Visibility.Collapsed);
+
+                // [ÖNEMLİ] SwapChain'in kopmasını (floating) ve ışınlanmasını önlemek için 
+                // XAML boyutlarını boyutlandırma boyunca ilk anki haline kilitleriz. 
+                // Bu sayede donanım SwapChain render işlemi felç olmaz.
+                if (MediaFoundationPlayer != null && MediaFoundationPlayer.Visibility == Visibility.Visible)
+                {
+                    if (MediaFoundationPlayer.ActualWidth > 0 && MediaFoundationPlayer.ActualHeight > 0)
+                    {
+                        MediaFoundationPlayer.Width = MediaFoundationPlayer.ActualWidth;
+                        MediaFoundationPlayer.Height = MediaFoundationPlayer.ActualHeight;
+                        MediaFoundationViewbox.Stretch = Stretch.Uniform; // Aspect ratio korunsun.
+                    }
+                }
+            }
+
+            _resizeDebounceTimer.Stop();
+            _resizeDebounceTimer.Start();
+        }
+
+        private void ResizeDebounceTimer_Tick(object sender, object e)
+        {
+            _resizeDebounceTimer.Stop();
+            _isResizingWindow = false;
+
+            if (MediaFoundationPlayer != null)
+            {
+                // Kilitleri kaldır: XAML artık son ulaşılan boyuta göre tek bir sefer SwapChain buffer yenilemesi yapsın.
+                MediaFoundationPlayer.ClearValue(FrameworkElement.WidthProperty);
+                MediaFoundationPlayer.ClearValue(FrameworkElement.HeightProperty);
+                if (MediaFoundationViewbox != null)
+                {
+                    MediaFoundationViewbox.Stretch = Stretch.Uniform;
+                }
+            }
+
+            // Boyutlandırma bittiğinde, farenin hareket algılayıcısını sıfırla ki arayüz belirebilsin
+            ResetCursorTimer();
         }
 
         private void SetControlsVisibility(Visibility visibility)
@@ -3046,7 +3580,7 @@ namespace ModernIPTVPlayer
 
             public override string ToString() => Text; // Fallback
         }
-        private bool IsPlayerActive => _isPageLoaded && _mpvPlayer != null;
+        private bool IsPlayerActive => _isPageLoaded && (_mpvPlayer != null || (_nativeMediaPlayer != null && MediaFoundationPlayer.Visibility == Visibility.Visible));
 
         // ---------- SUBTITLE & SYNC STATE ----------
 
@@ -4159,13 +4693,14 @@ namespace ModernIPTVPlayer
 
         private async void EnterPiPAsync()
         {
-            if (_mpvPlayer == null || _isPiPMode) return;
-            Debug.WriteLine("[PiP] Entering Single-Window PiP...");
+            if ((_useMpvPlayer && _mpvPlayer == null) || (!_useMpvPlayer && _nativeMediaPlayer == null) || _isPiPMode) return;
+            Debug.WriteLine("[PiP] Entering PiP Mode...");
             
             try 
             {
-                // 1. Save Current Window State
                 var appWindow = MainWindow.Current.AppWindow;
+
+                // 1. Save Current Window State
                 _savedWindowBounds = appWindow.Position.X != 0 || appWindow.Position.Y != 0 || appWindow.Size.Width != 0 ? 
                                      new Windows.Graphics.RectInt32(appWindow.Position.X, appWindow.Position.Y, appWindow.Size.Width, appWindow.Size.Height) : 
                                      new Windows.Graphics.RectInt32(100, 100, 1280, 720); // Fallback
@@ -4199,74 +4734,127 @@ namespace ModernIPTVPlayer
                 PipControls.Opacity = 0; // Hidden until hover
 
                 // Sync Icons
-                bool isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
-                PipPlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE";
+                bool isPaused = false;
+                string muteState = "no";
                 
-                string muteState = await _mpvPlayer.GetPropertyAsync("mute");
+                if (_useMpvPlayer && _mpvPlayer != null)
+                {
+                    isPaused = await _mpvPlayer.GetPropertyBoolAsync("pause");
+                    muteState = await _mpvPlayer.GetPropertyAsync("mute");
+                }
+                else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                {
+                    isPaused = _nativeMediaPlayer.PlaybackSession.PlaybackState != Windows.Media.Playback.MediaPlaybackState.Playing;
+                    muteState = _nativeMediaPlayer.IsMuted ? "yes" : "no";
+                }
+
+                PipPlayPauseIcon.Glyph = isPaused ? "\uF5B0" : "\uF8AE";
                 PipMuteIcon.Glyph = (muteState == "yes") ? "\uE767" : "\uE74F";
 
-                // 3. Prepare for Transition
-                // Ensure we are in Overlapped mode (not Fullscreen) so we can resize
+                // Ensure we are not Fullscreen before transitioning
                 if (_isFullScreen)
                 {
                     MainWindow.Current.SetFullScreen(false);
                     _isFullScreen = false;
                     UpdateFullScreenUI();
                 }
-                // Also ensure we aren't Maximized, otherwise MoveAndResize might be ignored or wonky
-                if (appWindow.Presenter is OverlappedPresenter presenter)
+
+                if (_useMpvPlayer && _mpvPlayer != null)
                 {
-                    if (presenter.State == OverlappedPresenterState.Maximized)
+                    // 3. Prepare for Transition
+                    if (appWindow.Presenter is OverlappedPresenter presenter)
                     {
-                        presenter.Restore();
+                        if (presenter.State == OverlappedPresenterState.Maximized)
+                        {
+                            presenter.Restore();
+                        }
+                        // Make Always on Top
+                        presenter.IsAlwaysOnTop = true;
                     }
+
+                    // 4. Calculate Target Bounds (Bottom Right)
+                    var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(appWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+                    int targetW = displayArea.WorkArea.Width / 4;
+                    if (targetW < 320) targetW = 320; // Min width
+                    int targetH = (int)(targetW * 9.0 / 16.0);
                     
-                    // Make Always on Top
-                    presenter.IsAlwaysOnTop = true;
+                    int targetX = displayArea.WorkArea.X + displayArea.WorkArea.Width - targetW - 20;
+                    int targetY = displayArea.WorkArea.Y + displayArea.WorkArea.Height - targetH - 20;
+
+                    // 5. Animate
+                    _mpvPlayer.SuspendResize();
+
+                    await Task.Run(async () => {
+                        const int steps = 25;
+                        
+                        int startX = appWindow.Position.X;
+                        int startY = appWindow.Position.Y;
+                        int startW = appWindow.Size.Width;
+                        int startH = appWindow.Size.Height;
+
+                        for (int i = 0; i <= steps; i++)
+                        {
+                            float t = (float)i / steps;
+                            float ease = 1 - MathF.Pow(1 - t, 4);
+                            
+                            int curX = (int)(startX + (targetX - startX) * ease);
+                            int curY = (int)(startY + (targetY - startY) * ease);
+                            int curW = (int)(startW + (targetW - startW) * ease);
+                            int curH = (int)(startH + (targetH - startH) * ease);
+                            
+                            this.DispatcherQueue.TryEnqueue(() => {
+                                if (_isPiPMode) // Guard
+                                    appWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curW, curH));
+                            });
+                            
+                            await Task.Delay(10);
+                        }
+                    });
+
+                    // 6. Finish
+                    _mpvPlayer.ResumeResize();
                 }
-
-                // 4. Calculate Target Bounds (Bottom Right)
-                var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(appWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
-                int targetW = displayArea.WorkArea.Width / 4;
-                if (targetW < 320) targetW = 320; // Min width
-                int targetH = (int)(targetW * 9.0 / 16.0);
-                
-                int targetX = displayArea.WorkArea.X + displayArea.WorkArea.Width - targetW - 20;
-                int targetY = displayArea.WorkArea.Y + displayArea.WorkArea.Height - targetH - 20;
-
-                // 5. Animate
-                // [PERF] Suspend Resize to just stretch the texture during animation
-                _mpvPlayer.SuspendResize();
-
-                await Task.Run(async () => {
-                    const int steps = 25; // Faster than 40, since we are moving the heavy window
-                    
-                    int startX = appWindow.Position.X;
-                    int startY = appWindow.Position.Y;
-                    int startW = appWindow.Size.Width;
-                    int startH = appWindow.Size.Height;
-
-                    for (int i = 0; i <= steps; i++)
+                else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                {
+                    // NATIVE WINDOWS MEDIA FOUNDATION PiP (Now using OverlappedPresenter for Resizability)
+                    if (appWindow.Presenter is OverlappedPresenter presenter)
                     {
-                        float t = (float)i / steps;
-                        float ease = 1 - MathF.Pow(1 - t, 4); // EaseOutQuartic
-                        
-                        int curX = (int)(startX + (targetX - startX) * ease);
-                        int curY = (int)(startY + (targetY - startY) * ease);
-                        int curW = (int)(startW + (targetW - startW) * ease);
-                        int curH = (int)(startH + (targetH - startH) * ease);
-                        
-                        this.DispatcherQueue.TryEnqueue(() => {
-                            if (_isPiPMode) // Guard
-                                appWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curW, curH));
-                        });
-                        
-                        await Task.Delay(10);
+                        if (presenter.State == OverlappedPresenterState.Maximized)
+                            presenter.Restore();
+                        presenter.IsAlwaysOnTop = true;
                     }
-                });
 
-                // 6. Finish
-                _mpvPlayer.ResumeResize();
+                    var displayArea = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(appWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Primary);
+                    int targetW = displayArea.WorkArea.Width / 4;
+                    if (targetW < 320) targetW = 320; 
+                    int targetH = (int)(targetW * 9.0 / 16.0);
+                    int targetX = displayArea.WorkArea.X + displayArea.WorkArea.Width - targetW - 20;
+                    int targetY = displayArea.WorkArea.Y + displayArea.WorkArea.Height - targetH - 20;
+
+                    // 5. Smooth Animation Loop for Native
+                    await Task.Run(async () => {
+                        const int steps = 25;
+                        int startX = appWindow.Position.X;
+                        int startY = appWindow.Position.Y;
+                        int startW = appWindow.Size.Width;
+                        int startH = appWindow.Size.Height;
+
+                        for (int i = 0; i <= steps; i++)
+                        {
+                            float t = (float)i / steps;
+                            float ease = 1 - MathF.Pow(1 - t, 4);
+                            int curX = (int)(startX + (targetX - startX) * ease);
+                            int curY = (int)(startY + (targetY - startY) * ease);
+                            int curW = (int)(startW + (targetW - startW) * ease);
+                            int curH = (int)(startH + (targetH - startH) * ease);
+                            
+                            this.DispatcherQueue.TryEnqueue(() => {
+                                if (_isPiPMode) appWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curW, curH));
+                            });
+                            await Task.Delay(10);
+                        }
+                    });
+                }
 
                 // Swap TitleBar to allow native dragging anywhere in PiP
                 MainWindow.Current.SetTitleBar(PipDragRegion);
@@ -4277,7 +4865,7 @@ namespace ModernIPTVPlayer
                     pipPresenter.SetBorderAndTitleBar(true, false);
                 }
 
-                Debug.WriteLine("[PiP] Single-Window Transition Complete");
+                Debug.WriteLine("[PiP] Transition Complete");
             }
             catch (Exception ex)
             {
@@ -4289,47 +4877,81 @@ namespace ModernIPTVPlayer
         private async void ExitPiP()
         {
             if (!_isPiPMode) return;
-            Debug.WriteLine("[PiP] Exiting Single-Window PiP...");
+            Debug.WriteLine("[PiP] Exiting PiP...");
 
             try
             {
                 var appWindow = MainWindow.Current.AppWindow;
 
-                // 1. Animate Back to Saved Bounds
-                _mpvPlayer.ResumeResize(); // Resume early so it sharpen as it grows
+                if (_useMpvPlayer && _mpvPlayer != null)
+                {
+                    // 1. Animate Back to Saved Bounds
+                    _mpvPlayer.ResumeResize(); // Resume early so it sharpen as it grows
 
-                int targetX = _savedWindowBounds.X;
-                int targetY = _savedWindowBounds.Y;
-                int targetW = _savedWindowBounds.Width;
-                int targetH = _savedWindowBounds.Height;
-                
-                await Task.Run(async () => {
-                    const int steps = 20;
+                    int targetX = _savedWindowBounds.X;
+                    int targetY = _savedWindowBounds.Y;
+                    int targetW = _savedWindowBounds.Width;
+                    int targetH = _savedWindowBounds.Height;
                     
-                    int startX = appWindow.Position.X;
-                    int startY = appWindow.Position.Y;
-                    int startW = appWindow.Size.Width;
-                    int startH = appWindow.Size.Height;
+                    await Task.Run(async () => {
+                        const int steps = 20;
+                        
+                        int startX = appWindow.Position.X;
+                        int startY = appWindow.Position.Y;
+                        int startW = appWindow.Size.Width;
+                        int startH = appWindow.Size.Height;
 
-                    for (int i = 0; i <= steps; i++)
-                    {
-                        float t = (float)i / steps;
-                        float ease = 1 - MathF.Pow(1 - t, 4);
-                        
-                        int curX = (int)(startX + (targetX - startX) * ease);
-                        int curY = (int)(startY + (targetY - startY) * ease);
-                        int curW = (int)(startW + (targetW - startW) * ease);
-                        int curH = (int)(startH + (targetH - startH) * ease);
-                        
-                        this.DispatcherQueue.TryEnqueue(() => {
-                            // Only restore if we are still meant to be restoring
-                            // (Race condition guard not strictly needed but good practice)
-                            appWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curW, curH));
-                        });
-                        
-                        await Task.Delay(10);
-                    }
-                });
+                        for (int i = 0; i <= steps; i++)
+                        {
+                            float t = (float)i / steps;
+                            float ease = 1 - MathF.Pow(1 - t, 4);
+                            
+                            int curX = (int)(startX + (targetX - startX) * ease);
+                            int curY = (int)(startY + (targetY - startY) * ease);
+                            int curW = (int)(startW + (targetW - startW) * ease);
+                            int curH = (int)(startH + (targetH - startH) * ease);
+                            
+                            this.DispatcherQueue.TryEnqueue(() => {
+                                appWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curW, curH));
+                            });
+                            
+                            await Task.Delay(10);
+                        }
+                    });
+                }
+                else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                {
+                    // NATIVE EXIT PIP
+                    appWindow.SetPresenter(Microsoft.UI.Windowing.AppWindowPresenterKind.Default);
+                    
+                    int targetX = _savedWindowBounds.X;
+                    int targetY = _savedWindowBounds.Y;
+                    int targetW = _savedWindowBounds.Width;
+                    int targetH = _savedWindowBounds.Height;
+                    
+                    await Task.Run(async () => {
+                        const int steps = 20;
+                        int startX = appWindow.Position.X;
+                        int startY = appWindow.Position.Y;
+                        int startW = appWindow.Size.Width;
+                        int startH = appWindow.Size.Height;
+
+                        for (int i = 0; i <= steps; i++)
+                        {
+                            float t = (float)i / steps;
+                            float ease = 1 - MathF.Pow(1 - t, 4);
+                            int curX = (int)(startX + (targetX - startX) * ease);
+                            int curY = (int)(startY + (targetY - startY) * ease);
+                            int curW = (int)(startW + (targetW - startW) * ease);
+                            int curH = (int)(startH + (targetH - startH) * ease);
+                            
+                            this.DispatcherQueue.TryEnqueue(() => {
+                                if (!_isPiPMode) appWindow.MoveAndResize(new Windows.Graphics.RectInt32(curX, curY, curW, curH));
+                            });
+                            await Task.Delay(10);
+                        }
+                    });
+                }
 
                 // 2. Restore Window State
                 _isPiPMode = false;

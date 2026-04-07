@@ -864,32 +864,22 @@ public class D3D11RenderControl : ContentControl
 
             if (_isResizing)
             {
-                // [RESIZE MODE] Swapchain = panel size (both grow and shrink).
-                // Throttle: skip ResizeBuffers if less than 100ms since last one.
-                stableWidth = (int)width;
-                stableHeight = (int)height;
+                // [RESIZE MODE - MEGA CANVAS OPTIMIZATION]
+                // Eğer pencere dar iken büyütülürse ve SwapChain küçük donmuşsa, aspect-ratio hesaplaması 
+                // dar kalmasına neden olur. Bu yüzden sürükleme başladığı an, arkaplanda monitör boyutunda dev 
+                // bir tuval (Mega Canvas) açıyoruz. Yeniden boyutlandırma bitene kadar video bu dev tuval
+                // içinde donanımsal MatrixTransform ile süzülerek istediği kadar büyüyebilir/küçülebilir.
                 
-                long nowTicks = Stopwatch.GetTimestamp();
-                double elapsedMs = (nowTicks - _lastPhysicalResizeTicks) * 1000.0 / Stopwatch.Frequency;
-                bool throttleActive = _lastPhysicalResizeTicks > 0 && elapsedMs < 100;
+                int targetMegaWidth = _maxMonitorWidth > 800 ? _maxMonitorWidth : 2560;
+                int targetMegaHeight = _maxMonitorHeight > 600 ? _maxMonitorHeight : 1440;
                 
-                if (throttleActive)
-                {
-                    // Throttle active — keep current swapchain, matrix transform handles scaling
-                    stableWidth = _swapChainWidth;
-                    stableHeight = _swapChainHeight;
-                    needsRealloc = false;
-                    LogSync($"[PERFORM_RESIZE] RESIZE MODE | Req: {width}x{height} | SC: {_swapChainWidth}x{_swapChainHeight} | THROTTLED ({elapsedMs:F0}ms)");
-                }
-                else
-                {
-                    // Throttle passed — ResizeBuffers if size changed
-                    needsRealloc = _swapChain.Handle == null ||
-                                  stableWidth != _swapChainWidth ||
-                                  stableHeight != _swapChainHeight;
-                    
-                    LogSync($"[PERFORM_RESIZE] RESIZE MODE | Req: {width}x{height} | Target: {stableWidth}x{stableHeight} | SC: {_swapChainWidth}x{_swapChainHeight} | Realloc: {needsRealloc}");
-                }
+                stableWidth = targetMegaWidth;
+                stableHeight = targetMegaHeight;
+                
+                // Sadece tuval devasa boyuta henüz geçmemişse bir kere realloc yap (Stutter olmaz)
+                needsRealloc = _swapChain.Handle == null || _swapChainWidth != stableWidth || _swapChainHeight != stableHeight;
+                
+                LogSync($"[PERFORM_RESIZE] RESIZE MODE (MEGA CANVAS) | Req: {width}x{height} | Canvas: {stableWidth}x{stableHeight} | Realloc: {needsRealloc}");
             }
             else
             {

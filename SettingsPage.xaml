@@ -51,6 +51,11 @@
                         <TextBlock Text="Cihazınızın donanım gücüne göre oynatıcı motorunu optimize edin." Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" Margin="0,-4,0,4"/>
                         <Border Height="1" Background="{ThemeResource CardStrokeColorDefaultBrush}" Margin="0,0,0,8"/>
 
+                        <ComboBox x:Name="PlayerEngineCombo" Header="Varsayılan Oynatıcı Motoru" HorizontalAlignment="Stretch" SelectionChanged="PlayerSetting_Changed" Margin="0,0,0,8">
+                            <ComboBoxItem Content="Windows Media Foundation (Native - MPO)" Tag="Native"/>
+                            <ComboBoxItem Content="MPV (Geniş Codec Desteği)" Tag="Mpv"/>
+                        </ComboBox>
+
                         <ComboBox x:Name="PlayerProfileCombo" Header="Performans Profili" HorizontalAlignment="Stretch" SelectionChanged="PlayerProfileCombo_SelectionChanged" Margin="0,0,0,2">
                             <ComboBoxItem Content="Performans (Düşük Gecikme)" Tag="Performance"/>
                             <ComboBoxItem Content="Dengeli (Önerilen)" Tag="Balanced"/>

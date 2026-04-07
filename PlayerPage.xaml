@@ -213,22 +213,25 @@
           IsTabStop="True"
           AllowFocusOnInteraction="True">
         
-        <!-- 1. Video Layer -->
-        <MediaPlayerElement x:Name="MediaFoundationPlayer"
-                        Visibility="Collapsed"
-                        AutoPlay="True"
-                        AreTransportControlsEnabled="False"
-                        HorizontalAlignment="Stretch"
-                        VerticalAlignment="Stretch"
-                        IsHitTestVisible="False"/>
-
         <!-- Safety Blackout Layer - Prevents Desktop Flicker during MPV Resize -->
         <Grid Background="Black" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
 
         <Grid x:Name="PlayerContainer" 
               HorizontalAlignment="Stretch" 
               VerticalAlignment="Stretch"
-              Background="Black"/>
+              Background="Black"
+              Transitions="{x:Null}"/>
+
+        <!-- 1. Video Layer -->
+        <!-- Moved below PlayerContainer to ensure it renders ON TOP when active -->
+        <Viewbox x:Name="MediaFoundationViewbox" Stretch="Uniform" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            <MediaPlayerElement x:Name="MediaFoundationPlayer"
+                            Visibility="Collapsed"
+                            AutoPlay="True"
+                            AreTransportControlsEnabled="False"
+                            IsHitTestVisible="False"
+                            Transitions="{x:Null}"/>
+        </Viewbox>
 
         <!-- [FIX] Snapshot Image for Smooth PiP Transition -->
         <Image x:Name="SnapshotImage" Stretch="Uniform" Visibility="Collapsed" IsHitTestVisible="False"/>
@@ -362,23 +365,23 @@
                     <TextBlock x:Name="TxtHdr" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <StackPanel x:Name="RowAppliedPeak" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Applied Peak:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtAppliedPeak" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <StackPanel x:Name="RowSdrWhite" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="OS SDR White:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtSdrWhite" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <!-- Connection Group -->
-                <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
+                <StackPanel x:Name="RowSpeed" Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
                     <TextBlock Text="Download Speed:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtSpeed" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <StackPanel x:Name="RowBitrate" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Bitrate:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtBitrate" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
@@ -398,12 +401,12 @@
                     <TextBlock x:Name="TxtRenderer" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <StackPanel x:Name="RowAvSync" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="A/V Sync:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtAvSync" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <StackPanel x:Name="RowDropped" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Dropped:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtDroppedDecoder" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>

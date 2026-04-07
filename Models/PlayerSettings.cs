@@ -10,6 +10,12 @@ namespace ModernIPTVPlayer.Models
         Custom
     }
 
+    public enum PlayerEngine
+    {
+        Mpv,
+        Native
+    }
+
     public enum HardwareDecoding
     {
         AutoSafe,
@@ -70,6 +76,7 @@ namespace ModernIPTVPlayer.Models
 
     public class PlayerSettings
     {
+        public PlayerEngine Engine { get; set; } = PlayerEngine.Mpv;
         public PlayerProfile Profile { get; set; } = PlayerProfile.Balanced;
         public HardwareDecoding HardwareDecoding { get; set; } = HardwareDecoding.AutoSafe;
         public VideoOutput VideoOutput { get; set; } = VideoOutput.GpuNext;
