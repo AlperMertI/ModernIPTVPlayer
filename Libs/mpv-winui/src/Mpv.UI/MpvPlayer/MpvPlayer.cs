@@ -64,6 +64,7 @@ public sealed partial class MpvPlayer : Control
     public float PeakLuminance => _renderControl?.PeakLuminance ?? 80f;
     public float SdrWhiteLevel => _renderControl?.SdrWhiteLevel ?? 80f;
     public float OsMaxLuminance => _renderControl?.OsMaxLuminance ?? 80f;
+    public bool IsMediaLoaded => Player?.IsMediaLoaded() ?? false;
 
     public float ManualPeakLuminance
     {
@@ -102,7 +103,8 @@ public sealed partial class MpvPlayer : Control
 
     public async Task SyncHdrStatusAsync()
     {
-        if (Player?.Client?.IsInitialized is not true || _renderControl == null)
+        // [DEADLOCK_PREVENTION] Early exit if disposed or in the middle of cleanup
+        if (_isDisposed || Player?.Client?.IsInitialized is not true || _renderControl == null)
             return;
 
         string renderApi = "dxgi";
@@ -111,47 +113,26 @@ public sealed partial class MpvPlayer : Control
         float sdrWhite = 80f;
         float peakLuma = 80f;
 
-        // [THREAD-SAFETY] Capture UI-bound properties safely on the UI thread.
-        // This prevents COMExceptions when called from background threads (like mpv events).
-        if (this.DispatcherQueue != null)
+        // [THREAD-SAFETY] Read properties directly from _renderControl.
+        // We avoid DispatcherQueue.TryEnqueue here because it's the primary source of 
+        // deadlocks during application shutdown (UI thread awaiting StopLoopAsync 
+        // while the background thread awaits the UI thread here).
+        try
         {
-            if (this.DispatcherQueue.HasThreadAccess)
-            {
-                renderApi = RenderApi;
-                isHdrEnabled = _renderControl.IsHdrEnabled;
-                computePeak = HdrComputePeak;
-                sdrWhite = _renderControl.SdrWhiteLevel;
-                peakLuma = _renderControl.PeakLuminance;
-            }
-            else
-            {
-                var tcs = new TaskCompletionSource<bool>();
-                bool queued = this.DispatcherQueue.TryEnqueue(() =>
-                {
-                    try
-                    {
-                        renderApi = RenderApi;
-                        isHdrEnabled = _renderControl.IsHdrEnabled;
-                        computePeak = HdrComputePeak;
-                        sdrWhite = _renderControl.SdrWhiteLevel;
-                        peakLuma = _renderControl.PeakLuminance;
-                        tcs.SetResult(true);
-                    }
-                    catch (Exception ex)
-                    {
-                        tcs.SetException(ex);
-                    }
-                });
-
-                if (queued)
-                {
-                    try { await tcs.Task; } catch { return; }
-                }
-                else
-                {
-                    return; // Dispatcher is likely shutting down
-                }
-            }
+            // These properties are simple getters for fields in D3D11RenderControl 
+            // and are safe to read from any thread.
+            isHdrEnabled = _renderControl.IsHdrEnabled;
+            sdrWhite = _renderControl.SdrWhiteLevel;
+            peakLuma = _renderControl.PeakLuminance;
+            
+            // For DependencyProperties, we use the cached values or safe defaults if on background thread
+            renderApi = this.DispatcherQueue.HasThreadAccess ? RenderApi : "dxgi";
+            computePeak = this.DispatcherQueue.HasThreadAccess ? HdrComputePeak : true;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[HDR_SYNC] Failed to read control properties: {ex.Message}");
+            if (_isDisposed) return;
         }
 
         // 1. Content-based HDR Detection (Expanded for better accuracy)
@@ -245,11 +226,9 @@ public sealed partial class MpvPlayer : Control
 
     private void OnStateChanged(object sender, PlaybackStateChangedEventArgs e)
     {
-        if (e.NewState == PlaybackState.Decoding || e.NewState == PlaybackState.Playing)
-        {
-            // When video starts, ensure HDR peak is correctly synced with the OS slider
-            _ = SyncHdrStatusAsync();
-        }
+        // [OPTIMIZATION] Removed SyncHdrStatusAsync from here. 
+        // Initial setup handles the start, and OnHdrStatusChanged handles display changes.
+        // Reading video-params should be done via property observation if needed.
     }
 
     public event EventHandler<Mpv.Core.Structs.Client.MpvEventProperty>? PropertyChanged;
@@ -367,42 +346,52 @@ public sealed partial class MpvPlayer : Control
 
     public async Task<string> GetPropertyAsync(string name)
     {
-        if (Player == null || _isDisposed) return "N/A";
+        if (Player == null || _isDisposed || Player.Client?.IsInitialized is not true) return "N/A";
         try
         {
             return await Task.Run(() => Player.Client.GetPropertyToString(name));
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[MPV_ERR] Failed to get property '{name}': {ex.Message}");
+            // Silently ignore "unavailable" errors which are common during loading/buffering
+            if (!ex.Message.Contains("unavailable") && !ex.Message.Contains("not found"))
+            {
+                Debug.WriteLine($"[MPV_ERR] Failed to get property '{name}': {ex.Message}");
+            }
             return "N/A";
         }
     }
 
     public async Task<bool> GetPropertyBoolAsync(string name)
     {
-        if (Player == null || _isDisposed) return false;
+        if (Player == null || _isDisposed || Player.Client?.IsInitialized is not true) return false;
         try
         {
             return await Task.Run(() => Player.Client.GetPropertyToBoolean(name));
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[MPV_ERR] Failed to get bool property '{name}': {ex.Message}");
+            if (!ex.Message.Contains("unavailable") && !ex.Message.Contains("not found"))
+            {
+                Debug.WriteLine($"[MPV_ERR] Failed to get bool property '{name}': {ex.Message}");
+            }
             return false;
         }
     }
 
     public async Task<long> GetPropertyLongAsync(string name)
     {
-        if (Player == null || _isDisposed) return -1;
+        if (Player == null || _isDisposed || Player.Client?.IsInitialized is not true) return -1;
         try
         {
             return await Task.Run(() => Player.Client.GetPropertyToLong(name));
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[MPV_ERR] Failed to get long property '{name}': {ex.Message}");
+            if (!ex.Message.Contains("unavailable") && !ex.Message.Contains("not found"))
+            {
+                Debug.WriteLine($"[MPV_ERR] Failed to get long property '{name}': {ex.Message}");
+            }
             return -1;
         }
     }
@@ -440,43 +429,61 @@ public sealed partial class MpvPlayer : Control
     public async Task CleanupAsync()
     {
         if (_isDisposed) return;
+        
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [MPV_CLEANUP] CleanupAsync STARTED");
         _isDisposed = true;
 
-        // 1. Stop the Render Loop FIRST to prevent access violations during disposal
+        // 1. Unsubscribe from all events IMMEDIATELY to prevent "echo" tasks 
+        // (like property changes triggering SyncHdrStatusAsync during shutdown)
         if (_renderControl != null)
         {
-            await _renderControl.StopLoopAsync();
+            _renderControl.HdrStatusChanged -= OnHdrStatusChanged;
         }
 
-        // 2. Dispose of libmpv BEFORE disconnecting SwapChain or Flush
-        // [STABLE_SHUTDOWN] mpv needs a fully valid/connected D3D11 environment to cleanly
-        // release its cached HW decoding surfaces and libplacebo internal textures.
-        if (Player != null && (_renderControl == null || !_renderControl.PreserveStateOnUnload))
+        if (Player != null)
         {
-            try
+            Player.PlaybackPositionChanged -= OnPositionChanged;
+            Player.PlaybackStateChanged -= OnStateChanged;
+            Player.PropertyChanged -= OnPropertyChanged;
+            Player.LogMessageReceived -= OnLogMessageReceived;
+            
+            // 2. Stop the Render Loop
+            if (_renderControl != null)
             {
-                await Player.DisposeAsync();
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] Player.DisposeAsync SUCCESS");
+                await _renderControl.StopLoopAsync();
             }
-            catch (Exception ex) 
-            { 
-                Debug.WriteLine($"[D3D_CTRL] Player.DisposeAsync ERROR: {ex.Message}");
+
+            // 3. Dispose of libmpv BEFORE disconnecting SwapChain
+            // mpv needs the device to be alive to free its internal HW textures.
+            if (_renderControl == null || !_renderControl.PreserveStateOnUnload)
+            {
+                try
+                {
+                    await Player.DisposeAsync();
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [MPV_CLEANUP] Player.DisposeAsync SUCCESS");
+                }
+                catch (Exception ex) 
+                { 
+                    Debug.WriteLine($"[MPV_CLEANUP] Player.DisposeAsync ERROR: {ex.Message}");
+                }
+                Player = null;
             }
-            Player = null;
         }
 
-        // 3. BREAK the link between UI and SwapChain AFTER mpv is done
+        // 4. Cleanup native control resources
         if (_renderControl != null)
         {
             _renderControl.DisconnectSwapChain();
             _renderControl.FlushContext();
+            
+            if (!_renderControl.PreserveStateOnUnload)
+            {
+                _renderControl.DestroyResources();
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [MPV_CLEANUP] DestroyResources SUCCESS");
+            }
         }
 
-        // 4. Finally destroy the hardware device
-        if (_renderControl != null && (_renderControl == null || !_renderControl.PreserveStateOnUnload))
-        {
-            _renderControl.DestroyResources();
-        }
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [MPV_CLEANUP] CleanupAsync FINISHED");
     }
 
     public void SetDisplayFps(double fps)
@@ -492,7 +499,7 @@ public sealed partial class MpvPlayer : Control
     {
         get
         {
-            if (Player == null) return TimeSpan.Zero;
+            if (Player == null || !IsMediaLoaded) return TimeSpan.Zero;
             try
             {
                 var val = Player.Client.GetPropertyToDouble("duration");
@@ -509,7 +516,7 @@ public sealed partial class MpvPlayer : Control
     {
         get
         {
-            if (Player == null) return TimeSpan.Zero;
+            if (Player == null || !IsMediaLoaded) return TimeSpan.Zero;
             try
             {
                 var val = Player.Client.GetPropertyToDouble("time-pos");

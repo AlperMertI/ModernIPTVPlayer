@@ -54,9 +54,18 @@ public sealed partial class Player
         {
             try 
             { 
-                RenderContext.Destroy(); 
+#if DEBUG
+                Debug.WriteLine("[PLAYER] Awaiting RenderContext destruction...");
+#endif
+                await RenderContext.DestroyAsync(); 
+#if DEBUG
+                Debug.WriteLine("[PLAYER] RenderContext destroyed.");
+#endif
             } 
-            catch { }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[PLAYER] RenderContext destruction error: {ex.Message}");
+            }
         }
         
         await Client.DestroyAsync();

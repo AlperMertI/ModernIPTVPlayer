@@ -1241,15 +1241,30 @@ public class D3D11RenderControl : ContentControl
         if (_cts == null || _cts.IsCancellationRequested) return;
 
         Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] StopLoopAsync STARTED");
+        
+        // 1. Cancel the token to request loop exit
         _cts.Cancel();
+        
+        // 2. Signal all events to wake up the RenderLoop from WaitForMultipleObjects
         _resizeEvent.Set();
+        _mpvUpdateEvent.Set();
 
         if (_renderTask != null)
         {
             try
             {
-                await _renderTask.ContinueWith(t => { }, TaskScheduler.Default);
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] RenderLoop TASK COMPLETED");
+                // Wait for the task to complete with a safety timeout to prevent deadlocks
+                var timeoutTask = Task.Delay(2000);
+                var completedTask = await Task.WhenAny(_renderTask, timeoutTask);
+                
+                if (completedTask == timeoutTask)
+                {
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] StopLoopAsync WARNING: Render loop did not exit in time. Forcing continuation.");
+                }
+                else
+                {
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] StopLoopAsync: Render loop exited gracefully.");
+                }
             }
             catch (Exception ex)
             {

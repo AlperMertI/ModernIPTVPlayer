@@ -139,21 +139,25 @@ public partial class MpvRenderContextNative
         }
     }
 
-    public void Destroy()
+    public Task DestroyAsync()
     {
-        if (Handle.Handle == IntPtr.Zero) return;
+        if (Handle.Handle == IntPtr.Zero) return Task.CompletedTask;
+        
         try
         {
+            // [CRITICAL] Unset callback first
             mpv_render_context_set_update_callback(Handle.Handle, null!, IntPtr.Zero);
 
-            // Run on background thread to prevent UI thread deadlock during GPU sync
-            Task.Run(() => {
+            // [PERF] Run on background thread to prevent UI thread deadlock during GPU/Driver sync.
+            // Returning the Task allows the caller to await full release of native resources.
+            return Task.Run(() => {
                 mpv_render_context_free(Handle.Handle);
             });
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[NATIVE_RC] Exception during Destroy: {ex.Message}");
+            Debug.WriteLine($"[NATIVE_RC] Exception during DestroyAsync: {ex.Message}");
+            return Task.CompletedTask;
         }
     }
 

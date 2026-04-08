@@ -369,14 +369,26 @@ namespace ModernIPTVPlayer
 
                 if (_useMpvPlayer && _mpvPlayer != null)
                 {
-                    durationStr = await _mpvPlayer.GetPropertyAsync("duration");
-                    positionStr = await _mpvPlayer.GetPropertyAsync("time-pos");
-                    coreIdleStr = await _mpvPlayer.GetPropertyAsync("core-idle");
-                    pausedForCacheStr = await _mpvPlayer.GetPropertyAsync("paused-for-cache");
-                    seekingStr = await _mpvPlayer.GetPropertyAsync("seeking");
-                    
-                    double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out duration);
-                    double.TryParse(positionStr, NumberStyles.Any, CultureInfo.InvariantCulture, out position);
+                    // [UI_PERF] Skip polling intensive properties until media is fully loaded and demuxed.
+                    // This prevents the underlying library from throwing "Property Unavailable" exceptions
+                    // which fill the debug console during startup.
+                    if (_mpvPlayer.IsMediaLoaded)
+                    {
+                        durationStr = await _mpvPlayer.GetPropertyAsync("duration");
+                        positionStr = await _mpvPlayer.GetPropertyAsync("time-pos");
+                        coreIdleStr = await _mpvPlayer.GetPropertyAsync("core-idle");
+                        pausedForCacheStr = await _mpvPlayer.GetPropertyAsync("paused-for-cache");
+                        seekingStr = await _mpvPlayer.GetPropertyAsync("seeking");
+                        
+                        double.TryParse(durationStr, NumberStyles.Any, CultureInfo.InvariantCulture, out duration);
+                        double.TryParse(positionStr, NumberStyles.Any, CultureInfo.InvariantCulture, out position);
+                    }
+                    else
+                    {
+                        // Default values during loading
+                        coreIdleStr = "yes";
+                        pausedForCacheStr = "yes";
+                    }
                 }
                 else if (!_useMpvPlayer && _nativeMediaPlayer?.PlaybackSession != null)
                 {
@@ -412,7 +424,7 @@ namespace ModernIPTVPlayer
                     }
                     else if (_loadingTargetProgress != 100)
                     {
-                        if (_useMpvPlayer && _mpvPlayer != null)
+                        if (_useMpvPlayer && _mpvPlayer != null && _mpvPlayer.IsMediaLoaded)
                         {
                             // Phase 2: MPV opened, reading cache fill status (0-100)
                             string bufferingStateStr = await _mpvPlayer.GetPropertyAsync("cache-buffering-state");
@@ -596,7 +608,7 @@ namespace ModernIPTVPlayer
 
                 if (shouldRefreshMetadata)
                 {
-                    if (_useMpvPlayer && _mpvPlayer != null)
+                    if (_useMpvPlayer && _mpvPlayer != null && _mpvPlayer.IsMediaLoaded)
                     {
                         // Resolution consolidation
                         var wSize = await _mpvPlayer.GetPropertyAsync("video-params/w");
@@ -712,8 +724,8 @@ namespace ModernIPTVPlayer
 
                 if (StatsOverlay.Visibility == Visibility.Visible)
                 {
-                    // 2. Dynamic Metadata (Always poll when visible)
-                    if (_useMpvPlayer && _mpvPlayer != null)
+                    // 2. Dynamic Metadata (Always poll when visible, but only if media is loaded)
+                    if (_useMpvPlayer && _mpvPlayer != null && _mpvPlayer.IsMediaLoaded)
                     {
                         RowAppliedPeak.Visibility = Visibility.Visible;
                         RowSdrWhite.Visibility = Visibility.Visible;
@@ -1220,13 +1232,27 @@ namespace ModernIPTVPlayer
                 {
                     try
                     {
-                        // Fresh player created on this page: Full destruction is safe and required.
-
-                        await _mpvPlayer.CleanupAsync();
-                        _mpvPlayer.PropertyChanged -= OnMpvPropertyChanged;
-                        // _mpvPlayer.CleanupAsync() COMPLETED
+                        // [UI_PERF] Offload CleanupAsync to background thread
+                        // This allows navigation to proceed instantly without waiting for libmpv shutdown
+                        var playerToCleanup = _mpvPlayer;
+                        _mpvPlayer = null; // Nullify immediately to stop all UI-thread interactions
+                        
+                        _ = Task.Run(async () => 
+                        {
+                            try 
+                            {
+                                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Background Cleanup STARTED");
+                                await playerToCleanup.CleanupAsync();
+                                playerToCleanup.PropertyChanged -= OnMpvPropertyChanged;
+                                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Background Cleanup COMPLETED");
+                            }
+                            catch (Exception ex) 
+                            { 
+                                Debug.WriteLine($"[LIFECYCLE] Background Cleanup Error: {ex.Message}"); 
+                            }
+                        });
                     }
-                    catch (Exception ex) { Debug.WriteLine($"[LIFECYCLE] Cleanup Error: {ex}"); }
+                    catch (Exception ex) { Debug.WriteLine($"[LIFECYCLE] Cleanup Setup Error: {ex}"); }
                 }
                 _mpvPlayer = null;
             }
@@ -4150,13 +4176,13 @@ namespace ModernIPTVPlayer
             {
                 if (_navArgs == null || _mpvPlayer == null) return;
 
-                // 1. Wait for MPV to fully load the video and have duration available
+                // 1. Wait for player to be READY (IsMediaLoaded = true in mpv-core)
                 // This indicates the player is ready to accept track commands (sub-add).
                 Debug.WriteLine("[AutoSubRestore] Waiting for player to stabilize...");
                 int subRestoreRetry = 0;
-                while (_mpvPlayer != null && _mpvPlayer.Duration.TotalSeconds <= 0 && subRestoreRetry < 20)
+                while (_mpvPlayer != null && !_mpvPlayer.IsMediaLoaded && subRestoreRetry < 40)
                 {
-                    await Task.Delay(500); // 500ms x 20 = 10s max wait
+                    await Task.Delay(250); // 250ms x 40 = 10s max wait
                     subRestoreRetry++;
                     if (!_isPageLoaded) return;
                 }
