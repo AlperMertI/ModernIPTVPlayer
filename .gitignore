@@ -77,6 +77,7 @@ $RECYCLE.BIN/
 # Keep libmpv if it's explicitly in Libs, but ignore built binaries
 
 # Specific ignores for MPV source to keep only core source code (Selective approach)
+Libs/FFmpeg-master/
 Libs/mpv-0.41.0/*
 !Libs/mpv-0.41.0/player/
 !Libs/mpv-0.41.0/include/
@@ -110,3 +111,7 @@ Libs/mpv-0.41.0/subprojects/libplacebo/src/*
 Libs/mpv-0.41.0/subprojects/libplacebo/src/d3d11/*
 !Libs/mpv-0.41.0/subprojects/libplacebo/src/d3d11/gpu_tex.c
 Libs/mpv-0.41.0/build/
+
+## AI / Assistant tools
+.qwen/
+

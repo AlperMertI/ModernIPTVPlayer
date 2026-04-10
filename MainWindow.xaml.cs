@@ -100,6 +100,7 @@ namespace ModernIPTVPlayer
         
         private DispatcherTimer _titleBarHideTimer;
         private bool _isTitleBarVisible = false;
+        private bool _isTitleBarSuppressed = false;
 
         private void InitializeSidebarBehavior()
         {
@@ -143,10 +144,43 @@ namespace ModernIPTVPlayer
             }
 
             // TitleBar Trigger
-            if (!_isTitleBarVisible && point.Y < 50)
+            if (!_isTitleBarSuppressed && !_isTitleBarVisible && point.Y < 50)
             {
                 ShowTitleBar();
             }
+        }
+
+        public void SetTitleBarSuppressed(bool suppressed)
+        {
+            _isTitleBarSuppressed = suppressed;
+
+            if (suppressed)
+            {
+                _titleBarHideTimer?.Stop();
+                _isTitleBarVisible = false;
+                AppTitleBar.IsHitTestVisible = false;
+                AppTitleBar.Opacity = 0;
+
+                if (AppWindowTitleBar.IsCustomizationSupported())
+                {
+                    var titleBar = this.AppWindow.TitleBar;
+                    titleBar.ButtonForegroundColor = Microsoft.UI.Colors.Transparent;
+                    titleBar.ButtonInactiveForegroundColor = Microsoft.UI.Colors.Transparent;
+                    titleBar.ButtonHoverForegroundColor = Microsoft.UI.Colors.Transparent;
+                    titleBar.ButtonHoverBackgroundColor = Microsoft.UI.Colors.Transparent;
+                    titleBar.ButtonPressedForegroundColor = Microsoft.UI.Colors.Transparent;
+                    titleBar.ButtonPressedBackgroundColor = Microsoft.UI.Colors.Transparent;
+                }
+
+                if (AppWindow.Presenter is OverlappedPresenter presenter)
+                {
+                    presenter.SetBorderAndTitleBar(true, false);
+                }
+
+                return;
+            }
+
+            HideTitleBar();
         }
 
         private void HideSidebar()
@@ -193,7 +227,7 @@ namespace ModernIPTVPlayer
 
         private void ShowTitleBar()
         {
-            if (_isTitleBarVisible) return;
+            if (_isTitleBarSuppressed || _isTitleBarVisible) return;
             _isTitleBarVisible = true;
             AppTitleBar.IsHitTestVisible = true;
             _titleBarHideTimer?.Stop();
@@ -230,6 +264,15 @@ namespace ModernIPTVPlayer
 
         private void HideTitleBar()
         {
+            if (_isTitleBarSuppressed)
+            {
+                _isTitleBarVisible = false;
+                AppTitleBar.IsHitTestVisible = false;
+                AppTitleBar.Opacity = 0;
+                _titleBarHideTimer?.Stop();
+                return;
+            }
+
             if (!_isTitleBarVisible) return;
             _isTitleBarVisible = false;
             AppTitleBar.IsHitTestVisible = false;
@@ -267,11 +310,14 @@ namespace ModernIPTVPlayer
 
         private void AppTitleBar_PointerEntered(object sender, PointerRoutedEventArgs e)
         {
+            if (_isTitleBarSuppressed) return;
             _titleBarHideTimer.Stop();
         }
 
         private void AppTitleBar_PointerExited(object sender, PointerRoutedEventArgs e)
         {
+            if (_isTitleBarSuppressed) return;
+
             if (_isTitleBarVisible)
             {
                 _titleBarHideTimer.Start();

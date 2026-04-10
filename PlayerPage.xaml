@@ -205,6 +205,7 @@
 
     <Grid x:Name="MainGrid" DoubleTapped="Page_DoubleTapped"
           PointerPressed="MainGrid_PointerPressed"
+          PointerEntered="MainGrid_PointerEntered"
           PointerMoved="MainGrid_PointerMoved"
           PointerReleased="MainGrid_PointerReleased"
           PointerExited="MainGrid_PointerExited"
@@ -361,8 +362,31 @@
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="HDR / Tone:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock Text="HDR / Primaries:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtHdr" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <!-- Display Group -->
+                <TextBlock Text="Display Information" FontWeight="Bold" Foreground="White" Margin="0,6,0,4" FontSize="13"/>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Display HDR:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtDisplayHdrStatus" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="HDR Available:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtDisplayHdrAvailable" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="SDR White:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtDisplaySdrWhite" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="Luminance:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock x:Name="TxtDisplayLuminance" Text="-" Foreground="White" FontWeight="SemiBold" TextWrapping="WrapWholeWords"/>
                 </StackPanel>
 
                 <StackPanel x:Name="RowAppliedPeak" Orientation="Horizontal" Spacing="8">
@@ -371,7 +395,7 @@
                 </StackPanel>
 
                 <StackPanel x:Name="RowSdrWhite" Orientation="Horizontal" Spacing="8">
-                    <TextBlock Text="OS SDR White:" Foreground="#AAAAAA" Width="135"/>
+                    <TextBlock Text="Target SDR White:" Foreground="#AAAAAA" Width="135"/>
                     <TextBlock x:Name="TxtSdrWhite" Text="-" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
@@ -1017,23 +1041,31 @@
         </Border>
 
         <!-- 7. PiP Hover Overlay (Only visible in PiP mode) -->
+        <!-- Background is set to a very low opacity solid color to ensure hit-testing works reliably over the video surface -->
         <Grid x:Name="PipOverlay"
               Visibility="Collapsed"
-              Background="#01000000" 
+              Background="#05000000"
+              PointerPressed="PipOverlay_PointerPressed"
               PointerEntered="PipOverlay_PointerEntered"
+              PointerMoved="PipOverlay_PointerMoved"
               PointerExited="PipOverlay_PointerExited"
+              PointerReleased="PipOverlay_PointerReleased"
               HorizontalAlignment="Stretch"
               VerticalAlignment="Stretch">
-            <!-- Native Drag Handle for PiP -->
-            <Border x:Name="PipDragRegion" 
-                    Background="Transparent" 
-                    IsHitTestVisible="True" />
             
             <!-- Controls Container (Hidden by default, shown on hover) -->
-            <Grid x:Name="PipControls" Opacity="0" Transitions="{x:Null}">
-                <Grid.Background>
-                    <SolidColorBrush Color="Black" Opacity="0.6"/>
-                </Grid.Background>
+            <Grid x:Name="PipControls" Opacity="0" Transitions="{x:Null}" IsHitTestVisible="True">
+                <Grid IsHitTestVisible="False">
+                    <Rectangle>
+                        <Rectangle.Fill>
+                            <LinearGradientBrush StartPoint="0.5,0" EndPoint="0.5,1">
+                                <GradientStop Color="#A6000000" Offset="0"/>
+                                <GradientStop Color="#33000000" Offset="0.45"/>
+                                <GradientStop Color="#59000000" Offset="1"/>
+                            </LinearGradientBrush>
+                        </Rectangle.Fill>
+                    </Rectangle>
+                </Grid>
 
                 <!-- Center Play/Pause -->
                 <Button x:Name="PipPlayPauseButton"
@@ -1045,7 +1077,7 @@
                      <FontIcon x:Name="PipPlayPauseIcon" Glyph="&#xE768;" FontSize="20"/>
                 </Button>
 
-                <!-- Top Right: Exit PiP -->
+                <!-- Top Right: Exit PiP (Back to Normal/Fullscreen) -->
                 <Button x:Name="PipExitButton"
                         Click="PipButton_Click"
                         HorizontalAlignment="Right"
@@ -1054,7 +1086,7 @@
                         Width="32" Height="32" CornerRadius="16"
                         Background="#CC000000" Foreground="White" BorderThickness="0" Padding="0"
                         ToolTipService.ToolTip="Büyüt">
-                    <FontIcon Glyph="&#xE73F;" FontSize="14"/>
+                    <FontIcon Glyph="&#xE740;" FontSize="14"/>
                 </Button>
 
                 <!-- Top Left: Mute -->

@@ -43,7 +43,7 @@ namespace ModernIPTVPlayer
             // 2. Network & Headers
             if (!string.IsNullOrEmpty(streamUrl) && !streamUrl.Contains("127.0.0.1"))
             {
-                string userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+                string userAgent = HttpHelper.UserAgent;
                 string headers = "Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
 
                 await player.SetPropertyAsync("user-agent", userAgent);

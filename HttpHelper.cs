@@ -9,6 +9,7 @@ namespace ModernIPTVPlayer
 {
     public static class HttpHelper
     {
+        public const string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
         private static readonly HttpClientHandler _handler;
         private static readonly HttpClient _client;
 
@@ -22,9 +23,10 @@ namespace ModernIPTVPlayer
             };
 
             _client = new HttpClient(_handler);
+            _client.Timeout = TimeSpan.FromSeconds(30);
             
             // Standard Browser Headers
-            _client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            _client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
             _client.DefaultRequestHeaders.Add("Accept", "*/*");
             _client.DefaultRequestHeaders.Add("Connection", "keep-alive");
             var language = System.Globalization.CultureInfo.CurrentUICulture.Name;
@@ -84,6 +86,16 @@ namespace ModernIPTVPlayer
                 AppLogger.Info($"[HttpHelper] Failed JSON snippet: {trimmed.Substring(0, Math.Min(500, trimmed.Length))}");
                 return new List<T>();
             }
+        }
+
+        /// <summary>
+        /// Centralized helper to apply standard browser headers to WinRT HttpClients (used by Media Foundation)
+        /// </summary>
+        public static void ApplyDefaultHeaders(Windows.Web.Http.HttpClient client)
+        {
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
+            client.DefaultRequestHeaders.Add("Accept", "*/*");
+            client.DefaultRequestHeaders.Connection.ParseAdd("keep-alive");
         }
     }
 }

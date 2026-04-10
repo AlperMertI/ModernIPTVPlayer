@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0-windows10.0.22000.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
@@ -12,11 +12,11 @@
 
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.251106002" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.6901" />
-    <PackageReference Include="Silk.NET.Core" Version="2.21.0" />
-    <PackageReference Include="Silk.NET.DXGI" Version="2.21.0" />
-    <PackageReference Include="Silk.NET.Direct3D11" Version="2.21.0" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="Silk.NET.Core" />
+    <PackageReference Include="Silk.NET.DXGI" />
+    <PackageReference Include="Silk.NET.Direct3D11" />
   </ItemGroup>
 
   <ItemGroup>
