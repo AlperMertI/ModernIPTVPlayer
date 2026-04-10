@@ -16,6 +16,8 @@
     <Page.Resources>
         <converters:BoolToVisibleConverter x:Key="BoolToVisibleConverter"/>
         <converters:StreamStatusToBrushConverter x:Key="StreamStatusToBrushConverter"/>
+        <!-- Phase 2.2: Channel icon converter with DecodePixelWidth=48 -->
+        <local:ChannelIconConverter x:Key="ChannelIconConverter"/>
         <!-- Category List Item Style -->
         <Style x:Key="CategoryItemStyle" TargetType="ListViewItem">
             <Setter Property="Padding" Value="12,8"/> <!-- Reduced Padding -->
@@ -419,87 +421,87 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <!-- Icon -->
-                            <Border Grid.Column="0" 
-                                    Width="48" Height="48" 
-                                    CornerRadius="8" 
+                            <!-- Icon (OneTime = no binding updates, ContainerContentChanging handles loading) -->
+                            <Border Grid.Column="0"
+                                    Width="48" Height="48"
+                                    CornerRadius="8"
                                     Background="#22FFFFFF"
                                     VerticalAlignment="Center">
                                 <Grid>
-                                    <Image Source="{x:Bind IconUrl}" 
-                                           Stretch="Uniform" 
-                                           HorizontalAlignment="Center" 
+                                    <Image Source="{x:Bind IconUrl, Mode=OneTime, Converter={StaticResource ChannelIconConverter}}"
+                                           Stretch="Uniform"
+                                           HorizontalAlignment="Center"
                                            VerticalAlignment="Center"
                                            Margin="4"/>
-                                    
-                                    <!-- Health Status Dot -->
-                                    <Ellipse Width="10" Height="10" 
-                                             Fill="{x:Bind Status, Mode=OneWay, Converter={StaticResource StreamStatusToBrushConverter}}" 
+
+                                    <!-- Health Status Dot (OneTime) -->
+                                    <Ellipse Width="10" Height="10"
+                                             Fill="{x:Bind Status, Mode=OneTime, Converter={StaticResource StreamStatusToBrushConverter}}"
                                              Stroke="#222222" StrokeThickness="1"
                                              HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                              Margin="0,0,4,4"
-                                             Visibility="{x:Bind ShowStatusDot, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}"
-                                             ToolTipService.ToolTip="{x:Bind StatusToolTip, Mode=OneWay}"/>
+                                             Visibility="{x:Bind ShowStatusDot, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}"
+                                             ToolTipService.ToolTip="{x:Bind StatusToolTip, Mode=OneTime}"/>
                                 </Grid>
                             </Border>
 
-                            <!-- Name -->
+                            <!-- Name (OneTime) -->
                             <TextBlock Grid.Column="1"
-                                       Text="{x:Bind Name}" 
+                                       Text="{x:Bind Name, Mode=OneTime}"
                                        VerticalAlignment="Top"
                                        HorizontalAlignment="Left"
-                                       Foreground="#F0F0F0" 
+                                       Foreground="#F0F0F0"
                                        FontSize="15"
                                        FontWeight="Medium"
                                        TextTrimming="CharacterEllipsis"
                                        MaxLines="1"
                                        Margin="14,10,4,0"/>
-                                       
-                            <!-- BADGES (Quality Info) -->
-                            <StackPanel Grid.Column="1" 
-                                        Orientation="Horizontal" 
-                                        HorizontalAlignment="Left" 
+
+                            <!-- BADGES (OneTime — rendered once per container) -->
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        HorizontalAlignment="Left"
                                         VerticalAlignment="Bottom"
                                         Margin="14,0,0,10"
                                         Spacing="4">
-                                
-                                <!-- Loading State -->
-                                <ProgressRing IsActive="{x:Bind IsProbing, Mode=OneWay}" 
-                                              Width="16" Height="16" 
-                                              Visibility="{x:Bind IsProbing, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}"/>
-                                
+
+                                <!-- Loading State (OneTime) -->
+                                <ProgressRing IsActive="{x:Bind IsProbing, Mode=OneTime}"
+                                              Width="16" Height="16"
+                                              Visibility="{x:Bind IsProbing, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}"/>
+
                                 <!-- Resolution Badge -->
-                                <Border Background="#CC00B7C3" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
-                                    <TextBlock Text="{x:Bind Resolution, Mode=OneWay}" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                                <Border Background="#CC00B7C3" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}">
+                                    <TextBlock Text="{x:Bind Resolution, Mode=OneTime}" FontSize="10" FontWeight="Bold" Foreground="White"/>
                                 </Border>
                                 <!-- FPS Badge -->
-                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
-                                    <TextBlock Text="{x:Bind Fps, Mode=OneWay}" FontSize="10" Foreground="#DDDDDD"/>
+                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}">
+                                    <TextBlock Text="{x:Bind Fps, Mode=OneTime}" FontSize="10" Foreground="#DDDDDD"/>
                                 </Border>
                                 <!-- Codec Badge -->
-                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
-                                    <TextBlock Text="{x:Bind Codec, Mode=OneWay}" FontSize="10" Foreground="#DDDDDD"/>
+                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}">
+                                    <TextBlock Text="{x:Bind Codec, Mode=OneTime}" FontSize="10" Foreground="#DDDDDD"/>
                                 </Border>
 
                                 <!-- Bitrate Badge -->
-                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" 
-                                        Visibility="{x:Bind HasBitrate, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
-                                    <TextBlock Text="{x:Bind FormattedBitrate, Mode=OneWay}" FontSize="10" Foreground="#DDDDDD"/>
+                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2"
+                                        Visibility="{x:Bind HasBitrate, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}">
+                                    <TextBlock Text="{x:Bind FormattedBitrate, Mode=OneTime}" FontSize="10" Foreground="#DDDDDD"/>
                                 </Border>
 
                                 <!-- HDR Badge -->
-                                <Border Background="#FFFFD700" CornerRadius="4" Padding="4,2" 
-                                        Visibility="{x:Bind ShowHdrBadge, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
+                                <Border Background="#FFFFD700" CornerRadius="4" Padding="4,2"
+                                        Visibility="{x:Bind ShowHdrBadge, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}">
                                     <TextBlock Text="HDR" FontSize="10" FontWeight="Bold" Foreground="Black"/>
                                 </Border>
- 
+
                                 <!-- Offline Badge -->
-                                <Border Background="#CCFF0000" CornerRadius="4" Padding="4,2" Visibility="{x:Bind IsOffline, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
+                                <Border Background="#CCFF0000" CornerRadius="4" Padding="4,2" Visibility="{x:Bind IsOffline, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}">
                                     <TextBlock Text="OFFLINE" FontSize="10" FontWeight="Bold" Foreground="White"/>
                                 </Border>
- 
+
                                 <!-- Unstable / Low Bitrate Badge -->
-                                <Border Background="#CCFFCC00" CornerRadius="4" Padding="4,2" Visibility="{x:Bind IsUnstable, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
+                                <Border Background="#CCFFCC00" CornerRadius="4" Padding="4,2" Visibility="{x:Bind IsUnstable, Mode=OneTime, Converter={StaticResource BoolToVisibleConverter}}">
                                     <TextBlock Text="SLOW/FAKE" FontSize="10" FontWeight="Bold" Foreground="#333333"/>
                                 </Border>
                             </StackPanel>
@@ -521,11 +523,66 @@
                 </GridView.ItemsPanel>
             </GridView>
 
-            <!-- Loading Ring (Main) -->
+            <!-- Loading Ring (Main) - kept for backward compat, hidden in favor of skeleton -->
             <ProgressRing x:Name="MainLoadingRing" IsActive="False"
                           Grid.Row="1"
                           Width="60" Height="60"
-                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                          HorizontalAlignment="Center" VerticalAlignment="Center"
+                          Visibility="Collapsed"/>
+
+            <!-- Phase 4.4: Skeleton Loading Overlay — shimmer placeholders while data loads -->
+            <GridView x:Name="SkeletonGrid"
+                      Grid.Row="1"
+                      Padding="24,4,24,32"
+                      Visibility="Collapsed"
+                      IsHitTestVisible="False"
+                      SelectionMode="None">
+                <GridView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ItemsWrapGrid Orientation="Horizontal" ItemHeight="68" HorizontalAlignment="Center"/>
+                    </ItemsPanelTemplate>
+                </GridView.ItemsPanel>
+                <GridView.ItemTemplate>
+                    <DataTemplate>
+                        <Grid Height="68">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Icon Placeholder -->
+                            <Border Grid.Column="0"
+                                    Width="48" Height="48"
+                                    CornerRadius="8"
+                                    Background="#22FFFFFF"
+                                    VerticalAlignment="Center">
+                                <controls:ShimmerControl Width="24" Height="24" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+
+                            <!-- Name Placeholder -->
+                            <Rectangle Grid.Column="1"
+                                       Fill="#22FFFFFF"
+                                       RadiusX="4" RadiusY="4"
+                                       Height="14"
+                                       Width="140"
+                                       HorizontalAlignment="Left"
+                                       VerticalAlignment="Top"
+                                       Margin="14,14,0,0"/>
+
+                            <!-- Badges Placeholder -->
+                            <StackPanel Grid.Column="1"
+                                        Orientation="Horizontal"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Bottom"
+                                        Margin="14,0,0,14"
+                                        Spacing="4">
+                                <Rectangle Fill="#15FFFFFF" RadiusX="4" RadiusY="4" Width="30" Height="14"/>
+                                <Rectangle Fill="#15FFFFFF" RadiusX="4" RadiusY="4" Width="24" Height="14"/>
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </GridView.ItemTemplate>
+            </GridView>
 
             <!-- Empty State -->
             <StackPanel x:Name="EmptyStatePanel" 

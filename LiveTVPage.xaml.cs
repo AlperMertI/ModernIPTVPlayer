@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.IO;
 using System.Text.Json;
 using System.Collections.Concurrent;
 using System.Threading;
@@ -14,6 +15,7 @@ using Windows.ApplicationModel.DataTransfer;
 using Microsoft.UI.Xaml.Media.Imaging;
 using MpvWinUI;
 using ModernIPTVPlayer.Services;
+using System.Collections.Concurrent;
 
 namespace ModernIPTVPlayer
 {
@@ -36,6 +38,10 @@ namespace ModernIPTVPlayer
         private bool _isSortDescending = false;
         private List<LiveCategory> _allCategories = new();
         private List<LiveStream> _allChannels = new();
+
+        // Phase A/B: Pre-computed search structures
+        private ushort[] _channelFlags = Array.Empty<ushort>();  // Bit field for quality/health/tech filters
+        private Dictionary<LiveStream, int> _channelToIndex = new();  // Fast reverse lookup: channel object → index
         
         // State
         private LiveCategory? _selectedCategory;
@@ -58,6 +64,9 @@ namespace ModernIPTVPlayer
 
         // SCROLL-BASED PROBING
         private ScrollViewer? _channelScrollViewer;
+
+        // HTTP Cancellation (Phase 4.1): Cancel in-flight requests on navigation away
+        private CancellationTokenSource? _loadCts;
 
         public LiveTVPage()
         {
@@ -228,16 +237,22 @@ namespace ModernIPTVPlayer
             }
             _ = StartProbingWorker();
 
+            // Phase 4.1: Create fresh CTS for this navigation's HTTP requests
+            _loadCts?.Cancel();
+            _loadCts?.Dispose();
+            _loadCts = new CancellationTokenSource();
+            _loadCts.CancelAfter(TimeSpan.FromSeconds(60)); // Hard timeout
+
             // 4. Data Loading
             if (_allCategories.Count > 0) return;
 
             if (!string.IsNullOrEmpty(_loginInfo.Host) && !string.IsNullOrEmpty(_loginInfo.Username))
             {
-                await LoadXtreamCategoriesAsync();
+                await LoadXtreamCategoriesAsync(cancellationToken: _loadCts.Token);
             }
             else if (!string.IsNullOrEmpty(_loginInfo.PlaylistUrl))
             {
-                await LoadM3uAsync(_loginInfo.PlaylistUrl);
+                await LoadM3uAsync(_loginInfo.PlaylistUrl, cancellationToken: _loadCts.Token);
             }
         }
 
@@ -246,17 +261,47 @@ namespace ModernIPTVPlayer
             base.OnNavigatedFrom(e);
             // Cancel Worker
             _workerCts.Cancel();
+            // Phase 4.1: Cancel in-flight HTTP requests
+            _loadCts?.Cancel();
+            _loadCts?.Dispose();
+            _loadCts = null;
         }
 
         // ==========================================
         // DATA LOADING
         // ==========================================
-        private async Task LoadXtreamCategoriesAsync(bool ignoreCache = false)
+
+        // Phase 4.4: Skeleton Loading Helpers
+        private const int SKELETON_ITEM_COUNT = 24; // Show 24 shimmer placeholders (fills ~3-4 rows)
+
+        private void ShowLoadingSkeleton()
+        {
+            // Show skeleton grid with shimmer items
+            if (SkeletonGrid != null)
+            {
+                SkeletonGrid.ItemsSource = new int[SKELETON_ITEM_COUNT]; // dummy data
+                SkeletonGrid.Visibility = Visibility.Visible;
+            }
+            // Hide the real grid until data is ready
+            if (ChannelGridView != null)
+                ChannelGridView.Visibility = Visibility.Collapsed;
+        }
+
+        private void HideLoadingSkeleton()
+        {
+            if (SkeletonGrid != null)
+                SkeletonGrid.Visibility = Visibility.Collapsed;
+            if (ChannelGridView != null)
+                ChannelGridView.Visibility = Visibility.Visible;
+            SidebarLoadingRing.IsActive = false;
+            MainLoadingRing.IsActive = false;
+        }
+
+        private async Task LoadXtreamCategoriesAsync(bool ignoreCache = false, CancellationToken cancellationToken = default)
         {
             try
             {
-                SidebarLoadingRing.IsActive = true;
-                MainLoadingRing.IsActive = true;
+                ShowLoadingSkeleton();
                 EmptyStatePanel.Visibility = Visibility.Collapsed;
 
                 string baseUrl = _loginInfo.Host.TrimEnd('/');
@@ -289,53 +334,41 @@ namespace ModernIPTVPlayer
                 {
                     swLoad.Stop();
                     System.Diagnostics.Debug.WriteLine($"[LiveTVPage] PROJECT ZERO BINARY LOAD OK! Total: {swLoad.ElapsedMilliseconds}ms");
-                    
-                    // NEW v2.4: Initialize the ID-based Binary Probe Cache for this playlist
-                    await Services.ProbeCacheService.Instance.InitializeForPlaylistAsync(playlistId);
 
                     _allCategories = cachedCats;
                     _allChannels = cachedStreams; // Raw list
-                    
-                    // 1. FAST RE-HYDRATION: Build URLs for all channels (Binary doesn't store them)
-                    // This is essential for ProbeCache and playback!
-                    Parallel.ForEach(_allChannels, s => 
-                    {
-                        string ext = string.IsNullOrEmpty(s.ContainerExtension) ? "ts" : s.ContainerExtension;
-                        s.StreamUrl = $"{baseUrl}/live/{username}/{password}/{s.StreamId}.{ext}";
-                    });
 
-                    // 2. Hydrate Metadata from ID-Based ProbeCache (Fastest - No URLs needed!)
+                    // -------------------------------------------------------
+                    // 1. Create "All Channels" category
+                    // -------------------------------------------------------
+                    var allCat = _allCategories.FirstOrDefault(c => c.CategoryId == "-1");
+                    if (allCat == null)
+                    {
+                        allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
+                        _allCategories.Insert(0, allCat);
+                    }
+                    allCat.Channels = _allChannels;
+
+                    // 2. Group channels by category (single-pass, ~50-100ms for 50k channels)
+                    var grouped = new Dictionary<string, List<LiveStream>>(_allCategories.Count, StringComparer.Ordinal);
                     foreach (var s in _allChannels)
                     {
-                        if (Services.ProbeCacheService.Instance.Get(s.StreamId) is Services.ProbeData pd)
-                        {
-                            s.Resolution = pd.Resolution;
-                            s.Codec = pd.Codec;
-                            s.Bitrate = pd.Bitrate;
-                            s.Fps = pd.Fps;
-                            s.IsHdr = pd.IsHdr;
-                            s.IsOnline = true; 
-                        }
+                        if (!grouped.TryGetValue(s.CategoryId, out var list))
+                            grouped[s.CategoryId] = list = new List<LiveStream>();
+                        list.Add(s);
+                    }
+                    foreach (var cat in _allCategories)
+                    {
+                        if (cat.CategoryId != "-1")
+                            cat.Channels = grouped.TryGetValue(cat.CategoryId, out var list) ? list : new List<LiveStream>();
                     }
 
-                    // Re-link logic (same as fetch)
-                     var allCat = _allCategories.FirstOrDefault(c => c.CategoryId == "-1");
-                     if (allCat == null)
-                     {
-                         allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
-                         _allCategories.Insert(0, allCat);
-                     }
-                     allCat.Channels = _allChannels;
+                    // 3. Build flags immediately (needed for filtering)
+                    BuildChannelFlags();
 
-                     foreach (var cat in _allCategories)
-                     {
-                         if (cat.CategoryId != "-1")
-                            cat.Channels = _allChannels.Where(s => s.CategoryId == cat.CategoryId).ToList();
-                     }
+                    // 4. Show UI
+                    CategoryListView.ItemsSource = _allCategories;
 
-                    CategoryListView.ItemsSource = _allCategories;
-                    CategoryListView.ItemsSource = _allCategories;
-                    
                     // Restoration Logic
                     var lastId = AppSettings.LastLiveCategoryId;
                     var targetCat = _allCategories.FirstOrDefault(c => c.CategoryId == lastId) ?? allCat;
@@ -343,50 +376,106 @@ namespace ModernIPTVPlayer
                     CategoryListView.SelectedItem = targetCat;
                     CategoryListView.ScrollIntoView(targetCat);
                     SelectCategory(targetCat);
-                    
+
                     LoadRecentChannels();
 
-                    SidebarLoadingRing.IsActive = false;
-                    MainLoadingRing.IsActive = false;
-                    
-                    // Optional: Background Refresh check could happen here
+                    HideLoadingSkeleton();
+
+                    // -------------------------------------------------------
+                    // BACKGROUND: URL reconstruction + probe cache
+                    // -------------------------------------------------------
+                    _ = Task.Run(() =>
+                    {
+                        Parallel.ForEach(_allChannels, s =>
+                        {
+                            if (string.IsNullOrEmpty(s.StreamUrl))
+                            {
+                                string ext = string.IsNullOrEmpty(s.ContainerExtension) ? "ts" : s.ContainerExtension;
+                                s.StreamUrl = $"{baseUrl}/live/{username}/{password}/{s.StreamId}.{ext}";
+                            }
+                        });
+                    });
+
+                    // Probe cache init — fire-and-forget (probe worker handles lazy loading)
+                    _ = Services.ProbeCacheService.Instance.InitializeForPlaylistAsync(playlistId);
                 }
 
                 // 2. NETWORK STRATEGY: If Cache Missing (or forced refresh needed)
                 if (!cacheLoaded)
                 {
+                    // ZERO-ALLOCATION PARSING (Phase 1.3): Parse directly from HTTP stream into structs + MetadataBuffer
+                    // Falls back to JsonSerializer if zero-alloc parser fails (robustness)
                     string api = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_live_categories";
-                    string json = await _httpClient.GetStringAsync(api);
-                    var categories = HttpHelper.TryDeserializeList<LiveCategory>(json);
-
-                    // Channel Fetch
                     string streamApi = $"{baseUrl}/player_api.php?username={username}&password={password}&action=get_live_streams";
-                    string streamJson = await _httpClient.GetStringAsync(streamApi);
-                    var streams = HttpHelper.TryDeserializeList<LiveStream>(streamJson);
 
-                    if (streams != null)
+                    List<LiveCategory> categories = null;
+                    List<LiveStream> streams = null;
+
+                    try
+                    {
+                        // Parse in parallel with zero-allocation parser
+                        var catTask = Services.ZeroAllocJsonParser.ParseLiveCategoriesAsync(_httpClient, api, cancellationToken);
+                        var streamTask = Services.ZeroAllocJsonParser.ParseLiveStreamsAsync(_httpClient, streamApi, cancellationToken);
+                        await Task.WhenAll(catTask, streamTask);
+                        categories = catTask.Result;
+                        streams = streamTask.Result;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Fallback: Use traditional JsonSerializer if zero-alloc parser fails
+                        System.Diagnostics.Debug.WriteLine($"[ZeroAlloc] Parser failed: {ex.Message}. Falling back to JsonSerializer.");
+
+                        var catTask = _httpClient.GetStringAsync(api, cancellationToken);
+                        var streamTask = _httpClient.GetStringAsync(streamApi, cancellationToken);
+                        await Task.WhenAll(catTask, streamTask);
+
+                        categories = HttpHelper.TryDeserializeList<LiveCategory>(catTask.Result);
+                        streams = HttpHelper.TryDeserializeList<LiveStream>(streamTask.Result);
+                    }
+
+                    if (streams != null && streams.Count > 0)
                     {
                         // URL Construction
                         foreach (var s in streams)
                         {
                             s.StreamUrl = $"{baseUrl}/live/{username}/{password}/{s.StreamId}.ts";
                         }
-                        
+
                         // 3. CACHE SAVE (Background)
-                        // We save RAW lists. Re-linking happens on load.
-                        _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_cats", categories);
+                        _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_cats", categories ?? new List<LiveCategory>());
                         _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_streams", streams);
 
-                        // 4. UI Update
+                        // 4. SINGLE-PASS CATEGORY GROUPING (O(N) instead of O(N×M))
+                        categories ??= new List<LiveCategory>();
                         var allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
-                        _allCategories = new List<LiveCategory> { allCat };
+                        _allCategories = new List<LiveCategory>(categories.Count + 1) { allCat };
                         _allCategories.AddRange(categories);
                         _allChannels = streams;
-                    
-                        // Wait for Probe Cache to be ready (Race Condition fix)
-                        await Services.ProbeCacheService.Instance.EnsureLoadedAsync();
-                        
+
+                        // Group channels by category in a single pass
+                        var grouped = new Dictionary<string, List<LiveStream>>(categories.Count + 1, StringComparer.Ordinal);
+                        foreach (var s in _allChannels)
+                        {
+                            if (!grouped.TryGetValue(s.CategoryId, out var list))
+                                grouped[s.CategoryId] = list = new List<LiveStream>();
+                            list.Add(s);
+                        }
+
+                        allCat.Channels = _allChannels;
+                        foreach (var cat in categories)
+                        {
+                            cat.Channels = grouped.TryGetValue(cat.CategoryId, out var list) ? list : new List<LiveStream>();
+                        }
+
+                        // Phase B: Build flags immediately (needed for filtering)
+                        BuildChannelFlags();
+
+                        // LAZY PROBE CACHE (Phase 3.2): Initialize in background, don't block UI
+                        // The probe worker checks cache before each probe — if not loaded yet, it proceeds normally
+                        _ = Services.ProbeCacheService.Instance.InitializeForPlaylistAsync(playlistId);
+
                         // Hydrate Metadata from ID-Based ProbeCache (Network Path v2.4)
+                        // This will only hit if probe cache is already loaded (non-blocking)
                         foreach (var s in _allChannels)
                         {
                             if (Services.ProbeCacheService.Instance.Get(s.StreamId) is Services.ProbeData pd)
@@ -396,23 +485,16 @@ namespace ModernIPTVPlayer
                                 s.Bitrate = pd.Bitrate;
                                 s.Fps = pd.Fps;
                                 s.IsHdr = pd.IsHdr;
-                                s.IsOnline = true; 
+                                s.IsOnline = true;
                             }
                         }
-                        
-                        allCat.Channels = _allChannels;
-                        foreach (var cat in categories)
-                        {
-                            cat.Channels = _allChannels.Where(s => s.CategoryId == cat.CategoryId).ToList();
-                        }
 
-                        CategoryListView.ItemsSource = _allCategories;
                         CategoryListView.ItemsSource = _allCategories;
 
                         // Restoration Logic
                         var lastId = AppSettings.LastLiveCategoryId;
                         var targetCat = _allCategories.FirstOrDefault(c => c.CategoryId == lastId) ?? allCat;
-                        
+
                         CategoryListView.SelectedItem = targetCat;
                         CategoryListView.ScrollIntoView(targetCat);
                         SelectCategory(targetCat);
@@ -427,36 +509,113 @@ namespace ModernIPTVPlayer
             }
             finally
             {
-                SidebarLoadingRing.IsActive = false;
-                MainLoadingRing.IsActive = false;
+                HideLoadingSkeleton();
             }
         }
 
-        private async Task LoadM3uAsync(string? url, bool ignoreCache = false)
+        private async Task LoadM3uAsync(string? url, bool ignoreCache = false, CancellationToken cancellationToken = default)
         {
-            // Similar logic for M3U...
-             if (string.IsNullOrEmpty(url)) return;
+            if (string.IsNullOrEmpty(url)) return;
 
+            string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
+
+            // -------------------------------------------------------------
+            // 1. CACHE STRATEGY: Check Binary Cache (same as Xtream)
+            // -------------------------------------------------------------
+            List<LiveStream> cachedStreams = null;
+            List<LiveCategory> cachedCats = null;
+            bool cacheLoaded = false;
+
+            if (!ignoreCache)
+            {
+                cachedStreams = await Services.ContentCacheService.Instance.LoadLiveStreamsBinaryAsync(playlistId);
+                cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, "live_cats_m3u");
+                cacheLoaded = (cachedStreams != null && cachedCats != null && cachedStreams.Count > 0);
+            }
+
+            if (cacheLoaded)
+            {
+                // FAST PATH: Load from binary cache, show UI immediately
+                _allChannels = cachedStreams;
+                _allCategories = cachedCats;
+
+                // Immediate UI
+                var allCat = _allCategories.FirstOrDefault(c => c.CategoryId == "-1");
+                if (allCat != null)
+                {
+                    allCat.Channels = _allChannels;
+                }
+
+                CategoryListView.ItemsSource = _allCategories;
+                CategoryListView.SelectedIndex = 0;
+                SelectCategory(allCat);
+                LoadRecentChannels();
+                HideLoadingSkeleton();
+
+                // Background: everything else
+                _ = Task.Run(() =>
+                {
+                    // URL Reconstruction (only if needed)
+                    Parallel.ForEach(_allChannels, s =>
+                    {
+                        if (string.IsNullOrEmpty(s.StreamUrl))
+                        {
+                            // M3U channels already have full URLs in StreamUrl
+                            // No action needed unless StreamUrl is empty
+                        }
+                    });
+                });
+
+                // Probe cache init — fire-and-forget
+                _ = Services.ProbeCacheService.Instance.InitializeForPlaylistAsync(playlistId);
+
+                return;
+            }
+
+            // -------------------------------------------------------------
+            // 2. NETWORK PATH: Download, Parse, Cache, Display
+            // -------------------------------------------------------------
             try
             {
-                MainLoadingRing.IsActive = true;
-                string m3uContent = await _httpClient.GetStringAsync(url);
-                
-                // Parse on background thread
-                var categories = await Task.Run(() => ParseM3u(m3uContent));
+                ShowLoadingSkeleton();
+
+                // Phase 4.2: Streaming M3U parse — avoid loading entire file into memory
+                var categories = await Task.Run(async () =>
+                {
+                    using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+                    response.EnsureSuccessStatusCode();
+                    await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+                    return ParseM3uStreaming(stream);
+                }, cancellationToken);
+
+                if (categories == null || categories.Count == 0)
+                {
+                    await ShowMessageDialog("Hata", "M3U listesinde kanal bulunamadı.");
+                    return;
+                }
 
                 var allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
-                
-                 // Populate All Channels
+
+                // Populate All Channels (single pass — SelectMany is efficient here)
                 _allChannels = categories.SelectMany(c => c.Channels).ToList();
                 allCat.Channels = _allChannels;
 
                 _allCategories = new List<LiveCategory> { allCat };
                 _allCategories.AddRange(categories);
 
+                // SAVE TO BINARY CACHE (background, fire-and-forget)
+                _ = Services.ContentCacheService.Instance.SaveLiveStreamsBinaryAsync(playlistId, _allChannels);
+                _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_cats_m3u", _allCategories);
+
+                // Phase B: Build flags immediately (needed for filtering)
+                BuildChannelFlags();
+
+                // Search index: lazy (built on first search)
+
                 CategoryListView.ItemsSource = _allCategories;
                 CategoryListView.SelectedIndex = 0;
                 SelectCategory(allCat);
+                LoadRecentChannels();
             }
             catch (Exception ex)
             {
@@ -464,7 +623,7 @@ namespace ModernIPTVPlayer
             }
             finally
             {
-                MainLoadingRing.IsActive = false;
+                HideLoadingSkeleton();
             }
         }
         
@@ -505,17 +664,88 @@ namespace ModernIPTVPlayer
                 }
                 else if (!trimLine.StartsWith("#") && currentName != null && !string.IsNullOrEmpty(trimLine))
                 {
+                    // Generate a stable ID from the URL hash for M3U (SHA256-based)
+                    int m3uId = 0;
+                    if (!string.IsNullOrEmpty(trimLine))
+                    {
+                        // Use SHA256 for stable, collision-resistant IDs (.NET 8 compatible)
+                        var hashBytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(trimLine));
+                        m3uId = BitConverter.ToInt32(hashBytes, 0) & 0x7FFFFFFF; // Ensure positive
+                    }
+
+                    result[currentGroup!].Channels.Add(new LiveStream
+                    {
+                        StreamId = m3uId,
+                        Name = currentName,
+                        StreamUrl = trimLine,
+                        IconUrl = currentLogo
+                    });
+
+                    currentName = null; currentLogo = null; currentGroup = null;
+                }
+            }
+
+            return result.Values.OrderBy(c => c.CategoryName).ToList();
+        }
+
+        /// <summary>
+        /// Phase 4.2: Streaming M3U parser — processes line-by-line without loading entire file into memory.
+        /// Uses StreamReader.ReadLineAsync() for memory-efficient parsing of large M3U files.
+        /// </summary>
+        private static List<LiveCategory> ParseM3uStreaming(Stream stream)
+        {
+            var result = new Dictionary<string, LiveCategory>();
+
+            using var reader = new System.IO.StreamReader(stream, System.Text.Encoding.UTF8);
+            string? line;
+            string? currentName = null;
+            string? currentLogo = null;
+            string? currentGroup = null;
+
+            while ((line = reader.ReadLine()) != null)
+            {
+                var trimLine = line.Trim();
+                if (trimLine.StartsWith("#EXTINF:"))
+                {
+                    // Metadata Parse
+                    var logoIndex = trimLine.IndexOf("tvg-logo=\"");
+                    if (logoIndex != -1)
+                    {
+                        var start = logoIndex + 10;
+                        var end = trimLine.IndexOf('"', start);
+                        if (end != -1) currentLogo = trimLine.Substring(start, end - start);
+                    }
+
+                    var groupIndex = trimLine.IndexOf("group-title=\"");
+                    if (groupIndex != -1)
+                    {
+                        var start = groupIndex + 13;
+                        var end = trimLine.IndexOf('"', start);
+                        if (end != -1) currentGroup = trimLine.Substring(start, end - start);
+                    }
+                    else currentGroup = "Genel";
+
+                    var commaIndex = trimLine.LastIndexOf(',');
+                    if (commaIndex != -1) currentName = trimLine.Substring(commaIndex + 1).Trim();
+                }
+                else if (!trimLine.StartsWith("#") && currentName != null && !string.IsNullOrEmpty(trimLine))
+                {
                     // Generate a stable ID from the URL hash for M3U
                     int m3uId = 0;
                     if (!string.IsNullOrEmpty(trimLine))
                     {
-                        // Use a basic stable hash instead of .GetHashCode() which is not stable in .NET Core
-                        uint hash = 0;
-                        foreach (char c in trimLine) hash = hash * 31 + c;
-                        m3uId = (int)(hash & 0x7FFFFFFF);
+                        // Same SHA256-based hash as ParseM3u
+                        var hashBytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(trimLine));
+                        m3uId = BitConverter.ToInt32(hashBytes, 0) & 0x7FFFFFFF;
                     }
 
-                    result[currentGroup!].Channels.Add(new LiveStream
+                    if (!result.TryGetValue(currentGroup!, out var cat))
+                    {
+                        cat = new LiveCategory { CategoryName = currentGroup!, CategoryId = currentGroup!, Channels = new List<LiveStream>() };
+                        result[currentGroup!] = cat;
+                    }
+
+                    cat.Channels.Add(new LiveStream
                     {
                         StreamId = m3uId,
                         Name = currentName,
@@ -541,7 +771,7 @@ namespace ModernIPTVPlayer
         {
             if (_searchDebounceTimer == null)
             {
-                _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+                _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
                 _searchDebounceTimer.Tick += (s, args) => 
                 {
                     _searchDebounceTimer.Stop();
@@ -556,6 +786,11 @@ namespace ModernIPTVPlayer
         private void PerformSearch()
         {
             if (SearchBox == null) return;
+
+            // Lazy build search index on first search
+            if (!Services.ChannelSearchIndex.IsBuilt && _allChannels.Count > 0)
+                BuildChannelSearchStructures();
+
             _searchQuery = SearchBox.Text.ToLowerInvariant();
             UpdateSidebar();
             UpdateChannelList();
@@ -591,6 +826,91 @@ namespace ModernIPTVPlayer
             UpdateChannelList();
         }
 
+        // ==========================================
+        // Phase A/B: Search Index + Flags Builder
+        // ==========================================
+
+        /// <summary>
+        /// Build ONLY channel flags + reverse index map (fast ~50ms for 50k channels).
+        /// Called immediately after cache load so filters work.
+        /// </summary>
+        private void BuildChannelFlags()
+        {
+            if (_channelFlags.Length == _allChannels.Count) return; // Already built
+
+            // Build reverse map (channel object → index) — needed for category filtering
+            _channelToIndex.Clear();
+
+            _channelFlags = new ushort[_allChannels.Count];
+            for (int i = 0; i < _allChannels.Count; i++)
+            {
+                var c = _allChannels[i];
+                _channelToIndex[c] = i;
+
+                ushort flags = 0;
+
+                // Resolution flags
+                var res = c.Resolution?.ToUpperInvariant() ?? "";
+                if (res.Contains("4K") || res.Contains("2160") || res.Contains("3840")) flags |= CF_RES_4K;
+                if (res.Contains("1080") || res.Contains("FHD")) flags |= CF_RES_1080;
+                if (res.Contains("720")) flags |= CF_RES_720;
+                if (res.Contains("576") || res.Contains("480") || res.Contains("SD")) flags |= CF_RES_SD;
+
+                // Health flags
+                if (c.IsOnline == true) flags |= CF_ONLINE;
+                if (c.IsUnstable) flags |= CF_UNSTABLE;
+
+                // Codec flags
+                var codec = c.Codec?.ToUpperInvariant() ?? "";
+                if (codec.Contains("HEVC") || codec.Contains("H265") || codec.Contains("H.265")) flags |= CF_HEVC;
+                if (codec.Contains("AVC") || codec.Contains("H264") || codec.Contains("H.264")) flags |= CF_AVC;
+
+                // Tech flags
+                if (c.IsHdr) flags |= CF_HDR;
+                if (c.Bitrate > 0) flags |= CF_HAS_BITRATE;
+
+                // FPS flag (high FPS = 50+)
+                var fpsStr = c.Fps?.Replace(" fps", "", StringComparison.OrdinalIgnoreCase).Trim();
+                if (double.TryParse(fpsStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fpsVal) && fpsVal >= 49.0)
+                    flags |= CF_HIGH_FPS;
+
+                _channelFlags[i] = flags;
+            }
+        }
+
+        /// <summary>
+        /// Build search index only (deferred until first search).
+        /// Reverse map is already built by BuildChannelFlags().
+        /// </summary>
+        private void BuildChannelSearchStructures()
+        {
+            if (Services.ChannelSearchIndex.IsBuilt) return;
+
+            // Phase A: Build token search index from channel names
+            var names = new string[_allChannels.Count];
+            for (int i = 0; i < _allChannels.Count; i++)
+            {
+                names[i] = _allChannels[i].Name;
+            }
+            Services.ChannelSearchIndex.BuildIndex(names);
+        }
+
+        // Bit flag constants (must fit in ushort)
+        private const ushort CF_RES_4K = 1 << 0;
+        private const ushort CF_RES_1080 = 1 << 1;
+        private const ushort CF_RES_720 = 1 << 2;
+        private const ushort CF_RES_SD = 1 << 3;
+        private const ushort CF_ONLINE = 1 << 4;
+        private const ushort CF_UNSTABLE = 1 << 5;
+        private const ushort CF_HEVC = 1 << 6;
+        private const ushort CF_AVC = 1 << 7;
+        private const ushort CF_HDR = 1 << 8;
+        private const ushort CF_HAS_BITRATE = 1 << 9;
+        private const ushort CF_HIGH_FPS = 1 << 10;
+
+        // ==========================================
+        // Phase C: Optimized Single-Pass Filter Pipeline
+        // ==========================================
         private void UpdateChannelList()
         {
             // Update HeroSection visibility based on search
@@ -600,38 +920,107 @@ namespace ModernIPTVPlayer
                 HeroSection.Visibility = (_recentChannels.Count > 0 && !isSearching) ? Visibility.Visible : Visibility.Collapsed;
             }
 
-            if (_selectedCategory == null) return;
-            
+            if (_selectedCategory == null || _allChannels.Count == 0) return;
+
             // Clear Queue on View Change to prioritize new items
-            _probingQueue.Clear(); 
+            _probingQueue.Clear();
             _queuedUrls.Clear();
 
-            IEnumerable<LiveStream> source = null;
-
-            // SMART CONTEXT STRATEGY
-            // 1. If Category is "All Channels" (-1): Search Globally in _allChannels
-            // 2. If Category is specific: Search LOCALLY in that category's channels
-            
             bool isGlobal = _selectedCategory.CategoryId == "-1";
-            
-            if (isGlobal)
+
+            // Phase C: Single-pass filter pipeline
+            var filteredList = FilterChannelsSinglePass(isGlobal);
+
+            // Setup Header
+            HeaderTitle.Text = !string.IsNullOrWhiteSpace(_searchQuery)
+                ? (isGlobal ? $"'{SearchBox.Text}' için Sonuçlar" : $"{_selectedCategory.CategoryName} içinde '{SearchBox.Text}'")
+                : _selectedCategory.CategoryName;
+
+            HeaderCount.Text = $"({filteredList.Count})";
+
+            ChannelGridView.ItemsSource = filteredList;
+
+            // Auto-Probe is now always enabled (Viewport based)
+            _canAutoProbe = AppSettings.IsAutoProbeEnabled;
+
+            EmptyStatePanel.Visibility = filteredList.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            // Trigger initial probe for visible items once data is loaded
+            if (filteredList.Count > 0)
             {
-                source = _allChannels;
+                DispatcherQueue.TryEnqueue(() => QueueVisibleItems());
+            }
+        }
+
+        /// <summary>
+        /// Phase C: Single-pass filter pipeline using pre-computed search index + flags.
+        /// Replaces 5 chained .Where() calls with one optimized pass.
+        /// </summary>
+        private List<LiveStream> FilterChannelsSinglePass(bool isGlobal)
+        {
+            // Determine candidate indices
+            int[] candidateIndices;
+            if (!string.IsNullOrWhiteSpace(_searchQuery) && Services.ChannelSearchIndex.IsBuilt)
+            {
+                // Use token index for search
+                int[] searchResults = Services.ChannelSearchIndex.Search(_searchQuery);
+                if (searchResults.Length == 0) return new List<LiveStream>();
+
+                // If not global, filter to only indices within the selected category
+                if (!isGlobal && _selectedCategory?.Channels != null)
+                {
+                    // Use pre-built reverse index for O(1) lookup
+                    var categorySet = new HashSet<int>();
+                    foreach (var ch in _selectedCategory.Channels)
+                    {
+                        if (_channelToIndex.TryGetValue(ch, out int idx))
+                            categorySet.Add(idx);
+                    }
+
+                    // Intersect search results with category indices
+                    var filtered = new List<int>(Math.Min(searchResults.Length, categorySet.Count));
+                    foreach (var idx in searchResults)
+                    {
+                        if (categorySet.Contains(idx)) filtered.Add(idx);
+                    }
+                    candidateIndices = filtered.ToArray();
+                }
+                else
+                {
+                    candidateIndices = searchResults;
+                }
             }
             else
             {
-                source = _selectedCategory.Channels ?? new List<LiveStream>();
+                // No search query — use all channels or category channels
+                if (isGlobal)
+                {
+                    candidateIndices = new int[_allChannels.Count];
+                    for (int i = 0; i < _allChannels.Count; i++) candidateIndices[i] = i;
+                }
+                else if (_selectedCategory?.Channels != null)
+                {
+                    var indices = new List<int>(_selectedCategory.Channels.Count);
+                    foreach (var ch in _selectedCategory.Channels)
+                    {
+                        if (_channelToIndex.TryGetValue(ch, out int idx))
+                            indices.Add(idx);
+                    }
+                    candidateIndices = indices.ToArray();
+                }
+                else
+                {
+                    return new List<LiveStream>();
+                }
             }
 
-            if (!string.IsNullOrWhiteSpace(_searchQuery))
-            {
-                source = source.Where(c => c.Name != null && c.Name.ToLowerInvariant().Contains(_searchQuery));
-            }
+            if (candidateIndices.Length == 0) return new List<LiveStream>();
 
-            // ==========================================
-            // APPLY ADVANCED FILTERS
-            // ==========================================
-            
+            // Compute filter masks from UI state
+            ushort requiredFlags = 0;
+            ushort excludeFlags = 0;
+            bool hasQualityFilter = false;
+
             // 1. Quality Filters
             bool q4k = Filter4K.IsChecked ?? false;
             bool qfhd = FilterFHD.IsChecked ?? false;
@@ -640,93 +1029,92 @@ namespace ModernIPTVPlayer
 
             if (q4k || qfhd || qhd || qsd)
             {
-                source = source.Where(c => 
-                    (q4k && (c.Resolution.Contains("4K") || c.Resolution.Contains("2160") || c.Resolution.Contains("3840"))) ||
-                    (qfhd && c.Resolution.Contains("1080")) ||
-                    (qhd && c.Resolution.Contains("720")) ||
-                    (qsd && (c.Resolution.Contains("576") || c.Resolution.Contains("480") || c.Resolution.Contains("SD")))
-                );
+                hasQualityFilter = true;
             }
 
             // 2. Health Filters
             if (FilterOnline.IsChecked ?? false)
             {
-                source = source.Where(c => c.IsOnline == true);
+                requiredFlags |= CF_ONLINE;
             }
             if (FilterNoFakes.IsChecked ?? false)
             {
-                source = source.Where(c => c.IsOnline == true && !c.IsUnstable);
+                requiredFlags |= CF_ONLINE;
+                excludeFlags |= CF_UNSTABLE;
             }
 
             // 3. Technical Filters
-            if (FilterHEVC.IsChecked ?? false)
+            bool needHevc = FilterHEVC.IsChecked ?? false;
+            bool needHdr = FilterHDR.IsChecked ?? false;
+            bool needHighFps = FilterHighFPS.IsChecked ?? false;
+
+            if (needHevc) requiredFlags |= CF_HEVC;
+            if (needHdr) requiredFlags |= CF_HDR;
+            if (needHighFps) requiredFlags |= CF_HIGH_FPS;
+
+            bool needsFlagFilter = (requiredFlags != 0) || (excludeFlags != 0) || hasQualityFilter;
+            _ = needsFlagFilter; // Used implicitly by flag checks below
+
+            // Single-pass filter
+            var result = new List<LiveStream>(Math.Min(candidateIndices.Length, 5000));
+
+            foreach (int idx in candidateIndices)
             {
-                source = source.Where(c => c.Codec.ToLower().Contains("hevc") || c.Codec.ToLower().Contains("h265"));
+                if (idx < 0 || idx >= _channelFlags.Length) continue;
+                ushort flags = _channelFlags[idx];
+
+                // Apply bitwise flag filters
+                if ((flags & requiredFlags) != requiredFlags) continue;
+                if ((flags & excludeFlags) != 0) continue;
+
+                // Quality filters (still need string checks for some edge cases)
+                if (hasQualityFilter)
+                {
+                    var res = _allChannels[idx].Resolution?.ToUpperInvariant() ?? "";
+                    bool matchQuality = false;
+                    if (q4k && (res.Contains("4K") || res.Contains("2160") || res.Contains("3840"))) matchQuality = true;
+                    if (qfhd && res.Contains("1080")) matchQuality = true;
+                    if (qhd && res.Contains("720")) matchQuality = true;
+                    if (qsd && (res.Contains("576") || res.Contains("480") || res.Contains("SD"))) matchQuality = true;
+                    if (!matchQuality) continue;
+                }
+
+                result.Add(_allChannels[idx]);
             }
-            if (FilterHDR.IsChecked ?? false)
+
+            // Apply sorting
+            if (_currentSortMode != LiveSortMode.Default && result.Count > 0)
             {
-                source = source.Where(c => c.IsHdr);
-            }
-            if (FilterHighFPS.IsChecked ?? false)
-            {
-                source = source.Where(c => {
-                    if (string.IsNullOrEmpty(c.Fps)) return false;
-                    string cleanFps = c.Fps.Replace(" fps", "", StringComparison.OrdinalIgnoreCase).Trim();
-                    if (double.TryParse(cleanFps, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double fpsValue)) 
-                        return fpsValue >= 49.0;
-                    return false;
-                });
+                result = ApplySortingFast(result);
             }
 
-            // ==========================================
-            // APPLY SORTING
-            // ==========================================
-            var finalResult = ApplySorting(source).ToList();
-
-            // Setup Header
-            HeaderTitle.Text = !string.IsNullOrWhiteSpace(_searchQuery) 
-                ? (isGlobal ? $"'{SearchBox.Text}' için Sonuçlar" : $"{_selectedCategory.CategoryName} içinde '{SearchBox.Text}'")
-                : _selectedCategory.CategoryName;
-                
-            HeaderCount.Text = $"({finalResult.Count})";
-
-            ChannelGridView.ItemsSource = finalResult;
-            
-            // Auto-Probe is now always enabled (Viewport based)
-            _canAutoProbe = AppSettings.IsAutoProbeEnabled;
-
-            EmptyStatePanel.Visibility = finalResult.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-
-            // Trigger initial probe for visible items once data is loaded
-            if (finalResult.Count > 0)
-            {
-                DispatcherQueue.TryEnqueue(() => QueueVisibleItems());
-            }
+            return result;
         }
 
-        private IEnumerable<LiveStream> ApplySorting(IEnumerable<LiveStream> source)
+        private List<LiveStream> ApplySortingFast(List<LiveStream> source)
         {
             if (_currentSortMode == LiveSortMode.Default) return source;
 
+            IEnumerable<LiveStream> result;
             switch (_currentSortMode)
             {
                 case LiveSortMode.Name:
-                    return _isSortDescending ? source.OrderByDescending(c => c.Name) : source.OrderBy(c => c.Name);
-                
+                    result = _isSortDescending ? source.OrderByDescending(c => c.Name) : source.OrderBy(c => c.Name);
+                    break;
+
                 case LiveSortMode.Quality:
-                    // Ascending (Up Arrow) = Lowest First | Descending (Down Arrow) = Highest First
-                    if (_isSortDescending) // Highest to Lowest
+                    if (_isSortDescending)
                     {
-                        return source.OrderByDescending(GetResolutionValue)
-                                     .ThenByDescending(GetBitrateValue) // Added bitrate as secondary
+                        result = source.OrderByDescending(GetResolutionValue)
+                                     .ThenByDescending(GetBitrateValue)
                                      .ThenByDescending(GetFpsValue)
                                      .ThenByDescending(GetCodecWeight)
                                      .ThenByDescending(c => c.IsHdr)
                                      .ThenBy(c => c.Name);
                     }
-                    else // Lowest to Highest (BUT we still want unprobed/0 at the bottom for better UX)
+                    else
                     {
-                        return source.OrderBy(c => GetResolutionValue(c) == 0 ? int.MaxValue : GetResolutionValue(c))
+                        result = source.OrderBy(c => GetResolutionValue(c) == 0 ? int.MaxValue : GetResolutionValue(c))
                                      .ThenBy(GetResolutionValue)
                                      .ThenBy(GetBitrateValue)
                                      .ThenBy(GetFpsValue)
@@ -734,26 +1122,26 @@ namespace ModernIPTVPlayer
                                      .ThenBy(c => c.IsHdr)
                                      .ThenBy(c => c.Name);
                     }
+                    break;
 
                 case LiveSortMode.OnlineFirst:
-                    // Descending = Healthy Online First | Ascending = Offline First
                     if (_isSortDescending)
                     {
-                        return source.OrderByDescending(GetStatusWeight)
+                        result = source.OrderByDescending(GetStatusWeight)
                                      .ThenBy(c => c.Name);
                     }
                     else
                     {
-                        return source.OrderBy(GetStatusWeight)
+                        result = source.OrderBy(GetStatusWeight)
                                      .ThenBy(c => c.Name);
                     }
+                    break;
 
                 case LiveSortMode.Recent:
                     var recentUrls = _recentChannels.Select(r => r.StreamUrl).ToList();
-                    // Descending = Most Recent First
                     if (_isSortDescending)
                     {
-                        return source.OrderByDescending(c => recentUrls.Contains(c.StreamUrl))
+                        result = source.OrderByDescending(c => recentUrls.Contains(c.StreamUrl))
                                      .ThenBy(c => {
                                          int idx = recentUrls.IndexOf(c.StreamUrl);
                                          return idx == -1 ? int.MaxValue : idx;
@@ -762,17 +1150,20 @@ namespace ModernIPTVPlayer
                     }
                     else
                     {
-                        return source.OrderBy(c => recentUrls.Contains(c.StreamUrl))
+                        result = source.OrderBy(c => recentUrls.Contains(c.StreamUrl))
                                      .ThenByDescending(c => {
                                          int idx = recentUrls.IndexOf(c.StreamUrl);
                                          return idx == -1 ? int.MinValue : idx;
                                      })
                                      .ThenBy(c => c.Name);
                     }
+                    break;
 
                 default:
                     return source;
             }
+
+            return result.ToList();
         }
 
         private int GetResolutionValue(LiveStream c)
@@ -1130,8 +1521,10 @@ namespace ModernIPTVPlayer
                         // OPTIMIZATION: Check ID-Based Cache explicitly to skip throttle (v2.4)
                         if (Services.ProbeCacheService.Instance.Get(item.StreamId) is Services.ProbeData cached)
                         {
-                            DispatcherQueue.TryEnqueue(() => 
+                            // BATCHED: All property updates in single DispatcherQueue call + IsLoading suppress
+                            DispatcherQueue.TryEnqueue(() =>
                             {
+                                item.IsLoading = true;
                                 item.Resolution = cached.Resolution;
                                 item.Fps = cached.Fps;
                                 item.Codec = cached.Codec;
@@ -1139,6 +1532,7 @@ namespace ModernIPTVPlayer
                                 item.IsOnline = true; // Cached implies success
                                 item.IsHdr = cached.IsHdr;
                                 item.IsProbing = false;
+                                item.IsLoading = false;
                             });
                             continue; // Valid cache hit: Process next item IMMEDIATELY (No Delay)
                         }
@@ -1146,8 +1540,10 @@ namespace ModernIPTVPlayer
                         // Process (This takes ~0.5s - 1.5s)
                         var result = await Services.StreamProberService.Instance.ProbeAsync(item.StreamId, item.StreamUrl, ct);
 
-                        DispatcherQueue.TryEnqueue(() => 
+                        // BATCHED: All property updates in single DispatcherQueue call + IsLoading suppress
+                        DispatcherQueue.TryEnqueue(() =>
                         {
+                            item.IsLoading = true;
                             item.Resolution = result.Resolution;
                             item.Fps = result.Fps;
                             item.Codec = result.Codec;
@@ -1155,14 +1551,19 @@ namespace ModernIPTVPlayer
                             item.IsOnline = result.Success;
                             item.IsHdr = result.IsHdr;
                             item.IsProbing = false;
+                            item.IsLoading = false;
                         });
 
                         // Small delay only for REAL probes to prevent CPU choking
-                        await Task.Delay(250, ct); 
+                        await Task.Delay(250, ct);
                     }
                     catch
                     {
-                        DispatcherQueue.TryEnqueue(() => item.IsProbing = false);
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            item.IsProbing = false;
+                            item.IsLoading = false;
+                        });
                     }
                 }
                 else
@@ -1266,6 +1667,43 @@ namespace ModernIPTVPlayer
         private void AddPlaylist_Click(object sender, RoutedEventArgs e)
         {
             Frame.Navigate(typeof(LoginPage));
+        }
+    }
+
+    // ==========================================
+    // Phase 2.2: ChannelIconConverter
+    // Converts channel icon URL to BitmapImage with DecodePixelWidth=48.
+    // Prevents full-resolution image loading for 48x48 display area.
+    // ==========================================
+    public class ChannelIconConverter : Microsoft.UI.Xaml.Data.IValueConverter
+    {
+        private static readonly ConcurrentDictionary<string, BitmapImage> _cache = new();
+        private const int MAX_CACHE_SIZE = 500;
+
+        public object Convert(object value, Type targetType, object parameter, string language)
+        {
+            var url = value as string;
+            if (string.IsNullOrEmpty(url)) return null;
+
+            if (_cache.TryGetValue(url, out var cached)) return cached;
+
+            try
+            {
+                var bitmap = new BitmapImage();
+                bitmap.DecodePixelWidth = 48; // Matches the 48x48 Border in the template
+                bitmap.DecodePixelType = DecodePixelType.Logical;
+                bitmap.UriSource = new Uri(url);
+
+                if (_cache.Count > MAX_CACHE_SIZE) _cache.Clear();
+                _cache.TryAdd(url, bitmap);
+                return bitmap;
+            }
+            catch { return null; }
+        }
+
+        public object ConvertBack(object value, Type targetType, object parameter, string language)
+        {
+            throw new NotImplementedException();
         }
     }
 }

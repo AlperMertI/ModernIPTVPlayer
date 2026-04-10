@@ -14,7 +14,8 @@ namespace ModernIPTVPlayer
 {
     public static class ImageHelper
     {
-        private static readonly HttpClient _httpClient = new HttpClient();
+        // Phase 3.4: Shared HttpClient (connection pool reuse)
+        private static readonly HttpClient _httpClient = HttpHelper.Client;
         private static readonly ConcurrentDictionary<string, (Color Primary, Color Secondary)> _colorCache = new();
         private static readonly ConcurrentDictionary<string, BitmapImage> _logoCache = new();
         private static readonly ConcurrentDictionary<string, BitmapImage> _posterCache = new();

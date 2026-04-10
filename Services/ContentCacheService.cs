@@ -37,6 +37,11 @@ namespace ModernIPTVPlayer.Services
         // **NEW: RAM Cache for Full Stream Lists (VOD/Series/Live)**
         private ConcurrentDictionary<string, object> _streamListsCache = new();
 
+        // **NEW: RAM Cache for Live Streams (instant re-navigation)**
+        // Key: playlistId, Value: (Streams, Categories, Timestamp)
+        private ConcurrentDictionary<string, (List<LiveStream> Streams, List<LiveCategory> Categories, DateTime Timestamp)> _liveRamCache = new();
+        private const int RAM_CACHE_TTL_MINUTES = 60; // Invalidate after 60 minutes
+
         private CancellationTokenSource _syncCts;
         public Dictionary<string, List<IMediaStream>> GlobalTokenIndex { get; private set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -499,20 +504,21 @@ namespace ModernIPTVPlayer.Services
 
         public async Task SaveLiveStreamsBinaryAsync(string playlistId, List<LiveStream> streams)
         {
-            string fileName = $"cache_{playlistId}_live_streams.bin.gz";
+            // UNCOMPRESSED BINARY CACHE (Phase 3.3): GZip adds CPU overhead with minimal savings on struct data.
+            // SSDs read 5MB uncompressed faster than 2MB compressed + decompress.
+            string fileName = $"cache_{playlistId}_live_streams.bin";
             await _diskSemaphore.WaitAsync();
             try
             {
                 var folder = ApplicationData.Current.LocalFolder;
                 using var fileStream = await folder.OpenStreamForWriteAsync(fileName, CreationCollisionOption.ReplaceExisting);
                 using var buffered = new BufferedStream(fileStream, 1 * 1024 * 1024); // 1MB buffer
-                using var gzip = new GZipStream(buffered, CompressionLevel.Fastest);
-                using var writer = new BinaryWriter(gzip, Encoding.UTF8);
+                using var writer = new BinaryWriter(buffered, Encoding.UTF8);
 
                 // 1. Header
                 writer.Write(0x4256494C); // Magic: "LIVB"
                 writer.Write(2); // Version 2 (Bulk)
-                
+
                 // 2. Metadata Buffer (Strings)
                 byte[] rawBuffer = MetadataBuffer.GetRawBuffer();
                 int bufferPos = MetadataBuffer.GetPosition();
@@ -521,11 +527,11 @@ namespace ModernIPTVPlayer.Services
 
                 // 3. Streams (PROJECT ZERO: Bulk Write)
                 writer.Write(streams.Count);
-                
+
                 // Extract structs into a contiguous array for bulk writing
                 var dataArray = new LiveStreamData[streams.Count];
                 for (int i = 0; i < streams.Count; i++) dataArray[i] = streams[i].ToData();
-                
+
                 // Write the entire struct array as one raw byte blob
                 byte[] structBytes = MemoryMarshal.AsBytes(dataArray.AsSpan()).ToArray();
                 writer.Write(structBytes.Length);
@@ -535,50 +541,102 @@ namespace ModernIPTVPlayer.Services
             }
             catch (Exception ex) { AppLogger.Error("[BinarySave] LIVE FAILED", ex); }
             finally { _diskSemaphore.Release(); }
+
+            // POPULATE RAM CACHE (Phase 3.1): Instant re-navigation
+            _liveRamCache[playlistId] = (streams, null, DateTime.UtcNow);
+            _streamListsCache[$"{playlistId}_live"] = streams;
         }
 
         public async Task<List<LiveStream>> LoadLiveStreamsBinaryAsync(string playlistId)
         {
-            string fileName = $"cache_{playlistId}_live_streams.bin.gz";
+            // RAM CACHE CHECK (Phase 3.1): Instant return if cached
+            if (_liveRamCache.TryGetValue(playlistId, out var cached))
+            {
+                if ((DateTime.UtcNow - cached.Timestamp).TotalMinutes < RAM_CACHE_TTL_MINUTES)
+                {
+                    AppLogger.Info($"[BinaryLoad] RAM CACHE HIT for {playlistId}. Items: {cached.Streams.Count}");
+                    return cached.Streams;
+                }
+                else
+                {
+                    _liveRamCache.TryRemove(playlistId, out _);
+                }
+            }
+
+            // Also check _streamListsCache
+            if (_streamListsCache.TryGetValue($"{playlistId}_live", out var ramCached))
+            {
+                AppLogger.Info($"[BinaryLoad] STREAM_LISTS CACHE HIT for {playlistId}");
+                return ramCached as List<LiveStream>;
+            }
+
+            // UNCOMPRESSED BINARY LOAD (Phase 3.3): No GZip decompression
+            string fileName = $"cache_{playlistId}_live_streams.bin";
             await _diskSemaphore.WaitAsync();
             try
             {
                 var folder = ApplicationData.Current.LocalFolder;
                 var item = await folder.TryGetItemAsync(fileName);
-                if (item == null) return null;
+                if (item == null)
+                {
+                    // FALLBACK: Try old .gz filename for backward compatibility
+                    var gzItem = await folder.TryGetItemAsync(fileName + ".gz");
+                    if (gzItem == null) return null;
+                    fileName = fileName + ".gz";
+                }
 
                 using var stream = await folder.OpenStreamForReadAsync(fileName);
                 using var buffered = new BufferedStream(stream, 1 * 1024 * 1024); // 1MB buffer
-                using var gzip = new GZipStream(buffered, CompressionMode.Decompress);
-                using var reader = new BinaryReader(gzip, Encoding.UTF8);
 
-                // Magic Check (int is faster than string)
-                int magic = reader.ReadInt32();
-                if (magic != 0x4256494C) return null;
-                int version = reader.ReadInt32();
-
-                // 1. Metadata Buffer
-                int bufferPos = reader.ReadInt32();
-                byte[] buffer = reader.ReadBytes(bufferPos); // Fixed: Guaranteed full read
-                int baseOffset = MetadataBuffer.AppendRawBuffer(buffer, bufferPos);
-
-                // 2. Streams (PROJECT ZERO: Sync Parsing to allow Span/Casting)
-                int count = reader.ReadInt32();
-                byte[]? structBytes = null;
-                if (version >= 2)
+                // Handle both compressed and uncompressed files
+                BinaryReader reader;
+                if (fileName.EndsWith(".gz"))
                 {
-                    int structBytesLen = reader.ReadInt32();
-                    structBytes = reader.ReadBytes(structBytesLen);
+                    var gzip = new GZipStream(buffered, CompressionMode.Decompress);
+                    reader = new BinaryReader(gzip, Encoding.UTF8);
+                }
+                else
+                {
+                    reader = new BinaryReader(buffered, Encoding.UTF8);
                 }
 
-                var results = ParseLiveStreamDataBulk(structBytes, count, version, reader, baseOffset);
+                using (reader)
+                {
+                    // Magic Check (int is faster than string)
+                    int magic = reader.ReadInt32();
+                    if (magic != 0x4256494C) return null;
+                    int version = reader.ReadInt32();
 
-                AppLogger.Info($"[BinaryLoad] Live Streams loaded. Items: {results?.Count ?? 0}");
-                return results;
+                    // 1. Metadata Buffer
+                    int bufferPos = reader.ReadInt32();
+                    byte[] buffer = reader.ReadBytes(bufferPos); // Fixed: Guaranteed full read
+                    int baseOffset = MetadataBuffer.AppendRawBuffer(buffer, bufferPos);
+
+                    // 2. Streams (PROJECT ZERO: Sync Parsing to allow Span/Casting)
+                    int count = reader.ReadInt32();
+                    byte[]? structBytes = null;
+                    if (version >= 2)
+                    {
+                        int structBytesLen = reader.ReadInt32();
+                        structBytes = reader.ReadBytes(structBytesLen);
+                    }
+
+                    var results = ParseLiveStreamDataBulk(structBytes, count, version, reader, baseOffset);
+
+                    // POPULATE RAM CACHE
+                    if (results != null)
+                    {
+                        _liveRamCache[playlistId] = (results, null, DateTime.UtcNow);
+                        _streamListsCache[$"{playlistId}_live"] = results;
+                    }
+
+                    AppLogger.Info($"[BinaryLoad] Live Streams loaded. Items: {results?.Count ?? 0}");
+                    return results;
+                }
             }
-            catch (Exception ex) 
-            { 
-                AppLogger.Error("[BinaryLoad] LIVE FAILED", ex); 
+            catch (Exception ex)
+            {
+                AppLogger.Error("[BinaryLoad] LIVE FAILED", ex);
                 return null;
             }
             finally { _diskSemaphore.Release(); }

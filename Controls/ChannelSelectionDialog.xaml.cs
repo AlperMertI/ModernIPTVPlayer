@@ -18,15 +18,13 @@ namespace ModernIPTVPlayer.Controls
         
         private List<LiveStream> _allChannels = new();
         private List<LiveStream> _filteredChannels = new();
-        private readonly HttpClient _httpClient = new HttpClient();
+        // Phase 3.4: Shared HttpClient (connection pool reuse)
+        private readonly HttpClient _httpClient = HttpHelper.Client;
 
         public ChannelSelectionDialog()
         {
             this.InitializeComponent();
-            
-            // Set User-Agent to emulate a standard browser or player
-            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-            
+
             this.Opened += ChannelSelectionDialog_Opened;
             this.Closing += ChannelSelectionDialog_Closing;
         }

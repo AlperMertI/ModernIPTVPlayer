@@ -19,7 +19,7 @@ namespace ModernIPTVPlayer
             {
                 CookieContainer = new CookieContainer(),
                 UseCookies = true,
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
             };
 
             _client = new HttpClient(_handler);
@@ -28,6 +28,7 @@ namespace ModernIPTVPlayer
             // Standard Browser Headers
             _client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
             _client.DefaultRequestHeaders.Add("Accept", "*/*");
+            _client.DefaultRequestHeaders.Add("Accept-Encoding", "gzip, deflate, br");
             _client.DefaultRequestHeaders.Add("Connection", "keep-alive");
             var language = System.Globalization.CultureInfo.CurrentUICulture.Name;
             _client.DefaultRequestHeaders.Add("Accept-Language", $"{language},{language.Split('-')[0]};q=0.9,en-US;q=0.8,en;q=0.7");
