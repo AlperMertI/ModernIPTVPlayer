@@ -233,13 +233,17 @@ namespace ModernIPTVPlayer
         /// Invoked when the application is launched.
         /// </summary>
         /// <param name="args">Details about the launch request and process.</param>
-        protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
+        protected override async void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
         {
             MainWindow = new MainWindow();
-            
+
             // Enable System-Wide Premium Audio (Cinematic Clicks)
             ElementSoundPlayer.State = ElementSoundPlayerState.On;
             ElementSoundPlayer.SpatialAudioMode = ElementSpatialAudioMode.On;
+
+            // Initialize ProbeCacheService with default playlist so it can serve cached data
+            // for any content (including Stremio/discovery) without blocking.
+            _ = Services.ProbeCacheService.Instance.InitializeForPlaylistAsync("default");
 
             MainWindow.Activate();
         }

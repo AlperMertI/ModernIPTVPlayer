@@ -6,7 +6,6 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Windows.Storage;
 
 namespace ModernIPTVPlayer.Services.Metadata
 {
@@ -28,9 +27,14 @@ namespace ModernIPTVPlayer.Services.Metadata
         private const string MAPPING_FILE = "IdMappings.json";
         private bool _isDirty = false;
         private Timer _saveTimer;
+        private readonly string _dataFolderPath;
 
         private IdMappingService()
         {
+            // Use System.IO paths instead of WinRT ApplicationData for thread safety
+            _dataFolderPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModernIPTVPlayer");
+            Directory.CreateDirectory(_dataFolderPath);
+            
             _ = LoadAsync();
             _saveTimer = new Timer(async _ => await SaveIfDirtyAsync(), null, -1, -1);
         }
@@ -40,10 +44,10 @@ namespace ModernIPTVPlayer.Services.Metadata
             try
             {
                 await _fileLock.WaitAsync();
-                var folder = ApplicationData.Current.LocalFolder;
-                if (await folder.TryGetItemAsync(MAPPING_FILE) is StorageFile file)
+                var filePath = Path.Combine(_dataFolderPath, MAPPING_FILE);
+                if (File.Exists(filePath))
                 {
-                    using var stream = await file.OpenStreamForReadAsync();
+                    using var stream = File.OpenRead(filePath);
                     var loaded = await JsonSerializer.DeserializeAsync<Dictionary<string, string>>(stream);
                     if (loaded != null)
                     {
@@ -65,9 +69,8 @@ namespace ModernIPTVPlayer.Services.Metadata
             try
             {
                 await _fileLock.WaitAsync();
-                var folder = ApplicationData.Current.LocalFolder;
-                var file = await folder.CreateFileAsync(MAPPING_FILE, CreationCollisionOption.ReplaceExisting);
-                using var stream = await file.OpenStreamForWriteAsync();
+                var filePath = Path.Combine(_dataFolderPath, MAPPING_FILE);
+                using var stream = File.Create(filePath);
                 var snapshot = _imdbToTmdb.ToDictionary(k => k.Key, v => v.Value);
                 await JsonSerializer.SerializeAsync(stream, snapshot);
                 _isDirty = false;

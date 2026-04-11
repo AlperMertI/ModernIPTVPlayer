@@ -608,13 +608,17 @@ namespace ModernIPTVPlayer.Controls
                                 }
                                 
                                 var heroItemsFinal = aggregatedHeroItems.Take(5).ToList();
-                                _ = Task.Run(async () => 
+                                _ = Task.Run(async () =>
                                 {
                                      // Await enrichment for Hero items before display to prevent flicker
                                      await EnrichItemsBatchAsync(heroItemsFinal, MetadataContext.Spotlight);
-                                    
-                                    DispatcherQueue.TryEnqueue(() => 
+
+                                    // Guard against cancellation/navigation before UI update
+                                    if (token.IsCancellationRequested || myVersion != _discoveryVersion) return;
+
+                                    DispatcherQueue.TryEnqueue(() =>
                                     {
+                                        if (!this.IsLoaded || token.IsCancellationRequested || myVersion != _discoveryVersion) return;
                                         HeroControl.SetLoading(false);
                                         HeroControl.SetItems(heroItemsFinal, animate: skipShimmer);
                                     });
@@ -631,13 +635,13 @@ namespace ModernIPTVPlayer.Controls
                 {
                     if (token.IsCancellationRequested) break;
 
-                    tasks.Add(Task.Run(async () => 
+                    tasks.Add(Task.Run(async () =>
                     {
                         try
                         {
                             var rowResult = await LoadCatalogRowAsync(url, contentType, cat, sortIndex);
-                            
-                            if (token.IsCancellationRequested) return;
+
+                            if (token.IsCancellationRequested || myVersion != _discoveryVersion) return;
 
                             // [NEW] Better enrichment flow for Landscape/Spotlight rows
                             // Enrich BEFORE Enqueue to UI thread
@@ -654,6 +658,9 @@ namespace ModernIPTVPlayer.Controls
                                     _ = EnrichRowMetadataAsync(rowResult, MetadataContext.Discovery);
                                 }
                             }
+
+                            // Guard against cancellation before UI update
+                            if (token.IsCancellationRequested || myVersion != _discoveryVersion) return;
 
                             DispatcherQueue.TryEnqueue(() =>
                             {

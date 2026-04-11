@@ -239,11 +239,14 @@ namespace ModernIPTVPlayer.Controls
 
         private async void SpotlightInjectRow_EffectiveViewportChanged(FrameworkElement sender, EffectiveViewportChangedEventArgs args)
         {
+            // Guard against disposal
+            if (!this.IsLoaded) return;
+            
             try
             {
                 var viewport = args.EffectiveViewport;
                 var componentHeight = sender.ActualHeight;
-                
+
                 // If more than 50% is visible
                 bool isHighlyVisible = viewport.Height > (componentHeight * 0.5);
 
@@ -782,15 +785,16 @@ namespace ModernIPTVPlayer.Controls
 
         private async void InitializeWebView(string ytId)
         {
-            if (_webView != null || _isTrailerPlaying) return;
-            
+            // Guard against disposal
+            if (!this.IsLoaded || _webView != null || _isTrailerPlaying) return;
+
             try
             {
                 // 0. Ensure environment is ready (Managed by WebView2Service)
                 var env = await WebView2Service.GetSharedEnvironmentAsync();
-                
+
                 // Re-check after await
-                if (_webView != null) return;
+                if (!this.IsLoaded || _webView != null) return;
 
                 _webView = new WebView2();
                 _webView.HorizontalAlignment = HorizontalAlignment.Stretch;
@@ -808,7 +812,7 @@ namespace ModernIPTVPlayer.Controls
                 }
 
                 await _webView.EnsureCoreWebView2Async(env);
-                if (_webView == null || _webView.CoreWebView2 == null) return;
+                if (!this.IsLoaded || _webView == null || _webView.CoreWebView2 == null) return;
 
                 // [FIX] Apply 100% Clean UI Script (Hides Title Flash, Logos, More Videos)
                 await WebView2Service.ApplyYouTubeCleanUISettingsAsync(_webView.CoreWebView2);

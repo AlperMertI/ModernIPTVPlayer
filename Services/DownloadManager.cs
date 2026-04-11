@@ -66,7 +66,8 @@ namespace ModernIPTVPlayer.Services
         {
             _client = new HttpClient();
             _client.Timeout = TimeSpan.FromHours(24);
-            _dispatcher = DispatcherQueue.GetForCurrentThread(); 
+            // Don't capture DispatcherQueue here - it will be set via Initialize()
+            // GetForCurrentThread() can fail if called before UI thread is fully initialized
         }
         
         public void Initialize(DispatcherQueue dispatcher)

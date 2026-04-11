@@ -395,12 +395,13 @@ namespace ModernIPTVPlayer.Controls
                 {
                     // Delay reveal until both primary surfaces are truly locked & ready
                     _pendingSetLoadingFalse = true;
-                    
+
                     // Safety timeout (2.5 seconds) to avoid getting stuck if a CDN is slow
+                    // Use TaskScheduler.Default to avoid SynchronizationContext issues
                     _ = Task.Delay(2500).ContinueWith(_ => {
                         if (!_firstLogoReadyTcs.Task.IsCompleted) _firstLogoReadyTcs.TrySetResult(false);
                         if (!_firstBackgroundReadyTcs.Task.IsCompleted) _firstBackgroundReadyTcs.TrySetResult(false);
-                    }, TaskScheduler.FromCurrentSynchronizationContext());
+                    }, TaskScheduler.Default);
 
                     Task.WhenAll(_firstLogoReadyTcs.Task, _firstBackgroundReadyTcs.Task).ContinueWith(t => {
                         DispatcherQueue.TryEnqueue(() => {
@@ -1074,8 +1075,11 @@ namespace ModernIPTVPlayer.Controls
 
         private async void InitializeWebView(string ytId)
         {
+            // Guard against disposal/unload
+            if (!this.IsLoaded || _webView == null) return;
+            
             AppLogger.Info($"[HeroTrailer] InitializeWebView called for {ytId}");
-            if (_isTrailerPlaying) 
+            if (_isTrailerPlaying)
             {
                 AppLogger.Info("[HeroTrailer] Already playing, ignoring init");
                 return;
@@ -1089,7 +1093,8 @@ namespace ModernIPTVPlayer.Controls
                     await PreInitializeWebViewAsync();
                 }
 
-                if (_webView == null || _webView.CoreWebView2 == null)
+                // Guard after await
+                if (!this.IsLoaded || _webView == null || _webView.CoreWebView2 == null)
                 {
                     AppLogger.Warn("[HeroTrailer] Pre-init failed or timed out");
                     return;
@@ -1220,7 +1225,7 @@ namespace ModernIPTVPlayer.Controls
                 _isTrailerPlaying = false;
                 _pendingTrailerId = null;
 
-                if (_webView != null)
+                if (_webView != null && _webView.CoreWebView2 != null)
                 {
                         // [FIX] Pause AND Reset Smart Crop state across ALL frames
                         await _webView.CoreWebView2.ExecuteScriptAsync("if(window.player && player.pauseVideo) player.pauseVideo();");

@@ -5005,11 +5005,37 @@ namespace ModernIPTVPlayer
                         CloseTrailer();
                     });
                 }
-                else if (message == "VIDEO_ERROR")
+                else if (message.StartsWith("VIDEO_ERROR"))
                 {
                     DispatcherQueue.TryEnqueue(() =>
                     {
-                        System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Video Error - Closing.");
+                        // Parse error code if available
+                        int errorCode = 0;
+                        if (message.Contains(":") && int.TryParse(message.Split(':')[1], out var code))
+                        {
+                            errorCode = code;
+                        }
+
+                        // Error 150/101 = embedding restricted by content owner
+                        if (errorCode == 150 || errorCode == 101)
+                        {
+                            System.Diagnostics.Debug.WriteLine("[TRAILER_DEBUG] Video Error 150/101 - Embedding restricted by content owner.");
+                            
+                            // Show user-friendly message
+                            var dialog = new ContentDialog
+                            {
+                                XamlRoot = this.Content.XamlRoot,
+                                Title = "Trailer Unavailable",
+                                Content = "This trailer's embedding is restricted by the content owner. The video cannot be played within the app.",
+                                CloseButtonText = "OK"
+                            };
+                            _ = dialog.ShowAsync();
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[TRAILER_DEBUG] Video Error {errorCode} - Closing.");
+                        }
+
                         _isTrailerWebViewInitialized = false;
                         CloseTrailer();
                     });
@@ -5199,7 +5225,7 @@ namespace ModernIPTVPlayer
 
         function onPlayerError(event) {
              log('Player Error: ' + event.data);
-             window.chrome.webview.postMessage('VIDEO_ERROR');
+             window.chrome.webview.postMessage('VIDEO_ERROR:' + event.data);
         }
 
         function applyQualityPreference() {
