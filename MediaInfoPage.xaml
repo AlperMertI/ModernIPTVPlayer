@@ -660,16 +660,17 @@
                             </ListView.ItemsPanel>
                             <ListView.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid Width="80" 
-                                          PointerEntered="CastItem_PointerEntered" 
+                                    <Grid Width="80"
+                                          PointerEntered="CastItem_PointerEntered"
                                           PointerExited="CastItem_PointerExited"
+                                          Tapped="CastItem_Tapped"
                                           Background="Transparent">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
-                                        
+
                                         <!-- Profile Image (Compact) -->
                                         <Border CornerRadius="6" Height="100" Width="80" Background="#1AFFFFFF">
                                             <Grid CornerRadius="6">
@@ -677,7 +678,7 @@
                                                 <Image Source="{Binding ProfileImage}" Stretch="UniformToFill"/>
                                             </Grid>
                                         </Border>
-                                        
+
                                         <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
                                         <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="10" Foreground="#888" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
@@ -685,7 +686,7 @@
                             </ListView.ItemTemplate>
                         </ListView>
                     </StackPanel>
-                    
+
                     <!-- Director Shimmer (Compact) -->
                     <StackPanel x:Name="DirectorShimmer" Spacing="8" Margin="0,8,0,0" HorizontalAlignment="Left" Visibility="Collapsed"> 
                         <ctl:ShimmerControl Width="80" Height="18" CornerRadius="4" HorizontalAlignment="Left"/>
@@ -711,6 +712,8 @@
                         <TextBlock x:Name="CastHeader" Text="Oyuncular" FontSize="14" FontWeight="SemiBold" Foreground="#88FFFFFF" CharacterSpacing="50"/>
                         <ListView x:Name="CastListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                                   ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" 
+                                  PointerEntered="CastListView_PointerEntered"
+                                  PointerExited="CastListView_PointerExited"
                                   Height="145" Padding="0" Margin="0">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
@@ -727,15 +730,16 @@
                             <ListView.ItemTemplate>
                                 <DataTemplate>
                                     <Grid Width="80"
-                                          PointerEntered="CastItem_PointerEntered" 
+                                          PointerEntered="CastItem_PointerEntered"
                                           PointerExited="CastItem_PointerExited"
+                                          Tapped="CastItem_Tapped"
                                           Background="Transparent">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                             <RowDefinition Height="Auto"/>
                                         </Grid.RowDefinitions>
-                                        
+
                                         <!-- Profile Image (Compact) -->
                                         <Border CornerRadius="6" Height="100" Width="80" Background="#1AFFFFFF">
                                             <Grid CornerRadius="6">
@@ -743,7 +747,7 @@
                                                 <Image Source="{Binding ProfileImage}" Stretch="UniformToFill"/>
                                             </Grid>
                                         </Border>
-                                        
+
                                         <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
                                         <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="10" Foreground="#888" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
@@ -751,7 +755,7 @@
                             </ListView.ItemTemplate>
                         </ListView>
                     </StackPanel>
-                    
+
                     <!-- Cast Shimmer (Compact) -->
                     <StackPanel x:Name="CastShimmer" Spacing="8" Margin="0,8,0,0" HorizontalAlignment="Left" Visibility="Collapsed"> 
                         <ctl:ShimmerControl Width="80" Height="18" CornerRadius="4" HorizontalAlignment="Left"/>
@@ -1332,9 +1336,14 @@
                 </Border>
 
                 <!-- Loading State -->
-                <ProgressRing x:Name="TrailerLoadingRing" IsActive="True" Width="48" Height="48" Foreground="White" 
-                              HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                <ProgressRing x:Name="TrailerLoadingRing" IsActive="True" Width="48" Height="48" Foreground="White"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Grid>
         </Grid>
+
+        <!-- Person Expanded Card Overlay -->
+        <Canvas x:Name="PersonCardOverlay" Grid.RowSpan="99" Grid.ColumnSpan="99" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Visibility="Collapsed" IsHitTestVisible="True" Canvas.ZIndex="3000" PointerPressed="PersonCardOverlay_PointerPressed">
+            <ctl:PersonExpandedCard x:Name="ActivePersonCard" Width="420" Height="560" Visibility="Collapsed" PointerEntered="ActivePersonCard_PointerEntered" PointerExited="ActivePersonCard_PointerExited"/>
+        </Canvas>
     </Grid>
-</Grid>
 </Page>

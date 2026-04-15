@@ -145,6 +145,14 @@ namespace ModernIPTVPlayer.Controls
             }
         }
         
+        private void PrepareForLoading()
+        {
+            PosterImage.Opacity = 0;
+            PosterShimmer.Opacity = 1;
+            PosterShimmer.Visibility = Visibility.Visible;
+            FadeInStoryboard?.Stop();
+        }
+        
         private DispatcherTimer? _hoverTimer;
         private System.Threading.CancellationTokenSource? _renderCts;
 
@@ -168,9 +176,7 @@ namespace ModernIPTVPlayer.Controls
             }
             else
             {
-                // Hide placeholders when image is available (User wanted them only for missing posters)
-                TitleOverlay.Visibility = Visibility.Collapsed;
-                PlaceholderTitle.Visibility = Visibility.Collapsed;
+                PrepareForLoading();
                 // Optimize: Set DecodePixelWidth to save memory (Card width is ~160)
                 var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
                 bitmapImage.DecodePixelWidth = 200; // Slightly larger than 160 for quality
@@ -178,12 +184,7 @@ namespace ModernIPTVPlayer.Controls
                 
                 PosterImage.Source = bitmapImage;
                 
-                // FORCE Opacity=1 immediately. 
-                // Previous FadeIn animation caused issues during virtualization/recycling.
-                PosterImage.Opacity = 1;
-
-                PosterShimmer.Visibility = Visibility.Collapsed;
-
+                // Note: Animation will be triggered in Image_ImageOpened
                 UpdateIPTVBadgeVisibility();
             }
         }
@@ -212,6 +213,7 @@ namespace ModernIPTVPlayer.Controls
 
         private async void Image_ImageOpened(object sender, RoutedEventArgs e)
         {
+            FadeInStoryboard?.Begin();
             // [FIX] Color extraction using URL-based approach (same as hover path, no RenderTargetBitmap)
             // The previous RenderTargetBitmap.RenderAsync approach caused COMException storms
             // when many cards loaded simultaneously. URL-based extraction is thread-safe and async.

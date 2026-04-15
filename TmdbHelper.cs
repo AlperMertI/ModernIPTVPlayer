@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -8,6 +9,9 @@ using System.Linq;
 
 using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Metadata; // [NEW] For IdMappingService
+using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Models.Stremio;
+using System.Collections.Concurrent;
 
 namespace ModernIPTVPlayer
 {
@@ -16,7 +20,11 @@ namespace ModernIPTVPlayer
         private static string API_KEY => AppSettings.TmdbApiKey;
         private const string BASE_URL = "https://api.themoviedb.org/3";
         private static HttpClient _client => HttpHelper.Client;
-        
+
+        // In-memory cache for Stremio people search (1h TTL)
+        private static readonly ConcurrentDictionary<string, (List<StremioMediaStream> Results, DateTime Expiry)> _stremioPeopleCache = new();
+        private static readonly TimeSpan _stremioPeopleCacheTtl = TimeSpan.FromHours(1);
+
         // Caching is now handled by TmdbCacheService (Persistent)
 
         public static async Task<List<string>> GetMovieImagesAsync(string tmdbId)
@@ -231,6 +239,7 @@ namespace ModernIPTVPlayer
 
         public static async Task<string?> GetTrailerKeyAsync(int tmdbId, bool isTv = false, string? language = null)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 language ??= AppSettings.TmdbLanguage;
@@ -336,6 +345,7 @@ namespace ModernIPTVPlayer
 
         public static async Task<TmdbCreditsResponse?> GetCreditsAsync(int id, bool isTv = false, string language = null)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 language ??= AppSettings.TmdbLanguage;
@@ -353,8 +363,135 @@ namespace ModernIPTVPlayer
             catch { return null; }
         }
 
+        // [NEW] Person Search
+        public static async Task<TmdbPersonSearchResult?> SearchPersonAsync(string name, CancellationToken ct = default)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
+            try
+            {
+                var lang = AppSettings.TmdbLanguage;
+                var cacheKey = $"person_search_{name}";
+                if (TmdbCacheService.Instance.Get<TmdbPersonSearchResponse>(cacheKey) is TmdbPersonSearchResponse cached)
+                    return cached.Results?.FirstOrDefault();
+
+                var encoded = Uri.EscapeDataString(name);
+                var url = $"{BASE_URL}/search/person?api_key={API_KEY}&query={encoded}&language={lang}";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Person Search: {url}");
+                var json = await _client.GetStringAsync(url);
+                var result = JsonSerializer.Deserialize<TmdbPersonSearchResponse>(json);
+                if (result?.Results?.Count > 0)
+                {
+                    TmdbCacheService.Instance.Set(cacheKey, result);
+                    return result.Results[0];
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        // [NEW] Person Details
+        public static async Task<TmdbPersonDetails?> GetPersonDetailsAsync(int personId, CancellationToken ct = default)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
+            try
+            {
+                var lang = AppSettings.TmdbLanguage;
+                var cacheKey = $"person_details_{personId}_{lang}";
+                if (TmdbCacheService.Instance.Get<TmdbPersonDetails>(cacheKey) is TmdbPersonDetails cached) return cached;
+
+                var url = $"{BASE_URL}/person/{personId}?api_key={API_KEY}&language={lang}";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Person Details: {url}");
+                var json = await _client.GetStringAsync(url);
+                var result = JsonSerializer.Deserialize<TmdbPersonDetails>(json);
+                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
+                return result;
+            }
+            catch { return null; }
+        }
+
+        // [NEW] Person Combined Credits
+        public static async Task<TmdbPersonCreditsResponse?> GetPersonCombinedCreditsAsync(int personId, CancellationToken ct = default)
+        {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
+            try
+            {
+                var lang = AppSettings.TmdbLanguage;
+                var cacheKey = $"person_credits_{personId}_{lang}";
+                if (TmdbCacheService.Instance.Get<TmdbPersonCreditsResponse>(cacheKey) is TmdbPersonCreditsResponse cached) return cached;
+
+                var url = $"{BASE_URL}/person/{personId}/combined_credits?api_key={API_KEY}&language={lang}";
+                System.Diagnostics.Debug.WriteLine($"[TMDB] Person Credits: {url}");
+                var json = await _client.GetStringAsync(url);
+                var result = JsonSerializer.Deserialize<TmdbPersonCreditsResponse>(json);
+                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
+                return result;
+            }
+            catch { return null; }
+        }
+
+        // [NEW] AIOMetadata People Search (with 1h in-memory cache)
+        public static async Task<List<StremioMediaStream>> SearchPeopleViaStremioAsync(string baseUrl, string personName, string type = "all", CancellationToken ct = default, Action<List<StremioMediaStream>> onProgress = null)
+        {
+            var cacheKey = $"{baseUrl}_{personName}";
+            if (_stremioPeopleCache.TryGetValue(cacheKey, out var cached) && DateTime.UtcNow < cached.Expiry)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Stremio] People Search CACHE HIT: {personName}");
+                onProgress?.Invoke(cached.Results);
+                return cached.Results;
+            }
+
+            try
+            {
+                var encoded = Uri.EscapeDataString(personName);
+                var catalogs = new[]
+                {
+                    $"{baseUrl.TrimEnd('/').Replace("/manifest.json", "")}/catalog/movie/people_search.people_search_movie/search={encoded}.json",
+                    $"{baseUrl.TrimEnd('/').Replace("/manifest.json", "")}/catalog/series/people_search.people_search_series/search={encoded}.json"
+                };
+
+                var allResults = new List<StremioMediaStream>();
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var tasks = catalogs.Select(async url =>
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Stremio] People Search Start: {url}");
+                    try
+                    {
+                        using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+                        using var request = new System.Net.Http.HttpRequestMessage(System.Net.Http.HttpMethod.Get, url);
+                        using var response = await _client.SendAsync(request, cts.Token);
+                        string json = await response.Content.ReadAsStringAsync();
+                        
+                        if (!response.IsSuccessStatusCode) return;
+
+                        var result = JsonSerializer.Deserialize<StremioMetaResponse>(json, options);
+                        if (result?.Metas != null)
+                        {
+                            var batch = result.Metas.Select(m => new StremioMediaStream(m)).ToList();
+                            lock (allResults)
+                            {
+                                allResults.AddRange(batch);
+                            }
+                            onProgress?.Invoke(batch);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[Stremio] Catalog Error ({url}): {ex.Message}");
+                    }
+                });
+
+                await Task.WhenAll(tasks);
+
+                var deduped = allResults.DistinctBy(m => m.IMDbId ?? m.Id.ToString()).ToList();
+                _stremioPeopleCache[cacheKey] = (deduped, DateTime.UtcNow.Add(_stremioPeopleCacheTtl));
+                return deduped;
+            }
+            catch { return new List<StremioMediaStream>(); }
+        }
+
         public static async Task<TmdbMovieDetails?> GetDetailsAsync(int id, bool isTv = false, string language = null)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 language ??= AppSettings.TmdbLanguage;
@@ -389,6 +526,7 @@ namespace ModernIPTVPlayer
 
         public static async Task<TmdbSeasonDetails?> GetSeasonDetailsAsync(int tvId, int seasonNumber, string language = null)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 language ??= AppSettings.TmdbLanguage;
@@ -557,6 +695,7 @@ namespace ModernIPTVPlayer
 
         public static async Task<TmdbMovieResult?> GetMovieByExternalIdAsync(string externalId, string language = null)
         {
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
             {
                 language ??= AppSettings.TmdbLanguage;
@@ -714,6 +853,66 @@ namespace ModernIPTVPlayer
                 return results;
             }
             catch { return new List<TmdbMovieResult>(); }
+        }
+
+        public static async Task<List<PersonFilmographyItem>> GetPersonFilmographyAsync(int tmdbId, CancellationToken token)
+        {
+            try
+            {
+                var credits = await GetPersonCombinedCreditsAsync(tmdbId, token);
+                var list = new List<PersonFilmographyItem>();
+                if (credits == null) return list;
+
+                void ProcessList(List<TmdbPersonCredit> source, bool isCast)
+                {
+                    if (source == null) return;
+                    foreach (var c in source)
+                    {
+                        var release = c.ReleaseDate ?? c.FirstAirDate;
+                        DateTime? releaseDate = null;
+                        if (DateTime.TryParse(release, out var d)) releaseDate = d;
+
+                        list.Add(new PersonFilmographyItem
+                        {
+                            Id = c.Id,
+                            Title = c.Title ?? c.Name,
+                            Character = c.Character ?? c.Job,
+                            PosterPath = c.PosterPath,
+                            VoteAverage = c.VoteAverage,
+                            ReleaseDate = releaseDate,
+                            MediaType = c.MediaType,
+                            IsCast = isCast
+                        });
+                    }
+                }
+
+                ProcessList(credits.Cast, true);
+                ProcessList(credits.Crew, false);
+
+                return list.OrderByDescending(f => f.ReleaseDate ?? DateTime.MinValue).ToList();
+            }
+            catch { return new List<PersonFilmographyItem>(); }
+        }
+
+        public static async Task<IMediaStream> ResolveFilmographyToStreamAsync(PersonFilmographyItem film, string parentImdbId)
+        {
+            if (film == null) return null;
+            
+            // If it's a TMDB item, we need to resolve it to an IMDb ID or similar for playback
+            if (film.MediaType == "movie")
+            {
+                var details = await GetMovieByIdAsync(film.Id);
+                if (details != null && !string.IsNullOrEmpty(details.ResolvedImdbId))
+                    return new StremioMediaStream { Meta = new StremioMeta { Id = details.ResolvedImdbId, Type = "movie", Name = details.Title } };
+            }
+            else if (film.MediaType == "tv")
+            {
+                var details = await GetTvByIdAsync(film.Id);
+                if (details != null && !string.IsNullOrEmpty(details.ResolvedImdbId))
+                    return new StremioMediaStream { Meta = new StremioMeta { Id = details.ResolvedImdbId, Type = "series", Name = details.Name } };
+            }
+            
+            return null;
         }
     }
 
@@ -977,5 +1176,122 @@ namespace ModernIPTVPlayer
 
         [JsonPropertyName("tv_db_id")]
         public object? TvdbId { get; set; }
+    }
+
+    // [NEW] Person Search Result
+    public class TmdbPersonSearchResult
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("profile_path")]
+        public string ProfilePath { get; set; }
+
+        [JsonPropertyName("known_for_department")]
+        public string KnownForDepartment { get; set; }
+
+        [JsonPropertyName("known_for")]
+        public List<TmdbPersonKnownFor> KnownFor { get; set; }
+    }
+
+    public class TmdbPersonKnownFor
+    {
+        [JsonPropertyName("title")]
+        public string Title { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("poster_path")]
+        public string PosterPath { get; set; }
+
+        [JsonPropertyName("media_type")]
+        public string MediaType { get; set; }
+    }
+
+    // [NEW] Person Details
+    public class TmdbPersonDetails
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("biography")]
+        public string Biography { get; set; }
+
+        [JsonPropertyName("birthday")]
+        public DateTime? Birthday { get; set; }
+
+        [JsonPropertyName("place_of_birth")]
+        public string PlaceOfBirth { get; set; }
+
+        [JsonPropertyName("profile_path")]
+        public string ProfilePath { get; set; }
+
+        [JsonPropertyName("known_for_department")]
+        public string KnownForDepartment { get; set; }
+    }
+
+    // [NEW] Person Credit
+    public class TmdbPersonCredit
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; set; }
+
+        [JsonPropertyName("title")]
+        public string Title { get; set; }
+
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("poster_path")]
+        public string PosterPath { get; set; }
+
+        [JsonPropertyName("character")]
+        public string Character { get; set; }
+
+        [JsonPropertyName("media_type")]
+        public string MediaType { get; set; }
+
+        [JsonPropertyName("release_date")]
+        public string ReleaseDate { get; set; }
+
+        [JsonPropertyName("first_air_date")]
+        public string FirstAirDate { get; set; }
+
+        [JsonPropertyName("vote_average")]
+        public double VoteAverage { get; set; }
+
+        [JsonPropertyName("popularity")]
+        public double Popularity { get; set; }
+
+        [JsonPropertyName("genre_ids")]
+        public List<int> GenreIds { get; set; }
+
+        [JsonPropertyName("job")]
+        public string Job { get; set; }
+
+        [JsonPropertyName("department")]
+        public string Department { get; set; }
+    }
+
+    public class TmdbPersonCreditsResponse
+    {
+        [JsonPropertyName("cast")]
+        public List<TmdbPersonCredit> Cast { get; set; }
+
+        [JsonPropertyName("crew")]
+        public List<TmdbPersonCredit> Crew { get; set; }
+    }
+
+    public class TmdbPersonSearchResponse
+    {
+        [JsonPropertyName("results")]
+        public List<TmdbPersonSearchResult> Results { get; set; }
     }
 }

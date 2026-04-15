@@ -24,7 +24,7 @@ namespace ModernIPTVPlayer.Controls
         private readonly Canvas _overlayCanvas;
         private readonly ExpandedCard _expandedCard;
         private readonly Rectangle? _cinemaScrim;
-        private readonly ScrollViewer? _scrollLockTarget;
+        private ScrollViewer? _scrollLockTarget;
 
         private DispatcherTimer? _hoverTimer;
         private DispatcherTimer? _flightTimer;
@@ -107,6 +107,20 @@ namespace ModernIPTVPlayer.Controls
             // Auto-clean on unload to prevent card persistence or audio leaks.
             // In WinUI Page, Unloaded fires when navigating away even if cached.
             _hostElement.Unloaded += (s, e) => ForceClose();
+        }
+
+        public void SetScrollViewer(ScrollViewer sv)
+        {
+            _scrollLockTarget = sv;
+            _scrollLockTarget.DirectManipulationStarted += (s, args) => 
+            {
+                IsManipulationInProgress = true;
+                CancelPendingShow();
+            };
+            _scrollLockTarget.DirectManipulationCompleted += (s, args) => 
+            {
+                IsManipulationInProgress = false;
+            };
         }
 
         public void PrepareForTrailer() => _expandedCard.PrepareForTrailer();

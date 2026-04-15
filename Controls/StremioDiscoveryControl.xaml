@@ -49,6 +49,7 @@
             <local:CatalogRow CatalogName="{x:Bind CatalogName, Mode=OneWay}" 
                               ItemsSource="{x:Bind Items, Mode=OneWay}"
                               IsLoading="{x:Bind IsLoading, Mode=OneWay}"
+                              RowStyle="{x:Bind RowStyle, Mode=OneWay}"
                               IsHeaderInteractive="{x:Bind IsHeaderInteractive, Mode=OneWay}"
                               ItemTemplate="{x:Bind RowStyle, Converter={StaticResource RowStyleToTemplateConverter}, Mode=OneWay}"
                               ItemClicked="CatalogRow_ItemClicked"

@@ -18,7 +18,11 @@ namespace ModernIPTVPlayer.Services
                 await _envLock.WaitAsync();
                 try { if (_sharedEnvironment == null) {
                     string userDataFolder = Path.Combine(Windows.Storage.ApplicationData.Current.LocalFolder.Path, "WebView2_Shared_Cache");
-                    _sharedEnvironment = await CoreWebView2Environment.CreateWithOptionsAsync(null, userDataFolder, null);
+                    var options = new CoreWebView2EnvironmentOptions 
+                    { 
+                        AdditionalBrowserArguments = "--autoplay-policy=no-user-gesture-required --disable-features=PreloadMediaEngagementData,AutoplayIgnoreWebAudio --enable-features=RunVideoWithDisplayOff --disable-backgrounding-occluded-windows" 
+                    };
+                    _sharedEnvironment = await CoreWebView2Environment.CreateWithOptionsAsync(null, userDataFolder, options);
                 }} finally { _envLock.Release(); }
             }
             return _sharedEnvironment;
@@ -167,7 +171,6 @@ namespace ModernIPTVPlayer.Services
                             const windowSize = isInitial ? 3 : 20; // 3sec initial, 20sec production
                             state.history.push(currentDetection);
                             while (state.history.length > windowSize) state.history.shift();
-
                             const median = getMedian(state.history);
 
                             // Only log on change (> 0.04) or during initial settling

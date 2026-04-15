@@ -167,6 +167,13 @@ namespace ModernIPTVPlayer.Controls
             sb.Begin();
         }
 
+        private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
+        {
+            // If the background or banner is a 404, stop the shimmer and just show whatever fallback (or nothing)
+            PosterShimmer.Visibility = Visibility.Collapsed;
+            PosterImage.Opacity = 0.1; // Or leave it 0
+        }
+
         private void Card_Loaded(object sender, RoutedEventArgs e)
         {
             UpdateImage();

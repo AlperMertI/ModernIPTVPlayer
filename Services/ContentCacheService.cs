@@ -103,17 +103,31 @@ namespace ModernIPTVPlayer.Services
         {
             // 1. Initial Index Build (from disk cache)
             _ = Task.Run(async () => {
-                await Task.Delay(1000); // reduced from 3000 for faster content availability
-                System.Diagnostics.Debug.WriteLine("[BackgroundSync] Triggering initial index refresh...");
-                await RefreshIptvMatchIndexAsync();
+                try
+                {
+                    await Task.Delay(1000);
+                    System.Diagnostics.Debug.WriteLine("[BackgroundSync] Triggering initial index refresh...");
+                    await RefreshIptvMatchIndexAsync();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[BackgroundSync] Index refresh error: {ex.Message}");
+                }
             });
 
             // 2. Continuous Pruning (Independent of sync)
             _ = Task.Run(async () => {
-                while (true)
+                try
                 {
-                    await Task.Delay(TimeSpan.FromMinutes(10));
-                    PruneMemoryCache();
+                    while (true)
+                    {
+                        await Task.Delay(TimeSpan.FromMinutes(10));
+                        PruneMemoryCache();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[BackgroundSync] Pruning error: {ex.Message}");
                 }
             });
 

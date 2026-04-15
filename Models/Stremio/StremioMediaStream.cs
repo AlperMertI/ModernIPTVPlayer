@@ -83,15 +83,15 @@ namespace ModernIPTVPlayer.Models.Stremio
             }
         }
 
-        private string _logoUrl;
+        private string _overrideLogoUrl;
         public string LogoUrl
         {
-            get => _logoUrl;
+            get => _overrideLogoUrl ?? Meta?.Logo;
             set
             {
-                if (_logoUrl != value)
+                if (_overrideLogoUrl != value)
                 {
-                    _logoUrl = value;
+                    _overrideLogoUrl = value;
                     OnPropertyChanged();
                 }
             }
@@ -175,16 +175,34 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Banner => Meta?.Background ?? "";
         public string Description { get => Meta?.Description ?? ""; set { if (Meta != null) { Meta.Description = value; OnPropertyChanged(); } } }
 
-        private string? _cast;
-        public string? Cast { get => _cast; set { if (_cast != value) { _cast = value; OnPropertyChanged(); } } }
+        private string? _overrideCast;
+        public string? Cast { get => _overrideCast ?? (Meta?.Cast != null && Meta.Cast.Count > 0 ? string.Join(", ", Meta.Cast) : null); set { if (_overrideCast != value) { _overrideCast = value; OnPropertyChanged(); } } }
 
-        private string? _director;
-        public string? Director { get => _director; set { if (_director != value) { _director = value; OnPropertyChanged(); } } }
+        private string? _overrideDirector;
+        public string? Director { get => _overrideDirector ?? (Meta?.Director != null && Meta.Director.Count > 0 ? string.Join(", ", Meta.Director) : null); set { if (_overrideDirector != value) { _overrideDirector = value; OnPropertyChanged(); } } }
 
         private string? _trailerUrl; // For manual enrichment retention
         public string? TrailerUrl 
         { 
-            get => _trailerUrl ?? Meta?.Trailers?.FirstOrDefault(t => !string.IsNullOrEmpty(t.Source))?.Source;
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(_trailerUrl)) return _trailerUrl;
+
+                string? trailer = Meta?.Trailers?.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Source))?.Source;
+                if (!string.IsNullOrWhiteSpace(trailer))
+                {
+                    return trailer;
+                }
+
+                trailer = Meta?.TrailerStreams?.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.YtId))?.YtId;
+                if (!string.IsNullOrWhiteSpace(trailer))
+                {
+                    return trailer;
+                }
+
+                trailer = Meta?.AppExtras?.Trailer;
+                return string.IsNullOrWhiteSpace(trailer) ? null : trailer;
+            }
             set 
             { 
                 if (_trailerUrl != value)
@@ -234,6 +252,7 @@ namespace ModernIPTVPlayer.Models.Stremio
             : (IsMovie ? "" : Genres); 
         
         // Helper
+        [JsonIgnore]
         public BitmapImage PosterBitmap => !string.IsNullOrEmpty(PosterUrl) ? new BitmapImage(new System.Uri(PosterUrl)) : null;
 
         public event PropertyChangedEventHandler? PropertyChanged;

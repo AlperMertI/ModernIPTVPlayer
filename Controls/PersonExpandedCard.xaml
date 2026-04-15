@@ -1,0 +1,248 @@
+<UserControl
+    x:Class="ModernIPTVPlayer.Controls.PersonExpandedCard"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:ModernIPTVPlayer.Controls"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    Width="420" VerticalAlignment="Top">
+    
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="AccentBrush" Color="#818CF8"/>
+        
+        <Style x:Key="ShimmerBlock" TargetType="Border">
+            <Setter Property="Background" Value="#1AFFFFFF"/>
+            <Setter Property="CornerRadius" Value="4"/>
+        </Style>
+
+        <DataTemplate x:Key="FilmographyItemTemplateStandard">
+            <Grid Width="106" Tapped="FilmographyItem_Tapped" Background="Transparent" PointerEntered="FilmItem_PointerEntered" PointerExited="FilmItem_PointerExited" VerticalAlignment="Top">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="140"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center" Width="90" Height="140">
+                    <Border x:Name="PosterFrame" CornerRadius="6" Height="130" Background="#1AFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Grid>
+                            <Image x:Name="FilmPoster" Source="{Binding Poster}" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+                <TextBlock Grid.Row="1" Text="{Binding Title}" FontSize="11" FontWeight="SemiBold" Foreground="#EEEEEE" TextTrimming="CharacterEllipsis" Margin="2,6,2,0" HorizontalAlignment="Center" Width="90"/>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="FilmographyItemTemplateMinimalist">
+            <Grid Width="116" Tapped="FilmographyItem_Tapped" Background="Transparent" PointerEntered="FilmItem_PointerEntered" PointerExited="FilmItem_PointerExited" VerticalAlignment="Top">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="164"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center" Width="104" Height="164">
+                    <Border x:Name="PosterFrame" CornerRadius="7" Height="152" Background="#1AFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Grid>
+                            <Image x:Name="FilmPoster" Source="{Binding Poster}" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+                <TextBlock Grid.Row="1" Text="{Binding Title}" FontSize="11" FontWeight="SemiBold" Foreground="#EEEEEE" TextTrimming="CharacterEllipsis" Margin="2,6,2,0" HorizontalAlignment="Center" Width="104"/>
+            </Grid>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid x:Name="RootGrid" VerticalAlignment="Top" CornerRadius="16" Background="#0A0A0B" 
+          BorderThickness="1" Width="400">
+        <Grid.Resources>
+            <LinearGradientBrush x:Key="HighEndBorderBrush" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#44818CF8" Offset="0"/>
+                <GradientStop Color="#20FFFFFF" Offset="0.3"/>
+                <GradientStop Color="#10FFFFFF" Offset="0.7"/>
+                <GradientStop Color="#22818CF8" Offset="1"/>
+            </LinearGradientBrush>
+        </Grid.Resources>
+        
+        <Grid.BorderBrush>
+            <StaticResource ResourceKey="HighEndBorderBrush"/>
+        </Grid.BorderBrush>
+
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup x:Name="LayoutStates">
+                <VisualState x:Name="FullMetadata">
+                    <VisualState.Setters>
+                        <Setter Target="BioSection.Visibility" Value="Visible"/>
+                        <Setter Target="MainStack.Padding" Value="20,12,20,16"/>
+                        <Setter Target="MainStack.Spacing" Value="16"/>
+                        <Setter Target="FilmographyListView.ItemTemplate" Value="{StaticResource FilmographyItemTemplateStandard}"/>
+                        <Setter Target="FilmographyListView.MaxHeight" Value="175"/>
+                        <Setter Target="FilmographyListView.Padding" Value="0,5,0,10"/>
+                        <Setter Target="FilmographyShimmer.Height" Value="130"/>
+                        <Setter Target="ShimmerB1.Width" Value="90"/>
+                        <Setter Target="ShimmerB1.Height" Value="130"/>
+                        <Setter Target="ShimmerB1.CornerRadius" Value="6"/>
+                        <Setter Target="ShimmerB2.Width" Value="90"/>
+                        <Setter Target="ShimmerB2.Height" Value="130"/>
+                        <Setter Target="ShimmerB2.CornerRadius" Value="6"/>
+                        <Setter Target="ShimmerB3.Width" Value="90"/>
+                        <Setter Target="ShimmerB3.Height" Value="130"/>
+                        <Setter Target="ShimmerB3.CornerRadius" Value="6"/>
+                    </VisualState.Setters>
+                </VisualState>
+                <VisualState x:Name="Minimalist">
+                    <VisualState.Setters>
+                        <Setter Target="BioSection.Visibility" Value="Collapsed"/>
+                        <Setter Target="HeaderGrid.HorizontalAlignment" Value="Stretch"/>
+                        <Setter Target="IdentityStack.HorizontalAlignment" Value="Left"/>
+                        <Setter Target="NameText.HorizontalAlignment" Value="Left"/>
+                        <Setter Target="NameText.TextAlignment" Value="Left"/>
+                        <Setter Target="NameText.FontSize" Value="20"/>
+                        <Setter Target="BirthText.Visibility" Value="Collapsed"/>
+                        <Setter Target="MainStack.Padding" Value="16,8,16,10"/>
+                        <Setter Target="MainStack.Spacing" Value="10"/>
+                        <Setter Target="ContentStack.Spacing" Value="10"/>
+                        <Setter Target="FilmographyListView.ItemTemplate" Value="{StaticResource FilmographyItemTemplateMinimalist}"/>
+                        <Setter Target="FilmographyListView.MaxHeight" Value="242"/>
+                        <Setter Target="FilmographyListView.Padding" Value="0,8,0,6"/>
+                        <Setter Target="FilmographyShimmer.Height" Value="152"/>
+                        <Setter Target="ShimmerB1.Width" Value="104"/>
+                        <Setter Target="ShimmerB1.Height" Value="152"/>
+                        <Setter Target="ShimmerB1.CornerRadius" Value="7"/>
+                        <Setter Target="ShimmerB2.Width" Value="104"/>
+                        <Setter Target="ShimmerB2.Height" Value="152"/>
+                        <Setter Target="ShimmerB2.CornerRadius" Value="7"/>
+                        <Setter Target="ShimmerB3.Width" Value="104"/>
+                        <Setter Target="ShimmerB3.Height" Value="152"/>
+                        <Setter Target="ShimmerB3.CornerRadius" Value="7"/>
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <Grid CornerRadius="16" Opacity="0.35">
+            <Image x:Name="AmbientBackdrop" Stretch="UniformToFill" Margin="-40"/>
+            <Rectangle>
+                <Rectangle.Fill>
+                    <RadialGradientBrush Center="0.5,0" GradientOrigin="0.5,0" RadiusX="1" RadiusY="1">
+                        <GradientStop Color="#33818CF8" Offset="0"/>
+                        <GradientStop Color="Transparent" Offset="0.7"/>
+                    </RadialGradientBrush>
+                </Rectangle.Fill>
+            </Rectangle>
+            <Rectangle Fill="#F20A0A0B"/>
+        </Grid>
+
+        <StackPanel x:Name="MainStack" Padding="20,12,20,16" Spacing="16">
+            <!-- Header with Close -->
+            <Grid>
+                <Button HorizontalAlignment="Right" Width="28" Height="28" CornerRadius="14" 
+                        Background="#1AFFFFFF" BorderThickness="0" Click="CloseBtn_Click" Padding="0">
+                    <FontIcon Glyph="&#xE711;" FontSize="10" Foreground="White"/>
+                </Button>
+            </Grid>
+
+            <!-- Hero Section -->
+            <Grid x:Name="HeaderGrid" ColumnSpacing="18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                
+                <Grid Grid.Column="0">
+                    <Ellipse x:Name="ProfileGlow" Width="82" Height="82" Fill="{StaticResource AccentBrush}" Opacity="0.1" Margin="-6"/>
+                    <Border Width="82" Height="82" CornerRadius="41" BorderBrush="#33FFFFFF" BorderThickness="1.5">
+                        <Grid>
+                            <Ellipse Fill="#11FFFFFF"/>
+                            <FontIcon Glyph="&#xE77B;" FontSize="32" Foreground="#22FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            <Ellipse x:Name="ProfileEllipse" Stretch="UniformToFill">
+                                <Ellipse.Fill>
+                                    <ImageBrush x:Name="ProfileImageBrush" Stretch="UniformToFill" ImageOpened="ProfileImageBrush_ImageOpened"/>
+                                </Ellipse.Fill>
+                            </Ellipse>
+                            <local:ShimmerCard x:Name="ProfileShimmer" Visibility="Visible" CornerRadius="41"/>
+                        </Grid>
+                    </Border>
+                </Grid>
+
+                <StackPanel x:Name="IdentityStack" Grid.Column="1" VerticalAlignment="Center" Spacing="0">
+                    <TextBlock x:Name="NameText" FontSize="22" FontWeight="Black" Foreground="White" CharacterSpacing="-10" TextWrapping="Wrap" MaxLines="2"/>
+                    <TextBlock x:Name="KnownForText" FontSize="13" Foreground="#94A3B8" FontWeight="Medium" Margin="0,4,0,0"/>
+                    <TextBlock x:Name="BirthText" FontSize="10" Foreground="#64748B" FontWeight="Bold" Margin="0,1,0,0"/>
+                    
+                </StackPanel>
+            </Grid>
+
+            <ScrollViewer x:Name="MainScroll" VerticalScrollBarVisibility="Hidden" Padding="0">
+                <StackPanel x:Name="ContentStack" Spacing="16">
+                    <!-- Bio Section -->
+                    <StackPanel x:Name="BioSection" Spacing="2" Visibility="Collapsed" Margin="0,4,0,0">
+                        <TextBlock x:Name="BioText" FontSize="13" Foreground="#94A3B8" TextWrapping="Wrap" MaxLines="3" LineHeight="18" FontStyle="Italic"/>
+                        <Button x:Name="BioExpandBtn" Content="Expand Bio ▾" FontSize="10" Foreground="{StaticResource AccentBrush}" 
+                                Background="Transparent" BorderThickness="0" Padding="0" Click="BioExpandBtn_Click" Visibility="Collapsed"/>
+                        <Border x:Name="BioSkeleton" Style="{StaticResource ShimmerBlock}" Height="40" Margin="0,4,0,0" Visibility="Collapsed"/>
+                    </StackPanel>
+
+                    <!-- Filmography -->
+                    <StackPanel Spacing="10" Margin="0,10,0,0">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock x:Name="FilmographyHeader" FontSize="10" FontWeight="Black" Foreground="#44FFFFFF" CharacterSpacing="150" Text="FILMOGRAPHY" VerticalAlignment="Center"/>
+                                <Grid VerticalAlignment="Center" Margin="0,1,0,0">
+                                    <TextBlock x:Name="FilmographyCount" FontSize="10" FontWeight="Bold" Foreground="#94A3B8"/>
+                                    <local:ShimmerCard x:Name="CounterShimmer" Width="24" Height="10" CornerRadius="2" Visibility="Collapsed"/>
+                                </Grid>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="12" x:Name="SortControls" Visibility="Collapsed">
+                                <Button x:Name="SortDateBtn" Content="YEAR" FontSize="9" FontWeight="Black" Foreground="{StaticResource AccentBrush}" Background="Transparent" Padding="0" Click="SortDateBtn_Click"/>
+                                <Button x:Name="SortRatingBtn" Content="SCORE" FontSize="9" FontWeight="Black" Foreground="#44FFFFFF" Background="Transparent" Padding="0" Click="SortRatingBtn_Click"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid Margin="0,5,0,0">
+                            <ListView x:Name="FilmographyListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
+                                      ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" MaxHeight="175" Padding="0,5,0,10" Margin="0" Visibility="Collapsed"
+                                      ScrollViewer.IsHorizontalRailEnabled="False" ScrollViewer.IsVerticalRailEnabled="False"
+                                      ContainerContentChanging="FilmographyListView_ContainerContentChanging">
+                                <ListView.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <ItemsStackPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate>
+                                </ListView.ItemsPanel>
+                                <ListView.ItemContainerStyle>
+                                    <Style TargetType="ListViewItem">
+                                        <Setter Property="Padding" Value="0"/>
+                                        <Setter Property="Margin" Value="0,0,12,0"/>
+                                        <Setter Property="MinWidth" Value="0"/>
+                                        <Setter Property="VerticalContentAlignment" Value="Top"/>
+                                    </Style>
+                                </ListView.ItemContainerStyle>
+                                <ListView.ItemTemplate>
+                                    <StaticResource ResourceKey="FilmographyItemTemplateStandard"/>
+                                </ListView.ItemTemplate>
+                            </ListView>
+
+                            <Grid x:Name="FilmographyShimmer" Visibility="Collapsed" Height="130" VerticalAlignment="Top" Margin="0,5,0,0">
+                                <ScrollViewer HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Hidden" VerticalScrollMode="Disabled" Padding="0">
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <StackPanel Spacing="8" Width="Auto">
+                                            <local:ShimmerCard x:Name="ShimmerB1" Width="90" Height="130" CornerRadius="6" Opacity="0.96"/>
+                                            <Border Style="{StaticResource ShimmerBlock}" Width="60" Height="10" HorizontalAlignment="Left" Opacity="0.42"/>
+                                        </StackPanel>
+                                        <StackPanel Spacing="8" Width="Auto">
+                                            <local:ShimmerCard x:Name="ShimmerB2" Width="90" Height="130" CornerRadius="6" Opacity="0.82"/>
+                                            <Border Style="{StaticResource ShimmerBlock}" Width="50" Height="10" HorizontalAlignment="Left" Opacity="0.34"/>
+                                        </StackPanel>
+                                        <StackPanel Spacing="8" Width="Auto">
+                                            <local:ShimmerCard x:Name="ShimmerB3" Width="90" Height="130" CornerRadius="6" Opacity="0.9"/>
+                                            <Border Style="{StaticResource ShimmerBlock}" Width="70" Height="10" HorizontalAlignment="Left" Opacity="0.38"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Grid>
+                        </Grid>
+                    </StackPanel>
+
+                    <TextBlock x:Name="NoResultsText" Text="NO ENTRIES FOUND" FontSize="9" FontWeight="Black" Foreground="#22FFFFFF" CharacterSpacing="200" HorizontalAlignment="Center" Margin="0,10,0,0" Visibility="Collapsed"/>
+                </StackPanel>
+            </ScrollViewer>
+        </StackPanel>
+    </Grid>
+</UserControl>

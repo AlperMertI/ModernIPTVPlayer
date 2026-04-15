@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Text;
 using System.Collections.Concurrent;
+using System.Threading;
 
 namespace ModernIPTVPlayer.Helpers
 {
@@ -15,7 +16,7 @@ namespace ModernIPTVPlayer.Helpers
         private static byte[] _buffer = new byte[10 * 1024 * 1024]; // Start with 10MB
         private static int _position = 0;
         private static readonly object _lock = new();
-        private static long _storeCount = 0;
+        private static int _storeCount = 0;
 
         // PROJECT ZERO: String Interning Pool
         // Reuses offsets for identical strings to save massive RAM & Lock contention
@@ -23,6 +24,9 @@ namespace ModernIPTVPlayer.Helpers
         private static readonly ConcurrentDictionary<(int Offset, int Length), string> _stringCache = new();
         private const int MAX_INTERN_LENGTH = 256; // Increased to cover most titles/URLs while preventing multi-MB strings in dictionary
         private const int MAX_CACHE_SIZE = 10000; // Limit string cache to prevent RAM bloat
+
+        // [FIX] Thread-safe counter to avoid accessing ConcurrentDictionary.Count (causes reentrancy)
+        private static int _stringCacheCount = 0;
 
         /// <summary>
         /// Stores a string in the UTF-8 buffer and returns its offset and length.
@@ -39,10 +43,11 @@ namespace ModernIPTVPlayer.Helpers
                 if (_internPool.TryGetValue(s, out var existing)) return existing;
             }
 
-            _storeCount++;
-            if (_storeCount % 50000 == 0)
+            Interlocked.Increment(ref _storeCount);
+            int currentStoreCount = _storeCount;
+            if (currentStoreCount % 50000 == 0)
             {
-                System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] Store Count: {_storeCount}, Current Pos: {_position / 1024 / 1024}MB");
+                System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] Store Count: {currentStoreCount}, Current Pos: {_position / 1024 / 1024}MB");
             }
 
             byte[] utf8 = Encoding.UTF8.GetBytes(s);
@@ -125,14 +130,20 @@ namespace ModernIPTVPlayer.Helpers
 
             s = Encoding.UTF8.GetString(_buffer, offset, length);
 
-            if (_stringCache.Count < MAX_CACHE_SIZE)
+            // [FIX] Use thread-safe counter instead of accessing ConcurrentDictionary.Count
+            int currentCount = Thread.VolatileRead(ref _stringCacheCount);
+            if (currentCount < MAX_CACHE_SIZE)
             {
-                _stringCache.TryAdd(key, s);
+                if (_stringCache.TryAdd(key, s))
+                {
+                    Interlocked.Increment(ref _stringCacheCount);
+                }
             }
-            else if (_stringCache.Count > MAX_CACHE_SIZE + 1000)
+            else if (currentCount > MAX_CACHE_SIZE + 1000)
             {
                 // Simple cache-clear if too big (O(1) approximation of LRU)
                 _stringCache.Clear();
+                Interlocked.Exchange(ref _stringCacheCount, 0);
             }
 
             return s;
@@ -184,6 +195,7 @@ namespace ModernIPTVPlayer.Helpers
                 _internPool.Clear();
                 _stringCache.Clear();
                 _storeCount = 0;
+                Interlocked.Exchange(ref _stringCacheCount, 0);
             }
         }
     }

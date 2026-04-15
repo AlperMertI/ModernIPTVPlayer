@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
@@ -42,6 +43,7 @@ namespace ModernIPTVPlayer.Pages
         private string _filterYear = "Tüm Yıllar";
         private string _sortOrder = "relevance";
         
+        private ScrollViewer? _gridScrollViewer;
         private readonly ExpandedCardOverlayController _expandedCardController;
         private System.Threading.CancellationTokenSource _pageSearchCts;
         private DateTime _lastUpdate = DateTime.MinValue;
@@ -58,9 +60,32 @@ namespace ModernIPTVPlayer.Pages
             this.NavigationCacheMode = NavigationCacheMode.Enabled;
             InitializeGenreOverlay();
 
-            _expandedCardController = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, MainScrollViewer);
+            _expandedCardController = new ExpandedCardOverlayController(this, OverlayCanvas, ActiveExpandedCard, CinemaScrim, null); // We will set ScrollViewer later
             _expandedCardController.PlayRequested += (s, stream) => NavigationService.NavigateToDetailsDirect(Frame, stream);
             _expandedCardController.DetailsRequested += (s, item) => NavigationService.NavigateToDetails(Frame, item.Stream);
+
+            this.Loaded += SearchResultsPage_Loaded;
+        }
+
+        private void SearchResultsPage_Loaded(object sender, RoutedEventArgs e)
+        {
+            EnsureScrollDetection();
+        }
+
+        private async void EnsureScrollDetection()
+        {
+            if (_gridScrollViewer != null) return;
+
+            // Give it one frame to materialize the template if it just became visible
+            await Task.Delay(100);
+
+            _gridScrollViewer = FindChild<ScrollViewer>(StremioGrid);
+            if (_gridScrollViewer != null)
+            {
+                _gridScrollViewer.ViewChanged += MainScrollViewer_ViewChanged;
+                _expandedCardController.SetScrollViewer(_gridScrollViewer);
+                System.Diagnostics.Debug.WriteLine("[SearchResults] ScrollViewer found and hooked.");
+            }
         }
 
         private void InitializeGenreOverlay()
@@ -134,7 +159,7 @@ namespace ModernIPTVPlayer.Pages
             {
                 EmptyPanel.Visibility = Visibility.Collapsed;
                 GlobalShimmer.Visibility = Visibility.Visible;
-                StremioSection.Visibility = Visibility.Collapsed;
+                StremioGrid.Visibility = Visibility.Collapsed;
                 // Header Reset
                 StremioCountBadge.Visibility = Visibility.Collapsed;
 
@@ -152,17 +177,20 @@ namespace ModernIPTVPlayer.Pages
                     
                     if (results != null && results.Any())
                     {
+                        GlobalShimmer.Visibility = Visibility.Collapsed;
                         _allRawResults = results.Cast<IMediaStream>().ToList();
                         UpdateYearList();
-                        ApplyFiltersAndSort();
+                        await ApplyFiltersAndSortAsync();
 
                         TxtStremioCount.Text = _stremioCollection.Count.ToString();
                         StremioCountBadge.Visibility = Visibility.Visible;
-                        StremioSection.Visibility = Visibility.Visible;
+                        StremioGrid.Visibility = Visibility.Visible;
+                        EnsureScrollDetection();
                         StremioSectionTitle.Visibility = Visibility.Collapsed;
                     }
                     else
                     {
+                        GlobalShimmer.Visibility = Visibility.Collapsed;
                         EmptyPanel.Visibility = Visibility.Visible;
                     }
 
@@ -181,17 +209,20 @@ namespace ModernIPTVPlayer.Pages
                     
                     if (results != null && results.Any())
                     {
+                        GlobalShimmer.Visibility = Visibility.Collapsed;
                         _allRawResults = results.Cast<IMediaStream>().ToList();
                         UpdateYearList();
-                        ApplyFiltersAndSort();
+                        await ApplyFiltersAndSortAsync();
 
                         TxtStremioCount.Text = _stremioCollection.Count.ToString();
                         StremioCountBadge.Visibility = Visibility.Visible;
-                        StremioSection.Visibility = Visibility.Visible;
+                        StremioGrid.Visibility = Visibility.Visible;
+                        EnsureScrollDetection();
                         StremioSectionTitle.Visibility = Visibility.Collapsed;
                     }
                     else
                     {
+                        GlobalShimmer.Visibility = Visibility.Collapsed;
                         EmptyPanel.Visibility = Visibility.Visible;
                     }
 
@@ -223,18 +254,21 @@ namespace ModernIPTVPlayer.Pages
                             if ((now - _lastUpdate).TotalMilliseconds > UPDATE_THROTTLE_MS || partialResults.Count < 10 || _stremioCollection.Count == 0)
                             {
                                 _lastUpdate = now;
-                                ApplyFiltersAndSort();
-                                
-                                GlobalShimmer.Visibility = Visibility.Collapsed;
-                                TxtStremioCount.Text = _stremioCollection.Count.ToString();
-                                StremioCountBadge.Visibility = Visibility.Visible;
-                                StremioSection.Visibility = Visibility.Visible;
-                                StremioSectionTitle.Text = searchScope == "library" ? "Kütüphane" : (searchScope == "iptv" ? "IPTV Sonuçları" : "Arama Sonuçları");
-                                StremioSectionTitle.Visibility = Visibility.Visible;
-                                EmptyPanel.Visibility = Visibility.Collapsed;
-
-                                // Trigger Lazy Match for visible results
-                                _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(15).Cast<StremioMediaStream>(), _args.Query);
+                                _ = ApplyFiltersAndSortAsync().ContinueWith(t => 
+                                {
+                                    this.DispatcherQueue.TryEnqueue(() => 
+                                    {
+                                        GlobalShimmer.Visibility = Visibility.Collapsed;
+                                        TxtStremioCount.Text = _stremioCollection.Count.ToString();
+                                        StremioCountBadge.Visibility = Visibility.Visible;
+                                        StremioGrid.Visibility = Visibility.Visible;
+                                        EnsureScrollDetection();
+                                        StremioSectionTitle.Text = searchScope == "library" ? "Kütüphane" : (searchScope == "iptv" ? "IPTV Sonuçları" : "Arama Sonuçları");
+                                        StremioSectionTitle.Visibility = Visibility.Visible;
+                                        EmptyPanel.Visibility = Visibility.Collapsed;
+                                        _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(15).Cast<StremioMediaStream>(), _args.Query);
+                                    });
+                                });
                             }
                         });
                     }, token);
@@ -376,15 +410,34 @@ namespace ModernIPTVPlayer.Pages
 
                 if (newResults != null && newResults.Any())
                 {
+                    // O(1) duplicate checking using combined HashSet for speed
+                    var existingImdbIds = new HashSet<string>(_allRawResults.Where(x => !string.IsNullOrEmpty(x.IMDbId)).Select(x => x.IMDbId));
+                    var existingTitleYearKeys = new HashSet<string>(_allRawResults.Where(x => string.IsNullOrEmpty(x.IMDbId)).Select(x => $"{x.Title.ToLowerInvariant()}|{x.Year}"));
+                    
                     foreach (var item in newResults)
                     {
-                        if (!_allRawResults.Any(x => IsEquivalent(x, item)))
+                        bool isDuplicate = false;
+                        if (!string.IsNullOrEmpty(item.IMDbId) && existingImdbIds.Contains(item.IMDbId))
+                        {
+                            isDuplicate = true;
+                        }
+                        else 
+                        {
+                            string key = $"{item.Title.ToLowerInvariant()}|{item.Year}";
+                            if (existingTitleYearKeys.Contains(key))
+                            {
+                                isDuplicate = true;
+                            }
+                        }
+
+                        if (!isDuplicate)
                         {
                             _allRawResults.Add(item);
+                            if (!string.IsNullOrEmpty(item.IMDbId)) existingImdbIds.Add(item.IMDbId);
                         }
                     }
                     UpdateYearList();
-                    ApplyFiltersAndSort();
+                    await ApplyFiltersAndSortAsync();
                     TxtStremioCount.Text = _stremioCollection.Count.ToString();
                 }
                 else
@@ -429,7 +482,7 @@ namespace ModernIPTVPlayer.Pages
             if (sender is RadioButton rb)
             {
                 _filterType = rb.Tag?.ToString() ?? "all";
-                ApplyFiltersAndSort();
+                _ = ApplyFiltersAndSortAsync();
             }
         }
 
@@ -438,17 +491,17 @@ namespace ModernIPTVPlayer.Pages
             if (sender is RadioButton rb)
             {
                 _filterSource = rb.Tag?.ToString() ?? "all";
-                ApplyFiltersAndSort();
+                _ = ApplyFiltersAndSortAsync();
             }
         }
 
         private void YearListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (YearListView.SelectedItem is string year)
+            if (e.AddedItems.Count > 0 && e.AddedItems[0] is string year)
             {
                 _filterYear = year;
                 YearFilterText.Text = year;
-                ApplyFiltersAndSort();
+                _ = ApplyFiltersAndSortAsync();
                 YearFilterButton.Flyout?.Hide();
             }
         }
@@ -459,7 +512,7 @@ namespace ModernIPTVPlayer.Pages
             {
                 _sortOrder = item.Tag?.ToString() ?? "relevance";
                 SortButtonText.Text = item.Text;
-                ApplyFiltersAndSort();
+                _ = ApplyFiltersAndSortAsync();
             }
         }
 
@@ -490,7 +543,7 @@ namespace ModernIPTVPlayer.Pages
             }
         }
 
-        private void ApplyFiltersAndSort()
+        private async Task ApplyFiltersAndSortAsync()
         {
             if (_stremioCollection == null) return;
             var items = _allRawResults.AsEnumerable();
@@ -530,41 +583,53 @@ namespace ModernIPTVPlayer.Pages
 
             var processedList = items.ToList();
 
-            // Synchronize _stremioCollection with processedList securely
-            // Pass 1: Remove ghosts and do in-place replacements for updated items
+            // Synchronize _stremioCollection with processedList securely (FAST-PATH O(N) ALGORITHM)
+            var processedSet = new HashSet<IMediaStream>(processedList);
+
+            // Pass 1: Remove items that were filtered out
             for (int i = _stremioCollection.Count - 1; i >= 0; i--)
             {
                 var existingItem = _stremioCollection[i];
-                if (!processedList.Contains(existingItem))
+                if (!processedSet.Contains(existingItem))
                 {
-                    var replacement = processedList.FirstOrDefault(x => IsEquivalent(x, existingItem));
-                    if (replacement != null && !_stremioCollection.Contains(replacement))
-                    {
-                        _stremioCollection[i] = replacement;
-                    }
-                    else
-                    {
-                        _stremioCollection.RemoveAt(i);
-                    }
+                    _stremioCollection.RemoveAt(i);
                 }
             }
 
-            // Pass 2: Insert new items and correct the sort order
+            // Pass 2: Ensure correct order and insert new items
             for (int i = 0; i < processedList.Count; i++)
             {
                 var target = processedList[i];
-                var currentIndex = _stremioCollection.IndexOf(target);
                 
-                if (currentIndex == -1)
+                if (i < _stremioCollection.Count)
                 {
-                    _stremioCollection.Insert(i, target);
+                    if (_stremioCollection[i] != target)
+                    {
+                        // Use a cheaper index check if the item might be further down
+                        int currentIndex = -1;
+                        for (int j = i + 1; j < Math.Min(i + 20, _stremioCollection.Count); j++)
+                        {
+                            if (_stremioCollection[j] == target) { currentIndex = j; break; }
+                        }
+
+                        if (currentIndex != -1)
+                        {
+                            _stremioCollection.Move(currentIndex, i);
+                        }
+                        else
+                        {
+                            _stremioCollection.Insert(i, target);
+                        }
+                    }
                 }
-                else if (currentIndex != i)
+                else
                 {
-                    _stremioCollection.Move(currentIndex, i);
+                    _stremioCollection.Add(target);
                 }
+
+                if (i % 30 == 0) await Task.Delay(1);
             }
-            
+
             // [NEW] Trigger Lazy IPTV Matching for the currently filtered/sorted top items
             if (_args != null && !string.IsNullOrEmpty(_args.Query))
             {
@@ -751,6 +816,20 @@ namespace ModernIPTVPlayer.Pages
                 _expandedCardController.ActiveExpandedCard.OnRootPointerWheelChanged(e);
                 e.Handled = true;
             }
+        }
+
+        private static T FindChild<T>(DependencyObject parent) where T : DependencyObject
+        {
+            if (parent == null) return null;
+            int childrenCount = VisualTreeHelper.GetChildrenCount(parent);
+            for (int i = 0; i < childrenCount; i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is T typedChild) return typedChild;
+                var found = FindChild<T>(child);
+                if (found != null) return found;
+            }
+            return null;
         }
     }
 }

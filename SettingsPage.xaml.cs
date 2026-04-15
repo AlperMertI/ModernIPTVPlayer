@@ -101,6 +101,7 @@ namespace ModernIPTVPlayer
             }
 
             LoadPlayerSettings();
+            LoadAioMetadataSettings();
         }
 
         private void UpdateSliderHeaders()
@@ -542,6 +543,97 @@ namespace ModernIPTVPlayer
             if (AppSettings.ProbingWorkerCount != (int)e.NewValue)
             {
                 AppSettings.ProbingWorkerCount = (int)e.NewValue;
+            }
+        }
+
+        // ==========================================
+        // AIOMetadata Settings
+        // ==========================================
+        private bool _isCustomAioMode = false;
+
+        private void LoadAioMetadataSettings()
+        {
+            _isCustomAioMode = !string.IsNullOrEmpty(AppSettings.CustomAioMetadataUrl);
+
+            if (_isCustomAioMode)
+            {
+                AioStatusText.Text = "Kişisel sunucu aktif";
+                AioStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.LightGreen);
+                AioUrlBox.Text = AppSettings.CustomAioMetadataUrl;
+                AioUrlBox.Visibility = Visibility.Visible;
+                AioToggleBtn.Content = "Varsayılana Dön";
+                AioConfigBtn.Visibility = Visibility.Visible;
+                AioResetBtn.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                AioStatusText.Text = "Varsayılan sunucu kullanılıyor";
+                AioStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Gray);
+                AioUrlBox.Visibility = Visibility.Collapsed;
+                AioToggleBtn.Content = "Kendi Sunucumu Kullan";
+                AioConfigBtn.Visibility = Visibility.Collapsed;
+                AioResetBtn.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private async void AioToggleBtn_Click(object sender, RoutedEventArgs e)
+        {
+            if (_isCustomAioMode)
+            {
+                // Switch back to default
+                AppSettings.CustomAioMetadataUrl = null;
+                _isCustomAioMode = false;
+                LoadAioMetadataSettings();
+                ShowStatus("Varsayılan AIOMetadata sunucusuna dönüldü.");
+            }
+            else
+            {
+                // Switch to custom mode
+                _isCustomAioMode = true;
+                AioUrlBox.Visibility = Visibility.Visible;
+                AioToggleBtn.Content = "Varsayılana Dön";
+                AioConfigBtn.Visibility = Visibility.Visible;
+                AioResetBtn.Visibility = Visibility.Visible;
+                AioUrlBox.Focus(FocusState.Programmatic);
+            }
+        }
+
+        private async void AioConfigBtn_Click(object sender, RoutedEventArgs e)
+        {
+            // Open the configurator in the default browser
+            string configUrl = "https://aiometadatafortheweebs.midnightignite.me/configure/";
+            try
+            {
+                await Windows.System.Launcher.LaunchUriAsync(new Uri(configUrl));
+                ShowStatus("Yapılandırma sayfası tarayıcıda açıldı. Ayarları kaydedin ve URL'yi buraya yapıştırın.");
+            }
+            catch (Exception ex)
+            {
+                ShowStatus($"Tarayıcı açılamadı: {ex.Message}");
+            }
+        }
+
+        private async void AioResetBtn_Click(object sender, RoutedEventArgs e)
+        {
+            AppSettings.CustomAioMetadataUrl = null;
+            _isCustomAioMode = false;
+            LoadAioMetadataSettings();
+            ShowStatus("AIOMetadata ayarları varsayılana sıfırlandı.");
+        }
+
+        private void AioUrlBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            var url = AioUrlBox.Text.Trim();
+            if (Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme.StartsWith("http"))
+            {
+                AioStatusText.Text = "URL geçerli — Kaydetmek için yapılandırma sayfasını kullanın";
+                AioStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.LightGreen);
+                AppSettings.CustomAioMetadataUrl = url;
+            }
+            else if (!string.IsNullOrEmpty(url))
+            {
+                AioStatusText.Text = "Geçerli bir URL girin (https://...)";
+                AioStatusText.Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Orange);
             }
         }
     }

@@ -173,11 +173,12 @@ namespace ModernIPTVPlayer.Services
                             result.Codec = rawCodec switch
                             {
                                 string c when c.Contains("H264") || c.Contains("AVC") => "H.264",
-                                string c when c.Contains("HEVC") || c.Contains("H265") => "HEVC",
+                                string c when c.Contains("HEVC") || c.Contains("H265") || c.Contains("H.265") => "HEVC",
+                                string c when c.Contains("HIGH EFFICIENCY") => "HEVC",
                                 string c when c.Contains("VP9") => "VP9",
                                 string c when c.Contains("AV1") => "AV1",
                                 string c when c.Contains("MPEG2") => "MPEG2",
-                                _ => rawCodec.Split('/').FirstOrDefault()?.Trim() ?? rawCodec
+                                _ => FormatFallbackCodec(rawCodec)
                             };
                             
                             string br1 = await GetPropertySafeAsync(player.Client, "video-bitrate");
@@ -399,6 +400,23 @@ namespace ModernIPTVPlayer.Services
                 }
                 _isDisposed = true;
             }
+        }
+
+        private static string FormatFallbackCodec(string rawCodec)
+        {
+            if (string.IsNullOrEmpty(rawCodec) || rawCodec == "UNKNOWN") return "UNKNOWN";
+            
+            // Try to extract the first part before '/'
+            string firstPart = rawCodec.Split('/').FirstOrDefault()?.Trim();
+            if (string.IsNullOrEmpty(firstPart)) firstPart = rawCodec;
+            
+            // Truncate long codec names to keep badge readable
+            if (firstPart.Length > 10)
+            {
+                return firstPart.Substring(0, 8).ToUpper() + "..";
+            }
+            
+            return firstPart.ToUpper();
         }
     }
 }

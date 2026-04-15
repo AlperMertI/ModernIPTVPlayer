@@ -38,7 +38,7 @@
 
         <!-- Shimmer Item Template -->
         <DataTemplate x:Key="ShimmerResultTemplate">
-            <controls:ShimmerCard Width="180" Height="265" Margin="4" CornerRadius="12"/>
+            <controls:ShimmerCard Width="160" Height="245" Margin="14,14,18,14" CornerRadius="12"/>
         </DataTemplate>
     </Page.Resources>
 
@@ -267,53 +267,55 @@
         </Grid>
 
         <!-- Main Content -->
-        <ScrollViewer x:Name="MainScrollViewer" Grid.Row="1" Padding="48,0,48,48" ViewChanged="MainScrollViewer_ViewChanged">
-            <StackPanel x:Name="ResultsStack" Spacing="40">
-                
+        <Grid x:Name="ContentRoot" Grid.Row="1">
                 <!-- Initial Shimmer State -->
-                <StackPanel x:Name="GlobalShimmer" Spacing="16" Visibility="Collapsed">
-                    <GridView ItemsSource="{x:Bind ShimmerItems}" 
-                              ItemTemplate="{StaticResource ShimmerResultTemplate}"
-                              ItemsPanel="{StaticResource SearchGridPanelTemplate}"
-                              SelectionMode="None" IsItemClickEnabled="False"/>
-                </StackPanel>
+                <GridView x:Name="GlobalShimmer" 
+                          Visibility="Collapsed"
+                          Padding="48,32,48,48"
+                          ItemsSource="{x:Bind ShimmerItems}" 
+                          ItemTemplate="{StaticResource ShimmerResultTemplate}"
+                          ItemsPanel="{StaticResource SearchGridPanelTemplate}"
+                          SelectionMode="None" IsItemClickEnabled="False"/>
+
+                <!-- Results Grid -->
+                <GridView x:Name="StremioGrid" 
+                          Visibility="Collapsed"
+                          Padding="48,0,48,48"
+                          SelectionMode="None" IsItemClickEnabled="True" 
+                          ItemClick="ResultsGrid_ItemClick"
+                          ItemTemplate="{StaticResource SearchResultTemplate}"
+                          ItemsPanel="{StaticResource SearchGridPanelTemplate}">
                 
-                <!-- Section 1: Stremio Results -->
-                <StackPanel x:Name="StremioSection" Spacing="12" Visibility="Collapsed">
-                    <TextBlock x:Name="StremioSectionTitle" Text="Arama Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9" Visibility="Collapsed"/>
-                    
-                    <GridView x:Name="StremioGrid" 
-                              SelectionMode="None" IsItemClickEnabled="True" 
-                              ItemClick="ResultsGrid_ItemClick"
-                              ItemTemplate="{StaticResource SearchResultTemplate}"
-                              ItemsPanel="{StaticResource SearchGridPanelTemplate}"
-                              Padding="0,32,0,32">
-                        <GridView.ItemContainerTransitions>
-                            <TransitionCollection>
-                                <AddDeleteThemeTransition/>
-                                <RepositionThemeTransition/>
-                            </TransitionCollection>
-                        </GridView.ItemContainerTransitions>
-                        <GridView.ItemContainerStyle>
-                            <Style TargetType="GridViewItem">
-                                <Setter Property="Margin" Value="0,0,20,32"/>
-                                <Setter Property="Padding" Value="0"/>
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                                <Setter Property="VerticalContentAlignment" Value="Stretch"/>
-                                <Setter Property="MinWidth" Value="0"/>
-                                <Setter Property="MinHeight" Value="0"/>
-                            </Style>
-                        </GridView.ItemContainerStyle>
-                    </GridView>
-                </StackPanel>
+                    <GridView.Header>
+                        <StackPanel Spacing="12" Margin="0,32,0,0">
+                            <TextBlock x:Name="StremioSectionTitle" Text="Arama Sonuçları" FontSize="20" FontWeight="Bold" Opacity="0.9" Visibility="Collapsed"/>
+                        </StackPanel>
+                    </GridView.Header>
 
-                    
+                    <GridView.Footer>
+                        <!-- Load More Indicator -->
+                        <ProgressBar x:Name="LoadMoreProgress" IsIndeterminate="True" Visibility="Collapsed" Height="4" HorizontalAlignment="Stretch" Margin="0,20,0,48"/>
+                    </GridView.Footer>
 
-                <!-- Load More Indicator -->
-                <ProgressBar x:Name="LoadMoreProgress" IsIndeterminate="True" Visibility="Collapsed" Height="4" HorizontalAlignment="Stretch" Margin="0,20"/>
+                    <GridView.ItemContainerTransitions>
+                        <TransitionCollection>
+                            <AddDeleteThemeTransition/>
+                            <RepositionThemeTransition/>
+                        </TransitionCollection>
+                    </GridView.ItemContainerTransitions>
 
-            </StackPanel>
-        </ScrollViewer>
+                    <GridView.ItemContainerStyle>
+                        <Style TargetType="GridViewItem">
+                            <Setter Property="Margin" Value="0,0,20,32"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                            <Setter Property="MinWidth" Value="0"/>
+                            <Setter Property="MinHeight" Value="0"/>
+                        </Style>
+                    </GridView.ItemContainerStyle>
+                </GridView>
+            </Grid>
         
         <!-- Empty State -->
         <StackPanel x:Name="EmptyPanel" Grid.Row="1" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="48" Margin="0,0,0,100">

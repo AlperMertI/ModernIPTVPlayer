@@ -231,6 +231,28 @@ namespace ModernIPTVPlayer
             set => Settings.Values[TmdbLanguageKey] = value;
         }
 
+        // AIOMetadata
+        private const string CustomAioMetadataUrlKey = "CustomAioMetadataUrl";
+        public static string? CustomAioMetadataUrl
+        {
+            get => Settings.Values[CustomAioMetadataUrlKey] as string;
+            set => Settings.Values[CustomAioMetadataUrlKey] = value;
+        }
+
+        public static string AioMetadataUrl
+        {
+            get
+            {
+                var url = CustomAioMetadataUrl;
+                if (!string.IsNullOrEmpty(url))
+                {
+                    // Strip /manifest.json if user pasted the full URL
+                    return url.TrimEnd('/').Replace("/manifest.json", "");
+                }
+                return "https://aiometadatafortheweebs.midnightignite.me/stremio/0925c97f-be68-4b15-a37a-8740a523c713";
+            }
+        }
+
         private const string DefaultStartupPageKey = "DefaultStartupPage";
         public static string DefaultStartupPage
         {

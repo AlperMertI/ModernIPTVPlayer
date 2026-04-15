@@ -294,6 +294,27 @@
                         </ComboBox>
                         <TextBlock x:Name="TmdbStatusText" Text="API Anahtarı girilmedi." FontSize="11" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
 
+                        <!-- AIOMetadata Section -->
+                        <Border Background="#0AFFFFFF" CornerRadius="8" Padding="16" Margin="0,8,0,0" BorderBrush="#1AFFFFFF" BorderThickness="1">
+                            <StackPanel Spacing="10">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <FontIcon Glyph="&#xE774;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+                                    <TextBlock Text="AIOMetadata" FontSize="15" FontWeight="SemiBold"/>
+                                </StackPanel>
+                                <TextBlock x:Name="AioStatusText" Text="Varsayılan sunucu kullanılıyor" FontSize="12" Foreground="{ThemeResource TextFillColorSecondaryBrush}" TextWrapping="Wrap"/>
+                                <TextBox x:Name="AioUrlBox" PlaceholderText="Kişisel sunucu URL'niz (opsiyonel)" FontSize="12" Visibility="Collapsed" Margin="0,0,0,4" TextChanged="AioUrlBox_TextChanged"/>
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="AioConfigBtn" Content="Yapılandır" Click="AioConfigBtn_Click" HorizontalAlignment="Stretch" Grid.Column="0"/>
+                                    <Button x:Name="AioToggleBtn" Content="Kendi Sunucumu Kullan" Click="AioToggleBtn_Click" HorizontalAlignment="Stretch" Grid.Column="1"/>
+                                </Grid>
+                                <Button x:Name="AioResetBtn" Content="Varsayılana Sıfırla" Click="AioResetBtn_Click" HorizontalAlignment="Stretch" Visibility="Collapsed" Style="{StaticResource DefaultButtonStyle}"/>
+                            </StackPanel>
+                        </Border>
+
                         <Expander Header="Gelişmiş MPV Yapılandırması" HorizontalAlignment="Stretch" Margin="0,12,0,0">
                             <StackPanel Spacing="12" Padding="0,12,0,4">
                                 <TextBlock Text="Uzman kullanıcılar için ek parametreler (örn: volume-max=200). Her satıra bir adet giriniz." 

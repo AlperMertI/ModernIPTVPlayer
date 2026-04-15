@@ -154,7 +154,10 @@ namespace ModernIPTVPlayer.Controls
                                 _borderClip = compositor.CreateGeometricClip(geometry);
                                 borderVisual.Clip = _borderClip;
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[Spotlight] Border clip creation error: {ex.GetType().Name} | {ex.Message}");
+                            }
                         }
 
                         // Content Clip (Inset) - Prevents Image/Video bleed
@@ -165,12 +168,15 @@ namespace ModernIPTVPlayer.Controls
                                 var geometry = compositor.CreateRoundedRectangleGeometry();
                                 geometry.CornerRadius = new Vector2(20, 20);
                                 _videoClip = compositor.CreateGeometricClip(geometry);
-                                
+
                                 // Apply to both ContentGrid (for image) and VideoContainer (for video)
                                 contentVisual.Clip = _videoClip;
                                 videoVisual.Clip = _videoClip;
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[Spotlight] Video clip creation error: {ex.GetType().Name} | {ex.Message}");
+                            }
                         }
 
                         // Update sizes and offsets
@@ -185,7 +191,10 @@ namespace ModernIPTVPlayer.Controls
                                     dClip.Geometry.Offset = Vector2.Zero;
                                 }
                             }
-                            catch { }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Debug.WriteLine($"[Spotlight] Border clip update error: {ex.GetType().Name} | {ex.Message}");
+                            }
                         }
 
                         if (_videoClip != null)
@@ -275,6 +284,10 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
+                // [FIX] Always clean up the previous webview state entirely during virtualization handover!
+                CleanupWebView();
+                _pendingTrailerId = null;
+
                 if (args.NewValue is CatalogRowViewModel vm && vm.Items != null && vm.Items.Count > 0)
                 {
                     // Take up to 5 items for the carousel
@@ -296,10 +309,18 @@ namespace ModernIPTVPlayer.Controls
                         AnimateInfoIn(true);
                         UpdateNavigationVisibility();
                         
-                        // [FIX] 15GB RAM: NEVER trigger a trailer load on DataContextChanged.
-                        // Wait for viewport/scroll to settle. The EffectiveViewportChanged handler 
-                        // will fire when it's actually visible and trigger InitializeWebView.
                         _pendingTrailerId = _items[_currentIndex].TrailerUrl; 
+
+                        // [FIX] If the row is already in the viewport (recycled while visible),
+                        // EffectiveViewportChanged won't fire again. We must trigger the trailer manually.
+                        if (_isInViewport)
+                        {
+                            // Use Dispatcher to avoid layout conflicts during rapid handover
+                            DispatcherQueue.TryEnqueue(() => 
+                            {
+                                if (_isInViewport) _ = TryLoadTrailerAsync();
+                            });
+                        }
                     }
                 }
                 else

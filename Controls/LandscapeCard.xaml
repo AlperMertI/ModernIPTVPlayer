@@ -40,6 +40,18 @@
                     </DoubleAnimation.EasingFunction>
                 </DoubleAnimation>
             </Storyboard>
+            <Storyboard x:Name="FadeInStoryboard">
+                <DoubleAnimation Storyboard.TargetName="PosterImage" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.35">
+                    <DoubleAnimation.EasingFunction>
+                        <CircleEase EasingMode="EaseOut"/>
+                    </DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+                <DoubleAnimation Storyboard.TargetName="PosterShimmer" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3">
+                    <DoubleAnimation.EasingFunction>
+                        <CircleEase EasingMode="EaseIn"/>
+                    </DoubleAnimation.EasingFunction>
+                </DoubleAnimation>
+            </Storyboard>
         </Grid.Resources>
 
         <!-- Viewport safety -->
@@ -59,7 +71,7 @@
                 <local:ShimmerCard x:Name="PosterShimmer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
                 
                 <Grid x:Name="ImageContainer" Background="Transparent">
-                    <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
+                    <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened" ImageFailed="Image_ImageFailed"/>
                 </Grid>
 
                 <!-- Title & Meta Overlay -->

@@ -152,7 +152,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             return null;
         }
 
-        public async Task<Dictionary<StremioMediaStream, UnifiedMetadata>> EnrichItemsAsync(IEnumerable<StremioMediaStream> items, MetadataContext context = MetadataContext.Discovery, int maxConcurrency = 8)
+        public async Task<Dictionary<StremioMediaStream, UnifiedMetadata>> EnrichItemsAsync(IEnumerable<StremioMediaStream> items, MetadataContext context = MetadataContext.Discovery, int maxConcurrency = 4)
         {
             var results = new Dictionary<StremioMediaStream, UnifiedMetadata>();
             if (items == null) return results;
@@ -172,9 +172,19 @@ namespace ModernIPTVPlayer.Services.Metadata
                             lock (results) results[item] = meta;
                         }
                     }
+                    catch (TaskCanceledException ex)
+                    {
+                        // Task-level cancellation
+                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] TaskCanceledException in EnrichItemsAsync | Title: {item.Title} | Context: {context} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        // Expected cancellation - log with details
+                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] OperationCanceledException in EnrichItemsAsync | Title: {item.Title} | Context: {context} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
+                    }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Batch enrichment error for {item.Title}: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Exception in EnrichItemsAsync | Title: {item.Title} | Context: {context} | ExceptionType: {ex.GetType().Name} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
                     }
                     finally
                     {
@@ -459,6 +469,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (sourceStream is StremioMediaStream stremioStream)
                 {
                     SeedFromCatalogMetadata(metadata, stremioStream, trace, context: context);
+                    
+                    // [PROGRESSIVE] Push initial catalog data (Logo/Backdrop) to UI immediately
+                    stremioStream.UpdateFromUnified(metadata);
                 }
 
                 // Global Catalog Seeding (from current cache)
@@ -524,6 +537,9 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                         missing = GetMissingFields(metadata, required);
                         trace.Log("TMDB", $"TMDB enriched. RemainingMissing={missing}");
+
+                        // [PROGRESSIVE] Push TMDB data to UI immediately
+                        if (sourceStream is StremioMediaStream sms) sms.UpdateFromUnified(metadata);
                     }
                     else
                     {
@@ -789,6 +805,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                                          else if (!metadata.DataSource.Contains("Episodes:"))
                                              metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} {epTag}");
                                      }
+
+                                     // [PROGRESSIVE] Push data to UI as soon as it's from a primary or equivalent source
+                                 }
+
+                                 // [PROGRESSIVE] Push data to UI as soon as it's from a primary or equivalent source
+                                 if (overwritePrimary && sourceStream is StremioMediaStream sms)
+                                 {
+                                     sms.UpdateFromUnified(metadata);
                                  }
 
                                  var missingAfter = GetMissingFields(metadata, GetRequiredFields(context));
@@ -1218,15 +1242,33 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             try
             {
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Fetching metadata from addon: {GetHostSafe(addonUrl)}, type: {type}, id: {id}");
                 var meta = await _stremioService.GetMetaAsync(addonUrl, type, id);
                 var entry = new AddonMetaCacheEntry { HasValue = meta != null, Meta = meta };
                 var ttl = entry.HasValue ? _addonMetaPositiveCacheDuration : _addonMetaNegativeCacheDuration;
                 _addonMetaCache[cacheKey] = (entry, DateTime.Now.Add(ttl));
                 return entry;
             }
+            catch (TaskCanceledException ex)
+            {
+                trace.Log("AddonCache", $"TaskCanceledException on {GetHostSafe(addonUrl)}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] TaskCanceledException in FetchAddonMetaInternalAsync | URL: {addonUrl} | Type: {type} | ID: {id} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
+                var entry = new AddonMetaCacheEntry { HasValue = false, Meta = null };
+                _addonMetaCache[cacheKey] = (entry, DateTime.Now.Add(_addonMetaNegativeCacheDuration));
+                return entry;
+            }
+            catch (OperationCanceledException ex)
+            {
+                trace.Log("AddonCache", $"OperationCanceledException on {GetHostSafe(addonUrl)}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] OperationCanceledException in FetchAddonMetaInternalAsync | URL: {addonUrl} | Type: {type} | ID: {id} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
+                var entry = new AddonMetaCacheEntry { HasValue = false, Meta = null };
+                _addonMetaCache[cacheKey] = (entry, DateTime.Now.Add(_addonMetaNegativeCacheDuration));
+                return entry;
+            }
             catch (Exception ex)
             {
                 trace.Log("AddonCache", $"Fetch error on {GetHostSafe(addonUrl)}: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Exception in FetchAddonMetaInternalAsync | URL: {addonUrl} | Type: {type} | ID: {id} | ExceptionType: {ex.GetType().Name} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
                 var entry = new AddonMetaCacheEntry { HasValue = false, Meta = null };
                 _addonMetaCache[cacheKey] = (entry, DateTime.Now.Add(_addonMetaNegativeCacheDuration));
                 return entry;
@@ -2002,6 +2044,47 @@ namespace ModernIPTVPlayer.Services.Metadata
             if ((overwritePrimary && stremio.Genres?.Count > 0) || string.IsNullOrEmpty(unified.Genres))
                 unified.Genres = (stremio.Genres != null && stremio.Genres.Count > 0) ? string.Join(", ", stremio.Genres) : "";
 
+            // [NEW] Map Country, Status, Writer, Certification from AIOMetadata
+            if (!string.IsNullOrEmpty(stremio.Country) && (overwritePrimary || string.IsNullOrEmpty(unified.Country)))
+                unified.Country = stremio.Country;
+
+            if (!string.IsNullOrEmpty(stremio.Status) && (overwritePrimary || string.IsNullOrEmpty(unified.Status)))
+                unified.Status = stremio.Status;
+
+            if (!string.IsNullOrEmpty(stremio.AppExtras?.Certification) && (overwritePrimary || string.IsNullOrEmpty(unified.Certification)))
+                unified.Certification = stremio.AppExtras.Certification;
+
+            if (stremio.Writer?.Count > 0 && (overwritePrimary || string.IsNullOrEmpty(unified.Writers)))
+                unified.Writers = string.Join(", ", stremio.Writer);
+            else if (stremio.AppExtras?.Writers?.Count > 0 && (overwritePrimary || string.IsNullOrEmpty(unified.Writers)))
+                unified.Writers = string.Join(", ", stremio.AppExtras.Writers.Select(w => w.Name));
+
+            // [NEW] Map AppExtras.Directors as alternative director source with photos
+            if (stremio.AppExtras?.Directors?.Count > 0 && (overwritePrimary || unified.Directors == null || unified.Directors.Count == 0))
+            {
+                var incomingDirectors = stremio.AppExtras.Directors.Take(10).Select(d => new UnifiedCast
+                {
+                    Name = d.Name,
+                    Character = "Yönetmen",
+                    ProfileUrl = d.Photo
+                }).ToList();
+                if (unified.Directors == null || unified.Directors.Count == 0)
+                    unified.Directors = incomingDirectors;
+            }
+
+            // [NEW] Map SeasonPosters to UnifiedSeason.PosterUrl
+            if (stremio.AppExtras?.SeasonPosters?.Count > 0 && unified.Seasons != null)
+            {
+                for (int i = 0; i < unified.Seasons.Count && i < stremio.AppExtras.SeasonPosters.Count; i++)
+                {
+                    var season = unified.Seasons[i];
+                    if (season != null && string.IsNullOrEmpty(season.PosterUrl))
+                    {
+                        season.PosterUrl = UpgradeImageUrl(stremio.AppExtras.SeasonPosters[i]);
+                    }
+                }
+            }
+
             lock (unified.SyncRoot)
             {
                 if (overwritePrimary || unified.Cast == null || unified.Cast.Count == 0 || unified.Cast.All(c => string.IsNullOrEmpty(c.ProfileUrl)))
@@ -2018,11 +2101,12 @@ namespace ModernIPTVPlayer.Services.Metadata
                     }
                     else if (stremio.CreditsCast?.Count > 0)
                     {
-                        incomingCast = stremio.CreditsCast.Take(25).Select(c => new UnifiedCast 
-                        { 
-                            Name = c.Name, 
+                        incomingCast = stremio.CreditsCast.Take(25).Select(c => new UnifiedCast
+                        {
+                            Name = c.Name,
                             Character = c.Character,
-                            ProfileUrl = !string.IsNullOrEmpty(c.ProfilePath) ? $"https://image.tmdb.org/t/p/w185{c.ProfilePath}" : null
+                            ProfileUrl = !string.IsNullOrEmpty(c.ProfilePath) ? $"https://image.tmdb.org/t/p/w185{c.ProfilePath}" : null,
+                            TmdbId = c.Id is int idVal ? idVal : (int.TryParse(c.Id?.ToString(), out var parsed) ? parsed : null)
                         }).ToList();
                     }
                     else if (stremio.Cast?.Count > 0)
@@ -2645,6 +2729,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                             if ((overwrite || existingEpisode.AirDate == null) && !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d2))
                                 existingEpisode.AirDate = d2;
 
+                            // [NEW] Map episode availability and runtime from AIOMetadata
+                            if (overwrite || !existingEpisode.IsAvailable)
+                                existingEpisode.IsAvailable = vid.Available;
+                            if (overwrite || string.IsNullOrEmpty(existingEpisode.Runtime))
+                                existingEpisode.Runtime = vid.Runtime;
+                            if (overwrite || existingEpisode.ReleaseDate == null)
+                                existingEpisode.ReleaseDate = existingEpisode.AirDate;
+
                             updated++;
                         }
                         else
@@ -2654,10 +2746,13 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 Id = vid.Id,
                                 SeasonNumber = sNum,
                                 EpisodeNumber = vid.Episode,
-                                Title = !string.IsNullOrEmpty(vid.Name) ? vid.Name : (vid.Title ?? $"{vid.Episode}. Bölüm"),
+                                Title = !string.IsNullOrEmpty(vid.Title) ? vid.Title : (!string.IsNullOrEmpty(vid.Name) ? vid.Name : $"{vid.Episode}. Bölüm"),
                                 Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description,
                                 ThumbnailUrl = vid.Thumbnail,
-                                AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d3) ? d3 : null
+                                AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d3) ? d3 : null,
+                                ReleaseDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d4) ? d4 : null,
+                                IsAvailable = vid.Available,
+                                Runtime = vid.Runtime
                             };
                             season.Episodes.Add(newEp);
                             episodeMap[vid.Episode] = newEp;

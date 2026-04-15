@@ -1850,12 +1850,19 @@ namespace ModernIPTVPlayer
             }
 
             AnimateOpacity(InactivityOverlay, 0.0, 0.3);
-            
+
             _ = Task.Run(async () => {
-                await Task.Delay(350);
-                DispatcherQueue.TryEnqueue(() => {
-                    if (!_isInactivityOverlayVisible) InactivityOverlay.Visibility = Visibility.Collapsed;
-                });
+                try
+                {
+                    await Task.Delay(350);
+                    DispatcherQueue.TryEnqueue(() => {
+                        if (!_isInactivityOverlayVisible) InactivityOverlay.Visibility = Visibility.Collapsed;
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[PlayerPage] Overlay hide error: {ex.Message}");
+                }
             });
         }
 
@@ -2116,10 +2123,17 @@ namespace ModernIPTVPlayer
 
             // Ensure keyboard shortcuts work immediately
             _ = Task.Run(async () => {
-                await Task.Delay(200);
-                DispatcherQueue.TryEnqueue(() => {
-                    if (MainGrid != null) MainGrid.Focus(FocusState.Programmatic);
-                });
+                try
+                {
+                    await Task.Delay(200);
+                    DispatcherQueue.TryEnqueue(() => {
+                        if (MainGrid != null) MainGrid.Focus(FocusState.Programmatic);
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[PlayerPage] Focus error: {ex.Message}");
+                }
             });
             _isStaticMetadataFetched = false;
             _cachedResolution = "-";
@@ -2517,22 +2531,29 @@ namespace ModernIPTVPlayer
                 // Optional: Monitor for initialization hang
                 _ = Task.Run(async () =>
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(30));
-                    DispatcherQueue.TryEnqueue(() =>
+                    try
                     {
-                        if (!IsCurrentNativeSession(nativeSessionId) || nativeGeneration != _nativePlaybackGeneration)
+                        await Task.Delay(TimeSpan.FromSeconds(30));
+                        DispatcherQueue.TryEnqueue(() =>
                         {
-                            return;
-                        }
+                            if (!IsCurrentNativeSession(nativeSessionId) || nativeGeneration != _nativePlaybackGeneration)
+                            {
+                                return;
+                            }
 
-                        if (!_useMpvPlayer && _nativeMediaPlayer != null &&
-                            (_nativeMediaPlayer.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Opening ||
-                             _nativeMediaPlayer.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.None))
-                        {
-                            LogPlayerTrace("[PlayerPage] Native Media: Initialization Timeout. Falling back to MPV.");
-                            TriggerMpvFallback();
-                        }
-                    });
+                            if (!_useMpvPlayer && _nativeMediaPlayer != null &&
+                                (_nativeMediaPlayer.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Opening ||
+                                 _nativeMediaPlayer.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.None))
+                            {
+                                LogPlayerTrace("[PlayerPage] Native Media: Initialization Timeout. Falling back to MPV.");
+                                TriggerMpvFallback();
+                            }
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[PlayerPage] Native init monitor error: {ex.Message}");
+                    }
                 });
                 
                 _statsTimer?.Start();
@@ -3739,10 +3760,17 @@ namespace ModernIPTVPlayer
             // Restart playback flow with a minor delay to avoid GPU race conditions
             _isPageLoaded = false;
             _ = Task.Run(async () => {
-                await Task.Delay(150);
-                DispatcherQueue.TryEnqueue(() => {
-                    PlayerPage_Loaded(this, new RoutedEventArgs());
-                });
+                try
+                {
+                    await Task.Delay(150);
+                    DispatcherQueue.TryEnqueue(() => {
+                        PlayerPage_Loaded(this, new RoutedEventArgs());
+                    });
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[PlayerPage] Reload error: {ex.Message}");
+                }
             });
         }
 

@@ -75,7 +75,10 @@
             </Rectangle>
 
             <!-- WebView for Trailer -->
+            <!-- Decoupled Trailer Player -->
             <Grid x:Name="VideoContainer" Background="Black" Opacity="0" IsHitTestVisible="False">
+                <local:HeroTrailerControl x:Name="TrailerView" VerticalAlignment="Stretch" HorizontalAlignment="Stretch"/>
+                
                 <!-- Bottom Scrim/Gradient for Trailer Blending (Smooth 3-stop) -->
                 <Rectangle VerticalAlignment="Bottom" Height="60" IsHitTestVisible="False">
                     <Rectangle.Fill>
@@ -105,7 +108,10 @@
                     <Border Background="#CCFFFFFF" HorizontalAlignment="Left" CornerRadius="4" Padding="8,4">
                         <TextBlock Text="GÜNÜN ÖNERİSİ" FontSize="12" FontWeight="Bold" Foreground="Black" CharacterSpacing="50"/>
                     </Border>
-                    <Border x:Name="HeroLogoHost" Height="100" Width="500" HorizontalAlignment="Left" Visibility="Collapsed"/>
+                    <Grid x:Name="HeroLogoContainer" HorizontalAlignment="Left" Visibility="Collapsed">
+                        <Border x:Name="HeroLogoHost" Height="100" Width="500" HorizontalAlignment="Left"/>
+                        <local:ShimmerControl x:Name="HeroLogoShimmer" Width="300" Height="60" CornerRadius="8" Opacity="0.5" Visibility="Collapsed"/>
+                    </Grid>
                     <TextBlock x:Name="HeroTitle" Text="" FontSize="56" FontWeight="Black" Foreground="White" TextWrapping="Wrap" MaxWidth="800" LineHeight="60"/>
                     <StackPanel Orientation="Horizontal" Spacing="12">
                         <TextBlock x:Name="HeroYear" Text="" Foreground="#CCFFFFFF" FontSize="16" FontWeight="SemiBold"/>

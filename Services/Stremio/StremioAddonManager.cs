@@ -83,9 +83,10 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
                 else
                 {
-                    // Default: Cinemeta (Official Catalog) + OpenSubtitles v3
+                    // Default: AIOMetadata (rich metadata, cast photos, streaming catalogs) + Cinemeta + OpenSubtitles v3
                     _addonUrls = new List<string>
                     {
+                        AppSettings.AioMetadataUrl.TrimEnd('/'),
                         "https://v3-cinemeta.strem.io",
                         "https://opensubtitles-v3.strem.io"
                     };
@@ -203,7 +204,12 @@ namespace ModernIPTVPlayer.Services.Stremio
         {
             lock (_addonLock)
             {
-                return _addonUrls.ToList();
+                var urls = _addonUrls.ToList();
+                // Ensure AIOMetadata is always first (highest priority)
+                string aioUrl = AppSettings.AioMetadataUrl.TrimEnd('/');
+                urls.Remove(aioUrl);
+                urls.Insert(0, aioUrl);
+                return urls;
             }
         }
         

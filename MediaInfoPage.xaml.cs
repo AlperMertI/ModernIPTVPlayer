@@ -46,6 +46,11 @@ namespace ModernIPTVPlayer
         private System.Collections.ObjectModel.ObservableCollection<StremioAddonViewModel> _addonResults;
         private Compositor _compositor;
         private string _streamUrl;
+        private DispatcherTimer? _personHoverTimer;
+        private FrameworkElement? _pendingPersonSource;
+        private bool _isPointerOverPersonCard;
+        private bool _isPointerOverCastSection;
+        private CancellationTokenSource? _personCloseCts;
         
         // Series Data
         public ObservableCollection<SeasonItem> Seasons { get; private set; } = new();
@@ -219,6 +224,12 @@ namespace ModernIPTVPlayer
             CastListView.AddHandler(PointerReleasedEvent, new PointerEventHandler(OnCastPointerReleased), true);
             CastListView.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnCastPointerReleased), true);
             CastListView.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnCastPointerReleased), true);
+
+            _personHoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            _personHoverTimer.Tick += PersonHoverTimer_Tick;
+
+            // Enable smooth morphing transitions
+            ElementCompositionPreview.SetIsTranslationEnabled(ActivePersonCard, true);
 
             // Project Zero: Mandatory Cleanup Registration
             this.Unloaded += (s, e) => Cleanup();
@@ -1691,13 +1702,21 @@ namespace ModernIPTVPlayer
                 }
 
                 await HistoryManager.Instance.InitializeAsync();
-                await CloseTrailer(); 
+                await CloseTrailer();
                 RestoreUIVisibility();
 
                 IMediaStream newItem = incomingItem;
-                if (newItem == null) return; 
+                if (newItem == null) return;
 
-                _item = newItem; 
+                // [OPTIMIZATION] Skip reload on back navigation to already-loaded item
+                if (isBackNav && !isItemSwitching && _unifiedMetadata != null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Back navigation to loaded item - Skipping reload");
+                    _item = newItem;
+                    return;
+                }
+
+                _item = newItem;
                 await LoadDetailsAsync(newItem, null, previousItem);
             }
             catch (Exception ex)
@@ -2766,7 +2785,7 @@ namespace ModernIPTVPlayer
             {
                 System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 3: AnimatePair START (Content={content.GetType().Name}, Shimmer={shimmer.GetType().Name}, Delay={delay})");
                 
-                if (content == null || shimmer == null) return;
+                if (content == null || shimmer == null || _compositor == null) return;
 
                 var visualContent = ElementCompositionPreview.GetElementVisual(content);
                 var visualShimmer = ElementCompositionPreview.GetElementVisual(shimmer);
@@ -8383,20 +8402,26 @@ namespace ModernIPTVPlayer
         {
             if (sender is FrameworkElement element)
             {
-                // CRITICAL: Set ZIndex on the actual ListViewItem container to prevent sibling clipping
+                // Cancel any pending close
+                _personCloseCts?.Cancel();
+                _personCloseCts?.Dispose();
+                _personCloseCts = null;
+
                 var container = FindParent<ListViewItem>(element);
                 if (container != null) Canvas.SetZIndex(container, 100);
-                
+
                 var visual = ElementCompositionPreview.GetElementVisual(element);
                 var compositor = visual.Compositor;
-
-                // Ensure CenterPoint is set
-                visual.CenterPoint = new System.Numerics.Vector3((float)element.ActualWidth / 2, (float)element.ActualHeight / 2, 0);
 
                 var scaleAnim = compositor.CreateVector3KeyFrameAnimation();
                 scaleAnim.InsertKeyFrame(1f, new System.Numerics.Vector3(1.08f, 1.08f, 1.0f));
                 scaleAnim.Duration = TimeSpan.FromMilliseconds(250);
                 visual.StartAnimation("Scale", scaleAnim);
+
+                // Start hover timer for person card (same pattern as ExpandedCardOverlayController)
+                _pendingPersonSource = element;
+                _personHoverTimer?.Stop();
+                _personHoverTimer?.Start();
             }
         }
 
@@ -8406,13 +8431,247 @@ namespace ModernIPTVPlayer
             {
                 var container = FindParent<ListViewItem>(element);
                 if (container != null) Canvas.SetZIndex(container, 0);
-                
+
                 var visual = ElementCompositionPreview.GetElementVisual(element);
                 var scaleAnim = visual.Compositor.CreateVector3KeyFrameAnimation();
                 scaleAnim.InsertKeyFrame(1f, new System.Numerics.Vector3(1.0f, 1.0f, 1.0f));
                 scaleAnim.Duration = TimeSpan.FromMilliseconds(200);
                 visual.StartAnimation("Scale", scaleAnim);
+
+                // Stop hover timer immediately
+                _personHoverTimer?.Stop();
+
+                // Trigger intelligent close
+                _ = ClosePersonCardAsync();
             }
+        }
+
+        private void CastItem_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        {
+            if (sender is FrameworkElement element && element.DataContext is CastItem castItem)
+            {
+                e.Handled = true;
+                _personHoverTimer?.Stop();
+                _pendingPersonSource = element;
+                System.Diagnostics.Debug.WriteLine($"[PersonCard] Opening for: {castItem.Name}");
+                ShowPersonCard(castItem);
+            }
+        }
+
+        private void PersonCardOverlay_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (!_isPointerOverPersonCard) ClosePersonCard();
+        }
+
+        private void ActivePersonCard_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            _isPointerOverPersonCard = true;
+            _personCloseCts?.Cancel();
+            _personCloseCts?.Dispose();
+            _personCloseCts = null;
+        }
+
+        private void ActivePersonCard_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            _isPointerOverPersonCard = false;
+            _ = ClosePersonCardAsync();
+        }
+    
+        private void PersonHoverTimer_Tick(object sender, object e)
+        {
+            _personHoverTimer?.Stop();
+            if (_pendingPersonSource != null && _pendingPersonSource.DataContext is CastItem castItem && PersonCardOverlay.XamlRoot != null)
+            {
+                ShowPersonCard(castItem);
+            }
+        }
+
+        private void ShowPersonCard(CastItem castItem)
+        {
+            if (PersonCardOverlay == null || ActivePersonCard == null || _pendingPersonSource == null) return;
+
+            // Set invisible before forcing layout to prevent flickering at (0,0) on first show
+            ActivePersonCard.Opacity = 0;
+            PersonCardOverlay.Visibility = Visibility.Visible;
+            ActivePersonCard.Visibility = Visibility.Visible;
+            PersonCardOverlay.UpdateLayout();
+            ActivePersonCard.UpdateLayout();
+
+            double overlayWidth = PersonCardOverlay.ActualWidth;
+            double overlayHeight = PersonCardOverlay.ActualHeight;
+
+            // Fallback to XamlRoot size if layout hasn't propagated (can happen on first show)
+            if (overlayWidth <= 0 || overlayHeight <= 0)
+            {
+                if (PersonCardOverlay.XamlRoot != null)
+                {
+                    overlayWidth = PersonCardOverlay.XamlRoot.Size.Width;
+                    overlayHeight = PersonCardOverlay.XamlRoot.Size.Height;
+                }
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[PersonCard] Overlay used size: {overlayWidth}x{overlayHeight}");
+
+            try
+            {
+                var transform = _pendingPersonSource.TransformToVisual(PersonCardOverlay);
+                var position = transform.TransformPoint(new Point(0, 0));
+
+                double cardWidth = ActivePersonCard.ActualWidth > 0 ? ActivePersonCard.ActualWidth : (ActivePersonCard.Width > 0 ? ActivePersonCard.Width : 420);
+                double cardHeight = ActivePersonCard.ActualHeight > 0 ? ActivePersonCard.ActualHeight : 650; // Better first-run estimate
+                double targetX = position.X + _pendingPersonSource.ActualWidth + 16;
+                double targetY = position.Y - 60; // Offset slightly higher
+
+                // Basic Boundary Checks (With 24px safety margin)
+                const double edgeMargin = 24.0;
+                if (targetX + cardWidth > overlayWidth - edgeMargin) targetX = position.X - cardWidth - 16;
+                if (targetX < edgeMargin) targetX = edgeMargin;
+                if (targetY + cardHeight > overlayHeight - edgeMargin) targetY = overlayHeight - cardHeight - edgeMargin;
+                if (targetY < edgeMargin + 20) targetY = edgeMargin + 20; // Extra top margin for title bars
+
+                var visual = ElementCompositionPreview.GetElementVisual(ActivePersonCard);
+                bool isAlreadyVisible = ActivePersonCard.Visibility == Visibility.Visible && visual.Opacity > 0.1f;
+                
+                double oldLeft = Canvas.GetLeft(ActivePersonCard);
+                double oldTop = Canvas.GetTop(ActivePersonCard);
+
+                Canvas.SetLeft(ActivePersonCard, targetX);
+                Canvas.SetTop(ActivePersonCard, targetY);
+                ActivePersonCard.UpdateLayout();
+
+                // Reset XAML Opacity to 1 so Composition transition is visible
+                ActivePersonCard.Opacity = 1;
+
+                if (visual != null)
+                {
+                    var compositor = visual.Compositor;
+
+                    if (isAlreadyVisible)
+                    {
+                        // MORPH TRANSITION: Slide to new position
+                        double deltaX = targetX - oldLeft;
+                        double deltaY = targetY - oldTop;
+
+                        if (Math.Abs(deltaX) > 0.1 || Math.Abs(deltaY) > 0.1)
+                        {
+                            visual.StopAnimation("Translation");
+                            try { visual.Properties.InsertVector3("Translation", new System.Numerics.Vector3((float)-deltaX, (float)-deltaY, 0)); } catch { }
+
+                            var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
+                            offsetAnim.Target = "Translation";
+                            
+                            var cubic = compositor.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.33f, 1f), new System.Numerics.Vector2(0.67f, 1f));
+                            offsetAnim.InsertKeyFrame(1f, System.Numerics.Vector3.Zero, cubic);
+                            offsetAnim.Duration = TimeSpan.FromMilliseconds(400); // Consistent with discovery morph
+                            
+                            try { visual.StartAnimation("Translation", offsetAnim); } catch { }
+                        }
+                    }
+                    else
+                    {
+                        // FIRST SHOW: Fade and Scale in
+                        visual.StopAnimation("Translation");
+                        try { visual.Properties.InsertVector3("Translation", System.Numerics.Vector3.Zero); } catch { }
+                        visual.Scale = new System.Numerics.Vector3(0.85f, 0.85f, 1f);
+                        visual.Opacity = 0f;
+
+                        var springAnim = compositor.CreateSpringVector3Animation();
+                        springAnim.Target = "Scale"; springAnim.FinalValue = System.Numerics.Vector3.One;
+                        springAnim.DampingRatio = 0.7f; springAnim.Period = TimeSpan.FromMilliseconds(50);
+
+                        var fadeAnim = compositor.CreateScalarKeyFrameAnimation();
+                        fadeAnim.Target = "Opacity"; fadeAnim.InsertKeyFrame(1f, 1f);
+                        fadeAnim.Duration = TimeSpan.FromMilliseconds(150);
+
+                        visual.StartAnimation("Scale", springAnim);
+                        visual.StartAnimation("Opacity", fadeAnim);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PersonCard] TransformToVisual FAILED: {ex.Message}");
+            }
+
+            ActivePersonCard.LoadPersonAsync(castItem.Name, castItem.Character, castItem.FullProfileUrl,
+                _unifiedMetadata?.ImdbId, _item?.TmdbInfo, (stream) => { ClosePersonCard(); Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(stream)); }, 
+                _lastApplyPrimary);
+        }
+
+        private async Task ClosePersonCardAsync(int delayMs = 600)
+        {
+            _personCloseCts?.Cancel();
+            _personCloseCts?.Dispose();
+            _personCloseCts = new CancellationTokenSource();
+            var token = _personCloseCts.Token;
+
+            try
+            {
+                await Task.Delay(delayMs, token);
+
+                if (_isPointerOverPersonCard || _isPointerOverCastSection) return;
+                
+                ClosePersonCard();
+            }
+            catch (TaskCanceledException) { }
+        }
+
+        private void ClosePersonCard()
+        {
+            _personHoverTimer?.Stop(); 
+            _pendingPersonSource = null;
+
+            // Immediately disable hit-testing so users can click/hover content behind
+            PersonCardOverlay.IsHitTestVisible = false;
+            
+            var visual = ElementCompositionPreview.GetElementVisual(ActivePersonCard);
+            if (visual != null && ActivePersonCard.Visibility == Visibility.Visible)
+            {
+                var compositor = visual.Compositor;
+                
+                var fadeOut = compositor.CreateScalarKeyFrameAnimation();
+                fadeOut.Target = "Opacity"; fadeOut.InsertKeyFrame(1f, 0f); fadeOut.Duration = TimeSpan.FromMilliseconds(200);
+                
+                var scaleDown = compositor.CreateVector3KeyFrameAnimation();
+                scaleDown.Target = "Scale"; scaleDown.InsertKeyFrame(1f, new System.Numerics.Vector3(0.9f, 0.9f, 1.0f)); scaleDown.Duration = TimeSpan.FromMilliseconds(200);
+
+                var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+                visual.StartAnimation("Opacity", fadeOut);
+                visual.StartAnimation("Scale", scaleDown);
+                
+                batch.Completed += (s, e) =>
+                {
+                    // The animation to 0 is done, now physically collapse
+                    if (visual.Opacity < 0.1f)
+                    {
+                        ActivePersonCard.Visibility = Visibility.Collapsed;
+                        PersonCardOverlay.Visibility = Visibility.Collapsed;
+                        
+                        // Ready for next show
+                        PersonCardOverlay.IsHitTestVisible = true;
+                    }
+                };
+                batch.End();
+            }
+            else
+            {
+                ActivePersonCard.Visibility = Visibility.Collapsed;
+                PersonCardOverlay.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void CastListView_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            _isPointerOverCastSection = true;
+            _personCloseCts?.Cancel();
+            _personCloseCts?.Dispose();
+            _personCloseCts = null;
+        }
+
+        private void CastListView_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            _isPointerOverCastSection = false;
+            _ = ClosePersonCardAsync(600);
         }
 
         private T FindParent<T>(DependencyObject child) where T : DependencyObject

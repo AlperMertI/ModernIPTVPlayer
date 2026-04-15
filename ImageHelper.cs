@@ -134,14 +134,17 @@ namespace ModernIPTVPlayer
 
         private static async Task<(Color Primary, Color Secondary)> ExtractDominantColorsAsync(string imageUrl)
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-
                 using (var stream = await RandomAccessStreamReference.CreateFromUri(new Uri(imageUrl)).OpenReadAsync())
                 {
                     if (stream == null || stream.Size == 0) return (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
                     
                     var decoder = await BitmapDecoder.CreateAsync(stream);
+                    sw.Stop();
+                    System.Diagnostics.Debug.WriteLine($"[NET-COLOR] ExtractDominantColorsAsync FETCH/DECODE DONE: {Path.GetFileName(imageUrl)} | Took: {sw.ElapsedMilliseconds}ms");
+                    sw.Restart();
 
                     uint targetSize = 128;
                     var transform = new BitmapTransform

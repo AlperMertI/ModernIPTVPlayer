@@ -37,6 +37,23 @@ namespace ModernIPTVPlayer.Controls
             get => (bool)GetValue(IsHeaderInteractiveProperty);
             set => SetValue(IsHeaderInteractiveProperty, value);
         }
+        
+        public static readonly DependencyProperty RowStyleProperty =
+            DependencyProperty.Register("RowStyle", typeof(string), typeof(CatalogRow), new PropertyMetadata("Standard", OnRowStyleChanged));
+
+        public string RowStyle
+        {
+            get => (string)GetValue(RowStyleProperty);
+            set => SetValue(RowStyleProperty, value);
+        }
+
+        private static void OnRowStyleChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is CatalogRow row)
+            {
+                row.UpdateLoadingState();
+            }
+        }
 
         public static readonly DependencyProperty ItemsSourceProperty =
             DependencyProperty.Register("ItemsSource", typeof(object), typeof(CatalogRow), new PropertyMetadata(null));
@@ -90,6 +107,9 @@ namespace ModernIPTVPlayer.Controls
                 ShimmerPanel.Visibility = Visibility.Visible;
                 ItemsListView.Visibility = Visibility.Collapsed;
                 RowTitle.Opacity = 0.5;
+                
+                // Update Shimmer Layout based on RowStyle
+                VisualStateManager.GoToState(this, RowStyle ?? "Standard", true);
             }
             else
             {

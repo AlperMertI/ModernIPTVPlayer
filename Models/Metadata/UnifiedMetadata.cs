@@ -23,6 +23,9 @@ namespace ModernIPTVPlayer.Models.Metadata
         public string Runtime { get; set; }
         public string AgeRating { get; set; } // [NEW] Age rating (MPAA, etc.)
         public string Country { get; set; } // [NEW] Production country
+        public string Writers { get; set; } // [NEW] Writers (comma-separated)
+        public string Status { get; set; } // [NEW] Series status (e.g. "Continuing", "Ended")
+        public string Certification { get; set; } // [NEW] Age certification (e.g. "TV-MA", "R")
         public string Genres { get; set; }
 
         // [NEW] Technical Metadata from Source
@@ -69,6 +72,7 @@ namespace ModernIPTVPlayer.Models.Metadata
     {
         public int SeasonNumber { get; set; }
         public string Name { get; set; }
+        public string PosterUrl { get; set; } // [NEW] Season poster
         public List<UnifiedEpisode> Episodes { get; set; } = new List<UnifiedEpisode>();
         public bool IsEnrichedByTmdb { get; set; }
     }
@@ -84,7 +88,10 @@ namespace ModernIPTVPlayer.Models.Metadata
         
         // Use DateTime? for proper date handling and comparison
         public System.DateTime? AirDate { get; set; }
-        
+        public System.DateTime? ReleaseDate { get; set; } // [NEW] Alias for AirDate compatibility
+        public bool IsAvailable { get; set; } = true; // [NEW] From AIOMetadata videos[].available
+        public string Runtime { get; set; } // [NEW] Per-episode runtime
+
         public string StreamUrl { get; set; } // For virtual episodes, this might be null until resolved
         
         public string RuntimeFormatted { get; set; } 
@@ -104,5 +111,6 @@ namespace ModernIPTVPlayer.Models.Metadata
         public string Name { get; set; }
         public string Character { get; set; }
         public string ProfileUrl { get; set; }
+        public int? TmdbId { get; set; } // [NEW] TMDB person ID for direct enrichment
     }
 }

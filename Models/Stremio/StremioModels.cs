@@ -235,6 +235,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public List<string> Cast { get; set; }
         
         [JsonPropertyName("director")]
+        [JsonConverter(typeof(Helpers.UniversalStringListConverter))]
         public List<string> Director { get; set; }
 
         [JsonPropertyName("videos")]
@@ -274,6 +275,16 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("credits_crew")]
         public List<StremioCreditCrew> CreditsCrew { get; set; }
 
+        [JsonPropertyName("country")]
+        public string Country { get; set; }
+
+        [JsonPropertyName("writer")]
+        [JsonConverter(typeof(Helpers.UniversalStringListConverter))]
+        public List<string> Writer { get; set; }
+
+        [JsonPropertyName("status")]
+        public string Status { get; set; }
+
         [JsonPropertyName("app_extras")]
         public StremioAppExtras AppExtras { get; set; }
     }
@@ -283,6 +294,12 @@ namespace ModernIPTVPlayer.Models.Stremio
         [JsonPropertyName("cast")]
         public List<StremioAppCast> Cast { get; set; }
 
+        [JsonPropertyName("directors")]
+        public List<StremioAppCast> Directors { get; set; }
+
+        [JsonPropertyName("writers")]
+        public List<StremioAppCast> Writers { get; set; }
+
         [JsonPropertyName("logo")]
         public string Logo { get; set; }
 
@@ -291,6 +308,12 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         [JsonPropertyName("backdrops")]
         public List<StremioAppBackdrop> Backdrops { get; set; }
+
+        [JsonPropertyName("seasonPosters")]
+        public List<string> SeasonPosters { get; set; }
+
+        [JsonPropertyName("certification")]
+        public string Certification { get; set; }
     }
 
     public class StremioAppBackdrop
@@ -431,6 +454,14 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         [JsonPropertyName("available")]
         public bool Available { get; set; }
+
+        private int _runtimeOff, _runtimeLen;
+        [JsonPropertyName("runtime")]
+        public string Runtime
+        {
+            get => MetadataBuffer.GetString(_runtimeOff, _runtimeLen);
+            set { if (MetadataBuffer.IsEqual(_runtimeOff, _runtimeLen, value)) return; var r = MetadataBuffer.Store(value); _runtimeOff = r.Offset; _runtimeLen = r.Length; }
+        }
 
         [JsonPropertyName("episode")]
         public int Episode { get; set; }
