@@ -91,33 +91,52 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             if (stream == null) return null;
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 string rawId = stream.IMDbId;
                 string? id = ResolveBestInitialId(stream) ?? NormalizeId(rawId) ?? rawId;
-                string type = (stream is ModernIPTVPlayer.SeriesStream || (stream is Models.Stremio.StremioMediaStream sms_entry && (sms_entry.Meta.Type == "series" || sms_entry.Meta.Type == "tv"))) ? "series" : "movie";
+                
+                // [FIX] Canonical ID restoration matching GetMetadataAsync
+                bool isCanonical = IsImdbId(id) || (!string.IsNullOrWhiteSpace(id) && id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase));
+                if (!isCanonical && !string.IsNullOrWhiteSpace(rawId) && _rawToCanonicalIdCache.TryGetValue(rawId, out var cachedCanonical))
+                {
+                    id = cachedCanonical;
+                    isCanonical = true;
+                }
 
+                // [FIX] KEY ALIGNMENT: Normalize ID and Type logic exactly like GetMetadataAsync
+                string normalizedId = NormalizeId(id) ?? id;
+                string streamType = (stream as Models.Stremio.StremioMediaStream)?.Meta?.Type;
+                string normalizedType = (stream is ModernIPTVPlayer.SeriesStream || string.Equals(streamType, "series", StringComparison.OrdinalIgnoreCase) || string.Equals(streamType, "tv", StringComparison.OrdinalIgnoreCase)) ? "series" : "movie";
+                
                 string addonHash = GetAddonOrderHash();
                 string tmdbLang = AppSettings.TmdbLanguage;
-                string cacheKey = $"{id ?? stream.Title}_{type}_{addonHash}_{tmdbLang}";
+                string cacheKey = $"{normalizedId ?? stream.Title}_{normalizedType}_{addonHash}_{tmdbLang}";
                 if (context == MetadataContext.Discovery) cacheKey += "_discovery";
-
-                // AppLogger.Info($"[MetadataProvider] TryPeekMetadata Key: {cacheKey}");
 
                 // 1. Check Primary Cache
                 if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
                 {
+                    sw.Stop();
+                    // We only log if it was actually a hit (Peeks are common)
+                    if (cached.Data != null)
+                    {
+                        var msg = $"[MetadataProvider] ⚡ TryPeek HIT (Primary) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                        AppLogger.Info(msg);
+                        System.Diagnostics.Debug.WriteLine(msg);
+                    }
                     return cached.Data;
                 }
 
-                // [FIX] Aliased Lookup: If tmdb:ID lookup failed, try looking up via IMDb ID alias
-                if (id != null && id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
+                // [FIX] ALIASED LOOKUP
+                if (normalizedId != null && normalizedId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
                 {
-                    string tmdbIdOnly = id.Replace("tmdb:", "", StringComparison.OrdinalIgnoreCase);
+                    string tmdbIdOnly = normalizedId.Replace("tmdb:", "", StringComparison.OrdinalIgnoreCase);
                     string mappedImdb = IdMappingService.Instance.GetImdbForTmdb(tmdbIdOnly);
                     if (!string.IsNullOrEmpty(mappedImdb))
                     {
-                        string fallbackKey = $"{mappedImdb}_{type}_{addonHash}_{tmdbLang}";
+                        string fallbackKey = $"{mappedImdb}_{normalizedType}_{addonHash}_{tmdbLang}";
                         if (context == MetadataContext.Discovery) fallbackKey += "_discovery";
                         
                         if (_resultCache.TryGetValue(fallbackKey, out var fallbackCached) && DateTime.Now < fallbackCached.Expiry)
@@ -127,9 +146,42 @@ namespace ModernIPTVPlayer.Services.Metadata
                         }
                     }
                 }
+
+                // [FIX] CATALOG SATISFACTION (LEVEL 0): 
+                // Peek should also check if the stream itself already satisfies the context requirements!
+                var tempMetadata = new UnifiedMetadata();
+                if (stream is ModernIPTVPlayer.Models.Stremio.StremioMediaStream sms)
+                    SeedFromCatalogMetadata(tempMetadata, sms, new MetadataTrace("PeekReasoning", cacheKey, stream.Title), context, quiet: true);
+                else if (stream is SeriesStream series_s)
+                {
+                    tempMetadata.Title = series_s.Title;
+                    tempMetadata.PosterUrl = series_s.PosterUrl;
+                    tempMetadata.IsSeries = true;
+                    tempMetadata.MetadataId = series_s.SeriesId.ToString();
+                }
+                else if (stream is LiveStream live_s)
+                {
+                    tempMetadata.Title = live_s.Title;
+                    tempMetadata.PosterUrl = live_s.PosterUrl;
+                    tempMetadata.MetadataId = live_s.StreamId.ToString();
+                }
+                
+                bool isContinueWatching = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                var missing = GetMissingFields(tempMetadata, GetRequiredFields(context, isContinueWatching));
+
+                if (missing == MetadataField.None && context != MetadataContext.Spotlight && context != MetadataContext.Detail)
+                {
+                    sw.Stop();
+                    var msg = $"[MetadataProvider] ⚡ TryPeek HIT (Catalog Satisfied) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                    AppLogger.Info(msg);
+                    System.Diagnostics.Debug.WriteLine(msg);
+                    return tempMetadata;
+                }
                 
                 // If not found, log it for deep diagnosis (Debug only)
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Cache Peek MISS for key: {cacheKey}");
+                return null;
+
 
                 // 2. Check Detail-from-Discovery promotion
                 if (context == MetadataContext.Detail)
@@ -137,7 +189,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                     string discoveryKey = cacheKey + "_discovery";
                     if (_resultCache.TryGetValue(discoveryKey, out var disc) && DateTime.Now < disc.Expiry)
                     {
-                        if (IsSatisfied(disc.Data, MetadataContext.Detail))
+                        bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                        if (IsSatisfied(disc.Data, MetadataContext.Detail, isCw))
                         {
                             return disc.Data;
                         }
@@ -201,6 +254,7 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             if (stream == null) return null;
             
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             string rawId = stream.IMDbId;
             string id = ResolveBestInitialId(stream) ?? NormalizeId(rawId) ?? rawId;
             var trace = new MetadataTrace(context.ToString(), id, stream?.Title);
@@ -257,9 +311,18 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // [FIX] Context-Aware Cache Validation
                 // Even if we have a cache hit, we must ensure it satisfies the current context's requirements.
                 // For example, a result cached by 'Spotlight' context might not have 'Seasons' data needed by 'Detail' context.
-                if (IsSatisfied(cached.Data, context))
+                bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                MetadataField required = GetRequiredFields(context, isCw);
+                MetadataField cacheMissing = GetMissingFields(cached.Data, required);
+                trace.Log("Cache", $"Required={required} Missing={cacheMissing}");
+
+                if (IsSatisfied(cached.Data, context, isCw))
                 {
-                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CACHE HIT (Satisfied): {cacheKey}");
+                    sw.Stop();
+                    var msg = $"[MetadataProvider] ⚡ Cache HIT (Primary) for '{stream.Title}' [{id ?? "NoId"}] in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                    AppLogger.Info(msg);
+                    System.Diagnostics.Debug.WriteLine(msg);
+                    trace.Log("Cache", $"HIT (Satisfied): {cacheKey}");
 
                     // [FIX] CROSS-CATALOG TITLE SEEDING:
                     // Even on cache hit, if we entered from a different catalog, we should seed its title!
@@ -279,8 +342,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
                 else
                 {
-                    var missingFromCache = GetMissingFields(cached.Data, GetRequiredFields(context));
-                    System.Diagnostics.Debug.WriteLine($"[MetadataProvider] CACHE HIT but NOT SATISFIED for {context}: {cacheKey}. Missing: {missingFromCache}. Passing as seed.");
+                    isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                    var missingFromCache = GetMissingFields(cached.Data, GetRequiredFields(context, isCw));
+                    trace.Log("Cache", "HIT but NOT SATISFIED. Passing as seed.");
                     
                     // We have cached data but it's not enough for the current context.
                     // We continue to GetMetadataInternalAsync, passing the cached data as 'seed' to avoid redundant addon probes.
@@ -315,12 +379,17 @@ namespace ModernIPTVPlayer.Services.Metadata
                     string discoveryKey = cacheKey + "_discovery";
                     if (_resultCache.TryGetValue(discoveryKey, out var disc) && DateTime.Now < disc.Expiry)
                     {
-                        if (IsSatisfied(disc.Data, MetadataContext.Detail))
+                        bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                        if (IsSatisfied(disc.Data, MetadataContext.Detail, isCw))
                         {
+                            sw.Stop();
+                            var msg = $"[MetadataProvider] ⚡ Cache HIT (Promoted) for '{stream.Title}' [{id ?? "NoId"}] in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                            AppLogger.Info(msg);
+                            System.Diagnostics.Debug.WriteLine(msg);
                             System.Diagnostics.Debug.WriteLine($"[MetadataProvider] PROMOTED Discovery cache to Detail: {cacheKey}");
                             return disc.Data;
                         }
-                        var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail));
+                        var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail, false));
                         string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
                         AppLogger.Info($"[MetadataProvider] SEEDING Detail fetch ({id ?? stream?.Title}) | Reason: {seedReason}");
                         return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data))).Value;
@@ -334,12 +403,18 @@ namespace ModernIPTVPlayer.Services.Metadata
             var tempMetadata = new UnifiedMetadata();
             if (stream is ModernIPTVPlayer.Models.Stremio.StremioMediaStream sms)
                 SeedFromCatalogMetadata(tempMetadata, sms, new MetadataTrace("Reasoning", cacheKey, stream.Title), context, quiet: true);
-            var missing = GetMissingFields(tempMetadata, GetRequiredFields(context));
+            bool isContinueWatching = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+            var missing = GetMissingFields(tempMetadata, GetRequiredFields(context, isContinueWatching));
             
             // [NEW] Early exit if catalog/discovery data already satisfies current context requirements
             // [FIX] NEVER early exit for Spotlight or Detail if we want TMDB enrichment, as catalog-seed is only a starting point.
             if (missing == MetadataField.None && context != MetadataContext.Spotlight && context != MetadataContext.Detail)
             {
+                sw.Stop();
+                var msg = $"[MetadataProvider] ⚡ Instant HIT (Satisfied by Catalog) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                AppLogger.Info(msg);
+                System.Diagnostics.Debug.WriteLine(msg);
+                
                 // Result found and satisfied without background task
                 var expiry = DateTime.Now.Add(_cacheDuration);
                 _resultCache[cacheKey] = (tempMetadata, expiry);
@@ -349,7 +424,9 @@ namespace ModernIPTVPlayer.Services.Metadata
             var fetchReason = missing.ToString();
             return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
             {
-                AppLogger.Info($"START Fetching ({context}): {id ?? stream.Title} | Type: {fetchType} | Reason: {fetchReason}");
+                var msg = $"[MetadataProvider] 🔍 Cache MISS. START Fetching ({context}): {id ?? stream.Title} | Type: {fetchType} | Reason: {fetchReason}";
+                AppLogger.Info(msg);
+                System.Diagnostics.Debug.WriteLine(msg);
                 return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound);
             })).Value;
         }
@@ -494,7 +571,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                     }
                 }
 
-                MetadataField required = GetRequiredFields(context);
+            bool isCw = (sourceStream as StremioMediaStream)?.IsContinueWatching ?? false;
+                MetadataField required = GetRequiredFields(context, isCw);
                 MetadataField missing = GetMissingFields(metadata, required);
                 trace.Log("Seed", $"Required={required} Missing={missing}");
 
@@ -766,7 +844,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                                  bool overwritePrimary = index <= primaryPriority;
 
-                                 var missingBefore = GetMissingFields(metadata, GetRequiredFields(context));
+                                 var missingBefore = GetMissingFields(metadata, GetRequiredFields(context, isContinueWatching));
                                  
                                  MapStremioToUnified(entry.Meta, metadata, overwritePrimary);
 
@@ -815,7 +893,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                      sms.UpdateFromUnified(metadata);
                                  }
 
-                                 var missingAfter = GetMissingFields(metadata, GetRequiredFields(context));
+                                 var missingAfter = GetMissingFields(metadata, GetRequiredFields(context, isContinueWatching));
 
                                  // Track field-level contributions (Title, Overview, etc.)
                                  var contributedFields = missingBefore & ~missingAfter;
@@ -888,7 +966,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 SortSeasons(metadata);
             }
 
-            var finalMissing = GetMissingFields(metadata, GetRequiredFields(context));
+            var finalMissing = GetMissingFields(metadata, GetRequiredFields(context, isContinueWatching));
             trace.Log("Finish", $"DataSource={metadata.DataSource} Source={metadata.MetadataSourceInfo} RemainingMissing={finalMissing}");
             
             // [FIX] Update the highest enrichment level attained.
@@ -901,7 +979,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             return metadata;
         }
 
-        private MetadataField GetRequiredFields(MetadataContext context)
+        private MetadataField GetRequiredFields(MetadataContext context, bool isContinueWatching = false)
         {
             if (context == MetadataContext.Discovery)
             {
@@ -910,11 +988,17 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             if (context == MetadataContext.Spotlight)
             {
-                // Spotlight/Hero needs a bit more than Discovery but less than full Detail
                 return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop | MetadataField.Logo | MetadataField.Trailer | MetadataField.Genres;
             }
 
-            // Detail context requirements
+            if (context == MetadataContext.ExpandedCard)
+            {
+                var req = MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Trailer | MetadataField.Genres | MetadataField.CastPortraits | MetadataField.Backdrop;
+                if (isContinueWatching) req |= MetadataField.Seasons;
+                return req;
+            }
+
+            // Detail context requirements.
             return MetadataField.Title | MetadataField.Overview | MetadataField.Year | MetadataField.Rating | MetadataField.Backdrop | 
                    MetadataField.Trailer | MetadataField.Seasons | MetadataField.Logo | MetadataField.Gallery | MetadataField.CastPortraits;
         }
@@ -1279,7 +1363,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
         }
 
-        private bool IsSatisfied(UnifiedMetadata metadata, MetadataContext context)
+        private bool IsSatisfied(UnifiedMetadata metadata, MetadataContext context, bool isCw = false)
         {
             // [FIX] Loading Loop Protection
             // If we've already done the full enrichment for this context or a higher one,
@@ -1288,7 +1372,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (metadata.MaxEnrichmentContext >= context)
                 return true;
 
-            return GetMissingFields(metadata, GetRequiredFields(context)) == MetadataField.None;
+            return GetMissingFields(metadata, GetRequiredFields(context, isCw)) == MetadataField.None;
         }
 
         private string GetHostSafe(string? url)
@@ -2058,6 +2142,11 @@ namespace ModernIPTVPlayer.Services.Metadata
                 unified.Writers = string.Join(", ", stremio.Writer);
             else if (stremio.AppExtras?.Writers?.Count > 0 && (overwritePrimary || string.IsNullOrEmpty(unified.Writers)))
                 unified.Writers = string.Join(", ", stremio.AppExtras.Writers.Select(w => w.Name));
+            else if (stremio.Links != null && (overwritePrimary || string.IsNullOrEmpty(unified.Writers)))
+            {
+                var writers = stremio.Links.Where(l => l.Category == "Writers").Select(l => l.Name).ToList();
+                if (writers.Count > 0) unified.Writers = string.Join(", ", writers);
+            }
 
             // [NEW] Map AppExtras.Directors as alternative director source with photos
             if (stremio.AppExtras?.Directors?.Count > 0 && (overwritePrimary || unified.Directors == null || unified.Directors.Count == 0))

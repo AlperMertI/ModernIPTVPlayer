@@ -14,6 +14,9 @@ using ModernIPTVPlayer.Services;
 using MpvWinUI;
 using System.Globalization;
 using System.Diagnostics;
+using Microsoft.UI.Composition;
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Xaml.Input;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -27,6 +30,7 @@ namespace ModernIPTVPlayer.Controls
         // Hold data
         private ModernIPTVPlayer.Models.IMediaStream _stream;
         private TmdbMovieResult _tmdbInfo;
+        private ModernIPTVPlayer.Models.Metadata.UnifiedMetadata _lastMetadata;
         
         // Cinema Mode State
         private bool _isCinemaMode = false;
@@ -40,6 +44,7 @@ namespace ModernIPTVPlayer.Controls
         private string _virtualHost = "trailers.moderniptv.local";
         private Microsoft.UI.Composition.Compositor _compositor;
         private System.Threading.CancellationTokenSource _trailerCts;
+        private TaskCompletionSource<bool> _webViewInitTcs;
         private Task _initTask;
 
         // Mouse Drag-to-Scroll State
@@ -47,9 +52,12 @@ namespace ModernIPTVPlayer.Controls
         private Windows.Foundation.Point _lastPointerPos;
         private bool _isCastDragging = false;
         private Windows.Foundation.Point _lastCastPointerPos;
+        private string? _currentBackdropUrl;
+        private string? _currentLogoUrl;
 
         public System.Collections.ObjectModel.ObservableCollection<CastItem> CastList { get; private set; } = new();
         public System.Collections.ObjectModel.ObservableCollection<CastItem> DirectorList { get; private set; } = new();
+        private bool _isTrailerRevealed = false;
 
         public Image BannerImage => BackdropImage;
 
@@ -311,6 +319,9 @@ namespace ModernIPTVPlayer.Controls
             
             try
             {
+                // [FIX] Initialize TCS before starting navigation
+                _webViewInitTcs ??= new TaskCompletionSource<bool>();
+
                 await TrailerWebView.EnsureCoreWebView2Async(await WebView2Service.GetSharedEnvironmentAsync());
                 
                 // Listen for messages
@@ -485,6 +496,7 @@ namespace ModernIPTVPlayer.Controls
             });
             setTimeout(applyQualityPreference, 80);
             setTimeout(applyQualityPreference, 700);
+            player.playVideo();
         }
         
         // Called from C# to stop playback
@@ -629,6 +641,8 @@ namespace ModernIPTVPlayer.Controls
                 _playerReadyTcs = null;
                 // [FIX] Only reset _isPlayerReady if we are actually destroying the webview or source
                 if (forceDestroy) _isPlayerReady = false;
+                
+                _isTrailerRevealed = false;
 
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] StopTrailer called. ForceDestroy={forceDestroy}");
 
@@ -677,38 +691,99 @@ namespace ModernIPTVPlayer.Controls
         /// <summary>
         /// Resets the card to initial state before loading new data
         /// </summary>
-        private void ResetState(bool isMorphing = false, bool isStopping = false)
+        private void ResetState(bool isMorphing = false, bool isStopping = false, bool forceSkeleton = true)
         {
-            // Reset trailer/WebView - stop video via JavaScript (preserve pre-initialized player)
-            if (_webViewInitialized && TrailerWebView?.CoreWebView2 != null)
+            // 1. STRATEGY: Calculate our behavior once at the top
+            bool isSmartSwap = !forceSkeleton;
+            bool shouldProtectIdentity = isSmartSwap || isStopping;
+            System.Diagnostics.Debug.WriteLine($"[EXP-RESET] Start | SmartSwap: {isSmartSwap} | Stopping: {isStopping} | IdentityProtected: {shouldProtectIdentity}");
+
+            // 2. STATE MANAGEMENT: Reset memory only if we are truly moving to a NEW item
+            if (!isStopping) 
             {
-                // Fire and forget stop to clear any pending videos immediately
-                _ = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();");
+                _lastMetadata = null;
+                _isRevealed = false;
             }
+            
+            // 3. UNIVERSAL CLEANUP: Reset layout, trailers, and progress
+            ResetUniversalUi(shouldProtectIdentity);
+
+            // 4. TRANSITION LOGIC: Manage Skeletons and Opacity
+            ResetTransitionLayer(isMorphing, isStopping, forceSkeleton, isSmartSwap);
+
+            // 5. CONTENT WIPING:
+            WipeExpandedContent(shouldProtectIdentity);
+
+            if (isStopping)
+            {
+                LoadingRing.IsActive = false;
+                LoadingRing.Visibility = Visibility.Collapsed;
+            }
+        }
+
+        private void ResetUniversalUi(bool shouldProtectDynamicData = false)
+        {
+            // Layout & Alignment
+            if (!shouldProtectDynamicData)
+            {
+                LogoContainer.HorizontalAlignment = Microsoft.UI.Xaml.HorizontalAlignment.Center;
+                TitleText.Visibility = Visibility.Visible;
+            System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] 0ms Seed - Title Visible forced");
+                TitleText.HorizontalAlignment = Microsoft.UI.Xaml.HorizontalAlignment.Center;
+                TitleText.TextAlignment = Microsoft.UI.Xaml.TextAlignment.Center;
+                GenresText.HorizontalAlignment = Microsoft.UI.Xaml.HorizontalAlignment.Center;
+                GenresText.TextAlignment = Microsoft.UI.Xaml.TextAlignment.Center;
+            }
+            MetadataLine.Visibility = Visibility.Visible;
+            WritersText.Visibility = Visibility.Collapsed;
+            BackdropContainer.Visibility = Visibility.Visible;
+            
+            // [FIX] Reset trailer revelation state so AmbienceGrid is hidden for the new trailer
+            _isTrailerRevealed = false;
+            AmbienceGrid.Visibility = Visibility.Visible;
+
+            // Media & Trailers
+            if (_webViewInitialized && TrailerWebView?.CoreWebView2 != null)
+                _ = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();");
+            
             TrailerWebView.Visibility = Visibility.Collapsed;
             MuteButton.Visibility = Visibility.Collapsed;
             ExpandButton.Visibility = Visibility.Collapsed;
             _isMuted = true;
             UpdateMuteIcon();
 
-            
-            // Show backdrop container again
-            BackdropContainer.Visibility = Visibility.Visible;
-            
-            // Content Visibility Logic
-            if (!isStopping) 
+            // Playback & Badges
+            if (!shouldProtectDynamicData)
             {
-                BackdropImage.Opacity = 0.7;
-                BackdropOverlay.Visibility = Visibility.Visible;
+                PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                PlayButtonSubtext.Text = "";
+                PlaybackProgressBar.Visibility = Visibility.Collapsed;
+                ProgressPanel.Visibility = Visibility.Collapsed;
+                TimeLeftText.Text = "";
+                TechBadgesPanel.Children.Clear();
+                TechBadgesPanel.Visibility = Visibility.Collapsed;
+                BadgeSkeleton.Visibility = Visibility.Collapsed;
+                StaticMetadataPanel.Visibility = Visibility.Collapsed;
+            }
+            MoodTag.Visibility = Visibility.Collapsed;
+        }
 
+        private void ResetTransitionLayer(bool isMorphing, bool isStopping, bool forceSkeleton, bool isSmartSwap)
+        {
+            if (isStopping) return;
+
+            BackdropImage.Opacity = 0.7;
+            BackdropOverlay.Visibility = Visibility.Visible;
+
+            if (forceSkeleton)
+            {
                 if (isMorphing)
                 {
-                    // Crossfade: Fade Out Old Content, Fade In Skeleton
-                    var visualContent = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(RealContentPanel);
-                    var visualSkeleton = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(MainSkeleton);
-                    
+                    // Smooth Crossfade to Skeleton
+                    var vContent = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(RealContentPanel);
+                    var vSkeleton = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(MainSkeleton);
                     MainSkeleton.Visibility = Visibility.Visible;
-                    visualSkeleton.Opacity = 0f;
+                    vSkeleton.Opacity = 0f;
 
                     try
                     {
@@ -730,85 +805,78 @@ namespace ModernIPTVPlayer.Controls
                             animIn.Duration = TimeSpan.FromMilliseconds(200);
                             animIn.Target = "Opacity";
 
-                            visualContent.StartAnimation("Opacity", animOut);
-                            visualSkeleton.StartAnimation("Opacity", animIn);
-
-                            // Ensure shimmer animation restarts
+                            vContent.StartAnimation("Opacity", animOut);
+                            vSkeleton.StartAnimation("Opacity", animIn);
                             MainSkeleton.Visibility = Visibility.Visible;
                             MainSkeleton.Opacity = 1;
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Morph Animation Failed: {ex.Message}");
-                        RealContentPanel.Opacity = 0;
-                        MainSkeleton.Visibility = Visibility.Visible;
-                        MainSkeleton.Opacity = 1;
+                    catch 
+                    { 
+                        RealContentPanel.Opacity = 0; 
+                        MainSkeleton.Visibility = Visibility.Visible; 
                     }
                 }
                 else
                 {
-                    // Instant Reset
+                    // Instant Skeleton
                     RealContentPanel.Opacity = 0;
                     MainSkeleton.Visibility = Visibility.Visible;
                     MainSkeleton.Opacity = 1;
-                    try { Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(MainSkeleton).Opacity = 1f; } catch { }
                 }
-                
-                // Reset badges
-                TechBadgesPanel.Children.Clear();
-                
-                // Reset Play Button Subtext
-                PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                PlayButtonSubtext.Text = "";
-
-                // Reset Progress UI
-                PlaybackProgressBar.Visibility = Visibility.Collapsed;
-                ProgressPanel.Visibility = Visibility.Collapsed;
-                TimeLeftText.Text = "";
-                    
-                // Reset tech badges
-                BadgeSkeleton.Visibility = Visibility.Collapsed;
-                TechBadgesPanel.Visibility = Visibility.Collapsed;
-                StaticMetadataPanel.Visibility = Visibility.Collapsed; // [FIX] Reset static metadata panel visibility
-
-                // Reset mood tag
-                MoodTag.Visibility = Visibility.Collapsed;
-                
-                // Reset ratings
-                YearText.Visibility = Visibility.Visible;
-                RatingText.Visibility = Visibility.Visible;
-                RatingText.Text = "";
-                YearText.Text = "";
-                
-                // STALE CONTENT FIX: Clear text and image immediately
-                TitleText.Text = "";
-                DescText.Text = "";
-                GenresText.Text = "";
-                BackdropImage.Source = null;
-                
-                // Reset Ambience
-                AmbienceGrid.Visibility = Visibility.Visible;
-                
-                // Reset loading ring
-                LoadingRing.IsActive = true;
-                LoadingRing.Visibility = Visibility.Visible;
-
-                // Reset Cast
-                CastList.Clear();
-                CastHeaderText.Visibility = Visibility.Collapsed;
-                CastListView.Visibility = Visibility.Collapsed;
-
-                // Reset Director
-                DirectorList.Clear();
-                DirectorHeaderText.Visibility = Visibility.Collapsed;
-                DirectorListView.Visibility = Visibility.Collapsed;
             }
             else
             {
-                LoadingRing.IsActive = false;
-                LoadingRing.Visibility = Visibility.Collapsed;
+                // Smart Swap: Keep content visible for instant swap
+                RealContentPanel.Opacity = 1;
+                MainSkeleton.Visibility = Visibility.Collapsed;
+                var vPanel = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(RealContentPanel);
+                vPanel.Opacity = 1f;
             }
+        }
+
+        private void WipeExpandedContent(bool shouldProtectIdentity)
+        {
+            if (shouldProtectIdentity)
+            {
+                System.Diagnostics.Debug.WriteLine($"[EXP-VERBOSE] UI SHIELDED - Title: {TitleText.Text}");
+                return;
+            }
+
+            // FULL WIPE: Only happens when moving to a brand new item with a cache miss
+            System.Diagnostics.Debug.WriteLine("[EXP-VERBOSE] Identity WIPE active - clearing Title/Logo/Genres/Details");
+            
+            // Layer A (Identity)
+            TitleText.Text = "";
+            LogoContainer.Visibility = Visibility.Collapsed;
+            LogoImage.Source = null;
+            BackdropImage.Source = null;
+            _currentBackdropUrl = null;
+            _currentLogoUrl = null;
+            GenresText.Text = "";
+            YearText.Text = "";
+            RatingText.Text = "";
+
+            // Layer B (Details)
+            DescText.Text = "";
+            WritersText.Text = "";
+            RatingText.Visibility = Visibility.Collapsed;
+            YearText.Visibility = Visibility.Collapsed;
+            
+            if (BadgeAge != null) { BadgeAge.Visibility = Visibility.Collapsed; if (BadgeAgeText != null) BadgeAgeText.Text = ""; }
+            if (BadgeCountry != null) { BadgeCountry.Visibility = Visibility.Collapsed; if (BadgeCountryText != null) BadgeCountryText.Text = ""; }
+            
+            CastList.Clear();
+            CastHeaderText.Visibility = Visibility.Collapsed;
+            CastListView.Visibility = Visibility.Collapsed;
+            DirectorList.Clear();
+            DirectorHeaderText.Visibility = Visibility.Collapsed;
+            DirectorListView.Visibility = Visibility.Collapsed;
+
+            // LAYER C: Feedback - Only show spinner if we don't have cached data yet
+            AmbienceGrid.Visibility = (shouldProtectIdentity) ? Visibility.Collapsed : Visibility.Visible;
+            LoadingRing.IsActive = !shouldProtectIdentity;
+            LoadingRing.Visibility = (shouldProtectIdentity) ? Visibility.Collapsed : Visibility.Visible;
         }
 
         /// <summary>
@@ -847,32 +915,68 @@ namespace ModernIPTVPlayer.Controls
             _loadNonce++;
             long loadNonce = _loadNonce;
 
-            // Reset all state first (except image)
-            ResetState(isMorphing);
+            // 1. SMART CHECK: Peek cache early to avoid layout/skeleton flicker
+            var peeked = Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(stream, Models.Metadata.MetadataContext.ExpandedCard);
+            bool hasCache = peeked != null;
+            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Start: {stream.Title} | hasCache: {hasCache}");
+
+            // 2. [0ms SEED] Immediately set identity from the stream to prevent placeholder ghosting
+            _stream = stream;
+            SafeSetText(TitleText, stream.Title);
+            
+            // Layout Stability: Always default to Visible at 0ms. 
+            // We let the physical image check later decide if it should be hidden (for wide logos).
+            TitleText.Visibility = Visibility.Visible;
+            System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] 0ms Seed - Title Visible forced");
+            
+            // PRIORITY: If we have cached Backdrop, show it immediately. Fallback to Poster.
+            string initialImageUrl = peeked?.BackdropUrl ?? stream.PosterUrl;
+            if (!string.IsNullOrEmpty(initialImageUrl))
+                SafeSetImage(BackdropImage, initialImageUrl, ref _currentBackdropUrl);
+
+            // 3. Atomic Clear of OLD data while optionally skipping the skeleton for the NEW data
+            ResetState(isMorphing, forceSkeleton: !hasCache);
+
+            if (hasCache)
+            {
+                // [SMART SWAP] PRE-FILL UI INSTANTLY
+                System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Early Swap Starting for: {stream.Title}");
+                UpdateUiFromUnified(peeked);
+            }
+            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Post-Reset State: BackdropVis={BackdropContainer.Visibility}, BackdropOp={BackdropImage.Opacity}, HasSource={BackdropImage.Source != null}");
 
             // DEBOUNCE: Wait 300ms before doing heavy metadata/trailer work
             await Task.Delay(300);
             if (loadNonce != _loadNonce) return; // User moved to another poster
 
             _stream = stream;
-            TitleText.Text = stream.Title;
-
-            // Set initial low-res image (or clear it if none)
-            if (!string.IsNullOrEmpty(stream.PosterUrl))
+            
+            // 3. Flicker Fix: Skip manual overwrite if metadata already filled the title correctly
+            if (!hasCache)
             {
-                BackdropImage.Source = ImageHelper.GetImage(stream.PosterUrl, 0, 420);
+                TitleText.Text = stream.Title;
             }
-            else
+
+            // Set initial low-res image ONLY if we don't have cache (don't overwrite high-res backdrop)
+            if (!hasCache)
             {
-                BackdropImage.Source = null;
+                if (!string.IsNullOrEmpty(stream.PosterUrl))
+                {
+                    BackdropImage.Source = ImageHelper.GetImage(stream.PosterUrl, 0, 420);
+                }
+                else
+                {
+                    BackdropImage.Source = null;
+                    _currentBackdropUrl = null;
+                }
             }
 
             // Fire-and-forget initialization - these are already initialized at app startup
             // or in other pages. We don't block the UI waiting for them.
             _ = InitializeServicesAsync();
 
-            // Initial Tooltip (Static parse)
-            UpdateTooltip(stream);
+            // Initial Badges (Static parse before probe/metadata)
+            UpdateTechnicalBadges(stream);
 
             // Stremio Badge Logic: Hide technical skeleton if no history available
             if (stream is StremioMediaStream stremio)
@@ -1012,6 +1116,7 @@ namespace ModernIPTVPlayer.Controls
                     }
 
                     // Update UI IMMEDIATELY
+                    System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Authoritative Result Arrived for: {unified.Title}");
                     UpdateUiFromUnified(unified, displayTitle, displaySubtitle, displayOverview, displayBackdrop);
 
                     // NOW Fetch Trailer (Provider might have pre-filled this from TMDB if enabled)
@@ -1034,6 +1139,7 @@ namespace ModernIPTVPlayer.Controls
 
                     if (!string.IsNullOrEmpty(trailerKey))
                     {
+                         System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Triggering PlayTrailer: {trailerKey}");
                          await PlayTrailer(videoKey: trailerKey);
                     }
                     else
@@ -1281,121 +1387,54 @@ namespace ModernIPTVPlayer.Controls
             {
                 if (loadNonce != _loadNonce) return;
                 BadgeSkeleton.Visibility = Visibility.Collapsed;
-                UpdateTooltip(stream);
+                UpdateTechnicalBadges(stream);
                 UpdatePlayButton(stream);
                 UpdateProgressState(stream);
             });
         }
 
-        private void UpdateTooltip(ModernIPTVPlayer.Models.IMediaStream stream)
+        private void UpdateTechnicalBadges(IMediaStream stream)
         {
-            TechBadgesPanel.Children.Clear();
-
-            // Stremio Specific: Hide TechBadgesPanel if no selected stream in history
-            if (stream is StremioMediaStream stremio)
-            {
-                HistoryItem? history = null;
-                if (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv")
-                    history = HistoryManager.Instance.GetLastWatchedEpisode(stremio.IMDbId);
-                else
-                    history = HistoryManager.Instance.GetProgress(stremio.IMDbId);
-
-                bool isFinishedSeries = stream.Type == "series" && history != null && history.IsFinished;
-
-                if ((history == null || string.IsNullOrEmpty(history.StreamUrl) || isFinishedSeries) && !stream.IsAvailableOnIptv)
-                {
-                    TechBadgesPanel.Visibility = Visibility.Collapsed;
-                    // Only collapse skeleton if we aren't currently probing (shimmer active)
-                    if (BadgeSkeleton.Visibility != Visibility.Visible)
-                        BadgeSkeleton.Visibility = Visibility.Collapsed;
-                }
-                else
-                {
-                    TechBadgesPanel.Visibility = Visibility.Visible;
-                }
-            }
-            else
-            {
-                TechBadgesPanel.Visibility = Visibility.Visible;
-            }
+            if (stream == null) return;
             
-            // 1. Logic moved to Play Button subtext for premium look
-            if (stream is LiveStream live)
+            TechBadgesPanel.Children.Clear();
+            
+            // Per User: "Don't show any tech badges if we don't know the source url"
+            // We check for Metadata presence as a proxy for 'probed/sourced' data.
+            if (!stream.HasMetadata)
             {
-                 // Probing Results - Handled in Dedup sections below
+                TechBadgesPanel.Visibility = Visibility.Collapsed;
+                return;
             }
 
-            // Metadata Extraction (Unified)
-            string name = stream.Title.ToUpperInvariant();
-
-            // Metadata Extraction (Unified)
+            // 1. RESOLUTION
             string res = stream.Resolution;
-            string codecLabel = stream.Codec;
-            bool? isHdrMetadata = stream.IsHdr;
-            bool hasMetadata = stream.HasMetadata;
-
-            // 2. RESOLUTION & 4K (DEDUPLICATION)
-            bool is4K = name.Contains("4K") || name.Contains("UHD");
             if (!string.IsNullOrEmpty(res))
             {
-                if (res.Contains("3840") || res.Contains("4096") || res.Contains("4K")) is4K = true;
-                
+                bool is4K = res.Contains("3840") || res.Contains("4096") || res.Contains("4K");
                 if (is4K) AddBadge("4K UHD", Colors.Purple);
                 else AddBadge(res, Colors.Teal);
             }
-            else
-            {
-                 if (is4K) AddBadge("4K UHD", Colors.Purple);
-                 else if (name.Contains("FHD") || name.Contains("1080P")) AddBadge("1080p", Colors.Teal);
-                 else if (name.Contains("HD") || name.Contains("720P")) AddBadge("720p", Colors.CornflowerBlue);
-            }
 
-            // Codec
+            // 2. CODEC
             if (!string.IsNullOrEmpty(stream.Codec))
             {
                 AddBadge(stream.Codec, Colors.Orange);
             }
-            else
-            {
-                 bool hasCodecText = TechBadgesPanel.Children.OfType<Border>().Any(b => (b.Child as TextBlock)?.Text.Contains("HEVC") == true || (b.Child as TextBlock)?.Text.Contains("264") == true);
-                 if(!hasCodecText)
-                 {
-                    if (name.Contains("HEVC") || name.Contains("H.265") || name.Contains("X265") || name.Contains("H265")) 
-                        AddBadge("HEVC", Colors.Orange);
-                    else if (name.Contains("H.264") || name.Contains("X264") || name.Contains("AVC")) 
-                        AddBadge("AVC", Colors.Gray);
-                 }
-            }
 
-            // Bitrate Badge
-            if (stream is LiveStream liveItem && liveItem.Bitrate > 0)
+            // 3. HDR / SDR
+            if (stream.IsHdr) AddBadge("HDR", Colors.Gold);
+            else AddBadge("SDR", Colors.DimGray);
+            
+            // 4. BITRATE
+            if (stream.Bitrate > 0)
             {
-                AddBadge(liveItem.FormattedBitrate, Colors.Orange);
-            }
-            else if (stream.Bitrate > 0)
-            {
-                // General fallback if Bitrate is available on IMediaStream or detected
                 double mbpsValue = stream.Bitrate / 1000000.0;
                 string formattedStr = mbpsValue >= 1.0 ? $"{mbpsValue:F1} Mbps" : $"{stream.Bitrate / 1000} kbps";
                 AddBadge(formattedStr, Colors.Orange);
             }
 
-            // 3. HDR / SDR
-            bool isHdrVisible = false;
-            if (hasMetadata) 
-            {
-                isHdrVisible = isHdrMetadata ?? false;
-            }
-            else 
-            {
-                isHdrVisible = name.Contains("HDR") || name.Contains("DOLBY") || name.Contains("DV");
-            }
-
-            if (isHdrVisible) AddBadge("HDR", Colors.Gold);
-            else if (hasMetadata) AddBadge("SDR", Colors.DimGray);
-            
-            // Standard Tooltip
-            Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(PlayButton, stream.Title);
+            TechBadgesPanel.Visibility = TechBadgesPanel.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void AddBadge(string text, Color color)
@@ -1432,32 +1471,23 @@ namespace ModernIPTVPlayer.Controls
 
             try
             {
-                // [FIX] Robust Player Readiness Check
-                // Even if _webViewInitialized is true, the player might still be loading its HTML/JS content.
-                // We MUST ensure the player ready signal has been received before sending JS commands.
-                if (!_isPlayerReady)
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Requested: {videoKey}");
+
+                // Only reinitialize if not already ready
+                if (!_webViewInitialized)
                 {
-                    // Create or reset TCS if not already in a pending state
-                    if (_playerReadyTcs == null || _playerReadyTcs.Task.IsCompleted)
+                    await PreInitializeWebViewAsync();
+                }
+
+                // [FIX] Wait for first-time ready signal to avoid race condition on first load
+                if (_webViewInitTcs != null && !_webViewInitTcs.Task.IsCompleted)
+                {
+                    System.Diagnostics.Debug.WriteLine("[ExpandedCard] Waiting for first-time player initialization...");
+                    var readyTask = _webViewInitTcs.Task;
+                    var timeoutTask = Task.Delay(5000); // 5s timeout for first load
+                    if (await Task.WhenAny(readyTask, timeoutTask) == timeoutTask)
                     {
-                        _playerReadyTcs = new System.Threading.Tasks.TaskCompletionSource<bool>();
-                    }
-
-                    if (!_webViewInitialized)
-                    {
-                        await PreInitializeWebViewAsync();
-                    }
-
-                    if (token.IsCancellationRequested) return;
-
-                    // Wait for PLAYER_READY message from JS (with timeout)
-                    var readyTask = _playerReadyTcs.Task;
-                    var timeoutTask = Task.Delay(10000);
-                    var completed = await Task.WhenAny(readyTask, timeoutTask);
-
-                    if (completed != timeoutTask)
-                    {
-                        await readyTask;
+                        System.Diagnostics.Debug.WriteLine("[ExpandedCard] First-time initialization timed out.");
                     }
                 }
 
@@ -1490,16 +1520,8 @@ namespace ModernIPTVPlayer.Controls
 
                 if (token.IsCancellationRequested) return;
 
-                // Hide Ambience during trailer
-                AmbienceGrid.Visibility = Visibility.Collapsed;
-
-                // Show WebView immediately so YouTube player is visible while loading
-                BackdropContainer.Visibility = Visibility.Collapsed;
-                TrailerWebView.Visibility = Visibility.Visible;
-                LoadingRing.IsActive = false;
-                LoadingRing.Visibility = Visibility.Collapsed;
-                MuteButton.Visibility = Visibility.Visible;
-                ExpandButton.Visibility = Visibility.Visible;
+                // Sync UI: Hide Backdrop and show WebView via consolidated method
+                RevealTrailerInternal();
 
                 // Mute state setup
                 _isMuted = true;
@@ -1525,23 +1547,12 @@ namespace ModernIPTVPlayer.Controls
                 if (message == "PLAYER_READY")
                 {
                     _isPlayerReady = true;
-                    _playerReadyTcs?.TrySetResult(true);
+                    _webViewInitTcs?.TrySetResult(true);
                     _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
                 }
                 else if (message == "VIDEO_PLAYING")
                 {
-                    // Video started playing - show mute button and switch from backdrop to video
-                    DispatcherQueue.TryEnqueue(() =>
-                    {
-                        LoadingRing.IsActive = false;
-                        LoadingRing.Visibility = Visibility.Collapsed;
-
-                        BackdropContainer.Visibility = Visibility.Collapsed;
-                        TrailerWebView.Visibility = Visibility.Visible;
-                        MuteButton.Visibility = Visibility.Visible;
-                        ExpandButton.Visibility = Visibility.Visible;
-                        _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
-                    });
+                    _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
                 }
             }
             catch (Exception ex)
@@ -1550,6 +1561,24 @@ namespace ModernIPTVPlayer.Controls
             }
         }
         
+        private void RevealTrailerInternal()
+        {
+            if (_isTrailerRevealed) return;
+            _isTrailerRevealed = true;
+
+            LoadingRing.IsActive = false;
+            LoadingRing.Visibility = Visibility.Collapsed;
+
+            BackdropContainer.Visibility = Visibility.Collapsed;
+            AmbienceGrid.Visibility = Visibility.Collapsed;
+
+            TrailerWebView.Visibility = Visibility.Visible;
+            TrailerWebView.Opacity = 1;
+            MuteButton.Visibility = Visibility.Visible;
+            ExpandButton.Visibility = Visibility.Visible;
+        }
+
+        private bool _isRevealed;
         private bool _isMuted = true;
 
         private static string? ParseScriptString(string? rawResult)
@@ -1657,66 +1686,170 @@ namespace ModernIPTVPlayer.Controls
                 }
             }
         }
-
         private void UpdateUiFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified, string? overrideTitle = null, string? overrideSubtitle = null, string? overrideOverview = null, string? overrideBackdrop = null)
         {
             if (unified == null) return;
             
-            TitleText.Text = overrideTitle ?? unified.Title;
-            GenresText.Text = overrideSubtitle ?? unified.Genres;
-            DescText.Text = overrideOverview ?? unified.Overview;
+            bool isDedupe = _lastMetadata?.MetadataId == unified.MetadataId;
+            System.Diagnostics.Debug.WriteLine($"[EXP-UI] Update: {unified.Title} | isDedupe: {isDedupe} | _isRevealed: {_isRevealed}");
+            
+            _lastMetadata = unified;
 
-            RatingText.Text = unified.Rating > 0 ? $"\u2605 {unified.Rating:F1}" : "";
-            YearText.Text = unified.Year;
+            // 1. Identity
+            string logoUrl = unified.LogoUrl ?? "";
+            bool logoUrlChanged = _currentLogoUrl != logoUrl;
+            SafeSetImage(LogoImage, logoUrl, ref _currentLogoUrl);
 
-            // Age Rating & Country
-            bool hasAge = !string.IsNullOrEmpty(unified.AgeRating);
+            bool hasLogo = !string.IsNullOrEmpty(logoUrl);
+            LogoContainer.Visibility = hasLogo ? Visibility.Visible : Visibility.Collapsed;
+
+            // Always set title text
+            SafeSetText(TitleText, overrideTitle ?? unified.Title);
+
+            // [FIX] VISIBILITY SEEDING:
+            // Only force Title visible if we don't have a logo, or if this is a fresh item, or the logo changed.
+            // This prevents 'Authoritative' updates from overriding the 'WIDE' logo decision made by ImageOpened.
+            if (!hasLogo || !isDedupe || logoUrlChanged)
+            {
+                TitleText.Visibility = Visibility.Visible;
+                System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] 0ms Seed - Title Visible forced");
+            }
+
+
+            // 2. Metadata & Description
+            SafeSetText(GenresText, overrideSubtitle ?? unified.Genres);
+            SafeSetText(DescText, overrideOverview ?? unified.Overview);
+            WritersText.Visibility = Visibility.Collapsed; 
+
+            SafeSetText(RatingText, unified.Rating > 0 ? $"\u2605 {unified.Rating:F1}" : "");
+            SafeSetText(YearText, unified.Year);
+            
+            RatingText.Visibility = unified.Rating > 0 ? Visibility.Visible : Visibility.Collapsed;
+            YearText.Visibility = string.IsNullOrEmpty(unified.Year) ? Visibility.Collapsed : Visibility.Visible;
+
+            // 3. Badges, Secondary Data & Progress
+            UpdateTechnicalBadges(_stream);
+            UpdatePlayButton(_stream);
+            UpdateProgressState(_stream);
+
+            // Age & Country (Static Metadata)
+            string cert = !string.IsNullOrEmpty(unified.Certification) ? unified.Certification : (unified.AgeRating ?? "");
+            bool hasAge = !string.IsNullOrEmpty(cert);
             bool hasCountry = !string.IsNullOrEmpty(unified.Country);
 
             if (BadgeAge != null)
             {
                 BadgeAge.Visibility = hasAge ? Visibility.Visible : Visibility.Collapsed;
-                if (hasAge && BadgeAgeText != null) BadgeAgeText.Text = unified.AgeRating;
+                SafeSetText(BadgeAgeText, cert);
             }
             if (BadgeCountry != null)
             {
                 BadgeCountry.Visibility = hasCountry ? Visibility.Visible : Visibility.Collapsed;
-                if (hasCountry && BadgeCountryText != null) BadgeCountryText.Text = unified.Country;
+                SafeSetText(BadgeCountryText, unified.Country);
             }
-
-            // [FIX] Collapse the whole panel if no static metadata exists to remove whitespace
             if (StaticMetadataPanel != null)
-            {
                 StaticMetadataPanel.Visibility = (hasAge || hasCountry) ? Visibility.Visible : Visibility.Collapsed;
-            }
             
-            // Hide skeleton and reveal description with staggered reveal
-            MainSkeleton.Visibility = Visibility.Collapsed;
-            // Note: BadgeSkeleton remains visible until Probe finishes (in UpdateTooltip)
-            
-            RealContentPanel.Opacity = 1; 
-            
-            var visualPanel = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(RealContentPanel);
-            visualPanel.Opacity = 1f;
+            _ = UpdateCastListAsync(unified);
+            _ = UpdateDirectorListAsync(unified);
 
-            StaggeredRevealContent();
-            
-            string backdropUrl = overrideBackdrop ?? unified.BackdropUrl;
-            if (!string.IsNullOrEmpty(backdropUrl))
-            {
-                BackdropImage.Source = new BitmapImage(new Uri(backdropUrl));
-            }
+            // 4. State & Background
+            MainSkeleton.Visibility = Visibility.Collapsed;
+            RealContentPanel.Opacity = 1; 
+            SafeSetImage(BackdropImage, overrideBackdrop ?? unified.BackdropUrl, ref _currentBackdropUrl);
 
             if (unified.Rating > 8.0)
             {
                 MoodTag.Visibility = Visibility.Visible;
-                MoodText.Text = "Top Rated";
-                MoodTag.Background = new SolidColorBrush(Color.FromArgb(255, 0, 180, 0));
+                SafeSetText(MoodText, "Top Rated");
             }
 
-            // --- CAST LOGIC ---
-            _ = UpdateCastListAsync(unified);
-            _ = UpdateDirectorListAsync(unified);
+            // 5. ANIMATION: One-shot reveal per item to prevent double-fades
+            if (!_isRevealed)
+            {
+                _isRevealed = true;
+                StaggeredRevealContent();
+            }
+
+            ToolTipService.SetToolTip(PlayButton, _stream?.Title);
+        }
+
+
+        private void LogoImage_ImageOpened(object sender, RoutedEventArgs e)
+        {
+            if (sender is Image img && img.Source is BitmapImage bmp)
+            {
+                var width = bmp.PixelWidth;
+                var height = bmp.PixelHeight;
+                if (height > 0)
+                {
+                    double aspect = (double)width / height;
+                    System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] Logo Opened - Pixels: {width}x{height} | Aspect: {aspect:F2}");
+                    if (aspect < 2.0) // Boxy/Square/Portrait
+                    {
+                        System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] Final Decision: BOXY - Keeping Title Visible");
+                        TitleText.Visibility = Microsoft.UI.Xaml.Visibility.Visible;
+                        
+                        // [Compact] Reduce icon height for square/portrait to save vertical space
+                        if (aspect < 1.4)
+                        {
+                            img.MaxHeight = 38;
+                        }
+                        else
+                        {
+                            img.MaxHeight = 55;
+                        }
+                    }
+                    else // Ultra-Landscape (Title Logo)
+                    {
+                        System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] Final Decision: WIDE - Hiding Title");
+                        TitleText.Visibility = Microsoft.UI.Xaml.Visibility.Collapsed;
+                        img.MaxHeight = 55;
+                    }
+
+                    // Always center branding elements if a logo exists
+                    LogoContainer.HorizontalAlignment = Microsoft.UI.Xaml.HorizontalAlignment.Center;
+                    TitleText.HorizontalAlignment = Microsoft.UI.Xaml.HorizontalAlignment.Center;
+                    TitleText.TextAlignment = Microsoft.UI.Xaml.TextAlignment.Center;
+                }
+            }
+            ApplyLogoShadow();
+        }
+
+        private void ApplyLogoShadow()
+        {
+            try
+            {
+                if (_compositor == null) return;
+                if (LogoImage.Source == null) return;
+
+                var visual = ElementCompositionPreview.GetElementVisual(LogoContainer);
+                if (visual == null) return;
+                
+                var shadow = _compositor.CreateDropShadow();
+                
+                shadow.Color = Color.FromArgb(160, 0, 0, 0);
+                shadow.BlurRadius = 15f;
+                shadow.Offset = new System.Numerics.Vector3(0, 5, 0);
+                
+                // Important: Mask the shadow with the actual image content
+                shadow.Mask = LogoImage.GetAlphaMask();
+                
+                var sprite = _compositor.CreateSpriteVisual();
+                sprite.Shadow = shadow;
+                
+                // Sync shadow container size with image container size
+                var bindSize = _compositor.CreateExpressionAnimation("visual.Size");
+                bindSize.SetReferenceParameter("visual", visual);
+                sprite.StartAnimation("Size", bindSize);
+                
+                // Attach shadow to the dedicated host (background layer)
+                ElementCompositionPreview.SetElementChildVisual(LogoShadowHost, sprite);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[ExpandedCard] Failed to apply logo shadow: {ex.Message}");
+            }
         }
 
         private async Task UpdateDirectorListAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
@@ -1842,6 +1975,22 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private HistoryItem? GetHistoryForStream(IMediaStream stream)
+        {
+            if (stream == null) return null;
+            
+            string id = "";
+            bool isSeries = false;
+
+            if (stream is LiveStream live) id = live.StreamId.ToString();
+            else if (stream is SeriesStream series) { id = series.SeriesId.ToString(); isSeries = true; }
+            else if (stream is StremioMediaStream s) { id = s.Meta.Id; isSeries = s.Meta.Type == "series" || s.Meta.Type == "tv"; }
+            else if (stream is WatchlistItem w) { id = w.Id; isSeries = w.Type == "series"; }
+
+            if (string.IsNullOrEmpty(id)) return null;
+            return isSeries ? HistoryManager.Instance.GetLastWatchedEpisode(id) : HistoryManager.Instance.GetProgress(id);
+        }
+
         private void UpdatePlayButton(IMediaStream stream)
         {
             if (stream == null) return;
@@ -1849,55 +1998,23 @@ namespace ModernIPTVPlayer.Controls
             bool isResume = false;
             string subtext = null;
 
-            if (stream is LiveStream live)
+            var history = GetHistoryForStream(stream);
+            if (history != null && !history.IsFinished)
             {
-                var hist = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
-                if (hist != null && !hist.IsFinished && (hist.Position / (double)hist.Duration) > 0.005) isResume = true;
-            }
-            else if (stream is SeriesStream series)
-            {
-                var history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
-                if (history != null && !history.IsFinished) 
+                // For movies/lives, check threshold. For episodes, always resume.
+                if (history.Duration > 0)
+                {
+                    if ((history.Position / (double)history.Duration) > 0.005) isResume = true;
+                }
+                else 
                 {
                     isResume = true;
+                }
+
+                if (isResume && history.EpisodeNumber > 0)
+                {
                     int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
                     subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
-                }
-            }
-            else if (stream is StremioMediaStream stremio)
-            {
-                if (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv")
-                {
-                    var history = HistoryManager.Instance.GetLastWatchedEpisode(stremio.Meta.Id);
-                    if (history != null && !history.IsFinished)
-                    {
-                        isResume = true;
-                        int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
-                        subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
-                    }
-                }
-                else
-                {
-                    var history = HistoryManager.Instance.GetProgress(stremio.Meta.Id);
-                    if (history != null && !history.IsFinished && (history.Position / (double)history.Duration) > 0.005) isResume = true;
-                }
-            }
-            else if (stream is WatchlistItem w)
-            {
-                if (w.Type == "series")
-                {
-                    var history = HistoryManager.Instance.GetLastWatchedEpisode(w.Id);
-                    if (history != null && !history.IsFinished)
-                    {
-                        isResume = true;
-                        int displayEp = history.EpisodeNumber == 0 ? 1 : history.EpisodeNumber;
-                        subtext = $"S{history.SeasonNumber:D2}E{displayEp:D2}";
-                    }
-                }
-                else
-                {
-                    var history = HistoryManager.Instance.GetProgress(w.Id);
-                    if (history != null && !history.IsFinished && (history.Position / (double)history.Duration) > 0.005) isResume = true;
                 }
             }
 
@@ -1923,7 +2040,17 @@ namespace ModernIPTVPlayer.Controls
             else
             {
                 PlayButtonText.Text = "Oynat";
-                PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                
+                // Show Runtime as subtext if available and not in resume/finished state
+                if (_lastMetadata != null && !string.IsNullOrEmpty(_lastMetadata.Runtime))
+                {
+                    PlayButtonSubtext.Text = _lastMetadata.Runtime;
+                    PlayButtonSubtext.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                }
             }
         }
 
@@ -1970,29 +2097,7 @@ namespace ModernIPTVPlayer.Controls
         {
             if (stream == null) return;
 
-            HistoryItem? history = null;
-            if (stream is LiveStream live)
-            {
-                history = HistoryManager.Instance.GetProgress(live.StreamId.ToString());
-            }
-            else if (stream is SeriesStream series)
-            {
-                history = HistoryManager.Instance.GetLastWatchedEpisode(series.SeriesId.ToString());
-            }
-            else if (stream is StremioMediaStream stremio)
-            {
-                if (stremio.Meta.Type == "series" || stremio.Meta.Type == "tv")
-                    history = HistoryManager.Instance.GetLastWatchedEpisode(stremio.Meta.Id);
-                else
-                    history = HistoryManager.Instance.GetProgress(stremio.Meta.Id);
-            }
-            else if (stream is WatchlistItem w)
-            {
-                if (w.Type == "series")
-                    history = HistoryManager.Instance.GetLastWatchedEpisode(w.Id);
-                else
-                    history = HistoryManager.Instance.GetProgress(w.Id);
-            }
+            var history = GetHistoryForStream(stream);
 
             if (history != null && !history.IsFinished && history.Duration > 0)
             {
@@ -2031,6 +2136,29 @@ namespace ModernIPTVPlayer.Controls
 
             PlaybackProgressBar.Visibility = Visibility.Collapsed;
             ProgressPanel.Visibility = Visibility.Collapsed;
+        }
+        private void SafeSetText(TextBlock? target, string? newValue)
+        {
+            if (target == null) return;
+            string val = newValue ?? "";
+            if (target.Text != val) target.Text = val;
+        }
+
+        private void SafeSetImage(Image? target, string? newUrl, ref string? currentUrl)
+        {
+            if (target == null) return;
+            if (string.IsNullOrEmpty(newUrl))
+            {
+                if (target.Source != null) target.Source = null;
+                currentUrl = null;
+                return;
+            }
+
+            if (currentUrl != newUrl)
+            {
+                currentUrl = newUrl;
+                target.Source = new BitmapImage(new Uri(newUrl));
+            }
         }
     }
 }

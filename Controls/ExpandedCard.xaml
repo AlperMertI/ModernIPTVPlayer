@@ -92,58 +92,71 @@
             <!-- Real Content -->
             <ScrollViewer x:Name="ContentScrollViewer" VerticalScrollBarVisibility="Auto" VerticalScrollMode="Auto" Background="Transparent">
                 <StackPanel x:Name="RealContentPanel" Padding="16,10,16,10" Spacing="4" Tapped="DetailsArea_Tapped" Background="Transparent" Opacity="0">
-                    <TextBlock x:Name="TitleText" Text="Movie Title" 
-                                Style="{StaticResource TitleTextBlockStyle}" 
-                                FontSize="19" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,0,2"/>
-
-                    <Grid>
-                        <!-- Badge Skeleton (Visible during Probe) -->
-                        <StackPanel x:Name="BadgeSkeleton" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center" Visibility="Collapsed">
-                             <Grid Width="36" Height="16"><local:ShimmerControl/></Grid>
-                             <Grid Width="42" Height="16"><local:ShimmerControl/></Grid>
-                             <Grid Width="32" Height="16"><local:ShimmerControl/></Grid>
-                        </StackPanel>
-
-                        <!-- Real Badges (Visible after Probe) -->
-                        <StackPanel x:Name="TechBadgesPanel" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center" Visibility="Collapsed"/>
-                        
-                        <!-- Static Metadata (Age, Country) -->
-                        <StackPanel x:Name="StaticMetadataPanel" Orientation="Horizontal" Spacing="6" Height="22" VerticalAlignment="Center" Margin="0,0,0,0" Visibility="Collapsed">
-                             <Border x:Name="BadgeAge" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="5,1">
-                                 <TextBlock x:Name="BadgeAgeText" FontSize="10" Foreground="#CCC" VerticalAlignment="Center"/>
-                             </Border>
-                             <Border x:Name="BadgeCountry" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="5,1">
-                                 <TextBlock x:Name="BadgeCountryText" FontSize="10" Foreground="#CCC" VerticalAlignment="Center"/>
-                             </Border>
-                        </StackPanel>
+                    <Grid x:Name="LogoContainer" Visibility="Collapsed" HorizontalAlignment="Center" Margin="0,4,0,10">
+                        <Border x:Name="LogoShadowHost" IsHitTestVisible="False"/>
+                        <Image x:Name="LogoImage" MaxHeight="55" HorizontalAlignment="Center" Stretch="Uniform" ImageOpened="LogoImage_ImageOpened"/>
                     </Grid>
+                    <TextBlock x:Name="TitleText" Text="" 
+                                Style="{StaticResource TitleTextBlockStyle}" 
+                                FontSize="17" FontWeight="Bold" TextTrimming="CharacterEllipsis" 
+                                HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,0"/>
 
-                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
-                        <Border x:Name="MoodTag" Background="#FF009900" CornerRadius="4" Padding="6,2" Visibility="Collapsed">
-                            <TextBlock x:Name="MoodText" Text="98% Match" FontSize="11" FontWeight="Bold"/>
+                    <StackPanel x:Name="MetadataLine" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center" Margin="0,0,0,4">
+                        <Border x:Name="MoodTag" CornerRadius="4" Padding="8,3" Visibility="Collapsed">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#FF008A02" Offset="0"/>
+                                    <GradientStop Color="#FF00B202" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <StackPanel Orientation="Horizontal" Spacing="4">
+                                <FontIcon Glyph="&#xE735;" FontSize="10" Foreground="White" VerticalAlignment="Center"/>
+                                <TextBlock x:Name="MoodText" Text="Top Rated" FontSize="11" FontWeight="Bold" Foreground="White"/>
+                            </StackPanel>
                         </Border>
-                        <TextBlock x:Name="RatingText" Text="&#x2605; 8.5" Foreground="#FFCC00" FontSize="13" VerticalAlignment="Center"/>
-                        <TextBlock x:Name="YearText" Text="2024" Foreground="#88FFFFFF" FontSize="13" VerticalAlignment="Center"/>
                         
-                        <!-- Progress Info (Hidden as it is now in the Play Button) -->
-                        <StackPanel x:Name="ProgressPanel" Orientation="Horizontal" Spacing="8" Visibility="Collapsed" VerticalAlignment="Center" Margin="4,0,0,0">
-                            <TextBlock x:Name="TimeLeftText" Text="45 dk kaldı" Foreground="#AABBBBBB" FontSize="11" Opacity="0.8"/>
+                        <TextBlock x:Name="RatingText" Text="" Foreground="#FFCC00" FontSize="13" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="YearText" Text="" Foreground="#BBFFFFFF" FontSize="13" VerticalAlignment="Center"/>
+
+                        <StackPanel x:Name="StaticMetadataPanel" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Visibility="Collapsed">
+                             <Border x:Name="BadgeAge" Visibility="Collapsed" BorderBrush="#44FFFFFF" BorderThickness="1" CornerRadius="4" Padding="4,1">
+                                 <TextBlock x:Name="BadgeAgeText" FontSize="10" Foreground="#AAA" VerticalAlignment="Center"/>
+                             </Border>
+                             <Border x:Name="BadgeCountry" Visibility="Collapsed" BorderBrush="#44FFFFFF" BorderThickness="1" CornerRadius="4" Padding="4,1">
+                                 <TextBlock x:Name="BadgeCountryText" FontSize="10" Foreground="#AAA" VerticalAlignment="Center"/>
+                             </Border>
+                        </StackPanel>
+
+                        <!-- Tech Badges -->
+                        <StackPanel x:Name="TechBadgesPanel" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center" Visibility="Collapsed"/>
+
+                        <!-- Badge Skeleton -->
+                        <StackPanel x:Name="BadgeSkeleton" Orientation="Horizontal" Spacing="6" Height="16" VerticalAlignment="Center" Visibility="Collapsed">
+                             <Grid Width="34" Height="14"><local:ShimmerControl/></Grid>
+                             <Grid Width="40" Height="14"><local:ShimmerControl/></Grid>
+                        </StackPanel>
+
+                        <!-- Progress Info -->
+                        <StackPanel x:Name="ProgressPanel" Orientation="Horizontal" Spacing="6" Visibility="Collapsed" VerticalAlignment="Center">
+                            <TextBlock x:Name="TimeLeftText" Text="" Foreground="#88BBBBBB" FontSize="11" Opacity="0.8"/>
                         </StackPanel>
                     </StackPanel>
 
-                    <TextBlock x:Name="GenresText" Text="" Foreground="#77FFFFFF" FontSize="12" Margin="0,0,0,4"/>
+                    <TextBlock x:Name="GenresText" Text="" Foreground="#77FFFFFF" FontSize="12" HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,4" TextWrapping="Wrap"/>
+                    <TextBlock x:Name="WritersText" Text="" Visibility="Collapsed"/>
                     
                     <TextBlock x:Name="DescText" 
-                               Text="Details..." 
-                               Foreground="#AABBBBBB" 
+                                Text="" 
+                                Foreground="#AABBBBBB" 
+
                                FontSize="12.5" 
                                TextWrapping="Wrap" 
                                LineHeight="18"/>
 
-                    <TextBlock x:Name="CastHeaderText" Text="Oyuncular" FontSize="12" FontWeight="Bold" Foreground="#DDD" Margin="0,10,0,4" Visibility="Collapsed"/>
+                    <TextBlock x:Name="CastHeaderText" Text="Oyuncular" FontSize="12" FontWeight="Bold" Foreground="#DDD" Margin="0,10,0,4" HorizontalAlignment="Center" Visibility="Collapsed"/>
                     <ListView x:Name="CastListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                               ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" Height="92" Margin="0,0,0,4" Visibility="Collapsed"
-                              Background="Transparent">
+                              HorizontalAlignment="Center" Background="Transparent">
                         <ListView.ItemContainerStyle>
                             <Style TargetType="ListViewItem">
                                 <Setter Property="Padding" Value="0"/>
@@ -156,7 +169,7 @@
                         </ListView.ItemContainerStyle>
                         <ListView.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Top"/>
+                                <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center" VerticalAlignment="Top"/>
                             </ItemsPanelTemplate>
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
@@ -183,10 +196,10 @@
                         </ListView.ItemTemplate>
                     </ListView>
 
-                    <TextBlock x:Name="DirectorHeaderText" Text="Yönetmen" FontSize="12" FontWeight="Bold" Foreground="#DDD" Margin="0,10,0,4" Visibility="Collapsed"/>
+                    <TextBlock x:Name="DirectorHeaderText" Text="Yönetmen" FontSize="12" FontWeight="Bold" Foreground="#DDD" Margin="0,10,0,4" HorizontalAlignment="Center" Visibility="Collapsed"/>
                     <ListView x:Name="DirectorListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                               ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" Height="92" Margin="0,0,0,4" Visibility="Collapsed"
-                              Background="Transparent">
+                              HorizontalAlignment="Center" Background="Transparent">
                         <ListView.ItemContainerStyle>
                             <Style TargetType="ListViewItem">
                                 <Setter Property="Padding" Value="0"/>
@@ -199,7 +212,7 @@
                         </ListView.ItemContainerStyle>
                         <ListView.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Top"/>
+                                <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Center" VerticalAlignment="Top"/>
                             </ItemsPanelTemplate>
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
@@ -230,27 +243,28 @@
 
             <!-- Advanced Per-Item Skeleton Loader -->
             <!-- Main Content Skeleton (Title, Desc, etc.) -->
-            <StackPanel x:Name="MainSkeleton" Padding="16,10,16,0" Spacing="12">
-                <!-- Title Skeleton -->
-                <Grid Width="200" Height="24" HorizontalAlignment="Left">
+            <StackPanel x:Name="MainSkeleton" Padding="16,10,16,0" Spacing="4">
+                <!-- Branding/Title Skeleton -->
+                <Grid Width="180" Height="40" HorizontalAlignment="Center" Margin="0,4,0,8">
                      <local:ShimmerControl/>
                 </Grid>
                 
-                <!-- Spacer for Badge Area is no longer needed in skeleton as it's part of content flow now 
-                     Actually we need it to push the Info/Desc down if we want MainSkeleton to match content shape
-                     But since we moved BadgeSkeleton out of MainSkeleton logic, MainSkeleton represents the 'rest' 
-                     Let's keep a small spacer or better yet, make MainSkeleton less tall at top -->
-                <Grid Height="0"/>
+                <!-- Metadata Skeleton -->
+                <Grid Width="140" Height="16" HorizontalAlignment="Center" Margin="0,0,0,2">
+                    <local:ShimmerControl/>
+                </Grid>
                 
-                <!-- Info Skeleton -->
-                <Grid Width="120" Height="14" HorizontalAlignment="Left"><local:ShimmerControl/></Grid>
+                <!-- Genre Skeleton -->
+                <Grid Width="100" Height="14" HorizontalAlignment="Center" Margin="0,0,0,2">
+                    <local:ShimmerControl/>
+                </Grid>
                 
                 <!-- Description Lines -->
-                <StackPanel Spacing="8" Margin="0,10,0,0">
-                    <Grid Height="10" Width="270"><local:ShimmerControl/></Grid>
-                    <Grid Height="10" Width="250"><local:ShimmerControl/></Grid>
+                <StackPanel Spacing="6" Margin="0,2,0,0">
+                    <Grid Height="10" Width="280"><local:ShimmerControl/></Grid>
                     <Grid Height="10" Width="260"><local:ShimmerControl/></Grid>
-                    <Grid Height="10" Width="220"><local:ShimmerControl/></Grid>
+                    <Grid Height="10" Width="270"><local:ShimmerControl/></Grid>
+                    <Grid Height="10" Width="240"><local:ShimmerControl/></Grid>
                 </StackPanel>
             </StackPanel>
 
