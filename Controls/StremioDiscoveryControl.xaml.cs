@@ -184,6 +184,20 @@ namespace ModernIPTVPlayer.Controls
             _ = LoadLayoutCacheFromDiskAsync();
 
             this.Unloaded += StremioDiscoveryControl_Unloaded;
+
+            // [FIX] Sync hero rotation with control visibility (handles switching to IPTV/Kütüphanem)
+            this.RegisterPropertyChangedCallback(VisibilityProperty, (s, dp) =>
+            {
+                HeroControl.Visibility = this.Visibility;
+                if (this.Visibility == Visibility.Visible)
+                {
+                    HeroControl.StartHeroAutoRotation();
+                }
+                else
+                {
+                    HeroControl.StopAutoRotation();
+                }
+            });
         }
 
         private static async Task DeleteLayoutCacheAsync()
@@ -253,6 +267,9 @@ namespace ModernIPTVPlayer.Controls
 
         private void StremioDiscoveryControl_Unloaded(object sender, RoutedEventArgs e)
         {
+            // [CRITICAL] Stop hero rotation to prevent background processing and leaks
+            HeroControl.StopAutoRotation();
+
             // [CRITICAL] Unsubscribe from static event to prevent leak
             StremioAddonManager.Instance.AddonsChanged -= OnAddonsChanged;
             HistoryManager.Instance.HistoryChanged -= OnHistoryChanged;
@@ -1214,12 +1231,15 @@ namespace ModernIPTVPlayer.Controls
                 if (_rowStates.TryGetValue(firstTargetRowId, out var state) && state == RowState.Pending && !skipShimmer)
                 {
                     if (!_rowItemsBuffer.ContainsKey(firstTargetRowId)) {
-                        HeroControl.SetLoading(true);
+                        if (this.Visibility == Visibility.Visible) HeroControl.SetLoading(true);
                         return;
                     }
                 }
 
                 if (!_rowItemsBuffer.TryGetValue(firstTargetRowId, out var items) || items.Count == 0) return;
+
+                // [FIX] Don't trigger hero transitions if we are hidden
+                if (this.Visibility != Visibility.Visible) return;
 
                 var heroItems = items.Take(5).ToList();
                 var newIds = heroItems.Select(i => i.IMDbId ?? i.Id.ToString()).ToList();

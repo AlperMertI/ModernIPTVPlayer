@@ -429,8 +429,11 @@ namespace ModernIPTVPlayer
                         var streamTask = _httpClient.GetStringAsync(streamApi, cancellationToken);
                         await Task.WhenAll(catTask, streamTask);
 
-                        categories = HttpHelper.TryDeserializeList<LiveCategory>(catTask.Result);
-                        streams = HttpHelper.TryDeserializeList<LiveStream>(streamTask.Result);
+                        string catJson = catTask.Result;
+                        string streamJson = streamTask.Result;
+
+                        categories = HttpHelper.TryDeserializeList<LiveCategory>(catJson);
+                        streams = HttpHelper.TryDeserializeList<LiveStream>(streamJson);
                     }
 
                     if (streams != null && streams.Count > 0)

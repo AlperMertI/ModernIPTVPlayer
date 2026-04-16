@@ -191,6 +191,37 @@ namespace ModernIPTVPlayer.Helpers
                      .Replace(" ", ""); 
         }
 
+        /// <summary>
+        /// Cleans technical tags and IPTV prefixes but PRESERVES spaces for search engine queries.
+        /// </summary>
+        public static string GetSearchTitle(string? title)
+        {
+            if (string.IsNullOrEmpty(title)) return string.Empty;
+
+            // 1. Strip Common IPTV Prefixes (e.g. "TR - ", "4K | ")
+            string cleaned = Regex.Replace(title, @"^.{1,4}\s*[:\-\|]\s*", " ", RegexOptions.IgnoreCase);
+
+            // 2. Strip brackets/parentheses and their content
+            cleaned = Regex.Replace(cleaned, @"\[.*?\]|\(.*?\)", " ");
+            
+            // 3. Strip Tech/Language Tags (Keep as words)
+            string langPattern = @"\b(TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR|NF|IR|GR|EN|US|UK|CA|AU)\b";
+            cleaned = Regex.Replace(cleaned, langPattern, " ", RegexOptions.IgnoreCase);
+
+            string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|REPACK|EXTENDED|DIRECTORS)\b";
+            cleaned = Regex.Replace(cleaned, techPattern, " ", RegexOptions.IgnoreCase);
+
+            // 4. Strip non-alphanumeric except spaces
+            var sb = new StringBuilder();
+            foreach (var c in cleaned)
+            {
+                if (char.IsLetterOrDigit(c) || char.IsWhiteSpace(c)) sb.Append(c);
+                else sb.Append(' ');
+            }
+
+            return Regex.Replace(sb.ToString(), @"\s+", " ").Trim().ToLowerInvariant();
+        }
+
         public static HashSet<string> GetSignificantTokens(string title)
         {
             if (string.IsNullOrEmpty(title)) return new HashSet<string>();

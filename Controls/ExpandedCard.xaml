@@ -179,10 +179,10 @@
                                         <RowDefinition Height="50"/>
                                         <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
-                                    <Border Grid.Row="0" CornerRadius="25" Height="50" Width="50" Background="#1AFFFFFF" BorderBrush="#33FFFFFF" BorderThickness="1">
+                                    <Border Grid.Row="0" CornerRadius="25" Height="50" Width="50" Background="{Binding ProfileBackground}" BorderBrush="#33FFFFFF" BorderThickness="1">
                                         <Grid CornerRadius="25">
-                                             <FontIcon Glyph="&#xE77B;" FontSize="20" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                             <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill" Margin="-1"/>
+                                             <TextBlock Text="{Binding Initials}" FontSize="16" FontWeight="Bold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="{Binding InitialsVisibility}"/>
+                                             <Image Source="{Binding FullProfileUrl}" Stretch="UniformToFill" Margin="-1" Visibility="{Binding ImageVisibility}"/>
                                         </Grid>
                                     </Border>
                                     <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="9" Foreground="#AAFFFFFF" 

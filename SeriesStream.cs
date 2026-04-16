@@ -115,7 +115,7 @@ namespace ModernIPTVPlayer
             set { if (MetadataBuffer.IsEqual(_tmdbAltOff, _tmdbAltLen, value)) return; var r = MetadataBuffer.Store(value); _tmdbAltOff = r.Offset; _tmdbAltLen = r.Length; OnPropertyChanged(); } 
         }
 
-        public string? IMDbId => !string.IsNullOrEmpty(ImdbId) ? ImdbId : (!string.IsNullOrEmpty(TmdbIdRaw) ? TmdbIdRaw : TmdbIdAlt);
+        public string? IMDbId => !string.IsNullOrEmpty(ImdbId) ? ImdbId : (!string.IsNullOrEmpty(TmdbIdRaw) ? TmdbIdRaw : (!string.IsNullOrEmpty(TmdbIdAlt) ? TmdbIdAlt : string.Empty));
         
         [JsonIgnore]
         public string Title 

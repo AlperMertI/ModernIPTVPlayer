@@ -535,10 +535,16 @@ namespace ModernIPTVPlayer.Controls
             try
             {
                 StopAutoRotation();
+
+                // [FIX] Don't start rotation if we are explicitly hidden
+                if (this.Visibility != Visibility.Visible) return;
+
                 _heroAutoTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
                 _heroAutoTimer.Tick += (s, e) =>
                 {
-                    if (this.Visibility != Visibility.Visible || this.ActualWidth <= 0 || this.XamlRoot == null || TrailerView.IsPlaying)
+                    // [MODERN] We allow rotation even if ActualWidth is 0 (scrolled off-screen in some layouts)
+                    // but we REQUIRE the control itself to be in the 'Visible' state.
+                    if (this.Visibility != Visibility.Visible || this.XamlRoot == null || TrailerView.IsPlaying)
                         return;
 
                     if (_heroItems.Count > 1)
@@ -564,6 +570,9 @@ namespace ModernIPTVPlayer.Controls
 
         private void NotifyColorChanged(Windows.UI.Color primary, Windows.UI.Color secondary)
         {
+            // [FIX] Don't notify or extract if we are hidden (e.g. in IPTV mode)
+            if (this.Visibility != Visibility.Visible) return;
+
             var now = DateTime.Now;
             var elapsed = (now - _lastColorChangeTime).TotalMilliseconds;
 

@@ -211,48 +211,10 @@ namespace ModernIPTVPlayer.Controls
         }
 
 
-        private async void Image_ImageOpened(object sender, RoutedEventArgs e)
+        private void Image_ImageOpened(object sender, RoutedEventArgs e)
         {
             FadeInStoryboard?.Begin();
-            // [FIX] Color extraction using URL-based approach (same as hover path, no RenderTargetBitmap)
-            // The previous RenderTargetBitmap.RenderAsync approach caused COMException storms
-            // when many cards loaded simultaneously. URL-based extraction is thread-safe and async.
-            var currentUrl = ImageUrl;
-            if (string.IsNullOrEmpty(currentUrl)) return;
-
-            try
-            {
-                // Cancel any previous pending extraction
-                _renderCts?.Cancel();
-                _renderCts = new System.Threading.CancellationTokenSource();
-                var token = _renderCts.Token;
-
-                // Small delay to allow the UI to stabilize before doing background work
-                await Task.Delay(50, token);
-                if (token.IsCancellationRequested || !this.IsLoaded) return;
-
-                // Extract colors from the image URL (cached, non-blocking)
-                var colors = await ImageHelper.GetOrExtractColorAsync(currentUrl);
-                
-                if (token.IsCancellationRequested || !this.IsLoaded) return;
-                
-                if (colors.HasValue)
-                {
-                    HeroColors = (colors.Value.Primary, colors.Value.Secondary);
-                    ColorsExtracted?.Invoke(this, colors.Value);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when card is recycled — no action needed
-            }
-            catch (Exception ex)
-            {
-                string hResult = string.Format("0x{0:X}", ex.HResult);
-                System.Diagnostics.Debug.WriteLine($"[PosterCard] !!! Extraction error for '{Title}'");
-                System.Diagnostics.Debug.WriteLine($"[PosterCard] HResult: {hResult}, Message: {ex.Message}");
-                // No need for stack trace here since it's likely just a call to ImageHelper
-            }
+            UpdateIPTVBadgeVisibility();
         }
 
     private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
@@ -282,10 +244,6 @@ namespace ModernIPTVPlayer.Controls
             Canvas.SetZIndex(this, 10); // Bring to front
             HoverInStoryboard.Begin();
             HoverStarted?.Invoke(this, EventArgs.Empty);
-            
-            // Colors are now extracted on ImageOpened using RenderTargetBitmap.
-            // If they are in cache, we could broadcast them here if needed, 
-            // but usually the consumer listens to the extraction event once.
         }
 
         private void OnPointerExited(object sender, PointerRoutedEventArgs e)

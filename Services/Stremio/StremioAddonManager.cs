@@ -277,6 +277,16 @@ namespace ModernIPTVPlayer.Services.Stremio
             return list;
         }
 
+        public StremioManifest? GetManifest(string url)
+        {
+            lock (_addonLock)
+            {
+                if (_manifestCache.TryGetValue(url, out var manifest))
+                    return manifest;
+                return null;
+            }
+        }
+
         public async void AddAddon(string url)
         {
             bool added = false;

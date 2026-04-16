@@ -11,6 +11,7 @@ using ModernIPTVPlayer;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services;
+using ModernIPTVPlayer.Helpers;
 using MpvWinUI;
 using System.Globalization;
 using System.Diagnostics;
@@ -631,6 +632,9 @@ namespace ModernIPTVPlayer.Controls
         /// </summary>
         public async Task StopTrailer(bool forceDestroy = false)
         {
+            long session = _loadNonce; // Capture current load session
+            System.Diagnostics.Debug.WriteLine($"[ExpandedCard] StopTrailer called. Session: {session}");
+            
             try
             {
                 // Cancel any pending PlayTrailer or init
@@ -639,44 +643,24 @@ namespace ModernIPTVPlayer.Controls
                 _trailerCts = null;
                 _playerReadyTcs?.TrySetCanceled();
                 _playerReadyTcs = null;
-                // [FIX] Only reset _isPlayerReady if we are actually destroying the webview or source
-                if (forceDestroy) _isPlayerReady = false;
                 
+                if (forceDestroy) _isPlayerReady = false;
                 _isTrailerRevealed = false;
 
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] StopTrailer called. ForceDestroy={forceDestroy}");
-
-                // Stop the player via JS explicitly before hiding
-                // [CRITICAL FIX] Check WebView validity before execution (removed IsLoaded to ensure stop works during unload)
                 if (_webViewInitialized && TrailerWebView?.CoreWebView2 != null)
                 {
                      try 
                      {
                          var jsTask = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();").AsTask();
-                         // Don't hang if WebView process is unresponsive
-                         if (await Task.WhenAny(jsTask, Task.Delay(500)) == jsTask)
-                         {
-                             await jsTask;
-                         }
+                         if (await Task.WhenAny(jsTask, Task.Delay(500)) == jsTask) await jsTask;
                      }
-                     catch(Exception ex) 
-                     {
-                         System.Diagnostics.Debug.WriteLine($"[ExpandedCard] StopJS Error: {ex.Message}");
-                     }
+                     catch { }
                 }
 
-                if (forceDestroy)
+                if (forceDestroy && TrailerWebView != null && this.IsLoaded)
                 {
-                    try
-                    {
-                        // Nuclear option for navigation: Kill the WebView content to ensure no audio persists
-                        if (TrailerWebView != null && this.IsLoaded)
-                        {
-                            TrailerWebView.Source = new Uri("about:blank");
-                        }
-                        _webViewInitialized = false; // Mark as uninitialized so it reloads next time
-                    }
-                    catch { }
+                    TrailerWebView.Source = new Uri("about:blank");
+                    _webViewInitialized = false;
                 }
             }
             catch (Exception ex)
@@ -684,19 +668,26 @@ namespace ModernIPTVPlayer.Controls
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error in StopTrailer: {ex.Message}");
             }
 
-            if (_isCinemaMode) ToggleCinemaMode(false); // Reset mode
-            ResetState(isMorphing: false, isStopping: true);
+            if (_isCinemaMode) ToggleCinemaMode(false);
+            ResetState(isMorphing: false, isStopping: true, sessionNonce: session);
         }
 
         /// <summary>
         /// Resets the card to initial state before loading new data
         /// </summary>
-        private void ResetState(bool isMorphing = false, bool isStopping = false, bool forceSkeleton = true)
+        private void ResetState(bool isMorphing = false, bool isStopping = false, bool forceSkeleton = true, long sessionNonce = -1)
         {
+            // Transactional Guard: If a reset arrives from an old session (e.g. a late StopTrailer), ignore it.
+            if (sessionNonce != -1 && sessionNonce != _loadNonce)
+            {
+                System.Diagnostics.Debug.WriteLine($"[EXP-RESET] REJECTED | Target Session: {sessionNonce} | Current: {_loadNonce}");
+                return;
+            }
+
             // 1. STRATEGY: Calculate our behavior once at the top
             bool isSmartSwap = !forceSkeleton;
             bool shouldProtectIdentity = isSmartSwap || isStopping;
-            System.Diagnostics.Debug.WriteLine($"[EXP-RESET] Start | SmartSwap: {isSmartSwap} | Stopping: {isStopping} | IdentityProtected: {shouldProtectIdentity}");
+            System.Diagnostics.Debug.WriteLine($"[EXP-RESET] Start | Session: {sessionNonce} | SmartSwap: {isSmartSwap} | Stopping: {isStopping} | IdentityProtected: {shouldProtectIdentity} | ForceSkeleton: {forceSkeleton}");
 
             // 2. STATE MANAGEMENT: Reset memory only if we are truly moving to a NEW item
             if (!isStopping) 
@@ -839,12 +830,12 @@ namespace ModernIPTVPlayer.Controls
         {
             if (shouldProtectIdentity)
             {
-                System.Diagnostics.Debug.WriteLine($"[EXP-VERBOSE] UI SHIELDED - Title: {TitleText.Text}");
+                System.Diagnostics.Debug.WriteLine($"[EXP-VERBOSE] UI SHIELDED - Skipping Wipe | Current Title: {TitleText.Text}");
                 return;
             }
 
             // FULL WIPE: Only happens when moving to a brand new item with a cache miss
-            System.Diagnostics.Debug.WriteLine("[EXP-VERBOSE] Identity WIPE active - clearing Title/Logo/Genres/Details");
+            System.Diagnostics.Debug.WriteLine($"[EXP-VERBOSE] Identity WIPE active (Full Clear) | Nonce: {_loadNonce}");
             
             // Layer A (Identity)
             TitleText.Text = "";
@@ -912,71 +903,37 @@ namespace ModernIPTVPlayer.Controls
         public async Task LoadDataAsync(ModernIPTVPlayer.Models.IMediaStream stream, bool isMorphing = false)
         {
             _isSeriesFinished = false; // Reset on new load
+            // 1. Transactional Update
             _loadNonce++;
             long loadNonce = _loadNonce;
 
-            // 1. SMART CHECK: Peek cache early to avoid layout/skeleton flicker
-            var peeked = Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(stream, Models.Metadata.MetadataContext.ExpandedCard);
-            bool hasCache = peeked != null;
-            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Start: {stream.Title} | hasCache: {hasCache}");
-
-            // 2. [0ms SEED] Immediately set identity from the stream to prevent placeholder ghosting
-            _stream = stream;
-            SafeSetText(TitleText, stream.Title);
+            // 2. High-Fidelity Seeding (Architectural Improvement)
+            // Immediately extract all available local data from the stream.
+            var seed = ModernIPTVPlayer.Models.Metadata.UnifiedMetadata.FromStream(stream);
+            bool hasRealCache = Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(stream, Models.Metadata.MetadataContext.ExpandedCard) != null;
             
-            // Layout Stability: Always default to Visible at 0ms. 
-            // We let the physical image check later decide if it should be hidden (for wide logos).
-            TitleText.Visibility = Visibility.Visible;
-            System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] 0ms Seed - Title Visible forced");
-            
-            // PRIORITY: If we have cached Backdrop, show it immediately. Fallback to Poster.
-            string initialImageUrl = peeked?.BackdropUrl ?? stream.PosterUrl;
-            if (!string.IsNullOrEmpty(initialImageUrl))
-                SafeSetImage(BackdropImage, initialImageUrl, ref _currentBackdropUrl);
+            // Engineering Decision: If we have seed data, we enable "Smart Swap" 
+            // even if the item isn't in the global enriched cache yet.
+            bool isEligibleForSmartSwap = isMorphing || seed != null || hasRealCache;
 
-            // 3. Atomic Clear of OLD data while optionally skipping the skeleton for the NEW data
-            ResetState(isMorphing, forceSkeleton: !hasCache);
-
-            if (hasCache)
-            {
-                // [SMART SWAP] PRE-FILL UI INSTANTLY
-                System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Early Swap Starting for: {stream.Title}");
-                UpdateUiFromUnified(peeked);
-            }
-            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Post-Reset State: BackdropVis={BackdropContainer.Visibility}, BackdropOp={BackdropImage.Opacity}, HasSource={BackdropImage.Source != null}");
-
-            // DEBOUNCE: Wait 300ms before doing heavy metadata/trailer work
-            await Task.Delay(300);
-            if (loadNonce != _loadNonce) return; // User moved to another poster
+            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Start Session {loadNonce}: {stream.Title} | SmartSwap: {isEligibleForSmartSwap}");
 
             _stream = stream;
-            
-            // 3. Flicker Fix: Skip manual overwrite if metadata already filled the title correctly
-            if (!hasCache)
-            {
-                TitleText.Text = stream.Title;
-            }
 
-            // Set initial low-res image ONLY if we don't have cache (don't overwrite high-res backdrop)
-            if (!hasCache)
-            {
-                if (!string.IsNullOrEmpty(stream.PosterUrl))
-                {
-                    BackdropImage.Source = ImageHelper.GetImage(stream.PosterUrl, 0, 420);
-                }
-                else
-                {
-                    BackdropImage.Source = null;
-                    _currentBackdropUrl = null;
-                }
-            }
+            // 3. Authority Seeding (0ms)
+            UpdateUiFromUnified(seed);
 
-            // Fire-and-forget initialization - these are already initialized at app startup
-            // or in other pages. We don't block the UI waiting for them.
-            _ = InitializeServicesAsync();
+            // 4. Session-Locked Reset (Shielded if smart swapping)
+            ResetState(isMorphing, forceSkeleton: !isEligibleForSmartSwap, sessionNonce: loadNonce);
+
+            // Minimal delay for layout settlement, then start enrichment tasks
+            await Task.Delay(10);
+            if (loadNonce != _loadNonce) return; 
 
             // Initial Badges (Static parse before probe/metadata)
             UpdateTechnicalBadges(stream);
+
+            // ... (Rest of UI updates follow seamlessly using the seed data) ...
 
             // Stremio Badge Logic: Hide technical skeleton if no history available
             if (stream is StremioMediaStream stremio)
@@ -1006,7 +963,23 @@ namespace ModernIPTVPlayer.Controls
 
             try
             {
-                var metadataTask = Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream, Models.Metadata.MetadataContext.ExpandedCard);
+                var metadataTask = Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream, Models.Metadata.MetadataContext.ExpandedCard, onUpdate: (partial) => 
+                {
+                    this.DispatcherQueue.TryEnqueue(() => 
+                    {
+                        if (loadNonce != _loadNonce) 
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] onUpdate IGNORED (Stale Nonce): {partial.Title} | TaskNonce: {loadNonce} | Current: {_loadNonce}");
+                            return;
+                        }
+                        
+                        lock (partial.SyncRoot)
+                        {
+                             System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] onUpdate Dispatching: {partial.Title} | DataSource: {partial.DataSource}");
+                             UpdateUiFromUnified(partial);
+                        }
+                    });
+                });
                 var timeoutTask = Task.Delay(15000);
                 var completedTask = await Task.WhenAny(metadataTask, timeoutTask);
 
@@ -1688,10 +1661,14 @@ namespace ModernIPTVPlayer.Controls
         }
         private void UpdateUiFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified, string? overrideTitle = null, string? overrideSubtitle = null, string? overrideOverview = null, string? overrideBackdrop = null)
         {
-            if (unified == null) return;
+            if (unified == null) 
+            {
+                System.Diagnostics.Debug.WriteLine("[EXP-UI] Update Aborted: unified is null");
+                return;
+            }
             
             bool isDedupe = _lastMetadata?.MetadataId == unified.MetadataId;
-            System.Diagnostics.Debug.WriteLine($"[EXP-UI] Update: {unified.Title} | isDedupe: {isDedupe} | _isRevealed: {_isRevealed}");
+            System.Diagnostics.Debug.WriteLine($"[EXP-UI] Update Start: {unified.Title} | metadataId: {unified.MetadataId} | isDedupe: {isDedupe} | CurrentRevealed: {_isRevealed}");
             
             _lastMetadata = unified;
 
@@ -1768,7 +1745,7 @@ namespace ModernIPTVPlayer.Controls
             if (!_isRevealed)
             {
                 _isRevealed = true;
-                StaggeredRevealContent();
+                DispatcherQueue.TryEnqueue(() => StaggeredRevealContent());
             }
 
             ToolTipService.SetToolTip(PlayButton, _stream?.Title);
@@ -1864,7 +1841,7 @@ namespace ModernIPTVPlayer.Controls
                 {
                     foreach (var d in unified.Directors.Take(5))
                     {
-                        DirectorList.Add(new CastItem { Name = d.Name, FullProfileUrl = d.ProfileUrl });
+                        DirectorList.Add(CreateCastItem(d.Name, d.ProfileUrl));
                     }
                 }
 
@@ -1889,12 +1866,12 @@ namespace ModernIPTVPlayer.Controls
             {
                 CastList.Clear();
 
-                // 1. Check if Catalog/Unified already provided cast with portraits
-                if (unified.Cast != null && unified.Cast.Count > 0 && unified.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl)))
+                // 1. Check if Catalog/Unified already provided cast
+                if (unified.Cast != null && unified.Cast.Count > 0)
                 {
                     foreach (var c in unified.Cast.Take(10))
                     {
-                        CastList.Add(new CastItem { Name = c.Name, FullProfileUrl = c.ProfileUrl });
+                        CastList.Add(CreateCastItem(c.Name, c.ProfileUrl));
                     }
                 }
                 // 2. Otherwise fallback to TMDB fetch
@@ -1905,7 +1882,7 @@ namespace ModernIPTVPlayer.Controls
                     {
                         foreach (var c in credits.Cast.Take(10))
                         {
-                            CastList.Add(new CastItem { Name = c.Name, FullProfileUrl = c.FullProfileUrl });
+                            CastList.Add(CreateCastItem(c.Name, c.FullProfileUrl));
                         }
                     }
                 }
@@ -1923,10 +1900,39 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private CastItem CreateCastItem(string name, string? profileUrl)
+        {
+            string initials = "";
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                var parts = name.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length > 0)
+                {
+                    initials = parts[0][0].ToString();
+                    if (parts.Length > 1) initials += parts[parts.Length - 1][0];
+                }
+            }
+
+            // Neutral Dark Gray for a professional, unified look across all platform items.
+            var neutralColor = AppColorHelper.FromHex("#333333");
+
+            return new CastItem 
+            { 
+                Name = name, 
+                FullProfileUrl = profileUrl,
+                Initials = initials.ToUpperInvariant(),
+                ProfileBackground = new SolidColorBrush(neutralColor)
+            };
+        }
+
         public class CastItem
         {
             public string Name { get; set; }
             public string FullProfileUrl { get; set; }
+            public string Initials { get; set; }
+            public SolidColorBrush ProfileBackground { get; set; }
+            public Visibility ImageVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Collapsed : Visibility.Visible;
+            public Visibility InitialsVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void StaggeredRevealContent()

@@ -1,3 +1,5 @@
+using System;
+using System.Linq;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using ModernIPTVPlayer;
@@ -49,6 +51,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         // [NEW] IPTV Integration Properties
         public string StreamUrl { get; set; }
         public bool IsAvailableOnIptv { get; set; }
+        public bool IsFromIptv { get; set; }
         public List<VodStream> IptvVods { get; set; } = new List<VodStream>();
         public List<SeriesStream> IptvSeries { get; set; } = new List<SeriesStream>();
 
@@ -66,6 +69,54 @@ namespace ModernIPTVPlayer.Models.Metadata
 
         [JsonIgnore] 
         public string DurationFormatted => Runtime; // Alias for compatibility
+
+        /// <summary>
+        /// Highly-performant factory method to create a unified seed from any stream object.
+        /// This ensures the UI has a consistent model to render at 0ms, even before network enrichment.
+        /// </summary>
+        public static UnifiedMetadata FromStream(IMediaStream stream)
+        {
+            if (stream == null) return null;
+
+            var meta = new UnifiedMetadata
+            {
+                Title = stream.Title,
+                Overview = stream.Description,
+                PosterUrl = stream.PosterUrl,
+                BackdropUrl = stream.BackdropUrl ?? stream.PosterUrl,
+                Year = stream.Year,
+                Genres = stream.Genres,
+                MetadataId = stream.Id.ToString(),
+                ImdbId = stream.IMDbId,
+                IsAvailableOnIptv = stream.IsAvailableOnIptv,
+                DataSource = "Stream Seed",
+                IsFromIptv = stream is VodStream || stream is SeriesStream
+            };
+
+            // Map Rating with InvariantCulture
+            if (double.TryParse(stream.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+                meta.Rating = r;
+
+            // Map Cast if available
+            if (!string.IsNullOrEmpty(stream.Cast))
+            {
+                meta.Cast = stream.Cast.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                      .Select(s => new UnifiedCast { Name = s.Trim() }).ToList();
+            }
+
+            // Map Director if available
+            if (!string.IsNullOrEmpty(stream.Director))
+            {
+                meta.Directors = stream.Director.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                                .Select(s => new UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
+            }
+
+            // Map Technical Data
+            meta.Resolution = stream.Resolution;
+            meta.VideoCodec = stream.Codec;
+
+            return meta;
+        }
     }
 
     public class UnifiedSeason

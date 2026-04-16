@@ -1853,6 +1853,28 @@ namespace ModernIPTVPlayer
                 _unifiedMetadata = await MetadataProvider.Instance.GetMetadataAsync(item, onBackdropFound: (url) => 
                 {
                     DispatcherQueue.TryEnqueue(() => AddBackdropToSlideshow(url));
+                }, onUpdate: (partial) => 
+                {
+                    DispatcherQueue.TryEnqueue(async () => 
+                    {
+                        if (currentVersion != _loadingVersion) return;
+
+                        lock (partial.SyncRoot)
+                        {
+                            _unifiedMetadata = partial;
+                            _ = PopulateMetadataUI(partial, item);
+                        }
+
+                        // Progressive Reveal: If we are still in Loading state, morph to content immediately
+                        if (_pageLoadState == PageLoadState.Loading)
+                        {
+                            System.Diagnostics.Debug.WriteLine("[MediaInfo-Progressive] Fast reveal triggered by partial metadata.");
+                            UpdateLayoutState(ActualWidth >= LayoutAdaptiveThreshold);
+                            _pageLoadState = PageLoadState.Revealing;
+                            StaggeredRevealContent();
+                            _pageLoadState = PageLoadState.Ready;
+                        }
+                    });
                 });
                 _lastUsedTmdbLanguage = AppSettings.TmdbLanguage;
 

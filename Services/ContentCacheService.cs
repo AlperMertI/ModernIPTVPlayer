@@ -319,6 +319,7 @@ namespace ModernIPTVPlayer.Services
                         {
                             string api = $"{login.Host}/player_api.php?username={login.Username}&password={login.Password}&action=get_vod_streams";
                             string json = await HttpHelper.Client.GetStringAsync(api);
+                            
                             var vods = JsonSerializer.Deserialize<List<VodStream>>(json, options) ?? new();
                             if (vods.Count > 0)
                             {
@@ -337,7 +338,6 @@ namespace ModernIPTVPlayer.Services
                         {
                             string api = $"{login.Host}/player_api.php?username={login.Username}&password={login.Password}&action=get_series";
                             string json = await HttpHelper.Client.GetStringAsync(api);
-                            AppLogger.Info($"[ContentCache] Series API Downloaded. Length: {json?.Length ?? 0}");
                             
                             var series = JsonSerializer.Deserialize<List<SeriesStream>>(json, options) ?? new();
                             AppLogger.Info($"[ContentCache] Series Deserialized: {series.Count} items.");
@@ -1127,6 +1127,40 @@ namespace ModernIPTVPlayer.Services
         // ==========================================
         // MATCH PERSISTENCE (THROTTLED)
         // ==========================================
+
+        public void RegisterImdbMapping(int streamId, string imdbId, bool isSeries)
+        {
+            if (string.IsNullOrEmpty(imdbId)) return;
+
+            string category = isSeries ? "series" : "vod";
+            string playlistId = App.CurrentLogin?.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
+            string cacheKey = $"{playlistId}_{category}";
+
+            if (_streamListsCache.TryGetValue(cacheKey, out var cached) && cached is System.Collections.IEnumerable list)
+            {
+                foreach (var item in list)
+                {
+                    if (isSeries && item is SeriesStream series && series.SeriesId == streamId)
+                    {
+                        if (series.ImdbId == imdbId) return;
+                        series.ImdbId = imdbId;
+                        AppLogger.Info($"[ContentCache] Mapping LEARNED globally: {category} ID {streamId} -> IMDb {imdbId}. Queueing save...");
+                        _pendingSaveCategories.TryAdd(category, 0);
+                        _throttledSaveTimer.Change(5000, -1); // Save in 5 seconds to batch
+                        return;
+                    }
+                    else if (!isSeries && item is VodStream vod && vod.StreamId == streamId)
+                    {
+                        if (vod.ImdbId == imdbId) return;
+                        vod.ImdbId = imdbId;
+                        AppLogger.Info($"[ContentCache] Mapping LEARNED globally: {category} ID {streamId} -> IMDb {imdbId}. Queueing save...");
+                        _pendingSaveCategories.TryAdd(category, 0);
+                        _throttledSaveTimer.Change(5000, -1);
+                        return;
+                    }
+                }
+            }
+        }
 
         public Task TriggerThrottledSaveAsync(string category)
         {

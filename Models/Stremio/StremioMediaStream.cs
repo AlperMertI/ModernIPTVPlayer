@@ -64,7 +64,7 @@ namespace ModernIPTVPlayer.Models.Stremio
                 return 0;
             } 
         }
-        public string IMDbId => Meta?.Id ?? ""; // Real ID
+        public string? IMDbId => !string.IsNullOrEmpty(Meta?.Id) ? Meta.Id : string.Empty;
 
         public string Title { get => Meta?.Name ?? "Loading..."; set { if (Meta != null) Meta.Name = value; } }
 

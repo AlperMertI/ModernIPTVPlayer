@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.RegularExpressions;
@@ -12,6 +13,7 @@ using ModernIPTVPlayer.Services.Iptv;
 using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer;
 using ModernIPTVPlayer.Helpers;
+using System.IO;
 
 namespace ModernIPTVPlayer.Services.Metadata
 {
@@ -63,6 +65,101 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private MetadataProvider()
         {
+            _ = LoadMappingCacheAsync();
+        }
+
+        private async Task LoadMappingCacheAsync()
+        {
+            try
+            {
+                await LoadMappingCacheBinaryAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Error loading mapping cache: {ex.Message}");
+            }
+        }
+
+        private async Task LoadMappingCacheBinaryAsync()
+        {
+            try
+            {
+                var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
+                var fileName = Path.Combine(folder.Path, MAPPING_CACHE_FILE_BINARY);
+                if (!File.Exists(fileName)) return;
+
+                using var fs = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var br = new BinaryReader(fs);
+
+                // Header Check
+                int magic = br.ReadInt32(); // 'MZMP' (Metadata Zero Mapping)
+                if (magic != 0x504D5A4D) return; 
+
+                int version = br.ReadInt32();
+                int count = br.ReadInt32();
+
+                for (int i = 0; i < count; i++)
+                {
+                    string key = br.ReadString();
+                    string val = br.ReadString();
+                    _rawToCanonicalIdCache[key] = val;
+                }
+
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Restored {count} mappings from Binary Index.");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Binary Load Error: {ex.Message}");
+            }
+        }
+
+        private CancellationTokenSource _saveCts;
+        private async Task SaveMappingCacheAsync()
+        {
+            // Debounce save (500ms) to prevent file system thrashing during rapid hover
+            _saveCts?.Cancel();
+            _saveCts = new CancellationTokenSource();
+            var token = _saveCts.Token;
+
+            try
+            {
+                await Task.Delay(500, token);
+                if (token.IsCancellationRequested) return;
+
+                await Task.Run(() => 
+                {
+                    try
+                    {
+                        var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
+                        var fileName = Path.Combine(folder.Path, MAPPING_CACHE_FILE_BINARY);
+                        var tempFile = fileName + ".tmp";
+
+                        var mappings = _rawToCanonicalIdCache.ToArray();
+
+                        using (var fs = new FileStream(tempFile, FileMode.Create, FileAccess.Write))
+                        using (var bw = new BinaryWriter(fs))
+                        {
+                            bw.Write(0x504D5A4D); // 'MZMP'
+                            bw.Write(1); // Version
+                            bw.Write(mappings.Length);
+
+                            foreach (var kv in mappings)
+                            {
+                                bw.Write(kv.Key);
+                                bw.Write(kv.Value);
+                            }
+                        }
+
+                        if (File.Exists(fileName)) File.Delete(fileName);
+                        File.Move(tempFile, fileName);
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Binary Save Error: {ex.Message}");
+                    }
+                }, token);
+            }
+            catch (OperationCanceledException) { }
         }
 
         private readonly ConcurrentDictionary<string, Lazy<Task<UnifiedMetadata>>> _activeTasks = new();
@@ -73,6 +170,9 @@ namespace ModernIPTVPlayer.Services.Metadata
         private readonly ConcurrentDictionary<string, string> _rawToCanonicalIdCache = new(StringComparer.OrdinalIgnoreCase);
         private readonly TimeSpan _addonMetaPositiveCacheDuration = TimeSpan.FromMinutes(20);
         private readonly TimeSpan _addonMetaNegativeCacheDuration = TimeSpan.FromMinutes(3);
+
+        private const string MAPPING_CACHE_FILE_BINARY = "metadata_mappings.bin";
+        private readonly SemaphoreSlim _enrichmentSemaphore = new SemaphoreSlim(16);
 
         public void ClearCache()
         {
@@ -95,7 +195,12 @@ namespace ModernIPTVPlayer.Services.Metadata
             try
             {
                 string rawId = stream.IMDbId;
-                string? id = ResolveBestInitialId(stream) ?? NormalizeId(rawId) ?? rawId;
+                if (string.IsNullOrWhiteSpace(rawId) && stream.Id != 0)
+                {
+                    rawId = $"iptv:{stream.Id}";
+                }
+
+                string? id = ResolveBestInitialId(stream) ?? NormalizeId(rawId) ?? (string.IsNullOrWhiteSpace(rawId) ? null : rawId);
                 
                 // [FIX] Canonical ID restoration matching GetMetadataAsync
                 bool isCanonical = IsImdbId(id) || (!string.IsNullOrWhiteSpace(id) && id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase));
@@ -112,7 +217,10 @@ namespace ModernIPTVPlayer.Services.Metadata
                 
                 string addonHash = GetAddonOrderHash();
                 string tmdbLang = AppSettings.TmdbLanguage;
-                string cacheKey = $"{normalizedId ?? stream.Title}_{normalizedType}_{addonHash}_{tmdbLang}";
+                
+                // [FIX] Use Title as extreme fallback only if no ID (Raw or Canonical) exists
+                string idPart = !string.IsNullOrWhiteSpace(normalizedId) ? normalizedId : (string.IsNullOrWhiteSpace(rawId) ? stream.Title : rawId);
+                string cacheKey = $"{idPart}_{normalizedType}_{addonHash}_{tmdbLang}";
                 if (context == MetadataContext.Discovery) cacheKey += "_discovery";
 
                 // 1. Check Primary Cache
@@ -250,7 +358,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             return results;
         }
 
-        public async Task<UnifiedMetadata> GetMetadataAsync(Models.IMediaStream stream, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null)
+        public async Task<UnifiedMetadata> GetMetadataAsync(Models.IMediaStream stream, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null, Action<UnifiedMetadata> onUpdate = null)
         {
             if (stream == null) return null;
             
@@ -273,6 +381,12 @@ namespace ModernIPTVPlayer.Services.Metadata
                 isCanonical = true;
                 AppLogger.Info($"Canonical ID restored from raw-cache: {rawId} -> {cachedCanonical}");
             }
+            if (isCanonical && !string.IsNullOrWhiteSpace(rawId) && id != rawId && !_rawToCanonicalIdCache.ContainsKey(rawId))
+            {
+                _rawToCanonicalIdCache[rawId] = id;
+                _ = SaveMappingCacheAsync();
+            }
+
             if (!isCanonical && rawId != null && (rawId.Contains(",") || rawId.Contains(" ") || rawId.Length > 100))
             {
                 AppLogger.Warn($"Non-standard ID detected, using title fallback. RawId: {rawId}");
@@ -289,7 +403,10 @@ namespace ModernIPTVPlayer.Services.Metadata
             
             string addonHash = GetAddonOrderHash();
             string tmdbLang = AppSettings.TmdbLanguage;
-            string baseCacheKey = $"{id ?? stream.Title}_{normalizedType}_{addonHash}_{tmdbLang}";
+            
+            // [FIX] Use Title as extreme fallback only if no ID (Raw or Canonical) exists
+            string idPart = !string.IsNullOrWhiteSpace(id) ? id : (string.IsNullOrWhiteSpace(rawId) ? stream.Title : rawId);
+            string baseCacheKey = $"{idPart}_{normalizedType}_{addonHash}_{tmdbLang}";
             string cacheKey = baseCacheKey;
             
             if (context == MetadataContext.Discovery)
@@ -351,7 +468,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
                     {
                         AppLogger.Info($"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
-                        return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data);
+                        return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data, onUpdate);
                     })).Value;
                 }
             }
@@ -392,7 +509,15 @@ namespace ModernIPTVPlayer.Services.Metadata
                         var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail, false));
                         string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
                         AppLogger.Info($"[MetadataProvider] SEEDING Detail fetch ({id ?? stream?.Title}) | Reason: {seedReason}");
-                        return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data))).Value;
+                        return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
+                        {
+                            await _enrichmentSemaphore.WaitAsync();
+                            try 
+                            {
+                                return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data, onUpdate);
+                            }
+                            finally { _enrichmentSemaphore.Release(); }
+                        }))).Value;
                     }
                 }
             }
@@ -422,13 +547,19 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             var fetchReason = missing.ToString();
-            return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
+            return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
             {
                 var msg = $"[MetadataProvider] 🔍 Cache MISS. START Fetching ({context}): {id ?? stream.Title} | Type: {fetchType} | Reason: {fetchReason}";
                 AppLogger.Info(msg);
                 System.Diagnostics.Debug.WriteLine(msg);
-                return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound);
-            })).Value;
+                
+                await _enrichmentSemaphore.WaitAsync();
+                try 
+                {
+                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, null, onUpdate);
+                }
+                finally { _enrichmentSemaphore.Release(); }
+            }))).Value;
         }
 
         private string? ResolveBestInitialId(Models.IMediaStream stream)
@@ -463,13 +594,13 @@ namespace ModernIPTVPlayer.Services.Metadata
             return baseId;
         }
 
-        private async Task<UnifiedMetadata> GetMetadataInternalAsync(string id, string type, Models.IMediaStream sourceStream, string cacheKey, MetadataContext context, Action<string> onBackdropFound = null, UnifiedMetadata seed = null)
+        private async Task<UnifiedMetadata> GetMetadataInternalAsync(string id, string type, Models.IMediaStream sourceStream, string cacheKey, MetadataContext context, Action<string> onBackdropFound = null, UnifiedMetadata seed = null, Action<UnifiedMetadata> onUpdate = null)
         {
             // [FIX] Normalize ID to canonical IMDB ID immediately to avoid search failures on priority addons
             string normalizedId = NormalizeId(id) ?? id;
             try
             {
-                var result = await GetMetadataAsync(normalizedId, type, sourceStream, context, onBackdropFound, seed);
+                var result = await GetMetadataAsync(normalizedId, type, sourceStream, context, onBackdropFound, seed, onUpdate);
                 
                 if (result != null)
                 {
@@ -513,7 +644,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private readonly StremioService _stremioService = StremioService.Instance;
 
-        private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null, UnifiedMetadata seed = null)
+        private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null, UnifiedMetadata seed = null, Action<UnifiedMetadata> onUpdate = null)
         {
             var trace = new MetadataTrace(context.ToString(), id, sourceStream?.Title);
             bool isSeriesType = type == "series" || type == "tv";
@@ -523,35 +654,90 @@ namespace ModernIPTVPlayer.Services.Metadata
                 ImdbId = id,
                 IsSeries = isSeriesType,
                 MetadataId = id,
-                Title = sourceStream != null && !string.IsNullOrEmpty(sourceStream.Title) && sourceStream.Title != "Loading..." ? sourceStream.Title : (id ?? "Unknown")
+                Title = sourceStream?.Title ?? (id ?? "Unknown"),
+                Overview = sourceStream?.Description,
+                PosterUrl = sourceStream?.PosterUrl,
+                BackdropUrl = sourceStream?.BackdropUrl ?? sourceStream?.PosterUrl,
+                Genres = sourceStream?.Genres,
+                Rating = double.TryParse(sourceStream?.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var r) ? r : 0,
+                IsFromIptv = sourceStream is ModernIPTVPlayer.VodStream || sourceStream is ModernIPTVPlayer.SeriesStream
             };
 
             // [FIX] Ensure IsSeries is correctly synced if we are using a seed (cached result)
             if (seed != null) metadata.IsSeries = isSeriesType;
 
-            // [NEW] Early ID Resolution: If this is a numeric IPTV ID, check if we already have an IMDb mapping.
-            // This allows the fetch to start with a canonical ID even if the user clicked an IPTV result.
-            if (!string.IsNullOrEmpty(metadata.MetadataId) && !IsCanonicalId(metadata.MetadataId) && char.IsDigit(metadata.MetadataId[0]))
+            // [NEW] Canonical ID Restoration (The Fix)
+            // Even if a 'seed' was provided, we must ensure it uses the canonical ID 
+            // restored from our persistent disk cache if possible.
+            if (!IsCanonicalId(metadata.ImdbId) && !string.IsNullOrEmpty(id) && IsCanonicalId(id))
             {
-                var match = IptvMatchService.Instance.FindAllMatchesById(metadata.MetadataId, true).FirstOrDefault();
-                if (match != null && !string.IsNullOrEmpty(match.IMDbId) && IsImdbId(match.IMDbId))
+                trace.Log("ID", $"Pinning canonical ID to metadata: {id}");
+                metadata.ImdbId = id;
+            }
+
+            // [NEW] Early ID Resolution: If this is an IPTV ID, check if we have a persistent match.
+            if (!string.IsNullOrEmpty(metadata.ImdbId) && !IsCanonicalId(metadata.ImdbId))
+            {
+                // A. Check high-speed binary cache first (MetadataProvider's own memory)
+                string rawId = NormalizeId(metadata.ImdbId) ?? metadata.ImdbId;
+                if (_rawToCanonicalIdCache.TryGetValue(rawId, out var cachedCanonical))
                 {
-                    trace.Log("ID", $"Early Resolution: IPTV {metadata.MetadataId} -> IMDb {match.IMDbId}");
-                    metadata.ImdbId = match.IMDbId;
+                    AppLogger.Info($"[Metadata] Restored mapping from disk cache: {rawId} -> {cachedCanonical}");
+                    trace.Log("ID", $"Restored from disk cache: {rawId} -> {cachedCanonical}");
+                    metadata.ImdbId = cachedCanonical;
+                }
+                // B. Fallback to IptvMatchService (User/Internal persistent mappings)
+                else if (char.IsDigit(metadata.ImdbId[0]))
+                {
+                    var match = IptvMatchService.Instance.FindAllMatchesById(metadata.ImdbId, true).FirstOrDefault();
+                    if (match != null && !string.IsNullOrEmpty(match.IMDbId) && IsImdbId(match.IMDbId))
+                    {
+                        trace.Log("ID", $"Early Resolution (Service): IPTV {metadata.ImdbId} -> IMDb {match.IMDbId}");
+                        metadata.ImdbId = match.IMDbId;
+                        
+                        // Sync back to our high-speed cache
+                        _rawToCanonicalIdCache[rawId] = match.IMDbId;
+                    }
                 }
             }
 
             try
             {
+                // [NEW] Parallel Progressive Hydration: Start IPTV enrichment and Discovery Search simultaneously.
+                // This ensures the plot and local poster appear within <50ms even if the network is slow.
+                Task? iptvTask = null;
+
+                // A. Local IPTV Enrichment (Ultra-fast Disk access)
+                if (App.CurrentLogin != null && context != MetadataContext.Discovery && context != MetadataContext.Spotlight)
+                {
+                    if (metadata.IsSeries)
+                    {
+                        var seriesStream = sourceStream as SeriesStream;
+                        iptvTask = EnrichWithIptvAsync(metadata, seriesStream ?? new SeriesStream { Name = metadata.Title }, trace);
+                    }
+                    else
+                    {
+                        var movieStream = sourceStream as VodStream;
+                        iptvTask = EnrichWithIptvMovieAsync(metadata, movieStream ?? new VodStream { Name = metadata.Title, StreamId = (sourceStream?.Id ?? 0) }, trace);
+                    }
+                }
+
+                // Wait for local data and push to UI immediately (The "Progressive" win)
+                if (iptvTask != null)
+                {
+                    await iptvTask;
+                    onUpdate?.Invoke(metadata);
+                    trace.Log("Progressive", $"Dispatched early IPTV seed: {metadata.Title}");
+                }
+
                 if (sourceStream is StremioMediaStream stremioStream)
                 {
                     SeedFromCatalogMetadata(metadata, stremioStream, trace, context: context);
-                    
-                    // [PROGRESSIVE] Push initial catalog data (Logo/Backdrop) to UI immediately
                     stremioStream.UpdateFromUnified(metadata);
+                    onUpdate?.Invoke(metadata);
                 }
 
-                // Global Catalog Seeding (from current cache)
+                // Global Catalog Seeding
                 var initialFragments = _stremioService.GetGlobalMetaCache(id);
                 if (initialFragments != null)
                 {
@@ -569,27 +755,61 @@ namespace ModernIPTVPlayer.Services.Metadata
                         }
                         seededKeys.Add(key);
                     }
+                    onUpdate?.Invoke(metadata);
                 }
 
-            bool isCw = (sourceStream as StremioMediaStream)?.IsContinueWatching ?? false;
+                bool isCw = (sourceStream as StremioMediaStream)?.IsContinueWatching ?? false;
                 MetadataField required = GetRequiredFields(context, isCw);
                 MetadataField missing = GetMissingFields(metadata, required);
                 trace.Log("Seed", $"Required={required} Missing={missing}");
 
-                // [NEW] TMDB THROTTLING PROTECTION
-                // Only enrich with TMDB if context is Detail, ExpandedCard, or Spotlight.
-                // Discovery (main grid) is excluded to prevent throttling/bans.
+                string currentSearchId = NormalizeId(metadata.ImdbId) ?? NormalizeId(id) ?? id;
+                
+                // [NEW] Discovery Search: Resolve non-canonical IDs by title (Runs AFTER IPTV seed is safe)
+                if (!IsCanonicalId(currentSearchId) && !string.IsNullOrWhiteSpace(metadata.Title))
+                {
+                    string? year = (sourceStream as Models.IMediaStream)?.Year;
+                    if (string.IsNullOrEmpty(year)) year = metadata.Year;
+
+                    string cleanSearchTitle = TitleHelper.GetSearchTitle(metadata.Title);
+                    if (string.IsNullOrWhiteSpace(cleanSearchTitle)) cleanSearchTitle = metadata.Title;
+
+                    var discoveredId = await ResolveIdByTitleDiscoveryAsync(cleanSearchTitle, type, year, trace);
+                    if (IsImdbId(discoveredId))
+                    {
+                        currentSearchId = discoveredId!;
+                        metadata.ImdbId = discoveredId;
+                        
+                        string rawId = NormalizeId(id) ?? id;
+                        if (string.IsNullOrEmpty(rawId) || rawId == "imdb" || rawId == "tmdb")
+                        {
+                            if (sourceStream != null) rawId = $"iptv:{sourceStream.Id}";
+                        }
+
+                        if (!IsCanonicalId(rawId) && !string.IsNullOrEmpty(rawId))
+                        {
+                            _rawToCanonicalIdCache[rawId] = discoveredId;
+                            AppLogger.Info($"[Metadata] Discovery LEARNED: {rawId} -> {discoveredId}. Syncing to library...");
+                            trace.Log("Discovery", $"LEARNED: {rawId} -> {discoveredId}");
+                            _ = SaveMappingCacheAsync(); 
+
+                            // [NEW] Synchronize with ContentCacheService for global persistence
+                            if (sourceStream is Models.IMediaStream iptvStream && (iptvStream.Id != 0 || !string.IsNullOrEmpty(iptvStream.IMDbId)))
+                            {
+                                bool isSeries = iptvStream is SeriesStream || iptvStream.Type == "series";
+                                ContentCacheService.Instance.RegisterImdbMapping(iptvStream.Id, discoveredId, isSeries);
+                            }
+                        }
+                    }
+                }
+
+                // [TMDB ENRICHMENT]
                 bool tmdbAllowed = context == MetadataContext.Detail || context == MetadataContext.ExpandedCard || context == MetadataContext.Spotlight;
                 bool tmdbEnabled = tmdbAllowed && AppSettings.IsTmdbEnabled && !string.IsNullOrWhiteSpace(AppSettings.TmdbApiKey);
                 
-                if (context == MetadataContext.Spotlight)
-                {
-                    trace.Log("Spotlight-Check", $"TMDB Allowed={tmdbAllowed}, Enabled={tmdbEnabled}, Missing={missing}");
-                }
-                
                 if (tmdbEnabled)
                 {
-                    trace.Log("TMDB", $"TMDB is enabled. CW={isContinueWatching}. Trying direct enrichment...");
+                    trace.Log("TMDB", "TMDB enrichment starting...");
                     var tmdb = await EnrichWithTmdbAsync(metadata, context, isContinueWatching);
                     if (tmdb != null)
                     {
@@ -597,27 +817,19 @@ namespace ModernIPTVPlayer.Services.Metadata
                         metadata.MetadataSourceInfo = "TMDB (Primary)";
                         metadata.DataSource = string.IsNullOrEmpty(metadata.DataSource) ? "TMDB" : $"{metadata.DataSource} + TMDB";
 
-                        // Set High Priority for TMDB data
-                        metadata.PriorityScore = MetadataPriority.CalculateScore(
-                            MetadataPriority.AUTHORITY_TMDB, 
+                        metadata.PriorityScore = MetadataPriority.CalculateScore(MetadataPriority.AUTHORITY_TMDB, 
                             context == MetadataContext.Detail ? MetadataPriority.DEPTH_DETAIL : 
-                            (context == MetadataContext.Spotlight ? MetadataPriority.DEPTH_SPOTLIGHT : MetadataPriority.DEPTH_CATALOG)
-                        );
+                            (context == MetadataContext.Spotlight ? MetadataPriority.DEPTH_SPOTLIGHT : MetadataPriority.DEPTH_CATALOG));
 
                         var additionalBackdrops = metadata.IsSeries
                             ? await TmdbHelper.GetTvImagesAsync(tmdb.Id.ToString())
                             : await TmdbHelper.GetMovieImagesAsync(tmdb.Id.ToString());
 
-                        foreach (var bg in additionalBackdrops)
-                        {
-                            AddUniqueBackdrop(metadata, bg, onBackdropFound);
-                        }
+                        foreach (var bg in additionalBackdrops) AddUniqueBackdrop(metadata, bg, onBackdropFound);
 
-                        missing = GetMissingFields(metadata, required);
-                        trace.Log("TMDB", $"TMDB enriched. RemainingMissing={missing}");
-
-                        // [PROGRESSIVE] Push TMDB data to UI immediately
                         if (sourceStream is StremioMediaStream sms) sms.UpdateFromUnified(metadata);
+                        onUpdate?.Invoke(metadata);
+                        missing = GetMissingFields(metadata, required);
                     }
                     else
                     {
@@ -642,16 +854,15 @@ namespace ModernIPTVPlayer.Services.Metadata
                     else if (metadata.TmdbInfo != null)
                     {
                         trace.Log("Decision", "TMDB present but requirements not met (e.g. Logo/Rating missing). Probing addons for gaps.");
-                        // Proceed to addon probes (line 482 onwards)
+                        // Proceed to addon probes (line 805 onwards)
                     }
                     else
                     {
-                        trace.Log("Decision", "TMDB enabled but result unavailable. Addon detail probes are disabled by policy for High-Vis scenes.");
-                        // [FIX] Actually, if TMDB failed, we SHOULD allow addon probes as fallback
-                        // BUT only if we don't have enough data yet.
+                        trace.Log("Decision", "TMDB enabled but result unavailable. Proceeding to addon detail probes as fallback.");
                     }
                 }
 
+                // [ADDON PROBE CHAIN] - RESTORED FULL COMPLEXITY
                 if (!tmdbEnabled || (metadata.TmdbInfo == null && GetMissingFields(metadata, required) != MetadataField.None) || (metadata.TmdbInfo != null && GetMissingFields(metadata, required) != MetadataField.None))
                 {
                     var addonUrls = StremioAddonManager.Instance.GetAddonsByResource("meta");
@@ -659,295 +870,215 @@ namespace ModernIPTVPlayer.Services.Metadata
                     {
                         int sourcePriority = GetAddonPriorityIndex(addonUrls, metadata.CatalogSourceAddonUrl);
                         int existingPrimaryPriority = GetAddonPriorityIndex(addonUrls, metadata.PrimaryMetadataAddonUrl);
+                        int primaryPriority = Math.Min(sourcePriority >= 0 ? sourcePriority : int.MaxValue, existingPrimaryPriority >= 0 ? existingPrimaryPriority : int.MaxValue);
 
-                        // [FIX] Initial priority should be the BEST (lowest index) priority we already have. 
-                        // This prevents lower-priority catalog sources (like Cinemeta) from demoting higher-priority data (like AioStreams)
-                        // that was already discovered and seeded into this fetch.
-                        int primaryPriority = Math.Min(
-                            sourcePriority >= 0 ? sourcePriority : int.MaxValue,
-                            existingPrimaryPriority >= 0 ? existingPrimaryPriority : int.MaxValue
-                        );
-
-                        // [NEW] If TMDB has already provided primary metadata, treat it as the highest priority source (-1)
-                        // to prevent addons from overwriting better (often localized) TMDB data.
-                        if (metadata.TmdbInfo != null)
-                        {
-                            primaryPriority = -1;
-                        }
+                        if (metadata.TmdbInfo != null) primaryPriority = -1;
 
                         string rawCatalogId = (sourceStream as StremioMediaStream)?.Meta?.Id ?? sourceStream?.IMDbId ?? id;
-                        string currentSearchId = NormalizeId(metadata.ImdbId) ?? NormalizeId(id) ?? id;
-                        if (!IsCanonicalId(currentSearchId) && !string.IsNullOrWhiteSpace(rawCatalogId) &&
-                            !string.Equals(currentSearchId, rawCatalogId, StringComparison.Ordinal))
+                        if (!IsCanonicalId(currentSearchId) && !string.IsNullOrWhiteSpace(rawCatalogId) && !string.Equals(currentSearchId, rawCatalogId, StringComparison.Ordinal))
                         {
                             currentSearchId = rawCatalogId;
                             trace.Log("ID", $"Canonical ID yok. Raw catalog ID ile probe denenecek: {currentSearchId}");
                         }
 
-                        trace.Log("Addon", $"Order={string.Join(" > ", addonUrls.Select((u, i) => $"{i}:{GetHostSafe(u)}"))} CatalogPriority={sourcePriority}");
-
-                        bool skipCrossAddonProbes = !IsCanonicalId(currentSearchId) && LooksLikeTitleFallback(currentSearchId, metadata.Title);
-                        if (skipCrossAddonProbes)
+                        // Prepare Probe Order (Restored full Torbox/TBM nuance)
+                        var indexedAddons = addonUrls.Select((u, i) => (Url: u, Index: i)).ToList();
+                        IEnumerable<(string Url, int Index)> probeOrder = indexedAddons;
+                        bool sourceFirstNeeded = !IsCanonicalId(currentSearchId) && sourcePriority >= 0;
+                        if (sourceFirstNeeded)
                         {
-                            trace.Log("Decision", "Search ID title-fallback durumda. Yanlis eslesme/404 spam riskine karsi addon probe atlandi.");
-                        }
-                        else
-                        {
-                            var indexedAddons = addonUrls.Select((u, i) => (Url: u, Index: i)).ToList();
-                            IEnumerable<(string Url, int Index)> probeOrder = indexedAddons;
-                            bool sourceFirstNeeded = !IsCanonicalId(currentSearchId) && sourcePriority >= 0;
-                            if (sourceFirstNeeded)
+                            var src = indexedAddons.FirstOrDefault(x => x.Index == sourcePriority);
+                            if (!string.IsNullOrWhiteSpace(src.Url))
                             {
-                                var src = indexedAddons.FirstOrDefault(x => x.Index == sourcePriority);
-                                if (!string.IsNullOrWhiteSpace(src.Url))
+                                bool isTbmNamespace = currentSearchId.StartsWith("tbm:", StringComparison.OrdinalIgnoreCase);
+                                var remaining = indexedAddons.Where(x => x.Index != sourcePriority).ToList();
+                                if (isTbmNamespace)
                                 {
-                                    bool isTbmNamespace = currentSearchId.StartsWith("tbm:", StringComparison.OrdinalIgnoreCase);
-                                    var remaining = indexedAddons.Where(x => x.Index != sourcePriority).ToList();
-                                    if (isTbmNamespace)
-                                    {
-                                        var torboxResolvers = remaining.Where(x => GetHostSafe(x.Url).Contains("torbox", StringComparison.OrdinalIgnoreCase)).ToList();
-                                        var nonResolvers = remaining.Where(x => !GetHostSafe(x.Url).Contains("torbox", StringComparison.OrdinalIgnoreCase)).ToList();
-                                        probeOrder = new[] { src }.Concat(torboxResolvers).Concat(nonResolvers);
-                                    }
-                                    else
-                                    {
-                                        probeOrder = new[] { src }.Concat(remaining);
-                                    }
-                                    trace.Log("Decision", $"Non-canonical akista source-first probe uygulanacak: {GetHostSafe(src.Url)}");
+                                    var torboxResolvers = remaining.Where(x => GetHostSafe(x.Url).Contains("torbox", StringComparison.OrdinalIgnoreCase)).ToList();
+                                    var nonResolvers = remaining.Where(x => !GetHostSafe(x.Url).Contains("torbox", StringComparison.OrdinalIgnoreCase)).ToList();
+                                    probeOrder = new[] { src }.Concat(torboxResolvers).Concat(nonResolvers);
+                                }
+                                else
+                                {
+                                    probeOrder = new[] { src }.Concat(remaining);
+                                }
+                                trace.Log("Decision", $"Non-canonical source-first probe uygulanacak: {GetHostSafe(src.Url)}");
+                            }
+                        }
+
+                        foreach (var pair in probeOrder)
+                        {
+                            string url = pair.Url;
+                            int index = pair.Index;
+
+                            missing = GetMissingFields(metadata, required);
+                            if (missing == MetadataField.None)
+                            {
+                                // Even if all required fields are present, if episode titles are generic,
+                                // we MUST continue probing lower-priority addons (e.g. Cinemeta) to get real titles.
+                                bool hasGenericEpTitles = metadata.IsSeries && HasGenericEpisodeTitles(metadata);
+                                
+                                // Even if satisfied, we MUST probe higher priority addons
+                                // to ensure that the preferred source (e.g. AioStreams) logic is applied.
+                                if (index < primaryPriority)
+                                {
+                                    trace.Log("Addon", $"Satisfied but {GetHostSafe(url)} (Prio:{index}) has higher priority than current (Prio:{primaryPriority}). Probing for better data.");
+                                }
+                                else if (hasGenericEpTitles)
+                                {
+                                    trace.Log("Addon", $"Fields satisfied but episode titles are generic. Continuing probe to {GetHostSafe(url)} for better episode data.");
+                                }
+                                else
+                                {
+                                    trace.Log("Addon", "Missing field kalmadi ve tum oncelikli eklentiler tarandi. Probe zinciri tamamlandi.");
+                                    break;
                                 }
                             }
 
-                            foreach (var pair in probeOrder)
+                            if (metadata.ProbedAddons.Contains(url))
                             {
-                                string url = pair.Url;
-                                int index = pair.Index;
+                                trace.Log("Addon", $"Skip already probed addon: {GetHostSafe(url)}");
+                                continue;
+                            }
 
-                                missing = GetMissingFields(metadata, required);
-                                if (missing == MetadataField.None)
-                                {
-                                    // Even if all required fields are present, if episode titles are generic,
-                                    // we MUST continue probing lower-priority addons (e.g. Cinemeta) to get real titles.
-                                    bool hasGenericEpTitles = metadata.IsSeries && HasGenericEpisodeTitles(metadata);
-                                    
-                                    // Even if satisfied, we MUST probe higher priority addons
-                                    // to ensure that the preferred source (e.g. AioStreams) logic is applied.
-                                    if (index < primaryPriority)
-                                    {
-                                        trace.Log("Addon", $"Satisfied but {GetHostSafe(url)} (Prio:{index}) has higher priority than current (Prio:{primaryPriority}). Probing for better data.");
-                                    }
-                                    else if (hasGenericEpTitles)
-                                    {
-                                        trace.Log("Addon", $"Fields satisfied but episode titles are generic. Continuing probe to {GetHostSafe(url)} for better episode data.");
-                                    }
-                                    else
-                                    {
-                                        trace.Log("Addon", "Missing field kalmadi ve tum oncelikli eklentiler tarandi. Probe zinciri tamamlandi.");
-                                        break;
-                                    }
-                                }
-
-                                var addonMeta = await _stremioService.GetMetaAsync(url, type, currentSearchId);
-                                if (addonMeta != null)
-                                {
-                                    int addonPriority = MetadataPriority.CalculateScore(MetadataPriority.AUTHORITY_STREMIO_ADDON, MetadataPriority.DEPTH_DETAIL, index);
-                                    
-                                    // Only update base metadata if this addon has higher or equal priority than current source
-                                    bool canOverwrite = addonPriority >= metadata.PriorityScore;
-                                    
-                                    trace.Log("Addon", $"Fetch success from {GetHostSafe(url)} (Score:{addonPriority}). CanOverwrite={canOverwrite}");
-
-                                    if (canOverwrite)
-                                    {
-                                        MapStremioToUnified(addonMeta, metadata, true);
-                                        metadata.PrimaryMetadataAddonUrl = url;
-                                        metadata.MetadataSourceInfo = $"{GetHostSafe(url)} (Full Details)";
-                                        metadata.PriorityScore = addonPriority;
-                                    }
-                                    else
-                                    {
-                                        // Backfill only
-                                        MapStremioToUnified(addonMeta, metadata, false);
-                                    }
-                                }
+                            // Non-canonical ID ile sadece katalog kaynagindan probe yap.
+                            if (!IsCanonicalId(currentSearchId))
+                            {
+                                bool isTbmNamespace = currentSearchId.StartsWith("tbm:", StringComparison.OrdinalIgnoreCase);
+                                bool isTorboxResolver = GetHostSafe(url).Contains("torbox", StringComparison.OrdinalIgnoreCase);
                                 
-                                // [NEW] SMART SEQUENTIAL PROBING (Discovery only)
-                                // If the CURRENT context requirements are met (even if not from a higher priority source), 
-                                // we can stop probing to save network requests, UNLESS we still want to hunt for better priority data.
-                                // For Discovery context, we stop immediately once basics are met.
-                                if (context == MetadataContext.Discovery && missing == MetadataField.None)
+                                // [FIX] Never probe Cinemeta with a non-canonical ID (like IPTV name/id) to avoid 404 spam.
+                                if (GetHostSafe(url).Contains("cinemeta", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    trace.Log("Decision", $"Context '{context}' requirements fully satisfied. Stopping probe loop.");
-                                    break;
-                                }
-
-                                if (metadata.ProbedAddons.Contains(url))
-                                {
-                                    trace.Log("Addon", $"Skip already probed addon: {GetHostSafe(url)}");
+                                    trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin Cinemeta probe edilmez.");
                                     continue;
                                 }
 
-                                // Non-canonical ID ile sadece katalog kaynagindan probe yap.
-                                if (!IsCanonicalId(currentSearchId))
+                                if (sourcePriority >= 0)
                                 {
-                                    bool isTbmNamespace = currentSearchId.StartsWith("tbm:", StringComparison.OrdinalIgnoreCase);
-                                    bool isTorboxResolver = GetHostSafe(url).Contains("torbox", StringComparison.OrdinalIgnoreCase);
-                                    
-                                    // [FIX] Never probe Cinemeta with a non-canonical ID (like IPTV name/id) to avoid 404 spam.
-                                    if (GetHostSafe(url).Contains("cinemeta", StringComparison.OrdinalIgnoreCase))
+                                    bool isCatalogSource = index == sourcePriority;
+                                    if (!isCatalogSource && !(isTbmNamespace && isTorboxResolver))
                                     {
-                                        trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin Cinemeta probe edilmez.");
+                                        trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin sadece catalog source (ve tbm ise torbox resolver) probe edilir.");
                                         continue;
                                     }
-
-                                    if (sourcePriority >= 0)
+                                }
+                                else if (index > 0)
+                                {
+                                    if (!(isTbmNamespace && isTorboxResolver))
                                     {
-                                        bool isCatalogSource = index == sourcePriority;
-                                        if (!isCatalogSource && !(isTbmNamespace && isTorboxResolver))
-                                        {
-                                            trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin sadece catalog source (ve tbm ise torbox resolver) probe edilir.");
-                                            continue;
-                                        }
-                                    }
-                                    else if (index > 0)
-                                    {
-                                        if (!(isTbmNamespace && isTorboxResolver))
-                                        {
-                                            trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) ve source belirsiz. Sadece en yuksek oncelik (tbm ise torbox resolver) probe edilir.");
-                                            continue;
-                                        }
+                                        trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) ve source belirsiz. Sadece en yuksek oncelik (tbm ise torbox resolver) probe edilir.");
+                                        continue;
                                     }
                                 }
+                            }
 
-                                if (currentSearchId != null && (currentSearchId.StartsWith("error", StringComparison.OrdinalIgnoreCase) || currentSearchId.Contains("aiostreamserror")))
-                                {
-                                    trace.Log("Addon", $"Invalid ID for probing: {currentSearchId}");
-                                    break;
-                                }
+                            if (currentSearchId != null && (currentSearchId.StartsWith("error", StringComparison.OrdinalIgnoreCase) || currentSearchId.Contains("aiostreamserror")))
+                            {
+                                trace.Log("Addon", $"Invalid ID for probing: {currentSearchId}");
+                                break;
+                            }
 
-                                trace.Log("Addon", $"Probe {GetHostSafe(url)} Priority={index} ID={currentSearchId} Missing={missing}");
-                                var entry = await GetAddonMetaCachedAsync(url, type, currentSearchId, trace);
-                                metadata.ProbedAddons.Add(url);
+                            trace.Log("Addon", $"Probe {GetHostSafe(url)} Priority={index} ID={currentSearchId}");
+                            var entry = await GetAddonMetaCachedAsync(url, type, currentSearchId, trace);
+                            metadata.ProbedAddons.Add(url);
 
-                                if (!entry.HasValue || entry.Meta == null || !IsValidMetadata(entry.Meta))
-                                {
-                                    trace.Log("Addon", $"No usable meta from {GetHostSafe(url)} (HasValue={entry.HasValue}, IsNull={entry.Meta == null})");
-                                    continue;
-                                }
+                            if (!entry.HasValue || entry.Meta == null || !IsValidMetadata(entry.Meta))
+                            {
+                                trace.Log("Addon", $"No usable meta from {GetHostSafe(url)} (HasValue={entry.HasValue}, IsNull={entry.Meta == null})");
+                                continue;
+                            }
 
-                                string? discoveredImdbId = ExtractImdbId(entry.Meta);
-                                if (!IsImdbId(currentSearchId) && IsImdbId(discoveredImdbId))
-                                {
-                                    currentSearchId = discoveredImdbId!;
-                                    metadata.ImdbId = discoveredImdbId;
-                                    trace.Log("ID", $"Upgraded search id to canonical IMDb: {discoveredImdbId}. Allowing full addon loop.");
-                                }
+                            string? discoveredImdbId = ExtractImdbId(entry.Meta);
+                            if (!IsImdbId(currentSearchId) && IsImdbId(discoveredImdbId))
+                            {
+                                currentSearchId = discoveredImdbId!;
+                                metadata.ImdbId = discoveredImdbId;
+                                trace.Log("ID", $"Upgraded search id to canonical IMDb: {discoveredImdbId}. Allowing full addon loop.");
+                            }
 
-                                 bool overwritePrimary = index <= primaryPriority;
+                             int addonPriority = MetadataPriority.CalculateScore(MetadataPriority.AUTHORITY_STREMIO_ADDON, MetadataPriority.DEPTH_DETAIL, index);
+                             bool overwritePrimary = addonPriority >= metadata.PriorityScore;
+                             var missingBefore = GetMissingFields(metadata, required);
+                             
+                             MapStremioToUnified(entry.Meta, metadata, overwritePrimary);
 
-                                 var missingBefore = GetMissingFields(metadata, GetRequiredFields(context, isContinueWatching));
-                                 
-                                 MapStremioToUnified(entry.Meta, metadata, overwritePrimary);
+                             if (overwritePrimary)
+                             {
+                                 primaryPriority = index;
+                                 metadata.PriorityScore = addonPriority;
+                                 metadata.PrimaryMetadataAddonUrl = url;
+                                 metadata.MetadataSourceInfo = $"{GetHostSafe(url)} (Primary)";
+                                 trace.Log("Priority", $"Primary source switched to {GetHostSafe(url)} (Score: {addonPriority})");
+                                 if (sourceStream is StremioMediaStream sms) sms.UpdateFromUnified(metadata);
+                                 onUpdate?.Invoke(metadata);
+                             }
+                             else
+                             {
+                                 trace.Log("Priority", $"{GetHostSafe(url)} used as gap filler (AddonScore: {addonPriority} < CurrentScore: {metadata.PriorityScore}).");
+                             }
 
-                                 if (overwritePrimary)
+                             if (!string.IsNullOrEmpty(entry.Meta.Background) && metadata.BackdropUrls.Count <= 20)
+                             {
+                                 AddUniqueBackdrop(metadata, entry.Meta.Background, onBackdropFound);
+                             }
+
+                             if (metadata.IsSeries && context != MetadataContext.Discovery)
+                             {
+                                 int epChanges = MergeStremioEpisodes(entry.Meta, metadata, GetHostSafe(url), overwritePrimary);
+                                 if (epChanges > 0)
                                  {
-                                     primaryPriority = index;
-                                     metadata.PrimaryMetadataAddonUrl = url;
-                                     metadata.MetadataSourceInfo = $"{GetHostSafe(url)} (Primary)";
-                                     trace.Log("Priority", $"Primary source switched to {GetHostSafe(url)}");
-                                 }
-                                 else
-                                 {
-                                     trace.Log("Priority", $"{GetHostSafe(url)} used as gap filler.");
-                                 }
-
-                                 if (!string.IsNullOrEmpty(entry.Meta.Background) && metadata.BackdropUrls.Count <= 20)
-                                 {
-                                     AddUniqueBackdrop(metadata, entry.Meta.Background, onBackdropFound);
-                                 }
-
-                                 if (metadata.IsSeries && context != MetadataContext.Discovery)
-                                 {
-                                     int epChanges = MergeStremioEpisodes(entry.Meta, metadata, GetHostSafe(url), overwritePrimary);
-                                     if (epChanges > 0)
-                                     {
-                                         // Credit the addon for episode contributions even if the "Seasons" bit isn't fully cleared
-                                         trace.Log("Merge", $"Addon {GetHostSafe(url)} contributed {epChanges} episode updates.");
-                                         string addonName = GetHostSafe(url);
-                                         string priorityTag = overwritePrimary ? "Primary" : "Gaps";
-                                         string epTag = $"(Episodes: {epChanges}) [{priorityTag}]";
-                                         
-                                         if (string.IsNullOrEmpty(metadata.DataSource))
-                                             metadata.DataSource = $"{addonName} {epTag}";
-                                         else if (!metadata.DataSource.Contains(addonName))
-                                             metadata.DataSource += $" + {addonName} {epTag}";
-                                         else if (!metadata.DataSource.Contains("Episodes:"))
-                                             metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} {epTag}");
-                                     }
-
-                                     // [PROGRESSIVE] Push data to UI as soon as it's from a primary or equivalent source
-                                 }
-
-                                 // [PROGRESSIVE] Push data to UI as soon as it's from a primary or equivalent source
-                                 if (overwritePrimary && sourceStream is StremioMediaStream sms)
-                                 {
-                                     sms.UpdateFromUnified(metadata);
-                                 }
-
-                                 var missingAfter = GetMissingFields(metadata, GetRequiredFields(context, isContinueWatching));
-
-                                 // Track field-level contributions (Title, Overview, etc.)
-                                 var contributedFields = missingBefore & ~missingAfter;
-                                 if (contributedFields != MetadataField.None)
-                                 {
+                                     // Credit the addon for episode contributions even if the "Seasons" bit isn't fully cleared
+                                     trace.Log("Merge", $"Addon {GetHostSafe(url)} contributed {epChanges} episode updates.");
                                      string addonName = GetHostSafe(url);
-                                     string fieldStr = contributedFields.ToString();
                                      string priorityTag = overwritePrimary ? "Primary" : "Gaps";
+                                     string epTag = $"(Episodes: {epChanges}) [{priorityTag}]";
                                      
                                      if (string.IsNullOrEmpty(metadata.DataSource))
-                                         metadata.DataSource = $"{addonName} ({fieldStr}) [{priorityTag}]";
+                                         metadata.DataSource = $"{addonName} {epTag}";
                                      else if (!metadata.DataSource.Contains(addonName))
-                                         metadata.DataSource += $" + {addonName} ({fieldStr}) [{priorityTag}]";
-                                     else if (!metadata.DataSource.Contains($"({fieldStr})"))
-                                         metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} ({fieldStr})");
+                                         metadata.DataSource += $" + {addonName} {epTag}";
+                                     else if (!metadata.DataSource.Contains("Episodes:"))
+                                         metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} {epTag}");
                                  }
+                             }
 
-                                 // [BREAK LOGIC] If everything satisfied, stop early
-                                 if (missingAfter == MetadataField.None)
-                                 {
-                                     trace.Log("Addon", "All required fields satisfied. Breaking probe chain.");
-                                     break;
-                                 }
+                             var missingAfter = GetMissingFields(metadata, required);
 
-                                 // [OPTIMIZATION] Best-effort break for series (One Piece fix)
-                                 if (metadata.IsSeries && missingAfter == MetadataField.Seasons && index >= 1)
-                                 {
-                                     trace.Log("Addon", "Found best-effort episode titles. Breaking probe chain to save time.");
-                                     break;
-                                 }
-                            }
+                             // Track field-level contributions (Restored Nuance)
+                             var contributedFields = missingBefore & ~missingAfter;
+                             if (contributedFields != MetadataField.None)
+                             {
+                                 string addonName = GetHostSafe(url);
+                                 string fieldStr = contributedFields.ToString();
+                                 string priorityTag = overwritePrimary ? "Primary" : "Gaps";
+                                 
+                                 if (string.IsNullOrEmpty(metadata.DataSource))
+                                     metadata.DataSource = $"{addonName} ({fieldStr}) [{priorityTag}]";
+                                 else if (!metadata.DataSource.Contains(addonName))
+                                     metadata.DataSource += $" + {addonName} ({fieldStr}) [{priorityTag}]";
+                                 else if (!metadata.DataSource.Contains($"({fieldStr})"))
+                                     metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} ({fieldStr})");
+                             }
+
+                             // [BREAK LOGIC] If everything satisfied, stop early
+                             if (missingAfter == MetadataField.None)
+                             {
+                                 trace.Log("Addon", "All required fields satisfied. Breaking probe chain.");
+                                 break;
+                             }
+
+                             // [OPTIMIZATION] Best-effort break for series (One Piece fix)
+                             if (metadata.IsSeries && missingAfter == MetadataField.Seasons && index >= 1)
+                             {
+                                 trace.Log("Addon", "Found best-effort episode titles. Breaking probe chain to save time.");
+                                 break;
+                             }
                         }
                     }
                 }
 
-                if (metadata.IsSeries && metadata.TmdbInfo != null)
-                {
-                    ReconcileTmdbSeasons(metadata, metadata.TmdbInfo);
-                }
-
-                if (App.CurrentLogin != null && context != MetadataContext.Discovery && context != MetadataContext.Spotlight)
-                {
-                    if (metadata.IsSeries)
-                    {
-                        var seriesStream = sourceStream as SeriesStream;
-                        await EnrichWithIptvAsync(metadata, seriesStream ?? new SeriesStream { Name = metadata.Title }, trace);
-                    }
-                    else
-                    {
-                        var movieStream = sourceStream as VodStream;
-                        // If it's another IPTV type (e.g. LiveStream), we still want to pass its Name for matching if ID is not known
-                        await EnrichWithIptvMovieAsync(metadata, movieStream ?? new VodStream { Name = metadata.Title, StreamId = (sourceStream?.Id ?? 0) }, trace);
-                    }
-                }
+                if (metadata.IsSeries && metadata.TmdbInfo != null) ReconcileTmdbSeasons(metadata, metadata.TmdbInfo);
             }
             catch (Exception ex)
             {
@@ -1309,6 +1440,53 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (!quiet) trace.Log("Seed", $"Catalog seed applied from {GetHostSafe(addonUrl)}");
         }
 
+        private async Task<string?> ResolveIdByTitleDiscoveryAsync(string title, string type, string? year, MetadataTrace trace)
+        {
+            try
+            {
+                // [UNIONIZED] Use the existing TitleHelper logic for cleaning/matching
+                string searchQuery = title;
+                trace.Log("Discovery", $"Searching Cinemeta for: \"{searchQuery}\" (Year: {year ?? "Any"})");
+
+                const string cinemetaUrl = "https://v3-cinemeta.strem.io";
+                var cinemetaManifest = StremioAddonManager.Instance.GetManifest(cinemetaUrl);
+                if (cinemetaManifest == null)
+                {
+                    trace.Log("Discovery", "Cinemeta manifest not found in manager. Skipping search.");
+                    return null;
+                }
+
+                // Call the search endpoint on Cinemeta
+                var results = await _stremioService.SearchAddonAsync(cinemetaUrl, cinemetaManifest, searchQuery, type);
+                if (results == null || results.Count == 0)
+                {
+                    trace.Log("Discovery", "No results found on Cinemeta.");
+                    return null;
+                }
+
+                foreach (var result in results)
+                {
+                    // [UNIONIZED] Use existing TitleHelper.IsMatch logic to ensure consistent matching behavior
+                    if (TitleHelper.IsMatch(result.Title, title, result.Year, year))
+                    {
+                        string? discoveredId = NormalizeId(result.IMDbId) ?? result.IMDbId;
+                        if (IsImdbId(discoveredId))
+                        {
+                            trace.Log("Discovery", $"SUCCESS: Matched \"{title}\" to {discoveredId} ({result.Title})");
+                            return discoveredId;
+                        }
+                    }
+                }
+                
+                trace.Log("Discovery", $"Found {results.Count} results, but none matched using TitleHelper.IsMatch.");
+            }
+            catch (Exception ex)
+            {
+                trace.Log("Discovery-Error", ex.Message);
+            }
+            return null;
+        }
+
         private async Task<AddonMetaCacheEntry> GetAddonMetaCachedAsync(string addonUrl, string type, string id, MetadataTrace trace)
         {
             string key = $"{addonUrl}|{type}|{id}";
@@ -1477,7 +1655,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                             if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = match.Name;
                             if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.IconUrl;
                             if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.Year;
-                            if (metadata.Rating == 0 && double.TryParse(match.Rating, out double r)) metadata.Rating = r;
+                            if (metadata.Rating == 0 && double.TryParse(match.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r)) metadata.Rating = r;
                         }
                         else
                         {
@@ -2496,6 +2674,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (IsCanonicalId(resolvedId) && !IsCanonicalId(metadata.ImdbId))
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Propagating Resolved ID: {resolvedId}");
+                    
+                    // [FIX] Persist the mapping if the original ID was raw
+                    if (!string.IsNullOrEmpty(metadata.MetadataId) && !IsCanonicalId(metadata.MetadataId))
+                    {
+                        _rawToCanonicalIdCache[metadata.MetadataId] = resolvedId;
+                        _ = SaveMappingCacheAsync();
+                    }
+                    
                     metadata.ImdbId = resolvedId;
                 }
                 

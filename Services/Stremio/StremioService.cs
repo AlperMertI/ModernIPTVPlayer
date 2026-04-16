@@ -167,6 +167,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 
                 response.EnsureSuccessStatusCode();
                 string json = await response.Content.ReadAsStringAsync();
+
                 var result = JsonSerializer.Deserialize<StremioMetaResponse>(json, _jsonOptions);
                 return result?.Meta;
             }
@@ -451,7 +452,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             return DeduplicateAndRank(allResults, query, cancellationToken);
         }
 
-        private async Task<List<StremioMediaStream>> SearchAddonAsync(string addonUrl, StremioManifest manifest, string query, string type, System.Threading.CancellationToken ct = default)
+        public async Task<List<StremioMediaStream>> SearchAddonAsync(string addonUrl, StremioManifest manifest, string query, string type, System.Threading.CancellationToken ct = default)
         {
             if (ct.IsCancellationRequested) return new List<StremioMediaStream>();
             var results = new List<StremioMediaStream>();
@@ -613,8 +614,9 @@ namespace ModernIPTVPlayer.Services.Stremio
             Log($"[NET-200] Catalog FULL LOAD in {sw.ElapsedMilliseconds}ms: {url}");
 
             // 4. Handle 200 OK
-            using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            var root = await JsonSerializer.DeserializeAsync<StremioCatalogRoot>(stream, _jsonOptions, cancellationToken);
+            string json = await response.Content.ReadAsStringAsync(cancellationToken);
+            
+            var root = JsonSerializer.Deserialize<StremioCatalogRoot>(json, _jsonOptions);
 
             // 5. Update Cache asynchronously in background
             if (root?.Metas != null)

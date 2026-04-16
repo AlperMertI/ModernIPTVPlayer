@@ -50,7 +50,7 @@ namespace ModernIPTVPlayer
                 OnPropertyChanged();
             }
         }
-        public string? IMDbId => ImdbId;
+        public string? IMDbId => !string.IsNullOrEmpty(ImdbId) ? ImdbId : string.Empty;
         
         [JsonIgnore]
         public string Title 
