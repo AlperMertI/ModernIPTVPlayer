@@ -30,9 +30,19 @@ namespace ModernIPTVPlayer.Controls
                 slideOut.Duration = TimeSpan.FromMilliseconds(300);
 
                 visual.StartAnimation("Opacity", fadeOut);
-                visual.StartAnimation("Translation", slideOut);
+                try { visual.StartAnimation("Translation", slideOut); }
+                catch { /* Translation may be unavailable on some visuals/states; opacity still runs. */ }
             }
             catch { element.Opacity = 0; }
+        }
+
+        public static void FadeVisualOpacity(Visual visual, float target, int durationMs)
+        {
+            var compositor = visual.Compositor;
+            var anim = compositor.CreateScalarKeyFrameAnimation();
+            anim.InsertKeyFrame(1f, target, compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(1f, 1f)));
+            anim.Duration = TimeSpan.FromMilliseconds(durationMs);
+            visual.StartAnimation("Opacity", anim);
         }
 
         public static void FadeElement(FrameworkElement element, double targetOpacity, int durationMs = 400)
@@ -83,13 +93,17 @@ namespace ModernIPTVPlayer.Controls
 
                 visual.CenterPoint = new Vector3((float)element.ActualWidth / 2, (float)element.ActualHeight / 2, 0);
                 visual.StartAnimation("Opacity", fadeIn);
-                visual.StartAnimation("Translation", slide);
+                try { visual.StartAnimation("Translation", slide); } catch { }
                 visual.StartAnimation("Scale", scale);
             }
             catch { element.Opacity = 1; }
         }
 
-        public static void AnimateTextIn(FrameworkElement element)
+        /// <summary>
+        /// Slide-in only (no container opacity fade) so composition-hosted logo is not dimmed by a parent
+        /// while the hero backdrop fades in on a separate visual.
+        /// </summary>
+        public static void AnimateTextIn(FrameworkElement element, int slideDurationMs = 1200)
         {
             try
             {
@@ -101,18 +115,24 @@ namespace ModernIPTVPlayer.Controls
 
                 ElementCompositionPreview.SetIsTranslationEnabled(element, true);
 
-                var fadeIn = compositor.CreateScalarKeyFrameAnimation();
-                fadeIn.InsertKeyFrame(0f, 0f, easing);
-                fadeIn.InsertKeyFrame(1f, 1f, easing);
-                fadeIn.Duration = TimeSpan.FromMilliseconds(1500);
+                element.Opacity = 1;
 
                 var slideIn = compositor.CreateVector3KeyFrameAnimation();
                 slideIn.InsertKeyFrame(0f, new Vector3(0, 40, 0), easing);
                 slideIn.InsertKeyFrame(1f, Vector3.Zero, easing);
-                slideIn.Duration = TimeSpan.FromMilliseconds(1500);
+                slideIn.Duration = TimeSpan.FromMilliseconds(slideDurationMs);
 
+                // Also fade-in opacity — when the shimmer is suppressed (warm-cache path) the text
+                // would otherwise snap visible. A short opacity ramp keeps the reveal smooth in both
+                // paths; it piggy-backs on the shimmer's cross-fade when the shimmer IS showing.
+                var fadeIn = compositor.CreateScalarKeyFrameAnimation();
+                fadeIn.InsertKeyFrame(0f, 0f, easing);
+                fadeIn.InsertKeyFrame(1f, 1f, easing);
+                fadeIn.Duration = TimeSpan.FromMilliseconds(Math.Min(slideDurationMs, 500));
+
+                try { visual.StartAnimation("Translation", slideIn); }
+                catch { /* Keep opacity fade if Translation channel is unsupported. */ }
                 visual.StartAnimation("Opacity", fadeIn);
-                visual.StartAnimation("Translation", slideIn);
             }
             catch { element.Opacity = 1; }
         }

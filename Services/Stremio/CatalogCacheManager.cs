@@ -16,8 +16,27 @@ namespace ModernIPTVPlayer.Services.Stremio
         private const string MAGIC = "CTLC";
         private const int VERSION = 1;
 
+        public static string CanonicalizeCatalogUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return url ?? "";
+            string t = url.Trim();
+            if (!Uri.TryCreate(t, UriKind.Absolute, out var uri)) return t;
+            string path = uri.AbsolutePath.TrimEnd('/');
+            var b = new UriBuilder(uri) { Path = path };
+            return b.Uri.AbsoluteUri;
+        }
+
         public static async Task SaveCatalogBinaryAsync(string url, string etag, List<StremioMediaStream> items)
         {
+            url = CanonicalizeCatalogUrl(url);
+            // Empty payloads produce 74-byte gzipped headers that later fail the <500 byte sanity check.
+            // Don't pollute disk with these; they add cold-start noise and repeatedly log REJECTED on boot.
+            if (items == null || items.Count == 0)
+            {
+                StremioService.Log($"[CatalogCache] SKIP SAVE: empty catalog for {url}");
+                return;
+            }
+
             try
             {
                 string fileName = GetSafeFileName(url);
@@ -53,6 +72,7 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         public static async Task<(string ETag, List<StremioMediaStream> Items, DateTime Timestamp)> LoadCatalogBinaryAsync(string url)
         {
+            url = CanonicalizeCatalogUrl(url);
             try
             {
                 string fileName = GetSafeFileName(url);
@@ -68,9 +88,11 @@ namespace ModernIPTVPlayer.Services.Stremio
                 var props = await fileInfo.GetBasicPropertiesAsync();
                 
                 // [FIX] Sanity Check: Files < 500 bytes are typically corrupt header-only files (e.g. the 74-byte ones)
+                // DELETE them so repeated cold starts don't log REJECTED every time.
                 if (props.Size < 500)
                 {
-                    StremioService.Log($"[CatalogCache] REJECTED: File {fileName} is suspiciously small ({props.Size} bytes). Treating as MISS.");
+                    StremioService.Log($"[CatalogCache] REJECTED: File {fileName} is suspiciously small ({props.Size} bytes). Deleting and treating as MISS.");
+                    try { await fileInfo.DeleteAsync(); } catch { }
                     return (null, null, DateTime.MinValue);
                 }
 
@@ -129,8 +151,9 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         private static string GetSafeFileName(string url)
         {
+            string norm = CanonicalizeCatalogUrl(url);
             using var sha1 = System.Security.Cryptography.SHA1.Create();
-            byte[] hash = sha1.ComputeHash(Encoding.UTF8.GetBytes(url));
+            byte[] hash = sha1.ComputeHash(Encoding.UTF8.GetBytes(norm));
             return $"{Convert.ToHexString(hash).ToLowerInvariant()}.bin.gz";
         }
     }

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Helpers;
+using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer.Services.Iptv
 {
@@ -13,9 +14,8 @@ namespace ModernIPTVPlayer.Services.Iptv
         private static IptvMatchService _instance;
         public static IptvMatchService Instance => _instance ??= new IptvMatchService();
 
-        private List<IMediaStream> _vods = new();
-        private List<IMediaStream> _series = new();
-        private Dictionary<int, IMediaStream> _idMap = new(); // Fast lookup
+        private IReadOnlyList<IMediaStream> _vods = Array.Empty<IMediaStream>();
+        private IReadOnlyList<IMediaStream> _series = Array.Empty<IMediaStream>();
         private Dictionary<string, int[]> _imdbIndex = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, int[]> _tokenIndex = new(StringComparer.OrdinalIgnoreCase);
         private bool _isInitialized = false;
@@ -27,34 +27,39 @@ namespace ModernIPTVPlayer.Services.Iptv
         /// Updates the internal stream lists and indices atomically.
         /// indices are pre-built by ContentCacheService in a background thread.
         /// </summary>
-        public void UpdateIndices(IEnumerable<IMediaStream> vods, IEnumerable<IMediaStream> series, 
-            Dictionary<string, int[]> imdbIndex, Dictionary<string, int[]> tokenIndex)
+        public void UpdateIndices(IReadOnlyList<IMediaStream> vods, IReadOnlyList<IMediaStream> series, 
+            Dictionary<string, int[]> imdbIndex, Dictionary<string, int[]> tokenIndex, string? correlationId = null, string? source = null)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            System.Diagnostics.Debug.WriteLine($"[IptvMatchService] UpdateIndices STARTED at {DateTime.Now}");
+            correlationId ??= LifecycleLog.NewId("matchidx");
+            using var lifecycle = LifecycleLog.Begin("Match.Index.Publish", correlationId, new Dictionary<string, object?>
+            {
+                ["source"] = source ?? "unknown"
+            });
 
             lock (_indexLock)
             {
-                _vods = vods?.ToList() ?? new List<IMediaStream>();
-                _series = series?.ToList() ?? new List<IMediaStream>();
+                _vods = vods ?? Array.Empty<IMediaStream>();
+                _series = series ?? Array.Empty<IMediaStream>();
                 
-                // Build ID Map with packing (-id for series to distinguish from VODs)
-                _idMap = _vods.Select(v => new { Id = v.Id, Item = v })
-                             .Concat(_series.Select(s => new { Id = -s.Id, Item = s }))
-                             .GroupBy(x => x.Id)
-                             .ToDictionary(g => g.Key, g => g.First().Item);
-
                 _imdbIndex = imdbIndex ?? new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
                 _tokenIndex = tokenIndex ?? new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
                 
                 _isInitialized = true;
                 TitleHelper.ClearCaches();
-                System.Diagnostics.Debug.WriteLine($"[IptvMatchService] UpdateIndices COMPLETED in {sw.ElapsedMilliseconds}ms. VODs: {_vods.Count}, Series: {_series.Count}");
+                lifecycle.Step("published", new Dictionary<string, object?>
+                {
+                    ["durationMs"] = sw.ElapsedMilliseconds,
+                    ["vodCount"] = _vods.Count,
+                    ["seriesCount"] = _series.Count,
+                    ["imdbKeys"] = _imdbIndex.Count,
+                    ["tokenKeys"] = _tokenIndex.Count
+                });
             }
         }
 
         // Backward compatibility
-        public void Initialize(IEnumerable<IMediaStream> vods, IEnumerable<IMediaStream> series)
+        public void Initialize(IReadOnlyList<IMediaStream> vods, IReadOnlyList<IMediaStream> series)
         {
              // This is now handled more efficiently via UpdateIndices from ContentCacheService.
              // But if called directly, we'll do a basic build.
@@ -63,7 +68,6 @@ namespace ModernIPTVPlayer.Services.Iptv
              {
                  if (string.IsNullOrEmpty(item.IMDbId)) continue;
                  
-                 // Support both "tt..." (IMDb) and numeric (TMDB) IDs
                  if (!imdbIndex.TryGetValue(item.IMDbId, out var list)) { list = new List<IMediaStream>(); imdbIndex[item.IMDbId] = list; }
                  list.Add(item);
              }
@@ -80,8 +84,34 @@ namespace ModernIPTVPlayer.Services.Iptv
                  }
              }
 
-             var imdbRun = imdbIndex.ToDictionary(k => k.Key, v => v.Value.Select(s => s is SeriesStream ? -s.Id : s.Id).ToArray(), StringComparer.OrdinalIgnoreCase);
-             var tokenRun = tokenIndex.ToDictionary(k => k.Key, v => v.Value.Select(s => s is SeriesStream ? -s.Id : s.Id).ToArray(), StringComparer.OrdinalIgnoreCase);
+             var vodList = vods?.ToList() ?? new List<IMediaStream>();
+             var seriesList = series?.ToList() ?? new List<IMediaStream>();
+
+             var imdbRun = imdbIndex.ToDictionary(
+                 k => k.Key, 
+                 v => v.Value.Select(s => {
+                     if (s is SeriesStream ss) {
+                         int idx = seriesList.IndexOf(ss);
+                         return idx >= 0 ? -(idx + 1) : 0;
+                     } else {
+                         int idx = vodList.IndexOf(s);
+                         return idx >= 0 ? idx : 0;
+                     }
+                 }).ToArray(), 
+                 StringComparer.OrdinalIgnoreCase);
+
+             var tokenRun = tokenIndex.ToDictionary(
+                 k => k.Key, 
+                 v => v.Value.Select(s => {
+                     if (s is SeriesStream ss) {
+                         int idx = seriesList.IndexOf(ss);
+                         return idx >= 0 ? -(idx + 1) : 0;
+                     } else {
+                         int idx = vodList.IndexOf(s);
+                         return idx >= 0 ? idx : 0;
+                     }
+                 }).ToArray(), 
+                 StringComparer.OrdinalIgnoreCase);
 
              UpdateIndices(vods, series, imdbRun, tokenRun);
         }
@@ -90,10 +120,10 @@ namespace ModernIPTVPlayer.Services.Iptv
 
         public IMediaStream? FindMatch(string? title, string? originalTitle, string? subTitle, string? localizedTitle, string? year, string? query, bool isSeries, System.Threading.CancellationToken ct = default)
         {
-            return FindAllMatches(title, originalTitle, subTitle, localizedTitle, year, query, isSeries, false, ct).FirstOrDefault();
+            return FindAllMatches(title, originalTitle, subTitle, localizedTitle, year, query, isSeries, false, false, ct).FirstOrDefault();
         }
 
-        public List<IMediaStream> FindAllMatches(string? title, string? originalTitle, string? subTitle, string? localizedTitle, string? year, string? query, bool isSeries, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
+        public List<IMediaStream> FindAllMatches(string? title, string? originalTitle, string? subTitle, string? localizedTitle, string? year, string? query, bool isSeries, bool stopOnHighConfidence = false, bool isLearning = false, System.Threading.CancellationToken ct = default)
         {
             if (ct.IsCancellationRequested) {
                 System.Diagnostics.Debug.WriteLine($"[IptvMatch] CANCELLED before start for Query: {query ?? title}");
@@ -104,8 +134,24 @@ namespace ModernIPTVPlayer.Services.Iptv
                 .Where(t => !string.IsNullOrEmpty(t))
                 .Distinct()
                 .ToList();
+            
+            if (!searchTitles.Any()) return new List<IMediaStream>();
 
             string searchType = isSeries ? "SERIES" : "VOD";
+            if (!_isInitialized)
+            {
+                if (LifecycleLog.ShouldLog($"iptv-match-notready-{searchType}", TimeSpan.FromSeconds(20)))
+                {
+                    AppLogger.Info($"[Lifecycle] ➔ Match.Query [SKIPPED_NOT_READY] ({query ?? title}) | type={searchType}, year={year ?? "null"}, tokens={_tokenIndex.Count}, vods={_vods.Count}, series={_series.Count}");
+                }
+                return new List<IMediaStream>();
+            }
+
+            if (LifecycleLog.ShouldLog($"iptv-match-start-{searchType}", TimeSpan.FromSeconds(10)))
+            {
+                AppLogger.Info($"[Lifecycle] ◎ Match.Query [START] ({query ?? title}) | type={searchType}, year={year ?? "null"}, titleVariants={searchTitles.Count}, learning={isLearning}");
+            }
+
             AppLogger.Warn($"[IptvMatch] Finding matches for {searchType}: '{title}' (Year: {year ?? "null"}). Index Status: Initialized={_isInitialized}, Tokens={_tokenIndex.Count}, VODs={_vods.Count}, Series={_series.Count}");
             if (searchTitles.Count > 1) AppLogger.Warn($"[IptvMatch] Search Titles: {string.Join(", ", searchTitles)}");
 
@@ -139,13 +185,30 @@ namespace ModernIPTVPlayer.Services.Iptv
                 {
                     ct.ThrowIfCancellationRequested();
                     if (token.Length < 2 && !char.IsDigit(token[0])) continue;
-                    if (_tokenIndex.TryGetValue(token, out var matches))
+
+                    // [PROJECT ZERO] Use our runtime index directly if initialized.
+                    // This avoids the expensive and potentially crashing FindMatchesBinaryAsync call.
+                    if (_isInitialized && _tokenIndex.TryGetValue(token, out var matches))
                     {
-                        foreach (var mid in matches)
+                        foreach (var mIdx in matches)
                         {
+                            IMediaStream? m = null;
+                            lock(_indexLock)
+                            {
+                                if (mIdx < 0) // Series
+                                {
+                                    int realIdx = -mIdx - 1;
+                                    if (isSeries && realIdx >= 0 && realIdx < _series.Count) m = _series[realIdx];
+                                }
+                                else // VOD
+                                {
+                                    if (!isSeries && mIdx >= 0 && mIdx < _vods.Count) m = _vods[mIdx];
+                                }
+                            }
+    
+                            if (m == null) continue;
+    
                             ct.ThrowIfCancellationRequested();
-                            if (!_idMap.TryGetValue(mid, out var m)) continue;
-                            if (m.Type != (isSeries ? "series" : "movie")) continue;
                             if (titleLevelMatches.ContainsKey(m)) titleLevelMatches[m]++;
                             else titleLevelMatches[m] = 1;
                         }
@@ -188,7 +251,8 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             // [NEW] Category Fallback
             // If primary category search finds nothing, look in the other category too.
-            if (!candidates.Any())
+            // [STRICT] DISABLED during learning phase to prevent series matching movies.
+            if (!candidates.Any() && !isLearning)
             {
                 var fallbackType = isSeries ? "movie" : "series";
                 AppLogger.Warn($"[IptvMatch] Search yielded 0 candidates in primary category ({searchType}). Trying fallback search in category: {fallbackType.ToUpperInvariant()}...");
@@ -201,10 +265,20 @@ namespace ModernIPTVPlayer.Services.Iptv
                         if (token.Length < 2 && !char.IsDigit(token[0])) continue;
                         if (_tokenIndex.TryGetValue(token, out var matches))
                         {
-                            foreach (var mid in matches)
+                            foreach (var mIdx in matches)
                             {
-                                if (!_idMap.TryGetValue(mid, out var m)) continue;
-                                if (m.Type != fallbackType) continue;
+                                IMediaStream? m = null;
+                                if (mIdx < 0) // Series
+                                {
+                                    int realIdx = -mIdx - 1;
+                                    if (realIdx >= 0 && realIdx < _series.Count) m = _series[realIdx];
+                                }
+                                else // VOD
+                                {
+                                    if (mIdx >= 0 && mIdx < _vods.Count) m = _vods[mIdx];
+                                }
+
+                                if (m == null || m.Type != fallbackType) continue;
                                 if (titleLevelMatches.ContainsKey(m)) titleLevelMatches[m]++;
                                 else titleLevelMatches[m] = 1;
                             }
@@ -238,6 +312,10 @@ namespace ModernIPTVPlayer.Services.Iptv
             if (!candidates.Any())
             {
                 AppLogger.Warn($"[IptvMatch] Found 0 candidates by token intersection for: {string.Join(", ", searchTitles)}");
+                if (LifecycleLog.ShouldLog($"iptv-match-summary-empty-{searchType}", TimeSpan.FromSeconds(10)))
+                {
+                    AppLogger.Info($"[Lifecycle] ✓ Match.Query [DONE] ({query ?? title}) | type={searchType}, candidates=0, results=0");
+                }
                 return new List<IMediaStream>();
             }
 
@@ -392,10 +470,20 @@ namespace ModernIPTVPlayer.Services.Iptv
                 if (_imdbIndex.TryGetValue(normalizedId, out var matches))
                 {
                     var results = new List<IMediaStream>();
-                    foreach (var mid in matches)
+                    foreach (var mIdx in matches)
                     {
-                        if (_idMap.TryGetValue(mid, out var m) && m.Type == (isSeries ? "series" : "movie"))
-                            results.Add(m);
+                        IMediaStream? m = null;
+                        if (mIdx < 0) // Series
+                        {
+                            int realIdx = -mIdx - 1;
+                            if (isSeries && realIdx >= 0 && realIdx < _series.Count) m = _series[realIdx];
+                        }
+                        else // VOD
+                        {
+                            if (!isSeries && mIdx >= 0 && mIdx < _vods.Count) m = _vods[mIdx];
+                        }
+
+                        if (m != null) results.Add(m);
                     }
                     AppLogger.Info($"[IptvMatch] ID Match HIT for {normalizedId}: Found {results.Count} results.");
                     if (stopOnHighConfidence && results.Any()) return new List<IMediaStream> { results[0] };
@@ -422,15 +510,23 @@ namespace ModernIPTVPlayer.Services.Iptv
             {
                 if (!_imdbIndex.ContainsKey(imdbId))
                 {
-                    _imdbIndex[imdbId] = new int[0];
+                    _imdbIndex[imdbId] = Array.Empty<int>();
                 }
 
                 var arr = _imdbIndex[imdbId];
-                if (!arr.Contains(item.Id))
+                int packedIdx = -1;
+                
+                if (item is SeriesStream seriesItem) {
+                    if (seriesItem.RecordIndex >= 0) packedIdx = -(seriesItem.RecordIndex + 1);
+                } else if (item is VodStream vodItem) {
+                    if (vodItem.RecordIndex >= 0) packedIdx = vodItem.RecordIndex;
+                }
+
+                if (packedIdx != -1 && !arr.Contains(packedIdx))
                 {
                     var newArr = new int[arr.Length + 1];
                     Array.Copy(arr, newArr, arr.Length);
-                    newArr[arr.Length] = item.Id;
+                    newArr[arr.Length] = packedIdx;
                     _imdbIndex[imdbId] = newArr;
                     AppLogger.Info($"[IptvMatch] Learned: '{item.Title}' -> {imdbId}. Match registered in runtime ID index.");
                 }
@@ -492,6 +588,7 @@ namespace ModernIPTVPlayer.Services.Iptv
                 safeQuery, 
                 isSeries,
                 stopOnHighConfidence,
+                true, // isLearning = true
                 ct
             );
 
@@ -517,10 +614,24 @@ namespace ModernIPTVPlayer.Services.Iptv
                 AppLogger.Warn($"[IptvMatch] MatchStremioItemAll: Title search added {newCount} additional unique matches.");
             }
 
-            // [NEW] Learn the match if it was found via Title during search/discovery
-            if (results.Any() && !string.IsNullOrEmpty(imdbId) && !idMatches.Any())
+            // [NEW] Learn the matches if they were found via Title during search/discovery
+            if (results.Any() && !string.IsNullOrEmpty(imdbId))
             {
-                RegisterMatch(results[0], imdbId);
+                int learnCount = 0;
+                foreach (var m in results)
+                {
+                    // Check if this specific stream already has this IMDB ID linked in runtime index
+                    string currentId = (m as VodStream)?.ImdbId ?? (m as SeriesStream)?.ImdbId;
+                    if (currentId != imdbId)
+                    {
+                        RegisterMatch(m, imdbId);
+                        learnCount++;
+                    }
+                }
+                if (learnCount > 0)
+                {
+                    AppLogger.Info($"[Lifecycle] ➔ Match.Query [LEARNED] ({item.Title}) | imdbId={imdbId}, newLinks={learnCount}");
+                }
             }
 
             return results;

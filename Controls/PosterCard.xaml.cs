@@ -171,16 +171,22 @@ namespace ModernIPTVPlayer.Controls
                 PosterImage.Opacity = 0;
                 PosterShimmer.Visibility = Visibility.Collapsed;
                 // No valid URL -> Only show centered placeholder
-                TitleOverlay.Visibility = Visibility.Collapsed;
-                PlaceholderTitle.Visibility = Visibility.Visible;
             }
             else
             {
                 PrepareForLoading();
-                // Optimize: Set DecodePixelWidth to save memory (Card width is ~160)
                 var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
                 bitmapImage.DecodePixelWidth = 200; // Slightly larger than 160 for quality
-                bitmapImage.UriSource = new Uri(ImageUrl);
+
+                try
+                {
+                    bitmapImage.UriSource = new Uri(ImageUrl);
+                }
+                catch (Exception ex)
+                {
+                    ModernIPTVPlayer.Services.AppLogger.Error($"[PosterCard] Invalid ImageUrl: '{ImageUrl}'", ex);
+                    bitmapImage.UriSource = null;
+                }
                 
                 PosterImage.Source = bitmapImage;
                 
@@ -219,9 +225,7 @@ namespace ModernIPTVPlayer.Controls
 
     private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
         {
-            // If the image fails to load, only show centered placeholder
-            TitleOverlay.Visibility = Visibility.Collapsed;
-            PlaceholderTitle.Visibility = Visibility.Visible;
+            // If the image fails to load, just show blank (TitleOverlay hidden by default)
             PosterShimmer.Visibility = Visibility.Collapsed;
             PosterImage.Opacity = 0;
         }

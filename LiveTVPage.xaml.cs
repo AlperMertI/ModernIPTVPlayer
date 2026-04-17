@@ -36,8 +36,8 @@ namespace ModernIPTVPlayer
         // Data Storage
         private LiveSortMode _currentSortMode = LiveSortMode.Default;
         private bool _isSortDescending = false;
-        private List<LiveCategory> _allCategories = new();
-        private List<LiveStream> _allChannels = new();
+        private IReadOnlyList<LiveCategory> _allCategories = new List<LiveCategory>();
+        private IReadOnlyList<LiveStream> _allChannels = new List<LiveStream>();
 
         // Phase A/B: Pre-computed search structures
         private ushort[] _channelFlags = Array.Empty<ushort>();  // Bit field for quality/health/tech filters
@@ -206,8 +206,8 @@ namespace ModernIPTVPlayer
             {
                 if (_loginInfo != null && _loginInfo.PlaylistUrl != loginParams.PlaylistUrl)
                 {
-                    _allCategories.Clear();
-                    _allChannels.Clear();
+                    _allCategories = Array.Empty<LiveCategory>();
+                    _allChannels = Array.Empty<LiveStream>();
                     CategoryListView.ItemsSource = null;
                     ChannelGridView.ItemsSource = null;
                 }
@@ -312,8 +312,8 @@ namespace ModernIPTVPlayer
                 // -------------------------------------------------------------
                 // 1. CACHE STRATEGY: Project Zero Binary Bundle (Insanely Fast)
                 // -------------------------------------------------------------
-                List<LiveCategory> cachedCats = null;
-                List<LiveStream> cachedStreams = null;
+                IReadOnlyList<LiveCategory> cachedCats = null;
+                IReadOnlyList<LiveStream> cachedStreams = null;
                 bool cacheLoaded = false;
                 var swLoad = System.Diagnostics.Stopwatch.StartNew();
 
@@ -322,10 +322,6 @@ namespace ModernIPTVPlayer
                     cachedCats = await Services.ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, "live_cats");
                     cachedStreams = await Services.ContentCacheService.Instance.LoadLiveStreamsBinaryAsync(playlistId);
 
-                    if (cachedStreams == null)
-                    {
-                        cachedStreams = await Services.ContentCacheService.Instance.MigrateLiveStreamsJsonToBinaryAsync(playlistId);
-                    }
 
                     cacheLoaded = (cachedCats != null && cachedStreams != null && cachedCats.Count > 0);
                 }
@@ -339,18 +335,17 @@ namespace ModernIPTVPlayer
                     _allChannels = cachedStreams; // Raw list
 
                     // -------------------------------------------------------
-                    // 1. Create "All Channels" category
-                    // -------------------------------------------------------
-                    var allCat = _allCategories.FirstOrDefault(c => c.CategoryId == "-1");
+                    // 2. Group channels by category (single-pass, ~50-100ms for 50k channels)
+                    var grouped = new Dictionary<string, List<LiveStream>>();
+                    var catsCopy = _allCategories.ToList(); // Need mutable list for category structure enrichment if needed
+                    var allCat = catsCopy.FirstOrDefault(c => c.CategoryId == "-1");
                     if (allCat == null)
                     {
                         allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
-                        _allCategories.Insert(0, allCat);
+                        catsCopy.Insert(0, allCat);
                     }
-                    allCat.Channels = _allChannels;
-
-                    // 2. Group channels by category (single-pass, ~50-100ms for 50k channels)
-                    var grouped = new Dictionary<string, List<LiveStream>>(_allCategories.Count, StringComparer.Ordinal);
+                    allCat.Channels = _allChannels.ToList();
+                    _allCategories = catsCopy;
                     foreach (var s in _allChannels)
                     {
                         if (!grouped.TryGetValue(s.CategoryId, out var list))
@@ -451,8 +446,9 @@ namespace ModernIPTVPlayer
                         // 4. SINGLE-PASS CATEGORY GROUPING (O(N) instead of O(N×M))
                         categories ??= new List<LiveCategory>();
                         var allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
-                        _allCategories = new List<LiveCategory>(categories.Count + 1) { allCat };
-                        _allCategories.AddRange(categories);
+                        var tempList = new List<LiveCategory>(categories.Count + 1) { allCat };
+                        tempList.AddRange(categories);
+                        _allCategories = tempList;
                         _allChannels = streams;
 
                         // Group channels by category in a single pass
@@ -525,8 +521,8 @@ namespace ModernIPTVPlayer
             // -------------------------------------------------------------
             // 1. CACHE STRATEGY: Check Binary Cache (same as Xtream)
             // -------------------------------------------------------------
-            List<LiveStream> cachedStreams = null;
-            List<LiveCategory> cachedCats = null;
+            IReadOnlyList<LiveStream> cachedStreams = null;
+            IReadOnlyList<LiveCategory> cachedCats = null;
             bool cacheLoaded = false;
 
             if (!ignoreCache)
@@ -603,8 +599,9 @@ namespace ModernIPTVPlayer
                 _allChannels = categories.SelectMany(c => c.Channels).ToList();
                 allCat.Channels = _allChannels;
 
-                _allCategories = new List<LiveCategory> { allCat };
-                _allCategories.AddRange(categories);
+                var tempCats = new List<LiveCategory> { allCat };
+                tempCats.AddRange(categories);
+                _allCategories = tempCats;
 
                 // SAVE TO BINARY CACHE (background, fire-and-forget)
                 _ = Services.ContentCacheService.Instance.SaveLiveStreamsBinaryAsync(playlistId, _allChannels);
@@ -632,7 +629,7 @@ namespace ModernIPTVPlayer
         
         private List<LiveCategory> ParseM3u(string content)
         {
-            var result = new Dictionary<string, LiveCategory>();
+            var categoryMap = new Dictionary<string, (LiveCategory Category, List<LiveStream> Channels)>();
             var lines = content.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
 
             string? currentName = null;
@@ -671,12 +668,17 @@ namespace ModernIPTVPlayer
                     int m3uId = 0;
                     if (!string.IsNullOrEmpty(trimLine))
                     {
-                        // Use SHA256 for stable, collision-resistant IDs (.NET 8 compatible)
                         var hashBytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(trimLine));
-                        m3uId = BitConverter.ToInt32(hashBytes, 0) & 0x7FFFFFFF; // Ensure positive
+                        m3uId = BitConverter.ToInt32(hashBytes, 0) & 0x7FFFFFFF;
                     }
 
-                    result[currentGroup!].Channels.Add(new LiveStream
+                    if (!categoryMap.TryGetValue(currentGroup!, out var entry))
+                    {
+                        entry = (new LiveCategory { CategoryName = currentGroup!, CategoryId = currentGroup! }, new List<LiveStream>());
+                        categoryMap[currentGroup!] = entry;
+                    }
+
+                    entry.Channels.Add(new LiveStream
                     {
                         StreamId = m3uId,
                         Name = currentName,
@@ -688,7 +690,12 @@ namespace ModernIPTVPlayer
                 }
             }
 
-            return result.Values.OrderBy(c => c.CategoryName).ToList();
+            foreach (var entry in categoryMap.Values)
+            {
+                entry.Category.Channels = entry.Channels;
+            }
+
+            return categoryMap.Values.Select(v => v.Category).OrderBy(c => c.CategoryName).ToList();
         }
 
         /// <summary>
@@ -697,7 +704,7 @@ namespace ModernIPTVPlayer
         /// </summary>
         private static List<LiveCategory> ParseM3uStreaming(Stream stream)
         {
-            var result = new Dictionary<string, LiveCategory>();
+            var categoryMap = new Dictionary<string, (LiveCategory Category, List<LiveStream> Channels)>();
 
             using var reader = new System.IO.StreamReader(stream, System.Text.Encoding.UTF8);
             string? line;
@@ -737,18 +744,17 @@ namespace ModernIPTVPlayer
                     int m3uId = 0;
                     if (!string.IsNullOrEmpty(trimLine))
                     {
-                        // Same SHA256-based hash as ParseM3u
                         var hashBytes = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(trimLine));
                         m3uId = BitConverter.ToInt32(hashBytes, 0) & 0x7FFFFFFF;
                     }
 
-                    if (!result.TryGetValue(currentGroup!, out var cat))
+                    if (!categoryMap.TryGetValue(currentGroup!, out var entry))
                     {
-                        cat = new LiveCategory { CategoryName = currentGroup!, CategoryId = currentGroup!, Channels = new List<LiveStream>() };
-                        result[currentGroup!] = cat;
+                        entry = (new LiveCategory { CategoryName = currentGroup!, CategoryId = currentGroup! }, new List<LiveStream>());
+                        categoryMap[currentGroup!] = entry;
                     }
 
-                    cat.Channels.Add(new LiveStream
+                    entry.Channels.Add(new LiveStream
                     {
                         StreamId = m3uId,
                         Name = currentName,
@@ -760,7 +766,12 @@ namespace ModernIPTVPlayer
                 }
             }
 
-            return result.Values.OrderBy(c => c.CategoryName).ToList();
+            foreach (var entry in categoryMap.Values)
+            {
+                entry.Category.Channels = entry.Channels;
+            }
+
+            return categoryMap.Values.Select(v => v.Category).OrderBy(c => c.CategoryName).ToList();
         }
 
         // ==========================================
@@ -1593,8 +1604,8 @@ namespace ModernIPTVPlayer
         private async void RefreshButton_Click(object sender, RoutedEventArgs e)
         {
             // Reload Data - Forcing network fetch
-            _allCategories.Clear();
-            _allChannels.Clear();
+            _allCategories = Array.Empty<LiveCategory>();
+            _allChannels = Array.Empty<LiveStream>();
             
             if (_loginInfo != null)
             {

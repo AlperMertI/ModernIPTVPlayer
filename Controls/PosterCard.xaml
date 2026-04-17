@@ -18,7 +18,7 @@
           RenderTransformOrigin="0.5,0.5"
           Loaded="PosterCard_Loaded"
           Unloaded="PosterCard_Unloaded"
-          Padding="10"> <!-- Using padding to provide internal "bleed" room for hover zoom -->
+          Padding="6"> <!-- Optimized padding to reduce empty space while allowing 1.05x zoom bleed -->
 
         <Grid.Resources>
             <Storyboard x:Name="HoverInStoryboard">

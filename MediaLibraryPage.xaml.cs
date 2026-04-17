@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Media.Animation;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text.Json;
@@ -31,11 +32,12 @@ namespace ModernIPTVPlayer
         private DateTime _indexingStartTime;
         
         // Data Store
-        private List<LiveCategory> _iptvCategories = new();
-        private List<IMediaStream> _allIptvItems = new();
+        private IReadOnlyList<LiveCategory> _iptvCategories = new List<LiveCategory>();
+        private IReadOnlyList<IMediaStream> _allIptvItems = new List<IMediaStream>();
         private System.Threading.CancellationTokenSource? _navigationCts;
-        private Dictionary<MediaType, List<LiveCategory>> _categoryCache = new();
-        private Dictionary<MediaType, List<IMediaStream>> _itemsCache = new();
+        private Dictionary<MediaType, IReadOnlyList<LiveCategory>> _categoryCache = new();
+        private Dictionary<MediaType, IReadOnlyList<IMediaStream>> _itemsCache = new();
+        private Dictionary<string, IReadOnlyList<IMediaStream>> _itemsByNormalizedCategoryId = new(StringComparer.Ordinal);
         private Dictionary<MediaType, (Windows.UI.Color Primary, Windows.UI.Color Secondary)?> _heroColorsCache = new();
 
         private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _heroColors;
@@ -51,7 +53,19 @@ namespace ModernIPTVPlayer
                 this.InitializeComponent();
                 this.NavigationCacheMode = NavigationCacheMode.Enabled;
                 _httpClient = HttpHelper.Client;
+                
+                // [ENGINEERED] Initialize Composition Visuals
                 _compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
+                SetupCompositionTransitions();
+
+                this.SizeChanged += (s, e) => 
+                {
+                    ViewportClip.Rect = new Windows.Foundation.Rect(0, 0, e.NewSize.Width, e.NewSize.Height);
+                    SyncHeaderSpacerHeight();
+                };
+
+                PageHeader.SizeChanged += (s, e) => SyncHeaderSpacerHeight();
+                this.Loaded += (s, e) => SyncHeaderSpacerHeight();
 
                 WireEvents();
                 AppLogger.Info($"[MediaLibraryPage] Initialized");
@@ -60,6 +74,75 @@ namespace ModernIPTVPlayer
             {
                 AppLogger.Critical($"[MediaLibraryPage] Constructor Error", ex);
             }
+        }
+
+        private Visual _iptvVisual;
+        private Visual _stremioVisual;
+
+        private void SyncHeaderSpacerHeight()
+        {
+            if (HeaderSpacer is null || PageHeader is null)
+                return;
+
+            // Keep content start aligned below the floating header/pill region.
+            HeaderSpacer.Height = PageHeader.ActualHeight;
+        }
+
+        private void SetupCompositionTransitions()
+        {
+            _iptvVisual = ElementCompositionPreview.GetElementVisual(IptvViewportHost);
+            _stremioVisual = ElementCompositionPreview.GetElementVisual(StremioViewportHost);
+
+            // Create an Implicit Animation Collection for the 'Offset' property
+            // This means whenever we change Visual.Offset, it handles the slide automatically
+            var implicitAnimations = _compositor.CreateImplicitAnimationCollection();
+            
+            // Define the Slide Animation
+            var slideAnimation = _compositor.CreateVector3KeyFrameAnimation();
+            slideAnimation.Target = "Offset";
+            slideAnimation.Duration = TimeSpan.FromMilliseconds(500);
+            
+            // [ENGINEERED] Premium Quintic-Out Bezier (Snap + Glide)
+            var quinticBezier = _compositor.CreateCubicBezierEasingFunction(
+                new Vector2(0.1f, 0.9f), 
+                new Vector2(0.2f, 1.0f));
+
+            // Apply easing directly to the final keyframe
+            slideAnimation.InsertExpressionKeyFrame(1.0f, "this.FinalValue", quinticBezier);
+            
+            slideAnimation.IterationBehavior = AnimationIterationBehavior.Count;
+            slideAnimation.IterationCount = 1;
+
+            // Set the slide as the trigger for Offset changes
+            implicitAnimations["Offset"] = slideAnimation;
+            
+            // Assign to both visuals
+            _iptvVisual.ImplicitAnimations = implicitAnimations;
+            _stremioVisual.ImplicitAnimations = implicitAnimations;
+
+            // Initial Position: Stremio is active (index 1), so IPTV starts at left offset
+            this.Loaded += (s, e) => 
+            {
+                float width = (float)ViewportGrid.ActualWidth;
+                if (width == 0) width = 1920; // Fallback
+
+                if (_currentSource == ContentSource.Stremio)
+                {
+                    _iptvVisual.Offset = new Vector3(-width, 0, 0);
+                    _stremioVisual.Offset = new Vector3(0, 0, 0);
+                    IptvViewportHost.Visibility = Visibility.Visible;
+                    StremioViewportHost.Visibility = Visibility.Visible;
+                    StremioControl.SetSourceActive(true);
+                }
+                else
+                {
+                    _iptvVisual.Offset = new Vector3(0, 0, 0);
+                    _stremioVisual.Offset = new Vector3(width, 0, 0);
+                    IptvViewportHost.Visibility = Visibility.Visible;
+                    StremioViewportHost.Visibility = Visibility.Visible;
+                    StremioControl.SetSourceActive(false);
+                }
+            };
         }
 
         private void WireEvents()
@@ -196,6 +279,32 @@ namespace ModernIPTVPlayer
             }
         }
 
+        protected override void OnNavigatedFrom(NavigationEventArgs e)
+        {
+            base.OnNavigatedFrom(e);
+            
+            // [PHASE 2.4] Resource Disposal: Kill the hydration anchors
+            _navigationCts?.Cancel();
+            _navigationCts = null;
+
+            // Clear the local references to help GC
+            _allIptvItems = new List<IMediaStream>();
+            _itemsByNormalizedCategoryId = new Dictionary<string, IReadOnlyList<IMediaStream>>(StringComparer.Ordinal);
+            
+            // Explicitly clear memory caches for this page instance
+            _categoryCache.Clear();
+            _itemsCache.Clear();
+
+            // Notify MediaLibraryStateService to purge if needed
+            MediaLibraryStateService.Instance.UpdateScope(null);
+
+            // [PHASE 2.4] Manual GC Hint: Flush transient UI and Buffer allocations
+            GC.Collect(2, GCCollectionMode.Forced, true);
+            GC.WaitForPendingFinalizers();
+
+            AppLogger.Info("[MediaLibraryPage] Navigated From - Resources Purged.");
+        }
+
         public async void SwitchMediaType(MediaType newType)
         {
             if (_mediaType == newType) return;
@@ -229,6 +338,7 @@ namespace ModernIPTVPlayer
             // to avoid clearing the same list instance that might be stored in the memory cache.
             _iptvCategories = new List<LiveCategory>();
             _allIptvItems = new List<IMediaStream>();
+            _itemsByNormalizedCategoryId = new Dictionary<string, IReadOnlyList<IMediaStream>>(StringComparer.Ordinal);
             CategoryList.ItemsSource = null;
             MediaGrid.ItemsSource = null;
             StremioControl.Clear();
@@ -244,18 +354,42 @@ namespace ModernIPTVPlayer
             SourceSwitcherPanel.Visibility = hasIptv ? Visibility.Visible : Visibility.Collapsed;
             SidebarToggle.Visibility = (_currentSource == ContentSource.IPTV && hasIptv) ? Visibility.Visible : Visibility.Collapsed;
 
+            float width = (float)ViewportGrid.ActualWidth;
+            if (width == 0) width = 1920; // Fallback
+
             if (_currentSource == ContentSource.IPTV && hasIptv)
             {
                 MainSplitView.DisplayMode = SplitViewDisplayMode.Inline;
-                MediaGrid.Visibility = Visibility.Visible;
-                StremioControl.Visibility = Visibility.Collapsed;
+                
+                // [ENGINEERED] Horizontal Viewport Slide
+                _iptvVisual.Offset = new Vector3(0, 0, 0);
+                _stremioVisual.Offset = new Vector3(width, 0, 0);
+                
+                // Keep Sidebar Toggle only for IPTV
+                SidebarToggle.Visibility = Visibility.Visible;
+
+                IptvViewportHost.Visibility = Visibility.Visible;
+                StremioViewportHost.Visibility = Visibility.Visible;
+                MediaGrid.IsHitTestVisible = true;
+                StremioControl.IsHitTestVisible = false;
+                StremioControl.SetSourceActive(false);
             }
             else
             {
                 MainSplitView.IsPaneOpen = false;
                 MainSplitView.DisplayMode = SplitViewDisplayMode.Overlay;
-                MediaGrid.Visibility = Visibility.Collapsed;
-                StremioControl.Visibility = Visibility.Visible;
+
+                // [ENGINEERED] Horizontal Viewport Slide
+                _iptvVisual.Offset = new Vector3(-width, 0, 0);
+                _stremioVisual.Offset = new Vector3(0, 0, 0);
+                
+                SidebarToggle.Visibility = Visibility.Collapsed;
+
+                IptvViewportHost.Visibility = Visibility.Visible;
+                StremioViewportHost.Visibility = Visibility.Visible;
+                MediaGrid.IsHitTestVisible = false;
+                StremioControl.IsHitTestVisible = true;
+                StremioControl.SetSourceActive(true);
             }
         }
 
@@ -296,24 +430,22 @@ namespace ModernIPTVPlayer
         {
             var contextType = _mediaType;
             var contextSource = _currentSource;
+            string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
 
             AppLogger.Info($"[MediaLibraryPage] Loading IPTV Data ({contextType})");
 
-            // 0. MEMORY CACHE CHECK (Instant Switch)
+            // 0. MEMORY CACHE CHECK
             if (_categoryCache.TryGetValue(contextType, out var memCats) && 
                 _itemsCache.TryGetValue(contextType, out var memItems) && 
                 memCats.Count > 0)
             {
-                // Yield to ensure the UI thread can finish the navigation transition (sidebar anim, etc.)
-                // before we potentially block it with heavy ItemsSource updates.
-                await Task.Yield();
                 if (token.IsCancellationRequested || _mediaType != contextType) return;
 
                 AppLogger.Info($"[MediaLibraryPage] Restoring from Memory Cache ({contextType})");
                 _iptvCategories = memCats;
                 _allIptvItems = memItems;
+                await UpdateIptvCollectionScopeAsync(playlistId, contextType);
 
-                // [RESTORE COLOR]
                 if (_heroColorsCache.TryGetValue(contextType, out var cachedColors) && cachedColors.HasValue)
                 {
                     _heroColors = cachedColors;
@@ -327,115 +459,116 @@ namespace ModernIPTVPlayer
             if (token.IsCancellationRequested || _mediaType != contextType) return;
 
             MediaGrid.IsLoading = true;
-            var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
             try
             {
-                if (_iptvCategories.Count > 0)
-                {
-                    DisplayCategories(_iptvCategories, contextType);
-                    return;
-                }
-
-                string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
                 string typeKey = _mediaType == MediaType.Movie ? "vod" : "series";
 
-                // 1. Categories
-                _iptvCategories = await ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, $"{typeKey}_categories") ?? new();
-                if (token.IsCancellationRequested || _mediaType != contextType) return;
-                if (_iptvCategories.Count == 0)
+                // EXTREME PERFORMANCE: Move all CPU-bound work to background thread
+                await Task.Run(async () =>
                 {
-                    string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_{typeKey}_categories";
-                    string json = await _httpClient.GetStringAsync(api, token);
-                    if (token.IsCancellationRequested || _mediaType != contextType) return;
-                    _iptvCategories = HttpHelper.TryDeserializeList<LiveCategory>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                    _ = ContentCacheService.Instance.SaveCacheAsync(playlistId, $"{typeKey}_categories", _iptvCategories);
-                }
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
 
-                // 2. Streams
-                if (_mediaType == MediaType.Movie)
-                {
-                    var cached = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod");
-                    if (token.IsCancellationRequested || _mediaType != contextType) return;
-                    if (cached != null && cached.Count > 0)
+                    // 1. Categories
+                    var cats = await ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, $"{typeKey}_categories") ?? new List<LiveCategory>();
+                    
+                    if (cats.Count == 0 && !token.IsCancellationRequested)
                     {
-                        foreach(var m in cached)
-                        {
-                            if (string.IsNullOrEmpty(m.StreamUrl))
-                                m.StreamUrl = $"{_loginInfo.Host}/movie/{_loginInfo.Username}/{_loginInfo.Password}/{m.StreamId}.{(string.IsNullOrEmpty(m.ContainerExtension) ? "mp4" : m.ContainerExtension)}";
-                        }
-                        _allIptvItems = cached.Cast<IMediaStream>().ToList();
-                    }
-                    else
-                    {
-                        string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams";
+                        AppLogger.Warn($"[MediaLibraryPage] Cache Empty. Fetching {typeKey} categories from network...");
+                        string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_{typeKey}_categories";
                         string json = await _httpClient.GetStringAsync(api, token);
-                        if (token.IsCancellationRequested || _mediaType != contextType) return;
-                        var movies = HttpHelper.TryDeserializeList<VodStream>(json, options);
-                        foreach(var m in movies) 
-                            m.StreamUrl = $"{_loginInfo.Host}/movie/{_loginInfo.Username}/{_loginInfo.Password}/{m.StreamId}.{(string.IsNullOrEmpty(m.ContainerExtension) ? "mp4" : m.ContainerExtension)}";
+                        cats = HttpHelper.TryDeserializeList<LiveCategory>(json, options);
+                        await ContentCacheService.Instance.SaveCacheAsync(playlistId, $"{typeKey}_categories", cats);
+                    }
+
+                    if (token.IsCancellationRequested) return;
+
+                    // 2. Streams
+                    IReadOnlyList<IMediaStream> items = new List<IMediaStream>();
+                    if (contextType == MediaType.Movie)
+                    {
+                        var movies = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod");
                         
-                        _allIptvItems = movies.Cast<IMediaStream>().ToList();
-                        _ = ContentCacheService.Instance.SaveCacheAsync(playlistId, "vod", movies);
-                    }
-                }
-                else
-                {
-                    var cached = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
-                    if (token.IsCancellationRequested || _mediaType != contextType) return;
-                    if (cached != null && cached.Count > 0)
-                    {
-                        _allIptvItems = cached.Cast<IMediaStream>().ToList();
+                        if ((movies == null || movies.Count == 0) && !token.IsCancellationRequested)
+                        {
+                            AppLogger.Warn("[MediaLibraryPage] Cache Empty. Fetching VOD streams from network...");
+                            string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams";
+                            string json = await _httpClient.GetStringAsync(api, token);
+                            movies = HttpHelper.TryDeserializeList<VodStream>(json, options);
+                            await ContentCacheService.Instance.SaveCacheAsync(playlistId, "vod", movies);
+                        }
+
+                        if (movies != null)
+                        {
+                            // [REMOVED] foreach (var m in movies) { ... } 
+                            // This loop was causing mass hydration of 200k items.
+                            // VodStream now calculates StreamUrl lazily.
+                            items = movies;
+                        }
                     }
                     else
                     {
-                        string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series";
-                        string json = await _httpClient.GetStringAsync(api, token);
-                        if (token.IsCancellationRequested || _mediaType != contextType) return;
-                        var series = HttpHelper.TryDeserializeList<SeriesStream>(json, options);
-                        _allIptvItems = series.Cast<IMediaStream>().ToList();
-                        await ContentCacheService.Instance.SaveCacheAsync(playlistId, "series", series);
-                        _ = ContentCacheService.Instance.RefreshIptvMatchIndexAsync(playlistId);
+                        var series = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
+                        
+                        if ((series == null || series.Count == 0) && !token.IsCancellationRequested)
+                        {
+                            AppLogger.Warn("[MediaLibraryPage] Cache Empty. Fetching Series from network...");
+                            string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series";
+                            string json = await _httpClient.GetStringAsync(api, token);
+                            series = HttpHelper.TryDeserializeList<SeriesStream>(json, options);
+                            await ContentCacheService.Instance.SaveCacheAsync(playlistId, "series", series);
+                            _ = ContentCacheService.Instance.RefreshIptvMatchIndexAsync(playlistId);
+                        }
+
+                        if (series != null) items = series;
                     }
-                }
 
-                AppLogger.Info($"[MediaLibraryPage] IPTV Load Done. Cats: {_iptvCategories.Count}, Items: {_allIptvItems.Count}");
-                
-                // Save to Memory Cache
-                _categoryCache[_mediaType] = _iptvCategories;
-                _itemsCache[_mediaType] = _allIptvItems;
+                    if (token.IsCancellationRequested) return;
 
+                    // Update local state
+                    _iptvCategories = cats;
+                    _allIptvItems = items;
+
+                    // Update memory cache
+                    _categoryCache[contextType] = cats;
+                    _itemsCache[contextType] = items;
+
+                    AppLogger.Info($"[MediaLibraryPage] Background Load Done. Cats: {cats.Count}, Items: {items.Count}");
+                });
+
+                if (token.IsCancellationRequested || _mediaType != contextType) return;
+
+                // Return to UI thread for binding
+                await UpdateIptvCollectionScopeAsync(playlistId, contextType);
                 DisplayCategories(_iptvCategories, contextType, token: token);
             }
             catch (Exception ex)
             {
-                if (token.IsCancellationRequested)
-                {
-                    AppLogger.Info($"[MediaLibraryPage] LoadIptvDataAsync cancelled for {contextType}.");
-                }
-                else
-                {
-                    AppLogger.Error($"[MediaLibraryPage] LoadIptvDataAsync Error", ex);
-                }
+                if (!token.IsCancellationRequested) AppLogger.Error($"[MediaLibraryPage] LoadIptvDataAsync Error", ex);
             }
             finally
             {
-                if (!token.IsCancellationRequested)
-                {
-                    MediaGrid.IsLoading = false;
-                }
+                if (!token.IsCancellationRequested) MediaGrid.IsLoading = false;
             }
         }
 
 
 
-        private void DisplayCategories(List<LiveCategory> categories, MediaType contextType, bool skipLoadingRing = false, System.Threading.CancellationToken token = default)
+        private void DisplayCategories(IReadOnlyList<LiveCategory> categories, MediaType contextType, bool skipLoadingRing = false, System.Threading.CancellationToken token = default)
         {
             if (token.IsCancellationRequested || _mediaType != contextType) return;
 
-            CategoryList.ItemsSource = categories;
+            // [ENGINEERED] Skip if already set to the same reference
+            if (CategoryList.ItemsSource != categories)
+            {
+                CategoryList.ItemsSource = categories;
+            }
             
             string? lastId = contextType == MediaType.Movie ? PageStateProvider.LastMovieCategoryId : PageStateProvider.LastSeriesCategoryId;
-            var toSelect = categories.FirstOrDefault(c => c.CategoryId == lastId) ?? categories.FirstOrDefault();
+            string? lastNorm = string.IsNullOrEmpty(lastId) ? null : NormalizeCategoryId(lastId);
+            var toSelect = lastNorm != null
+                ? categories.FirstOrDefault(c => NormalizeCategoryId(c.CategoryId) == lastNorm)
+                : null;
+            toSelect ??= categories.FirstOrDefault(c => c.CategoryId == lastId) ?? categories.FirstOrDefault();
 
             if (toSelect != null)
             {
@@ -447,23 +580,32 @@ namespace ModernIPTVPlayer
         private async Task LoadCategoryItemsAsync(LiveCategory category, MediaType contextType, bool skipLoadingRing = false, System.Threading.CancellationToken token = default)
         {
             if (token.IsCancellationRequested || _mediaType != contextType) return;
-            if (!skipLoadingRing) MediaGrid.IsLoading = true;
+            bool cacheHit = MediaLibraryStateService.Instance.TryGetCollection(contextType, category.CategoryId, out _);
+            string selectedRaw = category.CategoryId ?? string.Empty;
+            string selectedNormalized = NormalizeCategoryId(selectedRaw);
+
+            LogCategoryDiagnostics(category, selectedRaw, selectedNormalized);
+
+            if (_itemsByNormalizedCategoryId.Count == 0 && _allIptvItems.Count > 0)
+                RebuildCategoryIndexMap();
+
+            var collection = MediaLibraryStateService.Instance.GetOrCreateCollection(contextType, category.CategoryId, () =>
+            {
+                if (_itemsByNormalizedCategoryId.TryGetValue(selectedNormalized, out var bucket))
+                    return bucket;
+                return new List<IMediaStream>();
+            });
+
+            // Only set IsLoading if we don't already have the items bound
+            if (MediaGrid.ItemsSource != collection && !skipLoadingRing) MediaGrid.IsLoading = true;
             
             try
             {
-                var filtered = await Task.Run(() => _allIptvItems.Where(i => 
-                {
-                    if (i is LiveStream ls) return ls.CategoryId == category.CategoryId;
-                    if (i is SeriesStream ss) return ss.CategoryId == category.CategoryId;
-                    if (i is VodStream vs) return vs.CategoryId == category.CategoryId;
-                    return false;
-                }).ToList());
-                
                 if (token.IsCancellationRequested || _mediaType != contextType) return;
 
-                // STABILITY FIX: Single assignment to avoid GridView virtualization storms
-                MediaGrid.ItemsSource = filtered;
-                AppLogger.Info($"[MediaLibraryPage] Displaying {filtered.Count} items for Category {category.CategoryName}");
+                // If identical reference, GridView will skip layout destruction.
+                MediaGrid.ItemsSource = collection;
+                AppLogger.Info($"[MediaLibraryPage] Displaying {((ICollection)collection).Count} items for Category {category.CategoryName} (RawCatId='{selectedRaw}', NormalizedCatId='{selectedNormalized}', Cache {(cacheHit ? "Hit" : "Miss")})");
             }
             catch (Exception ex)
             {
@@ -526,6 +668,97 @@ namespace ModernIPTVPlayer
         }
 
         private void SearchButton_Click(object sender, RoutedEventArgs e) => SpotlightSearch.Show();
+
+        private async Task UpdateIptvCollectionScopeAsync(string playlistId, MediaType contextType)
+        {
+            // 1. O(1) Fingerprint from Virtual List Header
+            long datasetFp = 0;
+            if (_allIptvItems is Helpers.VirtualVodList vvl) datasetFp = vvl.Fingerprint;
+            else if (_allIptvItems is Helpers.VirtualSeriesList vsl) datasetFp = vsl.Fingerprint;
+
+            // 2. High Performance Indexing (Already offloaded if called correctly, but we ensure it remains Task-safe)
+            await Task.Run(() => RebuildCategoryIndexMap());
+            
+            string scopeKey = MediaLibraryStateService.BuildScopeKey(playlistId, contextType, _currentSource.ToString(), (ulong)datasetFp);
+            MediaLibraryStateService.Instance.UpdateScope(scopeKey);
+        }
+
+        private void RebuildCategoryIndexMap()
+        {
+            var map = new System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentBag<int>>(StringComparer.Ordinal);
+            
+            // ARCHITECTURAL FIX: Use Zero-Lock Parallel Scan (Index-only) to avoid object hydration
+            if (_allIptvItems is Helpers.VirtualVodList vvl)
+            {
+                vvl.ParallelScanInto(map);
+                _itemsByNormalizedCategoryId = map.ToDictionary(
+                    k => k.Key, 
+                    v => (IReadOnlyList<IMediaStream>)new Helpers.VirtualStreamSubList(vvl, v.Value)
+                );
+            }
+            else if (_allIptvItems is Helpers.VirtualSeriesList vsl)
+            {
+                vsl.ParallelScanInto(map);
+                _itemsByNormalizedCategoryId = map.ToDictionary(
+                    k => k.Key, 
+                    v => (IReadOnlyList<IMediaStream>)new Helpers.VirtualStreamSubList(vsl, v.Value)
+                );
+            }
+            else
+            {
+                // Fallback for non-virtual lists
+                var fallbackMap = new System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentBag<IMediaStream>>(StringComparer.Ordinal);
+                Parallel.ForEach(_allIptvItems, (stream) => 
+                {
+                    string norm = NormalizeCategoryId(GetStreamCategoryId(stream));
+                    var bag = fallbackMap.GetOrAdd(norm, _ => new System.Collections.Concurrent.ConcurrentBag<IMediaStream>());
+                    bag.Add(stream);
+                });
+                _itemsByNormalizedCategoryId = fallbackMap.ToDictionary(k => k.Key, v => v.Value.ToList() as IReadOnlyList<IMediaStream>);
+            }
+        }
+
+        private static ulong ComputeDatasetFingerprint(IReadOnlyList<IMediaStream> items)
+        {
+            if (items == null || items.Count == 0) return 0;
+            ulong h = 14695981039346656037UL;
+            foreach (var s in items)
+            {
+                h ^= (ulong)(uint)s.Id;
+                h *= 1099511628211UL;
+                string? cid = GetStreamCategoryId(s);
+                if (!string.IsNullOrEmpty(cid))
+                {
+                    h ^= (ulong)(uint)cid.GetHashCode(StringComparison.Ordinal);
+                    h *= 1099511628211UL;
+                }
+            }
+            h ^= (ulong)(uint)items.Count;
+            return h;
+        }
+
+        private static string NormalizeCategoryId(string? categoryId)
+        {
+            if (string.IsNullOrWhiteSpace(categoryId)) return "0";
+            string trimmed = categoryId.Trim();
+            if (int.TryParse(trimmed, out int numeric)) return numeric.ToString();
+            return trimmed;
+        }
+
+        private void LogCategoryDiagnostics(LiveCategory category, string selectedRaw, string selectedNormalized)
+        {
+            // Lightweight diagnostic: avoid full scan hydration
+            int itemCount = (_itemsByNormalizedCategoryId != null && _itemsByNormalizedCategoryId.TryGetValue(selectedNormalized, out var list)) ? list.Count : 0;
+            AppLogger.Info($"[Diag][MediaLibraryPage] Category: name='{category.CategoryName}' raw='{selectedRaw}' norm='{selectedNormalized}' items={itemCount}");
+        }
+
+        private static string? GetStreamCategoryId(IMediaStream stream)
+        {
+            if (stream is LiveStream ls) return ls.CategoryId;
+            if (stream is SeriesStream ss) return ss.CategoryId;
+            if (stream is VodStream vs) return vs.CategoryId;
+            return null;
+        }
 
         public bool HandleBackRequest()
         {

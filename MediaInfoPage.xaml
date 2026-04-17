@@ -1108,7 +1108,7 @@
 
                                                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="6">
                                                       <!-- File Name -->
-                                                      <TextBlock Text="{Binding Title}" ToolTipService.ToolTip="{Binding Title}" FontWeight="Bold" FontSize="15" Foreground="White" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+                                                      <TextBlock Text="{Binding SourceDisplayName}" ToolTipService.ToolTip="{Binding SourceDisplayName}" FontWeight="Bold" FontSize="15" Foreground="White" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
                                                       
                                                       <StackPanel Orientation="Horizontal" Spacing="8">
                                                           <!-- Quality -->

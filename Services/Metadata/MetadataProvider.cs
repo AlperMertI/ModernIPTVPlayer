@@ -237,7 +237,22 @@ namespace ModernIPTVPlayer.Services.Metadata
                     return cached.Data;
                 }
 
-                // [FIX] ALIASED LOOKUP
+                // [FIX] ALIASED & CANONICAL LOOKUP (LEVEL 0.5)
+                // If we have a canonical ID, check the global (suffix-less) cache first
+                if (isCanonical)
+                {
+                    string cleanKey = $"{normalizedId}_{normalizedType}";
+                    if (context == MetadataContext.Discovery) cleanKey += "_discovery";
+                    
+                    if (_resultCache.TryGetValue(cleanKey, out var cleanCached) && DateTime.Now < cleanCached.Expiry)
+                    {
+                        var msg = $"[MetadataProvider] ⚡ TryPeek HIT (Global ID) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                        AppLogger.Info(msg);
+                        return cleanCached.Data;
+                    }
+                }
+
+                // [FIX] ALIASED LOOKUP for TMDB -> IMDB
                 if (normalizedId != null && normalizedId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
                 {
                     string tmdbIdOnly = normalizedId.Replace("tmdb:", "", StringComparison.OrdinalIgnoreCase);
@@ -528,11 +543,18 @@ namespace ModernIPTVPlayer.Services.Metadata
             var tempMetadata = new UnifiedMetadata();
             if (stream is ModernIPTVPlayer.Models.Stremio.StremioMediaStream sms)
                 SeedFromCatalogMetadata(tempMetadata, sms, new MetadataTrace("Reasoning", cacheKey, stream.Title), context, quiet: true);
+            else if (stream != null)
+                SeedFromIptvStream(tempMetadata, stream, new MetadataTrace("IPTV-Seed", cacheKey, stream.Title));
+
             bool isContinueWatching = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
             var missing = GetMissingFields(tempMetadata, GetRequiredFields(context, isContinueWatching));
             
-            // [NEW] Early exit if catalog/discovery data already satisfies current context requirements
+            // [NEW] Early exit if catalog/discovery/IPTV data already satisfies current context requirements
             // [FIX] NEVER early exit for Spotlight or Detail if we want TMDB enrichment, as catalog-seed is only a starting point.
+            // [PRIORITY FIX] If the stream already has a high priority score (5000+), it means it was previously enriched
+            // and we should trust the disk-based metadata as an "Instant HIT".
+            bool isHighPriority = tempMetadata.PriorityScore > 4000;
+            
             if (missing == MetadataField.None && context != MetadataContext.Spotlight && context != MetadataContext.Detail)
             {
                 sw.Stop();
@@ -541,6 +563,17 @@ namespace ModernIPTVPlayer.Services.Metadata
                 System.Diagnostics.Debug.WriteLine(msg);
                 
                 // Result found and satisfied without background task
+                var expiry = DateTime.Now.Add(_cacheDuration);
+                _resultCache[cacheKey] = (tempMetadata, expiry);
+                return tempMetadata;
+            }
+            else if (isHighPriority && missing == MetadataField.None)
+            {
+                sw.Stop();
+                var msg = $"[MetadataProvider] ⚡ Instant HIT (Satisfied by Priority: {tempMetadata.PriorityScore}) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                AppLogger.Info(msg);
+                System.Diagnostics.Debug.WriteLine(msg);
+                
                 var expiry = DateTime.Now.Add(_cacheDuration);
                 _resultCache[cacheKey] = (tempMetadata, expiry);
                 return tempMetadata;
@@ -630,7 +663,22 @@ namespace ModernIPTVPlayer.Services.Metadata
                         string newKey = $"{result.ImdbId}_{type}";
                         if (context == MetadataContext.Discovery) newKey += "_discovery";
                         _resultCache[newKey] = (result, expiry);
+                        
+                        // [NEW] Also cache the discovery key specifically to prevent redundant searching
+                        string cleanKey = $"{normalizedId}_{type}";
+                        if (context == MetadataContext.Discovery) cleanKey += "_discovery";
+                        if (!_resultCache.ContainsKey(cleanKey)) _resultCache[cleanKey] = (result, expiry);
+
                         AppLogger.Info($"[MetadataProvider] Multi-cached: {cacheKey} AND {newKey}");
+                    }
+                    else if ((IsImdbId(normalizedId) || (normalizedId != null && normalizedId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))) && !cacheKey.Equals($"{normalizedId}_{type}", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Even if ID didn't change, if we used a complex cacheKey (with hash), 
+                        // also cache under the CLEAN ID to ensure instant peeks later.
+                        string cleanKey = $"{normalizedId}_{type}";
+                        if (context == MetadataContext.Discovery) cleanKey += "_discovery";
+                        _resultCache[cleanKey] = (result, expiry);
+                        AppLogger.Info($"[MetadataProvider] Promotion-cached: {cacheKey} -> {cleanKey}");
                     }
                 }
                 
@@ -793,12 +841,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                             trace.Log("Discovery", $"LEARNED: {rawId} -> {discoveredId}");
                             _ = SaveMappingCacheAsync(); 
 
-                            // [NEW] Synchronize with ContentCacheService for global persistence
-                            if (sourceStream is Models.IMediaStream iptvStream && (iptvStream.Id != 0 || !string.IsNullOrEmpty(iptvStream.IMDbId)))
-                            {
-                                bool isSeries = iptvStream is SeriesStream || iptvStream.Type == "series";
-                                ContentCacheService.Instance.RegisterImdbMapping(iptvStream.Id, discoveredId, isSeries);
-                            }
+                            string playlistId = App.CurrentLogin?.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
+                            _ = ContentCacheService.Instance.HydrateInPlaceAsync(playlistId, discoveredId, metadata, metadata.IsSeries);
                         }
                     }
                 }
@@ -1107,6 +1151,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                 metadata.MaxEnrichmentContext = context;
             }
             
+            // [PERSISTENCE] Sync enriched metadata back to binary cache for cold-start performance
+            if (context >= MetadataContext.ExpandedCard)
+            {
+                string syncId = !string.IsNullOrEmpty(metadata.ImdbId) ? metadata.ImdbId : id;
+                string pid = App.CurrentLogin?.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
+                _ = ContentCacheService.Instance.HydrateInPlaceAsync(pid, syncId, metadata, metadata.IsSeries);
+            }
+            
             return metadata;
         }
 
@@ -1185,6 +1237,36 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (string.IsNullOrWhiteSpace(addonUrl)) return -1;
             string host = GetHostSafe(addonUrl);
             return addonUrls.FindIndex(a => string.Equals(GetHostSafe(a), host, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void SeedFromIptvStream(UnifiedMetadata metadata, Models.IMediaStream stream, MetadataTrace trace)
+        {
+            if (stream == null) return;
+            
+            // [PHASE 2] High-Performance Disk Data Trust
+            // If the stream was already patched in a previous session, it carries a high PriorityScore.
+            metadata.PriorityScore = stream.PriorityScore;
+            metadata.Title = stream.Title;
+            metadata.Year = stream.Year;
+            metadata.Overview = stream.Description;
+            metadata.PosterUrl = stream.PosterUrl;
+            metadata.BackdropUrl = stream.BackdropUrl;
+            metadata.Genres = stream.Genres;
+            metadata.Cast = stream.Cast?.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                      .Select(s => new UnifiedCast { Name = s.Trim() }).ToList();
+            metadata.Directors = stream.Director?.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                                                .Select(s => new UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
+            metadata.TrailerUrl = stream.TrailerUrl;
+
+            if (double.TryParse(stream.Rating, NumberStyles.Any, CultureInfo.InvariantCulture, out double rating))
+                metadata.Rating = rating;
+
+            // Mark source as "IPTV-Disk" if it was already enriched
+            if (metadata.PriorityScore > 4000)
+            {
+                metadata.CatalogSourceInfo = "IPTV-Enriched";
+                trace.Log("Seed", $"Recovered enriched metadata from disk: Score={metadata.PriorityScore}");
+            }
         }
 
         private void SeedFromCatalogMetadata(UnifiedMetadata metadata, StremioMediaStream stream, MetadataTrace trace, MetadataContext context, bool quiet = false)
@@ -1357,13 +1439,22 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             if ((stream.Meta.Trailers?.Count > 0) || (stream.Meta.TrailerStreams?.Count > 0))
             {
-                var trailer = stream.Meta.Trailers?.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Source))?.Source
-                    ?? stream.Meta.TrailerStreams?.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.YtId))?.YtId;
-                if (!string.IsNullOrWhiteSpace(trailer))
+                if (stream.Meta.Trailers != null)
                 {
-                    metadata.TrailerUrl = trailer.Contains("/") || trailer.Contains(".")
-                        ? trailer
-                        : $"https://www.youtube.com/watch?v={trailer}";
+                    foreach (var trailer in stream.Meta.Trailers
+                        .Where(t => !string.IsNullOrWhiteSpace(t.Source))
+                        .OrderByDescending(t => string.Equals(t.Type, "trailer", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        AddTrailerCandidate(metadata, trailer.Source, preferPrimary: canOverwriteSeedFields || string.IsNullOrWhiteSpace(metadata.TrailerUrl));
+                    }
+                }
+
+                if (stream.Meta.TrailerStreams != null)
+                {
+                    foreach (var trailer in stream.Meta.TrailerStreams.Where(t => !string.IsNullOrWhiteSpace(t.YtId)))
+                    {
+                        AddTrailerCandidate(metadata, trailer.YtId, preferPrimary: canOverwriteSeedFields || string.IsNullOrWhiteSpace(metadata.TrailerUrl));
+                    }
                 }
             }
 
@@ -1383,8 +1474,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (!string.IsNullOrEmpty(stream.Meta.AppExtras.Logo) && (canOverwriteSeedFields || string.IsNullOrEmpty(metadata.LogoUrl)))
                     metadata.LogoUrl = stream.Meta.AppExtras.Logo;
 
-                if (!string.IsNullOrEmpty(stream.Meta.AppExtras.Trailer) && (canOverwriteSeedFields || string.IsNullOrEmpty(metadata.TrailerUrl)))
-                    metadata.TrailerUrl = stream.Meta.AppExtras.Trailer;
+                if (!string.IsNullOrEmpty(stream.Meta.AppExtras.Trailer))
+                    AddTrailerCandidate(metadata, stream.Meta.AppExtras.Trailer, preferPrimary: canOverwriteSeedFields || string.IsNullOrWhiteSpace(metadata.TrailerUrl));
 
                 if (stream.Meta.AppExtras.Backdrops?.Count > 0)
                 {
@@ -1737,9 +1828,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         // 4. Trailer
                         if (string.IsNullOrEmpty(metadata.TrailerUrl) && !string.IsNullOrEmpty(result.Info.YoutubeTrailer))
                         {
-                            metadata.TrailerUrl = result.Info.YoutubeTrailer.StartsWith("http") 
-                                ? result.Info.YoutubeTrailer 
-                                : $"https://www.youtube.com/watch?v={result.Info.YoutubeTrailer}";
+                            AddTrailerCandidate(metadata, result.Info.YoutubeTrailer, preferPrimary: true);
                         }
 
                         // 5. Technical Info (Used to skip probing)
@@ -2521,33 +2610,22 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             if ((stremio.Trailers != null && stremio.Trailers.Any()) || (stremio.TrailerStreams != null && stremio.TrailerStreams.Any()))
             {
-                 string? trailerId = null;
-                 
-                 // 1. Try standard trailers list
                  if (stremio.Trailers != null)
                  {
-                     var t = stremio.Trailers.FirstOrDefault(x => (x.Type?.ToLower() == "trailer" || string.IsNullOrEmpty(x.Type)) && !string.IsNullOrWhiteSpace(x.Source));
-                     if (t != null) trailerId = t.Source;
-                 }
-
-                 // 2. Try AioStreams specific trailerStreams
-                 if (string.IsNullOrEmpty(trailerId) && stremio.TrailerStreams != null)
-                 {
-                     var ts = stremio.TrailerStreams.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x.YtId));
-                     if (ts != null) trailerId = ts.YtId;
-                 }
-
-                 if (!string.IsNullOrEmpty(trailerId))
-                 {
-                     string source = trailerId;
-                     // Normalize YouTube IDs to full URLs
-                     if (!source.Contains("/") && !source.Contains("."))
-                         source = $"https://www.youtube.com/watch?v={source}";
-
-                     if (overwritePrimary || string.IsNullOrEmpty(unified.TrailerUrl))
+                     foreach (var trailer in stremio.Trailers
+                        .Where(x => !string.IsNullOrWhiteSpace(x.Source))
+                        .OrderByDescending(x => x.Type?.Equals("trailer", StringComparison.OrdinalIgnoreCase) == true || string.IsNullOrWhiteSpace(x.Type)))
                      {
-                         unified.TrailerUrl = source;
+                        AddTrailerCandidate(unified, trailer.Source, preferPrimary: overwritePrimary || string.IsNullOrEmpty(unified.TrailerUrl));
                      }
+                 }
+                 
+                 if (stremio.TrailerStreams != null)
+                 {
+                    foreach (var trailer in stremio.TrailerStreams.Where(x => !string.IsNullOrWhiteSpace(x.YtId)))
+                    {
+                        AddTrailerCandidate(unified, trailer.YtId, preferPrimary: overwritePrimary || string.IsNullOrEmpty(unified.TrailerUrl));
+                    }
                  }
             }
             
@@ -2722,10 +2800,11 @@ namespace ModernIPTVPlayer.Services.Metadata
                          if (string.IsNullOrEmpty(metadata.TrailerUrl) || metadata.TrailerUrl.Contains("youtube.com"))
                          {
                              System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] Overwriting Trailer: {metadata.TrailerUrl} -> {fullTrailerUrl}");
-                             metadata.TrailerUrl = fullTrailerUrl;
+                             AddTrailerCandidate(metadata, fullTrailerUrl, preferPrimary: true);
                          }
                          else
                          {
+                             AddTrailerCandidate(metadata, fullTrailerUrl, preferPrimary: false);
                              System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SKIPPED Trailer overwrite. Current: {metadata.TrailerUrl}, TMDB: {fullTrailerUrl}");
                          }
                     }
@@ -3345,14 +3424,141 @@ namespace ModernIPTVPlayer.Services.Metadata
             return id;
         }
 
+        private static string? NormalizeTrailerCandidate(string? source)
+        {
+            if (string.IsNullOrWhiteSpace(source)) return null;
+            string value = source.Trim();
+
+            if (!value.Contains("/") && !value.Contains("."))
+            {
+                return $"https://www.youtube.com/watch?v={value}";
+            }
+
+            if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+            {
+                string host = uri.Host.ToLowerInvariant();
+                if (host.Contains("youtu.be"))
+                {
+                    string id = uri.AbsolutePath.Trim('/').Split('/').FirstOrDefault() ?? string.Empty;
+                    if (!string.IsNullOrWhiteSpace(id))
+                        return $"https://www.youtube.com/watch?v={id}";
+                }
+
+                if (host.Contains("youtube.com"))
+                {
+                    string? v = ExtractQueryParam(uri.Query, "v");
+                    if (!string.IsNullOrWhiteSpace(v))
+                        return $"https://www.youtube.com/watch?v={v}";
+
+                    var segments = uri.AbsolutePath.Trim('/').Split('/');
+                    int embedIndex = Array.FindIndex(segments, s => s.Equals("embed", StringComparison.OrdinalIgnoreCase));
+                    if (embedIndex >= 0 && embedIndex + 1 < segments.Length)
+                        return $"https://www.youtube.com/watch?v={segments[embedIndex + 1]}";
+                }
+            }
+
+            return value;
+        }
+
+        private static string GetTrailerDedupKey(string normalized)
+        {
+            if (Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+            {
+                string host = uri.Host.ToLowerInvariant();
+                if (host.Contains("youtube.com"))
+                {
+                    string? v = ExtractQueryParam(uri.Query, "v");
+                    if (!string.IsNullOrWhiteSpace(v))
+                        return $"yt:{v.Trim().ToLowerInvariant()}";
+                }
+            }
+
+            return normalized.Trim().ToLowerInvariant();
+        }
+
+        private static int GetTrailerPriority(string normalized)
+        {
+            string value = normalized.ToLowerInvariant();
+            if (value.EndsWith(".mp4") || value.Contains(".mp4?") || value.Contains(".m3u8"))
+                return 0;
+            if (value.Contains("youtube.com/watch?v="))
+                return 1;
+            if (value.Contains("youtube.com") || value.Contains("youtu.be"))
+                return 2;
+            return 3;
+        }
+
+        private void AddTrailerCandidate(UnifiedMetadata metadata, string? rawSource, bool preferPrimary = false)
+        {
+            string? normalized = NormalizeTrailerCandidate(rawSource);
+            if (string.IsNullOrWhiteSpace(normalized)) return;
+
+            metadata.TrailerCandidates ??= new List<string>();
+
+            string key = GetTrailerDedupKey(normalized);
+            bool alreadyExists = metadata.TrailerCandidates.Any(x => GetTrailerDedupKey(x) == key);
+            if (!alreadyExists)
+            {
+                metadata.TrailerCandidates.Add(normalized);
+            }
+
+            metadata.TrailerCandidates = metadata.TrailerCandidates
+                .OrderBy(GetTrailerPriority)
+                .ThenBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (preferPrimary || string.IsNullOrWhiteSpace(metadata.TrailerUrl))
+            {
+                metadata.TrailerUrl = normalized;
+            }
+            else if (!string.IsNullOrWhiteSpace(metadata.TrailerUrl))
+            {
+                string? normalizedPrimary = NormalizeTrailerCandidate(metadata.TrailerUrl);
+                if (!string.IsNullOrWhiteSpace(normalizedPrimary))
+                {
+                    string primaryKey = GetTrailerDedupKey(normalizedPrimary);
+                    int existingIndex = metadata.TrailerCandidates.FindIndex(x => GetTrailerDedupKey(x) == primaryKey);
+                    if (existingIndex > 0)
+                    {
+                        string item = metadata.TrailerCandidates[existingIndex];
+                        metadata.TrailerCandidates.RemoveAt(existingIndex);
+                        metadata.TrailerCandidates.Insert(0, item);
+                    }
+                }
+            }
+        }
+
+        private static string? ExtractQueryParam(string query, string key)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return null;
+            string trimmed = query.TrimStart('?');
+            foreach (string part in trimmed.Split('&', StringSplitOptions.RemoveEmptyEntries))
+            {
+                int eq = part.IndexOf('=');
+                if (eq <= 0) continue;
+                string name = part.Substring(0, eq);
+                if (!name.Equals(key, StringComparison.OrdinalIgnoreCase)) continue;
+                string value = part.Substring(eq + 1);
+                return Uri.UnescapeDataString(value);
+            }
+
+            return null;
+        }
+
         private string GetAddonOrderHash()
         {
             var addons = StremioAddonManager.Instance.GetAddons();
             if (addons == null || addons.Count == 0) return "none";
 
-            // Simple combined string hash is sufficient for short-term result cache keying
+            // [STABILITY FIX] Use stable FNV-1a hash instead of string.GetHashCode()
+            // to ensure the cache key remains identical across process restarts.
             string combined = string.Join("|", addons);
-            return combined.GetHashCode().ToString("X");
+            uint hash = 2166136261;
+            foreach (char c in combined)
+            {
+                hash = (hash ^ (uint)c) * 16777619;
+            }
+            return hash.ToString("X8");
         }
 
         private string? SelectBestLogo(TmdbMovieResult tmdb)

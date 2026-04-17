@@ -43,6 +43,8 @@ namespace ModernIPTVPlayer
         private object? _metaLock;
         private object MetaLock => _metaLock ??= new object();
         public int MetadataPriority { get; set; } = 0;
+        public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
+        public uint Fingerprint { get; set; }
         [JsonIgnore]
         public bool IsLoading { get; set; } = false;
         
@@ -120,6 +122,7 @@ namespace ModernIPTVPlayer
             get => Name; 
             set => Name = value; 
         }
+        public string? SourceTitle { get; set; }
 
         public string? Description 
         { 

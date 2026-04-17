@@ -80,7 +80,7 @@
                   IsItemClickEnabled="False"
                   IsTabStop="False"
                   ItemTemplateSelector="{StaticResource DiscoveryRowTemplateSelector}"
-                  Padding="0,0,0,40">
+                  Padding="0">
             <ListView.Header>
                 <local:HeroSectionControl x:Name="HeroControl" />
             </ListView.Header>

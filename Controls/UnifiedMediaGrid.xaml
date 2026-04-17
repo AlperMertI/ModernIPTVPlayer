@@ -40,7 +40,7 @@
                   IsItemClickEnabled="True" 
                   ItemClick="MediaGridView_ItemClick"
                   ContainerContentChanging="MediaGridView_ContainerContentChanging"
-                  Padding="24,0,24,36"
+                  Padding="24,0,24,0"
                   Background="Transparent"
                   ItemContainerStyle="{StaticResource MediaCardStyle}">
             
@@ -57,34 +57,40 @@
             </GridView.ItemsPanel>
 
             <GridView.ItemTemplate>
-                <DataTemplate>
-                    <local:PosterCard 
-                        ImageUrl="{Binding PosterUrl}" 
-                        Title="{Binding Title}" 
-                        ProgressValue="{Binding ProgressValue}"
-                        BadgeText="{Binding BadgeText}"
-                        IsAvailableOnIptv="{Binding IsAvailableOnIptv}"
-                        ShowProgress="{Binding ShowProgress}"
-                        ShowIptvBadge="{Binding ShowIptvBadge, ElementName=RootGridControl}"
-                        ShowBadge="{Binding ShowBadge}"
-                        IsTitleVisible="{Binding ShowTitles, ElementName=RootGridControl}"
-                        Width="212" 
-                        Height="312"
-                        ColorsExtracted="PosterCard_ColorsExtracted"
-                        HoverStarted="Card_HoverStarted"
-                        HoverEnded="Card_HoverEnded"/>
+                <DataTemplate x:DataType="models:IMediaStream">
+                    <Grid Width="212" Height="312" Margin="2">
+                        <!-- Phase 0: Immediate Light Skeleton (Automatic) -->
+                        <local:ShimmerCard x:Name="Skeleton" Width="212" Height="312" Padding="6"/>
+                        
+                        <!-- Phase 1: Full Heavy Card -->
+                        <local:PosterCard x:Phase="1"
+                            ImageUrl="{x:Bind PosterUrl}" 
+                            Title="{x:Bind Title}" 
+                            ProgressValue="{x:Bind ProgressValue}"
+                            BadgeText="{x:Bind BadgeText}"
+                            IsAvailableOnIptv="{x:Bind IsAvailableOnIptv}"
+                            ShowProgress="{x:Bind ShowProgress}"
+                            ShowIptvBadge="{Binding ShowIptvBadge, ElementName=RootGridControl}"
+                            ShowBadge="{x:Bind ShowBadge}"
+                            IsTitleVisible="{Binding ShowTitles, ElementName=RootGridControl}"
+                            Width="212" 
+                            Height="312"
+                            ColorsExtracted="PosterCard_ColorsExtracted"
+                            HoverStarted="Card_HoverStarted"
+                            HoverEnded="Card_HoverEnded"/>
+                    </Grid>
                 </DataTemplate>
             </GridView.ItemTemplate>
         </GridView>
         
         <!-- Skeleton Loading State -->
         <GridView x:Name="SkeletonGrid" 
-                  Padding="24,0,24,36"
+                  Padding="24,0,24,0"
                   Visibility="Collapsed"
                   IsHitTestVisible="False">
             <GridView.ItemTemplate>
                 <DataTemplate>
-                    <local:ShimmerCard Width="212" Height="312" Margin="2"/>
+                    <local:ShimmerCard Width="212" Height="312" Margin="2" Padding="6"/>
                 </DataTemplate>
             </GridView.ItemTemplate>
         </GridView>

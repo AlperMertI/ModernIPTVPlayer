@@ -107,8 +107,15 @@ namespace ModernIPTVPlayer.Controls
                     // Fire-and-forget stop signal to JS and state reset
                     _ = StopTrailer(forceDestroy: true);
                     
-                    TrailerWebView.Visibility = Visibility.Collapsed;
-                    try { TrailerWebView.Source = new Uri("about:blank"); } catch { }
+                    try 
+                    {
+                        if (this.XamlRoot != null)
+                        {
+                            TrailerWebView.Visibility = Visibility.Collapsed;
+                            TrailerWebView.Source = new Uri("about:blank");
+                        }
+                    } 
+                    catch { }
                 }
 
                 // 3. Clear Managed Collections (Breaks reference chains)
@@ -651,8 +658,12 @@ namespace ModernIPTVPlayer.Controls
                 {
                      try 
                      {
-                         var jsTask = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();").AsTask();
-                         if (await Task.WhenAny(jsTask, Task.Delay(500)) == jsTask) await jsTask;
+                         // Ensure we are still on the visual tree before calling into WinRT
+                         if (this.XamlRoot != null && TrailerWebView.Visibility == Visibility.Visible)
+                         {
+                             var jsTask = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();").AsTask();
+                             if (await Task.WhenAny(jsTask, Task.Delay(500)) == jsTask) await jsTask;
+                         }
                      }
                      catch { }
                 }
@@ -1108,7 +1119,14 @@ namespace ModernIPTVPlayer.Controls
 
                     // [CONSOLIDATION] Synchronize the underlying stream with high-quality metadata 
                     // (Done after trailer potential update for completeness)
-                    if (stream != null) stream.UpdateFromUnified(unified);
+                    if (stream != null)
+                    {
+                        try { stream.UpdateFromUnified(unified); }
+                        catch (Exception syncEx)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[ExpandedCard] UpdateFromUnified skipped: {syncEx.Message}");
+                        }
+                    }
 
                     if (!string.IsNullOrEmpty(trailerKey))
                     {

@@ -20,9 +20,9 @@
         </Storyboard>
     </UserControl.Resources>
 
-    <Grid CornerRadius="{x:Bind CornerRadius, Mode=OneWay}" Background="#1AFFFFFF">
+    <Grid Padding="{x:Bind Padding, Mode=OneWay}">
         <!-- Mask for Shimmer -->
-        <Grid CornerRadius="{x:Bind CornerRadius, Mode=OneWay}" x:Name="ShimmerMask">
+        <Grid CornerRadius="{x:Bind CornerRadius, Mode=OneWay}" x:Name="ShimmerMask" Background="#1AFFFFFF">
             <Rectangle Opacity="1">
                 <Rectangle.Fill>
                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">

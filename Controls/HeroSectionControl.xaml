@@ -104,7 +104,7 @@
         <StackPanel x:Name="HeroContentPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Spacing="16" Margin="64,0,0,80">
             <Grid>
                 <!-- Real Content -->
-                <StackPanel x:Name="HeroRealContent" Spacing="16" Opacity="0">
+                <StackPanel x:Name="HeroRealContent" Spacing="16" Opacity="1">
                     <Border Background="#CCFFFFFF" HorizontalAlignment="Left" CornerRadius="4" Padding="8,4">
                         <TextBlock Text="GÜNÜN ÖNERİSİ" FontSize="12" FontWeight="Bold" Foreground="Black" CharacterSpacing="50"/>
                     </Border>

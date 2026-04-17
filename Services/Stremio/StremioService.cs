@@ -8,6 +8,7 @@ using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Services.Iptv;
 using ModernIPTVPlayer.Services.Metadata;
+using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer;
 using System.Linq;
 
@@ -231,9 +232,9 @@ namespace ModernIPTVPlayer.Services.Stremio
                         {
                             var metas = GetGlobalMetaCache(searchId);
                             var meta = metas.FirstOrDefault();
-                            if (meta != null)
+                            if (meta != null && !string.IsNullOrEmpty(meta.Title))
                             {
-                                matches = IptvMatchService.Instance.FindAllMatches(meta.Title, null, null, null, meta.Year, null, isSeries);
+                                matches = IptvMatchService.Instance.FindAllMatches(meta.Title, null, null, null, meta.Year, null, isSeries, false, false);
                             }
                         }
 
@@ -319,6 +320,12 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         private async Task<List<StremioMediaStream>> SearchInternalAsync(string query, string type, string scope, Action<List<StremioMediaStream>>? onResultsFound = null, System.Threading.CancellationToken cancellationToken = default)
         {
+            using var lifecycle = LifecycleLog.Begin("Stremio.Search", tags: new Dictionary<string, object?>
+            {
+                ["query"] = query,
+                ["type"] = type,
+                ["scope"] = scope
+            });
             var enabledAddons = StremioAddonManager.Instance.GetAddonsWithManifests();
             var allResults = new List<StremioMediaStream>();
             DateTime lastRankingTime = DateTime.MinValue;
@@ -326,6 +333,13 @@ namespace ModernIPTVPlayer.Services.Stremio
             bool includeIptv = scope == "all" || scope == "iptv";
             bool includeLibrary = scope == "all" || scope == "library";
             bool includeAddons = scope == "all";
+            lifecycle.Step("sources_selected", new Dictionary<string, object?>
+            {
+                ["includeIptv"] = includeIptv,
+                ["includeLibrary"] = includeLibrary,
+                ["includeAddons"] = includeAddons,
+                ["addonCount"] = enabledAddons.Count
+            });
             
             // 1. IPTV Task (Proactive or Fast)
             var iptvTask = includeIptv ? Task.Run(async () => {
@@ -351,9 +365,9 @@ namespace ModernIPTVPlayer.Services.Stremio
                 else
                 {
                     // STANDARD SEARCH: Fuzzy/Normalized for "All" scope
-                    var movieMatches = (type == "all" || type == "movie") ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, null, query, false, false, cancellationToken) : new List<IMediaStream>();
+                    var movieMatches = (type == "all" || type == "movie") && !string.IsNullOrEmpty(query) ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, null, query, false, false, false, cancellationToken) : new List<IMediaStream>();
                     cancellationToken.ThrowIfCancellationRequested();
-                    var seriesMatches = (type == "all" || type == "series") ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, null, query, true, false, cancellationToken) : new List<IMediaStream>();
+                    var seriesMatches = (type == "all" || type == "series") && !string.IsNullOrEmpty(query) ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, null, query, true, false, false, cancellationToken) : new List<IMediaStream>();
                     
                     foreach (var m in movieMatches.Concat(seriesMatches))
                     {
@@ -386,6 +400,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             }, cancellationToken) : Task.FromResult(new List<StremioMediaStream>());
 
             var addonTasks = new List<Task<List<StremioMediaStream>>>();
+            lifecycle.Step("addons_starting", new Dictionary<string, object?> { ["addonCount"] = enabledAddons.Count });
             if (includeAddons)
             {
                 foreach (var (baseUrl, manifest) in enabledAddons)
@@ -449,7 +464,13 @@ namespace ModernIPTVPlayer.Services.Stremio
                 catch (Exception ex) { AppLogger.Error("Error processing search result task", ex); }
             }
 
-            return DeduplicateAndRank(allResults, query, cancellationToken);
+            var final = DeduplicateAndRank(allResults, query, cancellationToken);
+            lifecycle.Step("DONE", new Dictionary<string, object?>
+            {
+                ["rawResults"] = allResults.Count,
+                ["finalResults"] = final.Count
+            });
+            return final;
         }
 
         public async Task<List<StremioMediaStream>> SearchAddonAsync(string addonUrl, StremioManifest manifest, string query, string type, System.Threading.CancellationToken ct = default)
@@ -461,7 +482,16 @@ namespace ModernIPTVPlayer.Services.Stremio
             var encodedQuery = Uri.EscapeDataString(query);
             // [FIX] Strictly respect the requested type (movie/series). 
             // Previously it was searching ALL movie/series catalogs regardless of the 'type' param.
-            var searchCatalogs = manifest.Catalogs.Where(c => c.Type == type && c.Extra != null && c.Extra.Any(e => e.Name == "search")).ToList();
+            var searchCatalogs = manifest.Catalogs
+                .Where(c => c.Type == type && c.Extra != null && c.Extra.Any(e => e.Name == "search"))
+                .Where(c => !IsPeopleSearchCatalogId(c.Id))
+                .ToList();
+
+            if (LifecycleLog.ShouldLog($"stremio-catalog-filter-{addonUrl}-{type}", TimeSpan.FromSeconds(30)))
+            {
+                int totalSearchCatalogs = manifest.Catalogs.Count(c => c.Type == type && c.Extra != null && c.Extra.Any(e => e.Name == "search"));
+                AppLogger.Info($"[Lifecycle] op=SearchAddon, phase=catalogs_selected, addon={addonUrl}, type={type}, selected={searchCatalogs.Count}, excludedPeopleSearch={Math.Max(0, totalSearchCatalogs - searchCatalogs.Count)}");
+            }
 
             foreach (var catalog in searchCatalogs)
             {
@@ -469,10 +499,12 @@ namespace ModernIPTVPlayer.Services.Stremio
                 try
                 {
                     using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(8));
-                    var root = await GetCatalogAsync(url, cts.Token);
+                    using var combinedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, cts.Token);
+                    var root = await GetCatalogAsync(url, combinedCts.Token);
                     if (root?.Metas != null)
                     {
                         results.AddRange(root.Metas.Select((m, index) => new StremioMediaStream(m) { SourceAddon = addonUrl, SourceIndex = index }));
+                        AppLogger.Info($"[Lifecycle] ➔ Stremio.AddonFetch [STEP] ({addonUrl}) | catalog={catalog.Id}, results={root.Metas.Count}");
                     }
                 }
                 catch (Exception ex)
@@ -481,6 +513,14 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
             }
             return results;
+        }
+
+        private static bool IsPeopleSearchCatalogId(string? catalogId)
+        {
+            if (string.IsNullOrWhiteSpace(catalogId)) return false;
+            return catalogId.StartsWith("people_search", StringComparison.OrdinalIgnoreCase)
+                || catalogId.Contains(".people_search_", StringComparison.OrdinalIgnoreCase)
+                || catalogId.Contains("people_search.", StringComparison.OrdinalIgnoreCase);
         }
 
         // ==========================================
@@ -553,7 +593,9 @@ namespace ModernIPTVPlayer.Services.Stremio
             return await GetCatalogAsync(url, cancellationToken);
         }
 
-        private async Task<StremioCatalogRoot> GetCatalogAsync(string url, System.Threading.CancellationToken cancellationToken = default)
+        private static readonly TimeSpan CatalogHardTtl = TimeSpan.FromHours(4);
+
+        private async Task<StremioCatalogRoot> GetCatalogAsync(string url, System.Threading.CancellationToken cancellationToken = default, bool bypassConditional = false)
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
@@ -562,13 +604,17 @@ namespace ModernIPTVPlayer.Services.Stremio
             int catalogIdx = url.IndexOf("/catalog/", StringComparison.OrdinalIgnoreCase);
             if (catalogIdx > 0) addonBaseUrl = url.Substring(0, catalogIdx);
 
-            // 1. Check for Cached Version (Binary Disk)
-            var (cachedEtag, cachedItems, _) = await CatalogCacheManager.LoadCatalogBinaryAsync(url);
-            
+            var (cachedEtag, cachedItems, cachedTime) = await CatalogCacheManager.LoadCatalogBinaryAsync(url);
+            if (!bypassConditional && cachedTime != DateTime.MinValue && (DateTime.UtcNow - cachedTime) > CatalogHardTtl)
+            {
+                Log($"[CatalogTTL] Hard TTL exceeded ({(DateTime.UtcNow - cachedTime).TotalHours:F1}h), revalidate: {url}");
+                cachedEtag = null;
+            }
+
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             
             // 2. Add Conditional Header if we have an ETag
-            if (!string.IsNullOrEmpty(cachedEtag))
+            if (!bypassConditional && !string.IsNullOrEmpty(cachedEtag))
             {
                 if (cachedEtag.StartsWith("W/"))
                     request.Headers.TryAddWithoutValidation("If-None-Match", cachedEtag);
@@ -605,9 +651,13 @@ namespace ModernIPTVPlayer.Services.Stremio
 
             if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
             {
-                // Fallback if 304 but cache somehow missing (forces 200)
-                Log($"[NET-304] Warning: Server sent 304 but local binary missing. Forcing retry: {url}");
-                return await GetCatalogAsync(url, cancellationToken);
+                if (!bypassConditional)
+                {
+                    Log($"[NET-304] Warning: Server sent 304 but local binary missing. Retrying without If-None-Match: {url}");
+                    return await GetCatalogAsync(url, cancellationToken, bypassConditional: true);
+                }
+                AppLogger.Warn($"[NET-304] Catalog not modified but no local cache after unconditional retry: {url}");
+                return new StremioCatalogRoot { Metas = new List<StremioMeta>() };
             }
 
             response.EnsureSuccessStatusCode();
@@ -659,11 +709,11 @@ namespace ModernIPTVPlayer.Services.Stremio
             try
             {
                 var top = final.Take(20).ToList();
-                AppLogger.Info($"[Rank] Top 20 results for query: '{query}'");
+                // AppLogger.Info($"[Rank] Top 20 results for query: '{query}'");
                 foreach (var item in top)
                 {
                     double w = CalculateRankWeight(item, query, true); // Log breakdown for top items
-                    AppLogger.Info($"[Rank] Result: {item.Title} ({item.Year}) | ID: {item.IMDbId} | Score: {w,6:F1}");
+                    // AppLogger.Info($"[Rank] Result: {item.Title} ({item.Year}) | ID: {item.IMDbId} | Score: {w,6:F1}");
                 }
             }
             catch { }
@@ -719,7 +769,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             double final = score + indexBoost + ratingBoost + sourceBoost + qualityBoost + recencyBoost + typeBoost - lengthPenalty - posterPenalty - standalonePenalty;
 
             if (log) {
-                AppLogger.Info($"[RankDetail] '{x.Title}': Total={final:F1} | Sim={score:F1} - LenPen={lengthPenalty:F1} - PosterPen={posterPenalty:F1} + IndexB={indexBoost:F1} + RatingB={ratingBoost:F1} + SourceB={sourceBoost:F1} + RecencyB={recencyBoost:F1}");
+                // AppLogger.Info($"[RankDetail] '{x.Title}': Total={final:F1} | Sim={score:F1} - LenPen={lengthPenalty:F1} - PosterPen={posterPenalty:F1} + IndexB={indexBoost:F1} + RatingB={ratingBoost:F1} + SourceB={sourceBoost:F1} + RecencyB={recencyBoost:F1}");
             }
 
             return final;

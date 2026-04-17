@@ -40,7 +40,15 @@ namespace ModernIPTVPlayer
             {
                 if (_currentLogin != value)
                 {
+                    string? oldPid = _currentLogin?.PlaylistId;
                     _currentLogin = value;
+                    string? newPid = value?.PlaylistId;
+                    if (!string.Equals(oldPid, newPid, StringComparison.Ordinal))
+                    {
+                        MediaLibraryStateService.Instance.Invalidate();
+                        if (!string.IsNullOrEmpty(oldPid))
+                            ContentCacheService.Instance.InvalidateRamSessionsForPlaylist(oldPid);
+                    }
                     AppLogger.Info($"[App] CurrentLogin changed to: {value?.PlaylistName ?? "null"}");
                     LoginChanged?.Invoke(value);
                 }
@@ -247,5 +255,6 @@ namespace ModernIPTVPlayer
 
             MainWindow.Activate();
         }
+
     }
 }

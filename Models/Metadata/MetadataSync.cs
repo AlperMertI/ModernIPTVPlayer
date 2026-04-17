@@ -72,6 +72,7 @@ namespace ModernIPTVPlayer.Models.Metadata
                 target.Director = MergeLists(target.Director, source.Directors != null ? string.Join(", ", source.Directors.Select(d => d.Name)) : null, false);
                 
                 if (!string.IsNullOrEmpty(source.TrailerUrl)) target.TrailerUrl = source.TrailerUrl;
+                if (!string.IsNullOrEmpty(source.SourceTitle)) target.SourceTitle = source.SourceTitle;
             }
 
             // 2. High-Priority Fields (Always sync if present in source)

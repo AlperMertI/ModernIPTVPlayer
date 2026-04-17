@@ -9,10 +9,13 @@ namespace ModernIPTVPlayer.Models
     {
         private readonly object _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
+        public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
+        public uint Fingerprint { get; set; }
 
         public string Id { get; set; }
         public string? IMDbId => Id; // For Stremio, Id is the IMDb ID
         public string Title { get; set; }
+        public string? SourceTitle { get; set; }
 
         [JsonIgnore]
         int IMediaStream.Id => Id?.GetHashCode() ?? 0;
@@ -80,6 +83,7 @@ namespace ModernIPTVPlayer.Models
         public WatchlistItem(IMediaStream stream)
         {
             Title = stream.Title;
+            SourceTitle = stream.SourceTitle;
             PosterUrl = stream.PosterUrl;
             
             if (stream is StremioMediaStream s)

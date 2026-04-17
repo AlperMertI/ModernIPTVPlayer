@@ -48,9 +48,11 @@ namespace ModernIPTVPlayer.Controls
             get => _items;
             set
             {
+                if (_items == value) return; // ENGINEERED: No-op if reference is identical
+
                 _items = value;
                 MediaGridView.ItemsSource = _items;
-                IsLoading = false; // This triggers the visibility check
+                IsLoading = false; 
             }
         }
 
@@ -138,6 +140,21 @@ namespace ModernIPTVPlayer.Controls
         private void MediaGridView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
         {
             if (args.InRecycleQueue || args.ItemContainer == null) return;
+
+            // [PROJECT ZERO] Phase-Aware Skeleton Management
+            // Phase 0: Skeleton is shown by default (XAML).
+            // Phase 1+: Skeleton is hidden to save GPU/Overdraw
+            if (args.Phase > 0)
+            {
+                var skeleton = FindVisualChild<ShimmerCard>(args.ItemContainer, "Skeleton");
+                if (skeleton != null) skeleton.Visibility = Visibility.Collapsed;
+                // No need to continue if we're just updating phase 1 (PosterCard takes over)
+            }
+            else
+            {
+                var skeleton = FindVisualChild<ShimmerCard>(args.ItemContainer, "Skeleton");
+                if (skeleton != null) skeleton.Visibility = Visibility.Visible;
+            }
 
             // Only animate the first appearance (not on scroll recycle)
             if (args.ItemContainer.Tag == null)
@@ -254,5 +271,22 @@ namespace ModernIPTVPlayer.Controls
         }
 
         public Task CloseExpandedCardAsync() => _expandedCardOverlay.CloseExpandedCardAsync();
+
+        private T? FindVisualChild<T>(DependencyObject element, string name) where T : DependencyObject
+        {
+            if (element == null) return null;
+            int childrenCount = VisualTreeHelper.GetChildrenCount(element);
+            for (int i = 0; i < childrenCount; i++)
+            {
+                var child = VisualTreeHelper.GetChild(element, i);
+                if (child is T typedChild && (child is FrameworkElement fe && fe.Name == name))
+                {
+                    return typedChild;
+                }
+                var result = FindVisualChild<T>(child, name);
+                if (result != null) return result;
+            }
+            return null;
+        }
     }
 }

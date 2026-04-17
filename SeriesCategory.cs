@@ -12,7 +12,7 @@ namespace ModernIPTVPlayer
         public string CategoryId { get; set; } = "0";
 
         // Bu alan JSON'dan gelmez, biz dolduracağız
-        public List<SeriesStream> Series { get; set; } = new List<SeriesStream>();
+        public IReadOnlyList<SeriesStream> Series { get; set; } = new List<SeriesStream>();
 
         public override string ToString() => CategoryName;
     }

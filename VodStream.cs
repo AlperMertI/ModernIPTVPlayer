@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
+using System.Linq;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -13,10 +14,13 @@ namespace ModernIPTVPlayer
     [JsonConverter(typeof(VodStreamConverter))]
     public class VodStream : INotifyPropertyChanged, IMediaStream
     {
+        private Helpers.BinaryCacheSession? _session;
         private readonly object _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
         [JsonIgnore]
         public bool IsLoading { get; set; } = false;
+        public int RecordIndex { get => _recordIndex; set => _recordIndex = value; }
+        private int _recordIndex = -1;
 
         // Compact storage (Offsets + Lengths)
         private int _nameOffset, _nameLen;
@@ -31,6 +35,73 @@ namespace ModernIPTVPlayer
         private int _dirOff, _dirLen;
         private int _trailOff, _trailLen;
         private int _ratOff, _ratLen;
+        private int _yearOff, _yearLen;
+
+        // When MMF session is read-only, enriched strings are stored in MetadataBuffer; mask marks which slots use _roBuf* not disk offsets.
+        public const int VodSlotName = 0;
+        public const int VodSlotIcon = 1;
+        public const int VodSlotImdb = 2;
+        public const int VodSlotDesc = 3;
+        public const int VodSlotGenre = 4;
+        public const int VodSlotCast = 5;
+        public const int VodSlotDir = 6;
+        public const int VodSlotTrail = 7;
+        public const int VodSlotRat = 8;
+        public const int VodSlotBg = 9;
+        public const int VodSlotSourceTitle = 10;
+        public const int VodSlotExt = 11;
+        public const int VodSlotYear = 12;
+        private const int VodSlotCount = 13;
+        private readonly int[] _roBufOff = new int[VodSlotCount];
+        private readonly int[] _roBufLen = new int[VodSlotCount];
+        private int _roMask;
+
+        private string VodReadString(int slot, int diskOff, int diskLen)
+        {
+            if ((_roMask & (1 << slot)) != 0)
+                return MetadataBuffer.GetString(_roBufOff[slot], _roBufLen[slot]);
+            if (_session != null)
+                return _session.GetString(diskOff, diskLen);
+            return MetadataBuffer.GetString(diskOff, diskLen);
+        }
+
+        private void VodWriteString(int slot, ref int diskOff, ref int diskLen, string? value, string? changed1 = null, string? changed2 = null)
+        {
+            if (_session != null && _session.IsReadOnly)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    _roMask &= ~(1 << slot);
+                    _roBufOff[slot] = -1;
+                    _roBufLen[slot] = 0;
+                }
+                else
+                {
+                    var r = MetadataBuffer.Store(value);
+                    _roBufOff[slot] = r.Offset;
+                    _roBufLen[slot] = r.Length;
+                    _roMask |= (1 << slot);
+                }
+                if (changed1 != null) OnPropertyChanged(changed1);
+                if (changed2 != null) OnPropertyChanged(changed2);
+                return;
+            }
+            if (_session != null)
+            {
+                var (no, nl) = _session.PokeString(diskOff, diskLen, value);
+                diskOff = no;
+                diskLen = nl;
+                if (changed1 != null) OnPropertyChanged(changed1);
+                if (changed2 != null) OnPropertyChanged(changed2);
+                return;
+            }
+            if (MetadataBuffer.IsEqual(diskOff, diskLen, value)) return;
+            var res = MetadataBuffer.Store(value);
+            diskOff = res.Offset;
+            diskLen = res.Length;
+            if (changed1 != null) OnPropertyChanged(changed1);
+            if (changed2 != null) OnPropertyChanged(changed2);
+        }
 
         // Bit-packed flags (1: IsFavorite, 2: IsHdr, 4: IsProbing, 8: IsOnline (null as false), 16: IsAvailableOnIptv)
         private byte _bitFlags = 16; 
@@ -41,14 +112,8 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("imdb_id")]
         public string? ImdbId 
         { 
-            get => MetadataBuffer.GetString(_imdbOffset, _imdbLen);
-            set 
-            { 
-                if (MetadataBuffer.IsEqual(_imdbOffset, _imdbLen, value)) return;
-                var res = MetadataBuffer.Store(value); 
-                _imdbOffset = res.Offset; _imdbLen = res.Length; 
-                OnPropertyChanged();
-            }
+            get => VodReadString(VodSlotImdb, _imdbOffset, _imdbLen);
+            set => VodWriteString(VodSlotImdb, ref _imdbOffset, ref _imdbLen, value, nameof(ImdbId));
         }
         public string? IMDbId => !string.IsNullOrEmpty(ImdbId) ? ImdbId : string.Empty;
         
@@ -61,8 +126,8 @@ namespace ModernIPTVPlayer
 
         public string? Description 
         { 
-            get => MetadataBuffer.GetString(_descOff, _descLen); 
-            set { if (MetadataBuffer.IsEqual(_descOff, _descLen, value)) return; var r = MetadataBuffer.Store(value); _descOff = r.Offset; _descLen = r.Length; OnPropertyChanged(); } 
+            get => VodReadString(VodSlotDesc, _descOff, _descLen);
+            set => VodWriteString(VodSlotDesc, ref _descOff, ref _descLen, value);
         }
 
         [JsonIgnore]
@@ -74,43 +139,83 @@ namespace ModernIPTVPlayer
 
         public string? BackdropUrl 
         { 
-            get => MetadataBuffer.GetString(_bgOff, _bgLen); 
-            set { if (MetadataBuffer.IsEqual(_bgOff, _bgLen, value)) return; var r = MetadataBuffer.Store(value); _bgOff = r.Offset; _bgLen = r.Length; OnPropertyChanged(); } 
+            get 
+            {
+                var all = VodReadString(VodSlotBg, _bgOff, _bgLen);
+                if (string.IsNullOrEmpty(all)) return null;
+                if (all.Contains('|')) return all.Split('|')[0];
+                return all;
+            }
+            set => VodWriteString(VodSlotBg, ref _bgOff, ref _bgLen, value);
+        }
+
+        [JsonIgnore]
+        public System.Collections.Generic.List<string> BackdropUrls
+        {
+            get
+            {
+                var all = VodReadString(VodSlotBg, _bgOff, _bgLen);
+                if (string.IsNullOrEmpty(all)) return new System.Collections.Generic.List<string>();
+                return all.Split('|', StringSplitOptions.RemoveEmptyEntries).ToList();
+            }
+            set
+            {
+                if (value == null || value.Count == 0) BackdropUrl = null;
+                else BackdropUrl = string.Join("|", value);
+            }
         }
         public string? Type => "movie";
         
         public string? Genres 
         { 
-            get => MetadataBuffer.GetString(_genreOff, _genreLen); 
-            set { if (MetadataBuffer.IsEqual(_genreOff, _genreLen, value)) return; var r = MetadataBuffer.Store(value); _genreOff = r.Offset; _genreLen = r.Length; OnPropertyChanged(); } 
+            get => VodReadString(VodSlotGenre, _genreOff, _genreLen);
+            set => VodWriteString(VodSlotGenre, ref _genreOff, ref _genreLen, value);
         }
 
         public string? Cast 
         { 
-            get => MetadataBuffer.GetString(_castOff, _castLen); 
-            set { if (MetadataBuffer.IsEqual(_castOff, _castLen, value)) return; var r = MetadataBuffer.Store(value); _castOff = r.Offset; _castLen = r.Length; OnPropertyChanged(); } 
+            get => VodReadString(VodSlotCast, _castOff, _castLen);
+            set => VodWriteString(VodSlotCast, ref _castOff, ref _castLen, value);
         }
 
         public string? Director 
         { 
-            get => MetadataBuffer.GetString(_dirOff, _dirLen); 
-            set { if (MetadataBuffer.IsEqual(_dirOff, _dirLen, value)) return; var r = MetadataBuffer.Store(value); _dirOff = r.Offset; _dirLen = r.Length; OnPropertyChanged(); } 
+            get => VodReadString(VodSlotDir, _dirOff, _dirLen);
+            set => VodWriteString(VodSlotDir, ref _dirOff, ref _dirLen, value);
         }
 
         public string? TrailerUrl 
         { 
-            get => MetadataBuffer.GetString(_trailOff, _trailLen); 
-            set { if (MetadataBuffer.IsEqual(_trailOff, _trailLen, value)) return; var r = MetadataBuffer.Store(value); _trailOff = r.Offset; _trailLen = r.Length; OnPropertyChanged(); } 
+            get => VodReadString(VodSlotTrail, _trailOff, _trailLen);
+            set => VodWriteString(VodSlotTrail, ref _trailOff, ref _trailLen, value);
         }
 
-        public string StreamUrl { get; set; } = "";
+        private string? _streamUrlOverride;
+        [JsonIgnore]
+        public string StreamUrl 
+        { 
+            get 
+            {
+                if (!string.IsNullOrEmpty(_streamUrlOverride)) return _streamUrlOverride;
+                
+                // [PHASE 2.4] Dynamic IPTV URL Generation: Avoids pre-calculating 200k strings in RAM
+                var login = App.CurrentLogin;
+                if (login != null && !string.IsNullOrEmpty(login.Host))
+                {
+                    string ext = string.IsNullOrEmpty(ContainerExtension) ? "mp4" : ContainerExtension;
+                    return $"{login.Host}/movie/{login.Username}/{login.Password}/{StreamId}.{ext}";
+                }
+                return string.Empty;
+            }
+            set => _streamUrlOverride = value; 
+        }
 
         [JsonPropertyName("rating")]
         [JsonConverter(typeof(Helpers.UniversalStringConverter))]
         public string? RatingRaw 
         { 
-            get => MetadataBuffer.GetString(_ratOff, _ratLen); 
-            set { if (MetadataBuffer.IsEqual(_ratOff, _ratLen, value)) return; var r = MetadataBuffer.Store(value); _ratOff = r.Offset; _ratLen = r.Length; OnPropertyChanged(); OnPropertyChanged(nameof(Rating)); } 
+            get => VodReadString(VodSlotRat, _ratOff, _ratLen);
+            set => VodWriteString(VodSlotRat, ref _ratOff, ref _ratLen, value, nameof(RatingRaw), nameof(Rating));
         }
 
         [JsonIgnore]
@@ -137,17 +242,9 @@ namespace ModernIPTVPlayer
 
 
         public event PropertyChangedEventHandler? PropertyChanged;
-        private static long _globalPropertyChangedCount = 0;
-
         public void OnPropertyChanged([System.Runtime.CompilerServices.CallerMemberName] string? name = null)
         {
             if (IsLoading) return; // Suppress during bulk load
-
-            _globalPropertyChangedCount++;
-            if (_globalPropertyChangedCount % 5000 == 0)
-            {
-                System.Diagnostics.Debug.WriteLine($"[VodStream] Property Change Count: {_globalPropertyChangedCount}, Property: {name}");
-            }
 
             if (PropertyChanged == null) return; 
 
@@ -172,14 +269,8 @@ namespace ModernIPTVPlayer
 
         public string Name 
         { 
-            get => MetadataBuffer.GetString(_nameOffset, _nameLen);
-            set 
-            { 
-                if (MetadataBuffer.IsEqual(_nameOffset, _nameLen, value)) return;
-                var res = MetadataBuffer.Store(value); 
-                _nameOffset = res.Offset; _nameLen = res.Length; 
-                OnPropertyChanged(); OnPropertyChanged(nameof(Title)); 
-            }
+            get => VodReadString(VodSlotName, _nameOffset, _nameLen);
+            set => VodWriteString(VodSlotName, ref _nameOffset, ref _nameLen, value, nameof(Name), nameof(Title));
         }
         
         [JsonPropertyName("stream_id")]
@@ -187,39 +278,22 @@ namespace ModernIPTVPlayer
         
         public string? IconUrl 
         { 
-            get => MetadataBuffer.GetString(_iconOffset, _iconLen);
-            set 
-            { 
-                if (MetadataBuffer.IsEqual(_iconOffset, _iconLen, value)) return;
-                var res = MetadataBuffer.Store(value); 
-                _iconOffset = res.Offset; _iconLen = res.Length; 
-                OnPropertyChanged(); OnPropertyChanged(nameof(PosterUrl)); 
-            }
+            get => VodReadString(VodSlotIcon, _iconOffset, _iconLen);
+            set => VodWriteString(VodSlotIcon, ref _iconOffset, ref _iconLen, value, nameof(IconUrl), nameof(PosterUrl));
         }
 
         public string? ContainerExtension 
         { 
-            get => MetadataBuffer.GetString(_extOffset, _extLen);
-            set 
-            { 
-                if (MetadataBuffer.IsEqual(_extOffset, _extLen, value)) return;
-                var res = MetadataBuffer.Store(value); 
-                _extOffset = res.Offset; _extLen = res.Length; 
-                OnPropertyChanged();
-            }
+            get => VodReadString(VodSlotExt, _extOffset, _extLen);
+            set => VodWriteString(VodSlotExt, ref _extOffset, ref _extLen, value);
         }
 
         public string? CategoryId 
         { 
-            get => MetadataBuffer.GetString(_catOffset, _catLen);
-            set 
-            { 
-                if (MetadataBuffer.IsEqual(_catOffset, _catLen, value)) return;
-                var res = MetadataBuffer.Store(value); 
-                _catOffset = res.Offset; _catLen = res.Length; 
-                OnPropertyChanged();
-            }
+            get => _categoryId;
+            set { if (_categoryId != value) { _categoryId = value; OnPropertyChanged(); } }
         }
+        private string? _categoryId;
         
         [JsonPropertyName("added")]
         public string? DateAdded { get; set; }
@@ -237,15 +311,53 @@ namespace ModernIPTVPlayer
         { 
             get 
             {
-                if (!string.IsNullOrEmpty(_year)) return _year;
+                string? stored = null;
+                if ((_roMask & (1 << VodSlotYear)) != 0)
+                    stored = MetadataBuffer.GetString(_roBufOff[VodSlotYear], _roBufLen[VodSlotYear]);
+                else if (_session != null)
+                    stored = _session.GetString(_yearOff, _yearLen);
+                else if (!string.IsNullOrEmpty(_year))
+                    stored = _year;
+                if (!string.IsNullOrEmpty(stored)) return stored;
+
                 string? dateYear = Helpers.TitleHelper.ExtractYear(ReleaseDate ?? AirDate ?? Released);
                 if (!string.IsNullOrEmpty(dateYear)) return dateYear;
-                // Fallback to title extraction for bulk list items
                 return Helpers.TitleHelper.ExtractYear(Name) ?? "";
             }
-            set => _year = value; 
+            set 
+            { 
+                if (_session != null && _session.IsReadOnly)
+                {
+                    if (string.IsNullOrEmpty(value))
+                    {
+                        _roMask &= ~(1 << VodSlotYear);
+                        _year = value;
+                    }
+                    else
+                    {
+                        var r = MetadataBuffer.Store(value);
+                        _roBufOff[VodSlotYear] = r.Offset;
+                        _roBufLen[VodSlotYear] = r.Length;
+                        _roMask |= (1 << VodSlotYear);
+                        _year = value;
+                    }
+                    OnPropertyChanged();
+                    return;
+                }
+                if (_session != null)
+                {
+                    var (no, nl) = _session.PokeString(_yearOff, _yearLen, value);
+                    _yearOff = no;
+                    _yearLen = nl;
+                }
+                _year = value;
+                OnPropertyChanged();
+            } 
         }
         private string? _year;
+
+        public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
+        public uint Fingerprint { get; set; }
         
         public bool IsFavorite 
         { 
@@ -336,6 +448,102 @@ namespace ModernIPTVPlayer
                 }
             }
         }
+
+        internal byte GetBitFlagsForBinarySave() => _bitFlags;
+
+        public uint CalculateFingerprint()
+        {
+            string cleanTitle = Helpers.TitleHelper.Normalize(Name ?? "");
+            string cleanYear = Year ?? "";
+            string cleanImdb = ImdbId ?? "";
+            
+            // Simple robust hash for cross-sync verification
+            uint hash = 2166136261;
+            foreach (char c in cleanTitle) hash = (hash ^ c) * 16777619;
+            foreach (char c in cleanYear) hash = (hash ^ c) * 16777619;
+            foreach (char c in cleanImdb) hash = (hash ^ c) * 16777619;
+            return hash;
+        }
+
+        public Models.Metadata.VodRecord ToRecord()
+        {
+            float ratingValue = 0;
+            if (double.TryParse(RatingRaw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+                ratingValue = (float)r;
+
+            return new Models.Metadata.VodRecord
+            {
+                StreamId = StreamId,
+                CategoryId = int.TryParse(_categoryId, out int catId) ? catId : 0,
+                PriorityScore = MetadataPriority,
+                Fingerprint = CalculateFingerprint(),
+                LastModified = DateTime.UtcNow.Ticks,
+
+                NameOff = _nameOffset, NameLen = _nameLen,
+                IconOff = _iconOffset, IconLen = _iconLen,
+                ImdbIdOff = _imdbOffset, ImdbIdLen = _imdbLen,
+                PlotOff = _descOff, PlotLen = _descLen,
+                YearOff = _yearOff, YearLen = _yearLen,
+                GenresOff = _genreOff, GenresLen = _genreLen,
+                CastOff = _castOff, CastLen = _castLen,
+                DirectorOff = _dirOff, DirectorLen = _dirLen,
+                TrailerOff = _trailOff, TrailerLen = _trailLen,
+                BackdropOff = _bgOff, BackdropLen = _bgLen,
+                SourceTitleOff = _catOffset, SourceTitleLen = _catLen,
+                RatingOff = _ratOff, RatingLen = _ratLen,
+
+                RatingScaled = (short)(ratingValue * 100),
+                Flags = _bitFlags,
+                Duration = 0, // TODO: Map duration if available
+                ExtOff = _extOffset, ExtLen = _extLen
+            };
+        }
+
+        public void LoadFromRecord(Models.Metadata.VodRecord data)
+        {
+            StreamId = data.StreamId;
+            _categoryId = data.CategoryId.ToString();
+            MetadataPriority = data.PriorityScore;
+            Fingerprint = data.Fingerprint;
+            
+            _nameOffset = data.NameOff; _nameLen = data.NameLen;
+            _iconOffset = data.IconOff; _iconLen = data.IconLen;
+            _imdbOffset = data.ImdbIdOff; _imdbLen = data.ImdbIdLen;
+            _descOff = data.PlotOff; _descLen = data.PlotLen;
+            _yearOff = data.YearOff; _yearLen = data.YearLen;
+            _genreOff = data.GenresOff; _genreLen = data.GenresLen;
+            _castOff = data.CastOff; _castLen = data.CastLen;
+            _dirOff = data.DirectorOff; _dirLen = data.DirectorLen;
+            _trailOff = data.TrailerOff; _trailLen = data.TrailerLen;
+            _bgOff = data.BackdropOff; _bgLen = data.BackdropLen;
+            _catOffset = data.SourceTitleOff; _catLen = data.SourceTitleLen;
+            _ratOff = data.RatingOff; _ratLen = data.RatingLen;
+            _extOffset = data.ExtOff; _extLen = data.ExtLen;
+
+            _bitFlags = data.Flags;
+            
+            OnPropertyChanged(nameof(Name));
+            OnPropertyChanged(nameof(IconUrl));
+            OnPropertyChanged(nameof(Year));
+            OnPropertyChanged(nameof(Rating));
+            OnPropertyChanged(nameof(SourceTitle));
+        }
+
+        [JsonIgnore]
+        public string? SourceTitle
+        {
+            get => VodReadString(VodSlotSourceTitle, _catOffset, _catLen);
+            set => VodWriteString(VodSlotSourceTitle, ref _catOffset, ref _catLen, value, nameof(SourceTitle));
+        }
+
+        public void SetCacheSession(Helpers.BinaryCacheSession session, int recordIndex)
+        {
+            _session = session;
+            _recordIndex = recordIndex;
+        }
+
+        [JsonPropertyName("last_modified")]
+        public string? LastModified { get; set; }
     }
 
     public class VodStreamConverter : JsonConverter<VodStream>
@@ -400,6 +608,7 @@ namespace ModernIPTVPlayer
             writer.WriteString("category_id", value.CategoryId);
             writer.WriteString("imdb_id", value.ImdbId);
             writer.WriteString("rating", value.RatingRaw);
+            writer.WriteString("stream_url", value.StreamUrl);
             writer.WriteEndObject();
         }
     }

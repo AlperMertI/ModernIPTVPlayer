@@ -14,6 +14,7 @@ namespace ModernIPTVPlayer.Controls
     {
         public event EventHandler<bool> PlayStateChanged;
         public event EventHandler VideoEnded;
+        public event EventHandler<int?> PlaybackError;
 
         private bool _isTrailerPlaying = false;
         private string _instanceId = Guid.NewGuid().ToString("N");
@@ -26,7 +27,18 @@ namespace ModernIPTVPlayer.Controls
         {
             this.InitializeComponent();
             this.Unloaded += (s, e) => _ = CleanupAsync();
-            // [NEW] Start warm-up as soon as possible
+            // Lazy init: WebView2 initialization is ~200-400ms and steals CPU from the hero reveal.
+            // We no longer kick off PreInitializeAsync in the constructor. Instead it runs on the
+            // first PlayTrailerAsync call, or via an idle warm-up once the hero is idle (see WarmUpIfIdle).
+        }
+
+        /// <summary>
+        /// Optional hook for the parent to request warm-up *after* the hero has finished its reveal.
+        /// Safe to call multiple times; only the first call triggers initialization.
+        /// </summary>
+        public void WarmUpIfIdle()
+        {
+            if (_isInitialized) return;
             _ = PreInitializeAsync();
         }
 
@@ -146,8 +158,21 @@ namespace ModernIPTVPlayer.Controls
                     WebView.Opacity = 1;
                     PlayStateChanged?.Invoke(this, true);
                 }
-                else if (msg == "ENDED" || msg == "ERROR")
+                else if (msg == "ENDED")
                 {
+                    _ = CleanupAsync();
+                    VideoEnded?.Invoke(this, EventArgs.Empty);
+                }
+                else if (msg == "ERROR" || msg.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+                {
+                    int? errorCode = null;
+                    if (msg.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string raw = msg.Substring("ERROR:".Length);
+                        if (int.TryParse(raw, out int parsed)) errorCode = parsed;
+                    }
+
+                    PlaybackError?.Invoke(this, errorCode);
                     _ = CleanupAsync();
                     VideoEnded?.Invoke(this, EventArgs.Empty);
                 }
@@ -215,8 +240,39 @@ namespace ModernIPTVPlayer.Controls
         var isReady = false;
         var pendingVideoId = null;
         
+        function normalizeYouTubeId(input) {{
+            if (!input) return null;
+            var raw = ('' + input).trim();
+            if (!raw) return null;
+
+            if (raw.indexOf('/') === -1 && raw.indexOf('.') === -1) return raw;
+
+            try {{
+                var url = new URL(raw);
+                if (url.hostname.indexOf('youtu.be') >= 0) {{
+                    var pathId = url.pathname.replace(/^\/+/, '').split('/')[0];
+                    if (pathId) return pathId;
+                }}
+
+                if (url.hostname.indexOf('youtube.com') >= 0) {{
+                    var v = url.searchParams.get('v');
+                    if (v) return v;
+
+                    var segments = url.pathname.replace(/^\/+/, '').split('/');
+                    var embedIndex = segments.indexOf('embed');
+                    if (embedIndex >= 0 && embedIndex + 1 < segments.length) return segments[embedIndex + 1];
+                }}
+            }} catch (e) {{
+                log('normalizeYouTubeId failed: ' + e);
+            }}
+
+            return raw;
+        }}
+        
         window.loadVideo = function(id) {{
             log('loadVideo called for ' + id);
+            if (!id) return;
+            id = normalizeYouTubeId(id);
             if (!id) return;
 
             // [MODERN] Reset Smart Crop state for new video (Broadcast to all frames)
@@ -311,6 +367,7 @@ namespace ModernIPTVPlayer.Controls
 
         function onPlayerError(event) {{
             log('onError: ' + event.data);
+            try {{ window.chrome.webview.postMessage('ERROR:' + event.data); }} catch(ex) {{}}
             try {{ window.chrome.webview.postMessage('ERROR'); }} catch(ex) {{}}
         }}
     </script>

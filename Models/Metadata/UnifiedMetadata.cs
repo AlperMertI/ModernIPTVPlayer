@@ -13,6 +13,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         public object SyncRoot => _lock;
 
         public string Title { get; set; }
+        public string SourceTitle { get; set; } // [NEW] Original IPTV/Source title
         public string OriginalTitle { get; set; } // Feature #OriginalTitleForMovies
         public string SubTitle { get; set; } // Secondary title (e.g. English title when Turkish is primary)
         public string Overview { get; set; }
@@ -41,6 +42,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         public List<UnifiedCast> Cast { get; set; } = new List<UnifiedCast>();
         public List<UnifiedCast> Directors { get; set; } = new List<UnifiedCast>();
         public string TrailerUrl { get; set; }
+        public List<string> TrailerCandidates { get; set; } = new List<string>();
         public string ImdbId { get; set; }
         public string MetadataId { get; set; } // e.g. "tt1234567" or Stremio internal ID
         public bool IsSeries { get; set; }
@@ -90,7 +92,8 @@ namespace ModernIPTVPlayer.Models.Metadata
                 ImdbId = stream.IMDbId,
                 IsAvailableOnIptv = stream.IsAvailableOnIptv,
                 DataSource = "Stream Seed",
-                IsFromIptv = stream is VodStream || stream is SeriesStream
+                IsFromIptv = stream is VodStream || stream is SeriesStream,
+                SourceTitle = stream.SourceTitle
             };
 
             // Map Rating with InvariantCulture

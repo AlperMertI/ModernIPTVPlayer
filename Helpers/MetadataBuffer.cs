@@ -20,13 +20,14 @@ namespace ModernIPTVPlayer.Helpers
 
         // PROJECT ZERO: String Interning Pool
         // Reuses offsets for identical strings to save massive RAM & Lock contention
-        private static readonly ConcurrentDictionary<string, (int Offset, int Length)> _internPool = new();
-        private static readonly ConcurrentDictionary<(int Offset, int Length), string> _stringCache = new();
-        private const int MAX_INTERN_LENGTH = 256; // Increased to cover most titles/URLs while preventing multi-MB strings in dictionary
-        private const int MAX_CACHE_SIZE = 10000; // Limit string cache to prevent RAM bloat
-
-        // [FIX] Thread-safe counter to avoid accessing ConcurrentDictionary.Count (causes reentrancy)
-        private static int _stringCacheCount = 0;
+         private static readonly ConcurrentDictionary<string, (int Offset, int Length)> _internPool = new();
+         private static readonly ConcurrentDictionary<(int Offset, int Length), string> _stringCache = new();
+         private const int MAX_INTERN_LENGTH = 16; // Restrict interning to common short strings (Extensions, Categories, Years)
+         private const int MAX_INTERN_KEYS = 50000; // Prevent permanent RAM leak for unique titles
+         private const int MAX_CACHE_SIZE = 10000; // Limit string cache to prevent RAM bloat
+         
+         private static int _internKeysCount = 0;
+         private static int _stringCacheCount = 0;
 
         /// <summary>
         /// Stores a string in the UTF-8 buffer and returns its offset and length.
@@ -44,11 +45,6 @@ namespace ModernIPTVPlayer.Helpers
             }
 
             Interlocked.Increment(ref _storeCount);
-            int currentStoreCount = _storeCount;
-            if (currentStoreCount % 50000 == 0)
-            {
-                System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] Store Count: {currentStoreCount}, Current Pos: {_position / 1024 / 1024}MB");
-            }
 
             byte[] utf8 = Encoding.UTF8.GetBytes(s);
             int len = utf8.Length;
@@ -70,9 +66,12 @@ namespace ModernIPTVPlayer.Helpers
             }
 
             // 2. Add to Intern Pool if eligible
-            if (s.Length <= MAX_INTERN_LENGTH)
+            if (s.Length <= MAX_INTERN_LENGTH && _internKeysCount < MAX_INTERN_KEYS)
             {
-                _internPool.TryAdd(s, (offset, len));
+                if (_internPool.TryAdd(s, (offset, len)))
+                {
+                    Interlocked.Increment(ref _internKeysCount);
+                }
             }
 
             return (offset, len);
@@ -195,6 +194,7 @@ namespace ModernIPTVPlayer.Helpers
                 _internPool.Clear();
                 _stringCache.Clear();
                 _storeCount = 0;
+                Interlocked.Exchange(ref _internKeysCount, 0);
                 Interlocked.Exchange(ref _stringCacheCount, 0);
             }
         }

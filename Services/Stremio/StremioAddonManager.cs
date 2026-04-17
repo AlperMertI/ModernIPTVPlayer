@@ -37,6 +37,11 @@ namespace ModernIPTVPlayer.Services.Stremio
         private bool _isInitializing = false;
         private readonly object _initLock = new();
 
+        // Manifests-from-disk readiness signal — consumers (discovery) can await this to avoid the startup
+        // race where GetAddonsWithManifests() returns entries with null manifests before disk load finishes.
+        private readonly TaskCompletionSource<bool> _manifestsLoadedFromDisk = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task ManifestsLoadedFromDiskTask => _manifestsLoadedFromDisk.Task;
+
         public event EventHandler AddonsChanged;
 
         private StremioAddonManager()
@@ -58,6 +63,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             try
             {
                 await LoadManifestsFromDiskAsync();
+                _manifestsLoadedFromDisk.TrySetResult(true);
                 if (_manifestCache.Count > 0)
                 {
                     // Notify UI immediately that we have cached manifests
@@ -68,6 +74,8 @@ namespace ModernIPTVPlayer.Services.Stremio
             finally
             {
                 lock (_initLock) { _isInitializing = false; }
+                // Even on failure, unblock waiters so discovery doesn't deadlock.
+                _manifestsLoadedFromDisk.TrySetResult(false);
             }
         }
 

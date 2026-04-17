@@ -46,6 +46,42 @@ namespace ModernIPTVPlayer
 
             // Perform auto-login then navigate
             _ = InitializeStartupAsync(startupPageType, startupPageTag);
+
+            // [PROJECT ZERO] Phase 4: Reliable Async Shutdown
+            InitializeShutdownHook();
+        }
+
+        private bool _isClosing = false;
+        private void InitializeShutdownHook()
+        {
+            if (this.AppWindow != null)
+            {
+                this.AppWindow.Closing += async (sender, args) =>
+                {
+                    if (_isClosing) return;
+
+                    // 1. Defer the close
+                    args.Cancel = true;
+                    _isClosing = true;
+
+                    AppLogger.Info("[App] AppWindow Closing. Starting deterministic cleanup...");
+
+                    try
+                    {
+                        // 2. Await full Vacuum / Shadow Paging
+                        await ContentCacheService.Instance.ShutdownAsync();
+                    }
+                    catch (Exception ex)
+                    {
+                        AppLogger.Error("[App] Shutdown logic failed", ex);
+                    }
+                    finally
+                    {
+                        // 3. Finalize exit
+                        this.Close();
+                    }
+                };
+            }
         }
 
         private async Task InitializeStartupAsync(Type startupPageType, string startupPageTag)

@@ -168,6 +168,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string OriginalName { get; set; }
 
         [JsonPropertyName("aliases")]
+        [JsonConverter(typeof(Helpers.UniversalStringListConverter))]
         public List<string> Aliases { get; set; }
 
         private int _posterOff, _posterLen;
@@ -211,6 +212,24 @@ namespace ModernIPTVPlayer.Models.Stremio
             set { if (MetadataBuffer.IsEqual(_relOff, _relLen, value)) return; var r = MetadataBuffer.Store(value); _relOff = r.Offset; _relLen = r.Length; } 
         }
 
+        private int _yearOff, _yearLen;
+        [JsonPropertyName("year")]
+        [JsonConverter(typeof(Helpers.UniversalStringConverter))]
+        public string? Year 
+        { 
+            get => MetadataBuffer.GetString(_yearOff, _yearLen); 
+            set { if (MetadataBuffer.IsEqual(_yearOff, _yearLen, value)) return; var r = MetadataBuffer.Store(value); _yearOff = r.Offset; _yearLen = r.Length; } 
+        }
+
+        private int _resOff, _resLen;
+        [JsonPropertyName("released")]
+        [JsonConverter(typeof(Helpers.UniversalStringConverter))]
+        public string? Released 
+        { 
+            get => MetadataBuffer.GetString(_resOff, _resLen); 
+            set { if (MetadataBuffer.IsEqual(_resOff, _resLen, value)) return; var r = MetadataBuffer.Store(value); _resOff = r.Offset; _resLen = r.Length; } 
+        }
+
         private int _ratOff, _ratLen;
         [JsonPropertyName("imdbRating")]
         [JsonConverter(typeof(Helpers.UniversalStringConverter))]
@@ -221,6 +240,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         }
 
         [JsonPropertyName("genres")]
+        [JsonConverter(typeof(Helpers.UniversalStringListConverter))]
         public List<string> Genres { get; set; }
 
         private int _runOff, _runLen;
@@ -232,6 +252,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         }
         
         [JsonPropertyName("cast")]
+        [JsonConverter(typeof(Helpers.UniversalStringListConverter))]
         public List<string> Cast { get; set; }
         
         [JsonPropertyName("director")]

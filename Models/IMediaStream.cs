@@ -16,6 +16,8 @@ namespace ModernIPTVPlayer.Models
         string Year { get; set; }
         string StreamUrl { get; set; }
         TmdbMovieResult TmdbInfo { get; set; }
+        string? SourceTitle { get; set; }
+        string SourceDisplayName => !string.IsNullOrEmpty(SourceTitle) ? SourceTitle : Title;
 
         // Extended Metadata
         string? Genres { get; set; }
@@ -23,6 +25,8 @@ namespace ModernIPTVPlayer.Models
         string? Director { get; set; }
         string? TrailerUrl { get; set; }
         int MetadataPriority { get; set; }
+        int PriorityScore { get; set; }
+        uint Fingerprint { get; set; }
 
         // UI Binding properties for PosterCard
         double ProgressValue { get; }

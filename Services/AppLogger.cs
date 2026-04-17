@@ -2,6 +2,9 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace ModernIPTVPlayer.Services
 {
@@ -78,6 +81,89 @@ namespace ModernIPTVPlayer.Services
             // but let's stick to Trace and just be careful with what goes to console.
             
             Trace.WriteLine(logLine);
+        }
+    }
+
+    public static class LifecycleLog
+    {
+        private static readonly ConcurrentDictionary<string, long> ThrottleMap = new(StringComparer.OrdinalIgnoreCase);
+
+        public readonly struct Scope : IDisposable
+        {
+            private readonly Stopwatch _sw;
+            private readonly string _operation;
+            private readonly string _correlationId;
+            private readonly Dictionary<string, object?> _baseTags;
+
+            public Scope(string operation, string correlationId, Dictionary<string, object?> baseTags)
+            {
+                _operation = operation;
+                _correlationId = correlationId;
+                _baseTags = baseTags;
+                _sw = Stopwatch.StartNew();
+                AppLogger.Info(Format("start", operation, correlationId, baseTags));
+            }
+
+            public void Step(string phase, Dictionary<string, object?>? tags = null)
+            {
+                AppLogger.Info(Format(phase, _operation, _correlationId, Merge(tags)));
+            }
+
+            public void Dispose()
+            {
+                var tags = Merge(new Dictionary<string, object?> { ["durationMs"] = _sw.ElapsedMilliseconds });
+                AppLogger.Info(Format("done", _operation, _correlationId, tags));
+            }
+
+            private Dictionary<string, object?> Merge(Dictionary<string, object?>? extra)
+            {
+                if (extra == null || extra.Count == 0) return _baseTags;
+                var merged = new Dictionary<string, object?>(_baseTags, StringComparer.OrdinalIgnoreCase);
+                foreach (var kv in extra) merged[kv.Key] = kv.Value;
+                return merged;
+            }
+        }
+
+        public static Scope Begin(string operation, string? correlationId = null, Dictionary<string, object?>? tags = null)
+        {
+            correlationId ??= NewId(operation);
+            return new Scope(operation, correlationId, tags ?? new Dictionary<string, object?>());
+        }
+
+        public static string NewId(string prefix)
+        {
+            string token = Guid.NewGuid().ToString("N").Substring(0, 8);
+            return $"{prefix}-{token}";
+        }
+
+        public static bool ShouldLog(string key, TimeSpan interval)
+        {
+            long now = DateTime.UtcNow.Ticks;
+            long minDelta = interval.Ticks;
+            while (true)
+            {
+                long previous = ThrottleMap.GetOrAdd(key, 0);
+                if (now - previous < minDelta) return false;
+                if (ThrottleMap.TryUpdate(key, now, previous)) return true;
+            }
+        }
+
+        private static string Format(string phase, string operation, string correlationId, Dictionary<string, object?> tags)
+        {
+            string p = phase.ToUpperInvariant();
+            string icon = p switch {
+                "START" => "◎",
+                "DONE"  => "✓",
+                "FAIL"  => "✗",
+                "ERROR" => "✗",
+                _ => "➔"
+            };
+
+            string tagString = tags.Count == 0
+                ? ""
+                : " | " + string.Join(", ", tags.Where(kv => kv.Value != null).Select(kv => $"{kv.Key}={kv.Value}"));
+            
+            return $"[Lifecycle] {icon} {operation} [{p}] ({correlationId}){tagString}";
         }
     }
 }

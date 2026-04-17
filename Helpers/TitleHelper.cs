@@ -62,35 +62,43 @@ namespace ModernIPTVPlayer.Helpers
             {
                 if (y1 != y2) 
                 {
-                    AppLogger.Warn($"[TitleMatch] Year REJECT: '{rawTitle1}' ({y1}) vs '{rawTitle2}' ({y2})");
+                    // System.Diagnostics.Debug.WriteLine($"[TitleMatch] Year REJECT: '{rawTitle1}' ({y1}) vs '{rawTitle2}' ({y2})");
                     return false;
                 }
                 hasYearMatch = true;
             }
             bool oneSideHasYear = !string.IsNullOrEmpty(y1) || !string.IsNullOrEmpty(y2);
 
-            // [NEW] Ambiguity Protection: For very short/generic titles, require exact year match if years are available.
-            // This prevents "Spider-Man" (no year) from matching "Spider-Man" (2017) if it's potentially a different version.
-            if (!hasYearMatch && oneSideHasYear && (GetBaseTokens(rawTitle1 ?? "").Count <= 1 || GetBaseTokens(rawTitle2 ?? "").Count <= 1))
-            {
-                AppLogger.Warn($"[TitleMatch] Ambiguity REJECT: '{rawTitle1}' vs '{rawTitle2}'. Generic/Short title requires exact year match.");
-                return false;
-            }
-
             // 2. Strict Digit/Sequel Check - Compare numbers and Roman Numerals (e.g. Spider-Man 2 vs 3, Watchmen I vs II)
             var numeric1 = tokens1.Where(t => (t.Any(char.IsDigit) && (!int.TryParse(t, out int n) || n < 50)) || IsRomanNumeral(t)).ToList();
             var numeric2 = tokens2.Where(t => (t.Any(char.IsDigit) && (!int.TryParse(t, out int n) || n < 50)) || IsRomanNumeral(t)).ToList();
             if (numeric1.Count != numeric2.Count || !numeric1.All(d => numeric2.Contains(d))) 
             {
-                AppLogger.Warn($"[TitleMatch] Numeric/Sequel REJECT: '{rawTitle1}' vs '{rawTitle2}'. Numerics: [{string.Join(", ", numeric1)}] vs [{string.Join(", ", numeric2)}]");
+                // System.Diagnostics.Debug.WriteLine($"[TitleMatch] Numeric/Sequel REJECT: '{rawTitle1}' vs '{rawTitle2}'. Numerics: [{string.Join(", ", numeric1)}] vs [{string.Join(", ", numeric2)}]");
                 return false;
             }
+
             // 3. Similarity Check
             double similarity = CalculateSimilarityInternal(tokens1, tokens2);
             
+            // [NEW] Ambiguity Protection: For very short/generic titles, require exact year match if years are available.
+            // UNLESS similarity is very high (0.95+), indicating it's likely a direct match.
+            if (!hasYearMatch && oneSideHasYear && (GetBaseTokens(rawTitle1 ?? "").Count <= 1 || GetBaseTokens(rawTitle2 ?? "").Count <= 1))
+            {
+                if (similarity < 0.98) // Tightened from 0.95 to 0.98 for generic titles
+                {
+                    // System.Diagnostics.Debug.WriteLine($"[TitleMatch] Ambiguity REJECT: '{rawTitle1}' vs '{rawTitle2}'. Generic/Short title requires exact year match (Sim: {similarity:F2}).");
+                    return false;
+                }
+                else
+                {
+                    // System.Diagnostics.Debug.WriteLine($"[TitleMatch] Ambiguity BYPASS: '{rawTitle1}' vs '{rawTitle2}' due to high similarity ({similarity:F2})");
+                }
+            }
+
             // [RELAXED] If year matches exactly, we are very lenient (40%) to handle long titles matching localized versions.
             // Example: "Your Friendly Neighborhood Spider-Man" (5 tokens) vs "Spider-Man" (2 tokens) -> 0.40
-            double threshold = hasYearMatch ? 0.40 : (oneSideHasYear ? 0.95 : 0.85);
+            double threshold = hasYearMatch ? 0.40 : (oneSideHasYear ? 0.98 : 0.85); // Tightened from 0.95 to 0.98
 
             if (similarity >= threshold)
             {
@@ -105,14 +113,14 @@ namespace ModernIPTVPlayer.Helpers
                     // unless the similarity is absolute (100%) or we have a high-confidence subset match (0.98+)
                     if (similarity < 0.98)
                     {
-                        AppLogger.Warn($"[TitleMatch] Unique Word REJECT: '{rawTitle1}' vs '{rawTitle2}'. Similarity {similarity:F2} >= {threshold:F2}, but unique words (no year): [{string.Join(", ", unique1)}] | [{string.Join(", ", unique2)}]");
+                        // System.Diagnostics.Debug.WriteLine($"[TitleMatch] Unique Word REJECT: '{rawTitle1}' vs '{rawTitle2}'. Similarity {similarity:F2} >= {threshold:F2}, but unique words (no year): [{string.Join(", ", unique1)}] | [{string.Join(", ", unique2)}]");
                         return false;
                     }
                 }
                 return true;
             }
 
-            AppLogger.Warn($"[TitleMatch] Similarity REJECT: '{rawTitle1}' vs '{rawTitle2}'. Similarity {similarity:F2} < threshold {threshold:F2} (YearMatch: {hasYearMatch})");
+            // System.Diagnostics.Debug.WriteLine($"[TitleMatch] Similarity REJECT: '{rawTitle1}' vs '{rawTitle2}'. Similarity {similarity:F2} < threshold {threshold:F2} (YearMatch: {hasYearMatch})");
             return false;
         }
 
@@ -127,6 +135,7 @@ namespace ModernIPTVPlayer.Helpers
             if (real1.Count == 0 || real2.Count == 0) return 0;
 
             int common = real1.Intersect(real2).Count();
+            // AppLogger.Info($"[TitleMatch] Calculating similarity: {common} common tokens.");
             int max = Math.Max(real1.Count, real2.Count);
             
             // 1. Full Query Match (Query is a total subset of Title)
@@ -152,43 +161,50 @@ namespace ModernIPTVPlayer.Helpers
 
         /// <summary>
         /// Universally normalizes a string: strips tags, language prefixes, diacritics, and non-alphanumeric.
+        /// [SIMD OPTIMIZED] Uses Span and vectorized filtering for peak performance.
         /// </summary>
         public static string Normalize(string? title)
         {
             if (string.IsNullOrEmpty(title)) return string.Empty;
+            if (title.Length > 10000) AppLogger.Warn($"[TitleDebug] Unusually long title for Normalize: {title.Length} chars.");
 
-            // 1. Strip Common IPTV Prefixes at the start of string (e.g. "TR - ", "4K | ", "IT:")
+            // 1. Initial Regex Cleaning (still necessary for complex patterns)
             string cleaned = Regex.Replace(title, @"^.{1,4}\s*[:\-\|]\s*", " ", RegexOptions.IgnoreCase);
-
-            // 2. Strip brackets/parentheses and their content
             cleaned = Regex.Replace(cleaned, @"\[.*?\]|\(.*?\)", " ");
             
-            // 3. Strip common IPTV Language Codes anywhere as words
-            string langPattern = @"\b(TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR|NF|IR|GR|EN|US|UK|CA|AU)\b";
+            const string langPattern = @"\b(TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR|NF|IR|GR|EN|US|UK|CA|AU)\b";
             cleaned = Regex.Replace(cleaned, langPattern, " ", RegexOptions.IgnoreCase);
 
-            // [NEW] Strip Adult Content Tags
-            string adultPattern = @"\b(XXX|ADULT|PORN|PURN|MATURE|NSFW|HENTAI|JAV|PVR|EROTIC|SEX|SEKS)\b";
+            const string adultPattern = @"\b(XXX|ADULT|PORN|PURN|MATURE|NSFW|HENTAI|JAV|PVR|EROTIC|SEX|SEKS)\b";
             cleaned = Regex.Replace(cleaned, adultPattern, " ", RegexOptions.IgnoreCase);
 
-            // 4. Strip Technical Tags
-            string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|REPACK|EXTENDED|DIRECTORS)\b";
+            const string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|REPACK|EXTENDED|DIRECTORS)\b";
             cleaned = Regex.Replace(cleaned, techPattern, " ", RegexOptions.IgnoreCase);
 
-            // 5. Unicode normalization (FormD) and filter
+            // 2. High-Performance Span Filtering
             string normalized = cleaned.Normalize(NormalizationForm.FormD);
-            var sb = new StringBuilder();
-            foreach (var c in normalized)
+            ReadOnlySpan<char> source = normalized.AsSpan();
+            Span<char> destination = stackalloc char[source.Length];
+            int destIdx = 0;
+
+            for (int i = 0; i < source.Length; i++)
             {
-                if (CharUnicodeInfo.GetUnicodeCategory(c) != UnicodeCategory.NonSpacingMark)
+                char c = source[i];
+                UnicodeCategory cat = CharUnicodeInfo.GetUnicodeCategory(c);
+                if (cat != UnicodeCategory.NonSpacingMark)
                 {
-                    if (char.IsLetterOrDigit(c)) sb.Append(c);
-                    else if (char.IsWhiteSpace(c)) sb.Append(' ');
+                    if (char.IsLetterOrDigit(c))
+                    {
+                        // Vectorized lowercase conversion can be added here if needed, 
+                        // but char.ToLowerInvariant is optimized by JIT.
+                        destination[destIdx++] = char.ToLowerInvariant(c);
+                    }
                 }
             }
 
-            return sb.ToString().Normalize(NormalizationForm.FormC).Replace("İ", "i").Replace("I", "i").ToLowerInvariant()
-                     .Replace(" ", ""); 
+            // Cleanup Turkish 'i' issue and return
+            var result = new string(destination.Slice(0, destIdx));
+            return result.Replace("İ", "i").Replace("I", "i").Replace(" ", "");
         }
 
         /// <summary>

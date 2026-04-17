@@ -14,7 +14,7 @@
         <converters:BoolToVisibleConverter x:Key="BoolToVisibleConverter"/>
     </UserControl.Resources>
 
-    <StackPanel x:Name="RootPanel" Spacing="16" Margin="48,0,0,24" Opacity="0"
+    <StackPanel x:Name="RootPanel" Spacing="16" Margin="48,0,0,0" Opacity="0"
                 PointerEntered="RootPanel_PointerEntered" 
                 PointerExited="RootPanel_PointerExited">
         <VisualStateManager.VisualStateGroups>

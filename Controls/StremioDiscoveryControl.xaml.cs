@@ -11,6 +11,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Services.Metadata;
 using ModernIPTVPlayer.Models.Metadata;
@@ -99,6 +100,7 @@ namespace ModernIPTVPlayer.Controls
         private int _discoveryVersion = 0; // Monotonic counter to invalidate stale runs
         private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _lastHeroColors;
         private DispatcherTimer? _heroDebounceTimer;
+        private bool _isSourceActive = true;
 
         // Hero Priority Logic
         private enum RowState { Pending, Success, Failed }
@@ -161,13 +163,7 @@ namespace ModernIPTVPlayer.Controls
 
             DiscoveryRows.ItemsSource = _discoveryRows;
 
-            // Global cache invalidation on addon change
-            StremioAddonManager.Instance.AddonsChanged += (s, e) => 
-            {
-                lock(_slotMapCache) _slotMapCache.Clear();
-                _ = DeleteLayoutCacheAsync();
-                OnAddonsChanged(s, e);
-            };
+            StremioAddonManager.Instance.AddonsChanged += OnStremioAddonsChanged;
 
             // History Events
             HistoryManager.Instance.HistoryChanged += OnHistoryChanged;
@@ -186,18 +182,28 @@ namespace ModernIPTVPlayer.Controls
             this.Unloaded += StremioDiscoveryControl_Unloaded;
 
             // [FIX] Sync hero rotation with control visibility (handles switching to IPTV/Kütüphanem)
-            this.RegisterPropertyChangedCallback(VisibilityProperty, (s, dp) =>
+            this.RegisterPropertyChangedCallback(VisibilityProperty, (s, dp) => UpdateHeroLifecycle());
+        }
+
+        public void SetSourceActive(bool isActive)
+        {
+            _isSourceActive = isActive;
+            UpdateHeroLifecycle();
+        }
+
+        private void UpdateHeroLifecycle()
+        {
+            bool shouldRun = _isSourceActive && this.Visibility == Visibility.Visible;
+
+            HeroControl.Visibility = shouldRun ? Visibility.Visible : Visibility.Collapsed;
+            if (shouldRun)
             {
-                HeroControl.Visibility = this.Visibility;
-                if (this.Visibility == Visibility.Visible)
-                {
-                    HeroControl.StartHeroAutoRotation();
-                }
-                else
-                {
-                    HeroControl.StopAutoRotation();
-                }
-            });
+                HeroControl.ResumeHeroAutoRotationIfRevealed();
+            }
+            else
+            {
+                HeroControl.StopAutoRotation();
+            }
         }
 
         private static async Task DeleteLayoutCacheAsync()
@@ -226,7 +232,13 @@ namespace ModernIPTVPlayer.Controls
                     {
                         lock(_slotMapCache)
                         {
-                            foreach(var kv in diskCache) _slotMapCache[kv.Key] = kv.Value;
+                            foreach(var kv in diskCache)
+                            {
+                                // Skip poisoned empty entries from previous runs — they would cause
+                                // the slot-map-cached path to emit an empty slot list and stall discovery.
+                                if (kv.Value == null || kv.Value.Count == 0) continue;
+                                _slotMapCache[kv.Key] = kv.Value;
+                            }
                         }
                     }
                 }
@@ -271,7 +283,7 @@ namespace ModernIPTVPlayer.Controls
             HeroControl.StopAutoRotation();
 
             // [CRITICAL] Unsubscribe from static event to prevent leak
-            StremioAddonManager.Instance.AddonsChanged -= OnAddonsChanged;
+            StremioAddonManager.Instance.AddonsChanged -= OnStremioAddonsChanged;
             HistoryManager.Instance.HistoryChanged -= OnHistoryChanged;
 
             var sv = MainScrollViewer;
@@ -281,15 +293,40 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private DispatcherTimer? _addonsChangeDebounce;
+        private DateTime _lastAddonsReloadAt = DateTime.MinValue;
+
+        private void OnStremioAddonsChanged(object sender, EventArgs e)
+        {
+            lock (_slotMapCache) _slotMapCache.Clear();
+            _ = DeleteLayoutCacheAsync();
+            OnAddonsChanged(sender, e);
+        }
+
         private void OnAddonsChanged(object sender, EventArgs e)
         {
-            DispatcherQueue.TryEnqueue(async () => 
+            DispatcherQueue.TryEnqueue(() =>
             {
-                if (!string.IsNullOrEmpty(_currentContentType) && !_isDiscoveryRunning)
+                // Debounce AddonsChanged storms — during startup the manifests fan in one at a time and we
+                // previously fired a full LoadDiscoveryAsync per event, each of which would reset the hero.
+                if (_addonsChangeDebounce == null)
                 {
-                    System.Diagnostics.Debug.WriteLine("[StremioControl] Addons changed/loaded. Reloading discovery incrementally...");
-                    await LoadDiscoveryAsync(_currentContentType);
+                    _addonsChangeDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+                    _addonsChangeDebounce.Tick += async (s2, e2) =>
+                    {
+                        _addonsChangeDebounce!.Stop();
+                        // Cooldown so we don't reload discovery more than once per ~1.5s for the same type.
+                        if ((DateTime.UtcNow - _lastAddonsReloadAt).TotalMilliseconds < 1500) return;
+                        _lastAddonsReloadAt = DateTime.UtcNow;
+                        if (!string.IsNullOrEmpty(_currentContentType) && !_isDiscoveryRunning)
+                        {
+                            System.Diagnostics.Debug.WriteLine("[StremioControl] Addons changed/loaded (debounced). Reloading discovery incrementally...");
+                            await LoadDiscoveryAsync(_currentContentType);
+                        }
+                    };
                 }
+                _addonsChangeDebounce.Stop();
+                _addonsChangeDebounce.Start();
             });
         }
 
@@ -394,17 +431,9 @@ namespace ModernIPTVPlayer.Controls
         }
 
 
-        private void HeroPerfLog(string msg)
-        {
-            var line = $"[HERO PERF] {DateTime.Now:HH:mm:ss.fff} | {msg}";
-            System.Diagnostics.Debug.WriteLine(line);
-            try
-            {
-                var logPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hero_perf_log.txt");
-                System.IO.File.AppendAllText(logPath, line + "\n");
-            }
-            catch { }
-        }
+        // Delegates to Helpers.HeroTracer — a single shared writer prevents the first-chance IOException
+        // storm that occurred when this class and HeroSectionControl both tried to own the log file.
+        private static void HeroPerfLog(string msg) => Helpers.HeroTracer.Log(msg);
 
         private async Task EnrichItemsBatchAsync(IEnumerable<StremioMediaStream> items, MetadataContext context = MetadataContext.Discovery)
         {
@@ -468,8 +497,9 @@ namespace ModernIPTVPlayer.Controls
         public async Task LoadDiscoveryAsync(string contentType)
         {
             var overallSw = System.Diagnostics.Stopwatch.StartNew();
-            // Clear old log file for fresh run
-            try { System.IO.File.Delete(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "hero_perf_log.txt")); } catch { }
+            // (Logger is a long-lived StreamWriter; deleting the file here would orphan the handle,
+            // so we just emit a separator line instead.)
+            HeroPerfLog("=== =================================================== ===");
             HeroPerfLog($"=== LoadDiscoveryAsync started for {contentType} ===");
             HeroPerfLog($"[StremioControl] LoadDiscoveryAsync START: {contentType}");
 
@@ -518,7 +548,20 @@ namespace ModernIPTVPlayer.Controls
                 // --- 0. CACHE RESTORATION PHASE (Instant Swap) ---
                 _heroItemsSet = false;
                 _heroPrewarmDone = false;
-                if (_contentCache.TryGetValue(contentType, out var cachedState))
+                // [POISON GUARD] Reject empty cached states (0 catalog rows). These can arise when a prior
+                // LoadDiscoveryAsync exited early because manifests were still loading from disk; the
+                // finally-block UpdateDiscoveryCache fires regardless and pollutes the cache. Treating the
+                // entry as a miss forces a proper reload once manifests are available.
+                bool cacheHit = _contentCache.TryGetValue(contentType, out var cachedState);
+                if (cacheHit && (cachedState.Rows == null || cachedState.Rows.Count(r => r.RowId != "CW") == 0))
+                {
+                    HeroPerfLog($"[StremioControl] CACHE HIT for {contentType} but empty ({cachedState.Rows?.Count ?? 0} rows). Treating as miss.");
+                    _contentCache.Remove(contentType);
+                    // Also drop the sibling slot map cache so we don't reuse the empty slot list.
+                    lock (_slotMapCache) { _slotMapCache.Remove(contentType); }
+                    cacheHit = false;
+                }
+                if (cacheHit)
                 {
                     HeroPerfLog($"[StremioControl] CACHE HIT for {contentType}");
                     System.Diagnostics.Debug.WriteLine($"[StremioControl] Restoring cached state for {contentType}");
@@ -592,8 +635,18 @@ namespace ModernIPTVPlayer.Controls
                 }
 
                 HeroPerfLog("Step 2: Fetch Addons/Manifests START");
+                // [STARTUP RACE FIX] Block briefly (up to 1.5s) for manifests to be restored from disk the
+                // first time discovery runs. Before this guard, we'd get an addon list with all-null manifests
+                // and bail immediately, poisoning the cache. The ManifestsLoadedFromDiskTask resolves in ~50ms
+                // on disk cache hit, so in the common case this is a near-zero wait.
+                var manifestsReady = StremioAddonManager.Instance.ManifestsLoadedFromDiskTask;
+                if (!manifestsReady.IsCompleted)
+                {
+                    await Task.WhenAny(manifestsReady, Task.Delay(1500, token)).ConfigureAwait(true);
+                    HeroPerfLog($"Step 2: Awaited manifest-from-disk load ({overallSw.ElapsedMilliseconds}ms)");
+                }
                 var addons = StremioAddonManager.Instance.GetAddonsWithManifests();
-                HeroPerfLog($"Step 2: Fetch Addons/Manifests DONE ({overallSw.ElapsedMilliseconds}ms). Found {addons.Count} addons.");
+                HeroPerfLog($"Step 2: Fetch Addons/Manifests DONE ({overallSw.ElapsedMilliseconds}ms). Found {addons.Count} addons, {addons.Count(a => a.Manifest != null)} manifests loaded.");
                 System.Diagnostics.Debug.WriteLine($"[StremioControl] Starting Discovery for: '{contentType}' with {addons.Count} addons.");
 
                 if (addons.Count == 0)
@@ -602,58 +655,7 @@ namespace ModernIPTVPlayer.Controls
                     return;
                 }
 
-                // --- 0. INJECT CONTINUE WATCHING ROW ---
-                // [OPTIMIZATION] Await history init only now, before accessing GetContinueWatching
-                await (_historyInitTask ?? Task.CompletedTask);
-                var continueWatching = HistoryManager.Instance.GetContinueWatching(contentType);
-                if (continueWatching.Count > 0)
-                {
-                    var cwItems = new ObservableCollection<StremioMediaStream>();
-                    foreach (var hist in continueWatching)
-                    {
-                        var stream = new StremioMediaStream(new StremioMeta 
-                        { 
-                            Id = hist.ParentSeriesId ?? hist.Id,
-                            Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
-                            Poster = hist.PosterUrl,
-                            Background = hist.BackdropUrl,
-                            Type = hist.ParentSeriesId != null ? "series" : contentType
-                        });
-                        
-                        stream.IsContinueWatching = true;
-                        stream.EpisodeSubtext = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0 
-                                ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}" 
-                                : null;
-                        stream.ProgressValue = hist.Duration > 0 ? (hist.Position / hist.Duration) * 100 : 0;
-                        cwItems.Add(stream);
-                    }
-                    
-                    if (cwItems.Count > 0)
-                    {
-                        var cwRow = new CatalogRowViewModel 
-                        {
-                            CatalogName = "İzlemeye Devam Et",
-                            Items = cwItems,
-                            IsLoading = false,
-                            RowId = "CW",
-                            SortIndex = -1,
-                            RowStyle = "Landscape" // explicitly set Landscape
-                        };
-                        
-                        if (!_discoveryRows.Any(r => r.RowId == "CW"))
-                        {
-                            _discoveryRows.Add(cwRow);
-                        }
-                        
-                        lock(_rowItemsBuffer) {
-                            _rowStates["CW"] = RowState.Success;
-                            _rowItemsBuffer["CW"] = cwItems;
-                        }
-
-                        // Asynchronously enrich items that have no poster
-                        _ = EnrichItemsBatchAsync(cwItems);
-                    }
-                }
+                await LoadContinueWatchingLaneAsync(contentType, myVersion, token);
 
                 // --- 1. PRE-ALLOCATE SLOTS (To maintain visual priority) ---
                 HeroPerfLog($"Step 3: Slot Mapping START ({overallSw.ElapsedMilliseconds}ms)");
@@ -697,21 +699,26 @@ namespace ModernIPTVPlayer.Controls
                             if (seenLogicalCatalogs.Contains(idKey)) continue;
                             seenLogicalCatalogs.Add(idKey);
 
-                            string rowId = $"{url}|{cat.Id}|{cat.Name}";
+                            string rowId = $"{url}|{cat.Type}|{cat.Id}|{cat.Name}";
                             newPriorityOrder.Add(rowId);
                             slotMap.Add((url, cat, globalIndex, rowId));
                             globalIndex++;
                         }
                     }
 
-                    // Save to cache
-                    lock(_slotMapCache)
+                    // Save to cache — but only if we actually computed slots. An empty slotMap means the
+                    // manifests hadn't finished loading; caching the empty list would pin discovery to a dead
+                    // state on the next reload (pre-cached empty slot map → slotMap.Count==0 → SetLoading(false)).
+                    if (slotMap.Count > 0)
                     {
-                        _slotMapCache[contentType] = slotMap.Select(s => new CachedSlot { 
-                            BaseUrl = s.BaseUrl, Catalog = s.Catalog, SortIndex = s.SortIndex, RowId = s.RowId 
-                        }).ToList();
+                        lock (_slotMapCache)
+                        {
+                            _slotMapCache[contentType] = slotMap.Select(s => new CachedSlot {
+                                BaseUrl = s.BaseUrl, Catalog = s.Catalog, SortIndex = s.SortIndex, RowId = s.RowId
+                            }).ToList();
+                        }
+                        _ = SaveLayoutCacheToDiskAsync();
                     }
-                    _ = SaveLayoutCacheToDiskAsync();
                 }
                 
                 _heroPriorityOrder = newPriorityOrder;
@@ -785,42 +792,32 @@ namespace ModernIPTVPlayer.Controls
                 }
                 HeroPerfLog($"Step 3: Slot Mapping DONE ({overallSw.ElapsedMilliseconds}ms). Total slots: {slotMap.Count}");
                 
-                // --- STEP 3.5: PHASE 0 INSTANT DISK LOAD (Prioritized) ---
-                HeroPerfLog($"Step 3.5: Phase 0 Instant Disk Load START ({overallSw.ElapsedMilliseconds}ms)");
-                
-                var firstSlot = slotMap.FirstOrDefault();
-                if (firstSlot != default)
-                {
-                    _ = Task.Run(() => ProcessCatalogSlotAsync(firstSlot, isPhase0: true));
-                }
-                foreach (var slot in slotMap.Skip(1))
-                {
-                    if (token.IsCancellationRequested) break;
-                    _ = Task.Run(() => ProcessCatalogSlotAsync(slot, isPhase0: true));
-                }
+                HeroPerfLog($"Step 3.5: Phase 0 Disk Load START ({overallSw.ElapsedMilliseconds}ms)");
+                var phase0Tasks = slotMap.Select(slot => ProcessCatalogSlotAsync(slot, isPhase0: true, myVersion, token)).ToArray();
+                await Task.WhenAll(phase0Tasks);
+                if (token.IsCancellationRequested || myVersion != _discoveryVersion) return;
 
-                // --- STEP 4: NETWORK FETCH (Sequential/Throttled via helper) ---
-                HeroPerfLog($"Step 4: Launching network fetches ({overallSw.ElapsedMilliseconds}ms)");
-                foreach (var slot in slotMap)
-                {
-                    if (token.IsCancellationRequested) break;
-                    _ = Task.Run(() => ProcessCatalogSlotAsync(slot, isPhase0: false));
-                }
+                HeroPerfLog($"Step 4: Network fetches START ({overallSw.ElapsedMilliseconds}ms)");
+                var netTasks = slotMap.Select(slot => ProcessCatalogSlotAsync(slot, isPhase0: false, myVersion, token)).ToArray();
+                await Task.WhenAll(netTasks);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[StremioControl] Critical Error: {ex.Message}");
+                AppLogger.Warn($"[StremioControl] LoadDiscoveryAsync: {ex.Message}");
             }
             finally
             {
-                _isDiscoveryRunning = false;
-                DispatcherQueue.TryEnqueue(() => UpdateDiscoveryCache(contentType));
+                if (myVersion == _discoveryVersion)
+                {
+                    _isDiscoveryRunning = false;
+                    DispatcherQueue.TryEnqueue(() => UpdateDiscoveryCache(contentType, myVersion));
+                }
             }
         }
 
-        private void UpdateDiscoveryCache(string contentType)
+        private void UpdateDiscoveryCache(string contentType, int completedVersion)
         {
-            // [STABILITY FIX] Guard against saving stale state from a cancelled task
+            if (completedVersion != _discoveryVersion) return;
             if (string.IsNullOrEmpty(contentType) || contentType != _currentContentType) return;
 
             var state = new DiscoveryState
@@ -829,6 +826,17 @@ namespace ModernIPTVPlayer.Controls
                 HeroPriorityOrder = new List<string>(_heroPriorityOrder),
                 HeroColors = _lastHeroColors
             };
+
+            // [POISON GUARD] Never persist an empty (no catalog rows) state. This happens when LoadDiscoveryAsync
+            // bails early because the addon manifests haven't finished loading from disk; the finally block still
+            // fires UpdateDiscoveryCache and would otherwise write a dead cache entry that pins the hero in shimmer
+            // forever on the next reload.
+            int realRowCount = state.Rows.Count(r => r.RowId != "CW");
+            if (realRowCount == 0 && _heroPriorityOrder.Count == 0)
+            {
+                HeroPerfLog($"[CACHE-SAVE] SKIPPED: no catalog rows yet for {contentType} (likely manifests still loading). Cache untouched.");
+                return;
+            }
 
             // [FIX] Memory Cache Persistence Guard
             // If the current list is significantly smaller than the cached one, and we are in a non-stable state, 
@@ -1231,7 +1239,8 @@ namespace ModernIPTVPlayer.Controls
                 if (_rowStates.TryGetValue(firstTargetRowId, out var state) && state == RowState.Pending && !skipShimmer)
                 {
                     if (!_rowItemsBuffer.ContainsKey(firstTargetRowId)) {
-                        if (this.Visibility == Visibility.Visible) HeroControl.SetLoading(true);
+                        if (this.Visibility == Visibility.Visible)
+                            HeroControl.SetLoading(true, silent: false, resetHeroPipelineState: false);
                         return;
                     }
                 }
@@ -1255,7 +1264,9 @@ namespace ModernIPTVPlayer.Controls
 
                 HeroPerfLog($"[HERO-DIAG] UpdateHeroState: Matches Current IDs? {isMatch}. New IDs: {string.Join(", ", newIds.Take(3))}");
 
-                if (isMatch && !skipShimmer) return; // Immediate updates only if IDs changed or it's a silent enrichment
+                // Same IDs: nothing to do. HeroSectionControl's PropertyChanged subscriptions already react to
+                // late metadata/logo/backdrop enrichment — another SetItems call would just reset state.
+                if (isMatch) return;
 
                 _currentHeroIds = newIds;
                 _isFirstHeroLoad = false;
@@ -1264,11 +1275,86 @@ namespace ModernIPTVPlayer.Controls
                 HeroPerfLog($"[HERO-READY] Row 0 processing took {sw.ElapsedMilliseconds}ms. Setting {heroItems.Count} items.");
                 
                 HeroControl.SetItems(heroItems, animate: !skipShimmer);
-                HeroControl.SetLoading(false);
+                // Do not SetLoading(false) here — races ApplyTransitionInternalAsync / shimmer; hero clears loading in ShowRealContent.
             });
         }
 
-        private async Task ProcessCatalogSlotAsync((string Url, StremioCatalog Catalog, int SortIndex, string RowId) slot, bool isPhase0)
+        private async Task LoadContinueWatchingLaneAsync(string contentType, int discoveryVersion, System.Threading.CancellationToken token)
+        {
+            try
+            {
+                await (_historyInitTask ?? Task.CompletedTask);
+                if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion || contentType != _currentContentType)
+                {
+                    HeroPerfLog($"[CW] Skipped stale lane. V={discoveryVersion}, CurrentV={_discoveryVersion}, Content={contentType}/{_currentContentType}");
+                    return;
+                }
+
+                var continueWatching = HistoryManager.Instance.GetContinueWatching(contentType);
+                if (continueWatching.Count == 0) return;
+
+                var cwItems = new ObservableCollection<StremioMediaStream>();
+                foreach (var hist in continueWatching)
+                {
+                    var stream = new StremioMediaStream(new StremioMeta
+                    {
+                        Id = hist.ParentSeriesId ?? hist.Id,
+                        Name = hist.ParentSeriesId != null ? (hist.SeriesName ?? hist.Title) : hist.Title,
+                        Poster = hist.PosterUrl,
+                        Background = hist.BackdropUrl,
+                        Type = hist.ParentSeriesId != null ? "series" : contentType
+                    });
+
+                    stream.IsContinueWatching = true;
+                    stream.EpisodeSubtext = hist.ParentSeriesId != null && hist.SeasonNumber > 0 && hist.EpisodeNumber > 0
+                        ? $"S{hist.SeasonNumber:D2}E{hist.EpisodeNumber:D2}"
+                        : null;
+                    stream.ProgressValue = hist.Duration > 0 ? (hist.Position / hist.Duration) * 100 : 0;
+                    cwItems.Add(stream);
+                }
+
+                if (cwItems.Count == 0) return;
+
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion || contentType != _currentContentType) return;
+
+                    var existing = _discoveryRows.FirstOrDefault(r => r.RowId == "CW");
+                    if (existing == null)
+                    {
+                        _discoveryRows.Add(new CatalogRowViewModel
+                        {
+                            CatalogName = "İzlemeye Devam Et",
+                            Items = cwItems,
+                            IsLoading = false,
+                            RowId = "CW",
+                            SortIndex = -1,
+                            RowStyle = "Landscape"
+                        });
+                    }
+                    else
+                    {
+                        existing.Items = cwItems;
+                        existing.IsLoading = false;
+                    }
+
+                    lock (_rowItemsBuffer)
+                    {
+                        _rowStates["CW"] = RowState.Success;
+                        _rowItemsBuffer["CW"] = cwItems;
+                    }
+                });
+
+                _ = EnrichItemsBatchAsync(cwItems);
+                HeroPerfLog($"[CW] Injected {cwItems.Count} items (V={discoveryVersion}).");
+            }
+            catch (Exception ex)
+            {
+                HeroPerfLog($"[CW] Lane error: {ex.Message}");
+            }
+        }
+
+        private async Task ProcessCatalogSlotAsync((string BaseUrl, StremioCatalog Catalog, int SortIndex, string RowId) slot, bool isPhase0, int discoveryVersion, System.Threading.CancellationToken token)
         {
             var (u, cat, sIdx, rid) = slot;
             bool isHeroRow = _heroPriorityOrder.Count > 0 && rid == _heroPriorityOrder[0];
@@ -1282,11 +1368,13 @@ namespace ModernIPTVPlayer.Controls
 
             try
             {
+                if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion) return;
                 string catalogUrl = $"{u.TrimEnd('/')}/catalog/{cat.Type}/{cat.Id}.json";
                 
                 if (isPhase0)
                 {
                     var (_, items, _) = await CatalogCacheManager.LoadCatalogBinaryAsync(catalogUrl);
+                    if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion) return;
                     if (items != null && items.Count > 0)
                     {
                         foreach (var item in items) if (string.IsNullOrEmpty(item.SourceAddon)) item.SourceAddon = u;
@@ -1304,6 +1392,7 @@ namespace ModernIPTVPlayer.Controls
                         }
 
                         DispatcherQueue.TryEnqueue(() => {
+                            if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion) return;
                             var row = _discoveryRows.FirstOrDefault(r => r.RowId == rid);
                             if (row != null && (row.Items == null || row.Items.Count == 0))
                             {
@@ -1316,6 +1405,7 @@ namespace ModernIPTVPlayer.Controls
                 else
                 {
                     var root = await StremioService.Instance.GetCatalogAsync(u, cat.Type, cat.Id);
+                    if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion) return;
                     if (root?.Metas != null)
                     {
                         var itemsList = root.Metas.Select(m => new StremioMediaStream(m) { SourceAddon = u }).ToList();
@@ -1331,6 +1421,7 @@ namespace ModernIPTVPlayer.Controls
                         if (isHeroRow) UpdateHeroState();
 
                         DispatcherQueue.TryEnqueue(() => {
+                            if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion) return;
                             var row = _discoveryRows.FirstOrDefault(r => r.RowId == rid);
                             if (row != null)
                             {
@@ -1341,7 +1432,10 @@ namespace ModernIPTVPlayer.Controls
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                HeroPerfLog($"[ROW] Slot {rid} failed (Phase0={isPhase0}, V={discoveryVersion}): {ex.Message}");
+            }
             finally
             {
                 if (acquired) _catalogSemaphore.Release();

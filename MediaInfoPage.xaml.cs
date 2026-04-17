@@ -9251,6 +9251,8 @@ namespace ModernIPTVPlayer
         private bool _isActive;
         public bool IsActive { get => _isActive; set { if (_isActive != value) { _isActive = value; OnPropertyChanged(nameof(IsActive)); } } }
         
+        public string SourceDisplayName => Title;
+        
         public event System.ComponentModel.PropertyChangedEventHandler PropertyChanged;
         protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }

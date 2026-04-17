@@ -155,8 +155,8 @@
                                     </Style>
                                 </ListView.ItemContainerStyle>
                                 <ListView.ItemTemplate>
-                                    <DataTemplate>
-                                        <TextBlock Text="{Binding CategoryName}" FontSize="14" FontWeight="Medium" Opacity="0.85" TextTrimming="CharacterEllipsis"/>
+                                    <DataTemplate x:DataType="local:LiveCategory">
+                                        <TextBlock Text="{x:Bind CategoryName, Mode=OneWay}" FontSize="14" FontWeight="Medium" Opacity="0.85" TextTrimming="CharacterEllipsis"/>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
@@ -174,7 +174,7 @@
                     </Grid.RowDefinitions>
 
                     <!-- HEADER (Refactored for true mathematical centering) -->
-                    <Grid x:Name="PageHeader" Padding="24,24,36,12" Canvas.ZIndex="10">
+                    <Grid x:Name="PageHeader" Grid.Row="0" Padding="24,24,36,12" Canvas.ZIndex="10">
                         <!-- Sidebar Toggle (Left Aligned) -->
                         <Button x:Name="SidebarToggle" Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" HorizontalAlignment="Left" VerticalAlignment="Center">
                             <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
@@ -214,11 +214,41 @@
                         </StackPanel>
                     </Grid>
 
-                    <!-- MEDIA CONTENT AREA -->
-                    <controls:UnifiedMediaGrid x:Name="MediaGrid" Grid.Row="1" Margin="0" Visibility="Visible" Background="Transparent" ShowIptvBadge="False" />
+                    <Grid x:Name="ViewportGrid" Grid.Row="0" Grid.RowSpan="2" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                        <Grid.Clip>
+                            <RectangleGeometry Rect="0,0,5000,5000" x:Name="ViewportClip"/>
+                        </Grid.Clip>
 
-                    <!-- STREMIO HOME (Hero + Rows) -->
-                    <controls:StremioDiscoveryControl x:Name="StremioControl" Grid.Row="0" Grid.RowSpan="2" Visibility="Collapsed" Canvas.ZIndex="0" Background="Transparent" ShowIptvBadge="False"/>
+                        <!-- IPTV host: content starts below header mirror -->
+                        <Grid x:Name="IptvViewportHost" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Invisible spacer that mirrors the real header height -->
+                            <Grid x:Name="HeaderSpacer" Grid.Row="0" Opacity="0" IsHitTestVisible="False"/>
+
+                            <controls:UnifiedMediaGrid x:Name="MediaGrid" 
+                                                       Grid.Row="1"
+                                                       Margin="0" 
+                                                       Visibility="Visible" 
+                                                       HorizontalAlignment="Stretch" 
+                                                       VerticalAlignment="Stretch" 
+                                                       Background="Transparent" 
+                                                       ShowIptvBadge="False" />
+                        </Grid>
+
+                        <!-- Stremio host: no header spacer offset -->
+                        <Grid x:Name="StremioViewportHost" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+                            <controls:StremioDiscoveryControl x:Name="StremioControl"
+                                                              Visibility="Visible" 
+                                                              HorizontalAlignment="Stretch" 
+                                                              VerticalAlignment="Stretch" 
+                                                              Background="Transparent" 
+                                                              ShowIptvBadge="False"/>
+                        </Grid>
+                    </Grid>
                     
                     <!-- Overlays -->
                     <Canvas x:Name="OverlayCanvas" Grid.Row="0" Grid.RowSpan="2">

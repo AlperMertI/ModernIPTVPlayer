@@ -80,12 +80,18 @@ namespace ModernIPTVPlayer
             if (string.IsNullOrEmpty(imageUrl)) return null;
             if (_colorCache.TryGetValue(imageUrl, out var cached)) return cached;
 
-            // Use pending extraction if already in progress to avoid redundant work/resource exhaustion
-            var task = _pendingExtractions.GetOrAdd(imageUrl, async (url) => {
+            // Single-flight: keep exactly one extraction task per URL. The task itself seeds the
+            // color cache BEFORE clearing the pending map, so a late caller either sees the task
+            // or the finished cache entry — never a brief window where both are empty (which caused
+            // duplicate fetches when the original _pendingExtractions.TryRemove ran first).
+            var task = _pendingExtractions.GetOrAdd(imageUrl, async (url) =>
+            {
                 await _extractionSemaphore.WaitAsync();
                 try
                 {
-                    return await ExtractDominantColorsAsync(url);
+                    var colors = await ExtractDominantColorsAsync(url);
+                    _colorCache.TryAdd(url, colors);
+                    return colors;
                 }
                 finally
                 {
@@ -96,14 +102,61 @@ namespace ModernIPTVPlayer
 
             try
             {
-                var result = await task;
-                _colorCache.TryAdd(imageUrl, result);
-                return result;
+                return await task;
             }
             catch
             {
                 var fallback = (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
                 _colorCache.TryAdd(imageUrl, fallback);
+                return fallback;
+            }
+        }
+
+        /// <summary>Extract (and cache) dominant colors directly from an in-memory image buffer.
+        /// Lets the Hero asset pipeline reuse one HTTP fetch for both GPU surface + color extraction.</summary>
+        public static async Task<(Color Primary, Color Secondary)?> GetOrExtractColorFromBytesAsync(string cacheKey, byte[] bytes)
+        {
+            if (string.IsNullOrEmpty(cacheKey) || bytes == null || bytes.Length == 0) return null;
+            if (_colorCache.TryGetValue(cacheKey, out var cached)) return cached;
+
+            try
+            {
+                using var ms = new InMemoryRandomAccessStream();
+                using (var writer = new Windows.Storage.Streams.DataWriter(ms.GetOutputStreamAt(0)))
+                {
+                    writer.WriteBytes(bytes);
+                    await writer.StoreAsync();
+                    await writer.FlushAsync();
+                    writer.DetachStream();
+                }
+                ms.Seek(0);
+
+                var decoder = await BitmapDecoder.CreateAsync(ms);
+                uint targetSize = 128;
+                var transform = new BitmapTransform
+                {
+                    ScaledWidth = targetSize,
+                    ScaledHeight = targetSize,
+                    InterpolationMode = BitmapInterpolationMode.Linear
+                };
+                var pixelData = await decoder.GetPixelDataAsync(
+                    BitmapPixelFormat.Bgra8,
+                    BitmapAlphaMode.Premultiplied,
+                    transform,
+                    ExifOrientationMode.IgnoreExifOrientation,
+                    ColorManagementMode.DoNotColorManage);
+                var pixels = pixelData.DetachPixelData();
+
+                var (c1, _, c2, _) = FindTopTwoColorsWithRatios(pixels, (int)targetSize, (int)targetSize);
+                bool dominantOnLeft = _random.Next(2) == 0;
+                var result = dominantOnLeft ? (c1, c2) : (c2, c1);
+                _colorCache.TryAdd(cacheKey, result);
+                return result;
+            }
+            catch
+            {
+                var fallback = (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
+                _colorCache.TryAdd(cacheKey, fallback);
                 return fallback;
             }
         }

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Microsoft.UI.Xaml.Media.Imaging;
+using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 
@@ -18,6 +19,8 @@ namespace ModernIPTVPlayer.Models.Stremio
         
         private readonly object _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
+        public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
+        public uint Fingerprint { get; set; }
         
         public StremioMediaStream(StremioMeta meta)
         {
@@ -67,6 +70,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string? IMDbId => !string.IsNullOrEmpty(Meta?.Id) ? Meta.Id : string.Empty;
 
         public string Title { get => Meta?.Name ?? "Loading..."; set { if (Meta != null) Meta.Name = value; } }
+        public string? SourceTitle { get => Title; set => Title = value; }
 
         // PosterUrl: uses override (set by async enrichment) if available, else Meta.Poster
         private string _overridePosterUrl;
@@ -171,7 +175,28 @@ namespace ModernIPTVPlayer.Models.Stremio
 
         // Properties for UI Binding
         public string Type { get => Meta?.Type ?? "movie"; set { if (Meta != null) Meta.Type = value; } }
-        public string Year { get => Meta?.ReleaseInfo ?? ""; set { if (Meta != null) Meta.ReleaseInfo = value; } }
+        public string Year 
+        { 
+            get 
+            {
+                if (Meta == null) return "";
+                // 1. Check Year field
+                string y = TitleHelper.ExtractYear(Meta.Year);
+                if (!string.IsNullOrEmpty(y)) return y;
+
+                // 2. Check ReleaseInfo field
+                y = TitleHelper.ExtractYear(Meta.ReleaseInfo);
+                if (!string.IsNullOrEmpty(y)) return y;
+
+                // 3. Check Released ISO date
+                y = TitleHelper.ExtractYear(Meta.Released);
+                if (!string.IsNullOrEmpty(y)) return y;
+
+                // 4. Fallback to Title
+                return TitleHelper.ExtractYear(Meta.Name) ?? "";
+            }
+            set { if (Meta != null) Meta.ReleaseInfo = value; } 
+        }
         public string Banner => Meta?.Background ?? "";
         public string Description { get => Meta?.Description ?? ""; set { if (Meta != null) { Meta.Description = value; OnPropertyChanged(); } } }
 
