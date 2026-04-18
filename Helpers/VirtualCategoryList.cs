@@ -41,14 +41,10 @@ namespace ModernIPTVPlayer.Helpers
 
                     // 2. Just-In-Time Hydration (Flyweight)
                     var category = new LiveCategory();
-                    unsafe
+                    if (_session.TryReadRecord<CategoryRecord>(index, out var record))
                     {
-                        var record = _session.GetRecordPointer<CategoryRecord>(index);
-                        if (record != null)
-                        {
-                            category.LoadFromRecord(*record);
-                            category.SetCacheSession(_session);
-                        }
+                        category.LoadFromRecord(record);
+                        category.SetCacheSession(_session);
                     }
 
                     _identityMap[index] = new WeakReference<LiveCategory>(category);

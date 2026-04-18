@@ -40,10 +40,12 @@ namespace ModernIPTVPlayer
 
     public class LiveStream : INotifyPropertyChanged, IMediaStream
     {
+        private BinaryCacheSession? _session;
         private object? _metaLock;
         private object MetaLock => _metaLock ??= new object();
         public int MetadataPriority { get; set; } = 0;
         public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
+        public int RecordIndex { get; private set; } = -1;
         public uint Fingerprint { get; set; }
         [JsonIgnore]
         public bool IsLoading { get; set; } = false;
@@ -66,6 +68,80 @@ namespace ModernIPTVPlayer
         private int _catOff = -1, _catLen = 0;
         private int _ratOff = -1, _ratLen = 0;
 
+        private const int LiveSlotName = 0;
+        private const int LiveSlotIcon = 1;
+        private const int LiveSlotImdb = 2;
+        private const int LiveSlotDesc = 3;
+        private const int LiveSlotBg = 4;
+        private const int LiveSlotGenre = 5;
+        private const int LiveSlotCast = 6;
+        private const int LiveSlotDir = 7;
+        private const int LiveSlotTrail = 8;
+        private const int LiveSlotYear = 9;
+        private const int LiveSlotExt = 10;
+        private const int LiveSlotCat = 11;
+        private const int LiveSlotRat = 12;
+        private const int LiveSlotCount = 13;
+        private readonly int[] _roBufOff = new int[LiveSlotCount];
+        private readonly int[] _roBufLen = new int[LiveSlotCount];
+        private int _roMask;
+
+        private string LiveReadString(int slot, int diskOff, int diskLen)
+        {
+            if ((_roMask & (1 << slot)) != 0)
+            {
+                return MetadataBuffer.GetString(_roBufOff[slot], _roBufLen[slot]);
+            }
+
+            if (_session != null)
+            {
+                return _session.GetString(diskOff, diskLen);
+            }
+
+            return MetadataBuffer.GetString(diskOff, diskLen);
+        }
+
+        private void LiveWriteString(int slot, ref int diskOff, ref int diskLen, string? value, string? changed1 = null, string? changed2 = null)
+        {
+            if (_session != null && _session.IsReadOnly)
+            {
+                if (string.IsNullOrEmpty(value))
+                {
+                    _roMask &= ~(1 << slot);
+                    _roBufOff[slot] = -1;
+                    _roBufLen[slot] = 0;
+                }
+                else
+                {
+                    var r = MetadataBuffer.Store(value);
+                    _roBufOff[slot] = r.Offset;
+                    _roBufLen[slot] = r.Length;
+                    _roMask |= 1 << slot;
+                }
+
+                if (changed1 != null) OnPropertyChanged(changed1);
+                if (changed2 != null) OnPropertyChanged(changed2);
+                return;
+            }
+
+            if (_session != null)
+            {
+                var (newOffset, newLength) = _session.PokeString(diskOff, diskLen, value);
+                diskOff = newOffset;
+                diskLen = newLength;
+                if (changed1 != null) OnPropertyChanged(changed1);
+                if (changed2 != null) OnPropertyChanged(changed2);
+                return;
+            }
+
+            if (MetadataBuffer.IsEqual(diskOff, diskLen, value)) return;
+            var stored = MetadataBuffer.Store(value);
+            diskOff = stored.Offset;
+            diskLen = stored.Length;
+            if (changed1 != null) OnPropertyChanged(changed1);
+            if (changed2 != null) OnPropertyChanged(changed2);
+        }
+
         /// <summary>
         /// PROJECT ZERO: Zero-Allocation Fast Initialization.
         /// Bypasses property setters to avoid re-storing strings in MetadataBuffer.
@@ -73,19 +149,28 @@ namespace ModernIPTVPlayer
         public void LoadFromData(LiveStreamData data, int baseOffset = 0)
         {
             this.StreamId = data.StreamId;
-            this._nameOff = data.NameOff + baseOffset; this._nameLen = data.NameLen;
-            this._iconOff = data.IconOff + baseOffset; this._iconLen = data.IconLen;
-            this._imdbOff = data.ImdbOff + baseOffset; this._imdbLen = data.ImdbLen;
-            this._descOff = data.DescOff + baseOffset; this._descLen = data.DescLen;
-            this._bgOff = data.BgOff + baseOffset; this._bgLen = data.BgLen;
-            this._genreOff = data.GenreOff + baseOffset; this._genreLen = data.GenreLen;
-            this._castOff = data.CastOff + baseOffset; this._castLen = data.CastLen;
-            this._dirOff = data.DirOff + baseOffset; this._dirLen = data.DirLen;
-            this._trailOff = data.TrailOff + baseOffset; this._trailLen = data.TrailLen;
-            this._yearOff = data.YearOff + baseOffset; this._yearLen = data.YearLen;
-            this._extOff = data.ExtOff + baseOffset; this._extLen = data.ExtLen;
-            this._catOff = data.CatOff + baseOffset; this._catLen = data.CatLen;
-            this._ratOff = data.RatOff + baseOffset; this._ratLen = data.RatLen;
+            this._nameOff = AddBaseOffset(data.NameOff, baseOffset); this._nameLen = data.NameLen;
+            this._iconOff = AddBaseOffset(data.IconOff, baseOffset); this._iconLen = data.IconLen;
+            this._imdbOff = AddBaseOffset(data.ImdbOff, baseOffset); this._imdbLen = data.ImdbLen;
+            this._descOff = AddBaseOffset(data.DescOff, baseOffset); this._descLen = data.DescLen;
+            this._bgOff = AddBaseOffset(data.BgOff, baseOffset); this._bgLen = data.BgLen;
+            this._genreOff = AddBaseOffset(data.GenreOff, baseOffset); this._genreLen = data.GenreLen;
+            this._castOff = AddBaseOffset(data.CastOff, baseOffset); this._castLen = data.CastLen;
+            this._dirOff = AddBaseOffset(data.DirOff, baseOffset); this._dirLen = data.DirLen;
+            this._trailOff = AddBaseOffset(data.TrailOff, baseOffset); this._trailLen = data.TrailLen;
+            this._yearOff = AddBaseOffset(data.YearOff, baseOffset); this._yearLen = data.YearLen;
+            this._extOff = AddBaseOffset(data.ExtOff, baseOffset); this._extLen = data.ExtLen;
+            this._catOff = AddBaseOffset(data.CatOff, baseOffset); this._catLen = data.CatLen;
+            this._ratOff = AddBaseOffset(data.RatOff, baseOffset); this._ratLen = data.RatLen;
+        }
+
+        private static int AddBaseOffset(int offset, int baseOffset)
+            => offset < 0 ? offset : offset + baseOffset;
+
+        public void SetCacheSession(BinaryCacheSession session, int recordIndex)
+        {
+            _session = session;
+            RecordIndex = recordIndex;
         }
 
         /// <summary>
@@ -111,8 +196,8 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("imdb_id")]
         public string? ImdbId 
         { 
-            get => MetadataBuffer.GetString(_imdbOff, _imdbLen); 
-            set { if (MetadataBuffer.IsEqual(_imdbOff, _imdbLen, value)) return; var r = MetadataBuffer.Store(value); _imdbOff = r.Offset; _imdbLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotImdb, _imdbOff, _imdbLen); 
+            set => LiveWriteString(LiveSlotImdb, ref _imdbOff, ref _imdbLen, value, nameof(ImdbId));
         }
         public string? IMDbId => ImdbId;
         
@@ -126,8 +211,8 @@ namespace ModernIPTVPlayer
 
         public string? Description 
         { 
-            get => MetadataBuffer.GetString(_descOff, _descLen); 
-            set { if (MetadataBuffer.IsEqual(_descOff, _descLen, value)) return; var r = MetadataBuffer.Store(value); _descOff = r.Offset; _descLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotDesc, _descOff, _descLen); 
+            set => LiveWriteString(LiveSlotDesc, ref _descOff, ref _descLen, value, nameof(Description));
         }
 
         [JsonIgnore]
@@ -139,36 +224,36 @@ namespace ModernIPTVPlayer
 
         public string? BackdropUrl 
         { 
-            get => MetadataBuffer.GetString(_bgOff, _bgLen); 
-            set { if (MetadataBuffer.IsEqual(_bgOff, _bgLen, value)) return; var r = MetadataBuffer.Store(value); _bgOff = r.Offset; _bgLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotBg, _bgOff, _bgLen); 
+            set => LiveWriteString(LiveSlotBg, ref _bgOff, ref _bgLen, value, nameof(BackdropUrl));
         }
         public string? Type => "live";
 
         public string? Genres 
         { 
-            get => MetadataBuffer.GetString(_genreOff, _genreLen); 
-            set { if (MetadataBuffer.IsEqual(_genreOff, _genreLen, value)) return; var r = MetadataBuffer.Store(value); _genreOff = r.Offset; _genreLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotGenre, _genreOff, _genreLen); 
+            set => LiveWriteString(LiveSlotGenre, ref _genreOff, ref _genreLen, value, nameof(Genres));
         }
         public string? Cast 
         { 
-            get => MetadataBuffer.GetString(_castOff, _castLen); 
-            set { if (MetadataBuffer.IsEqual(_castOff, _castLen, value)) return; var r = MetadataBuffer.Store(value); _castOff = r.Offset; _castLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotCast, _castOff, _castLen); 
+            set => LiveWriteString(LiveSlotCast, ref _castOff, ref _castLen, value, nameof(Cast));
         }
         public string? Director 
         { 
-            get => MetadataBuffer.GetString(_dirOff, _dirLen); 
-            set { if (MetadataBuffer.IsEqual(_dirOff, _dirLen, value)) return; var r = MetadataBuffer.Store(value); _dirOff = r.Offset; _dirLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotDir, _dirOff, _dirLen); 
+            set => LiveWriteString(LiveSlotDir, ref _dirOff, ref _dirLen, value, nameof(Director));
         }
         public string? TrailerUrl 
         { 
-            get => MetadataBuffer.GetString(_trailOff, _trailLen); 
-            set { if (MetadataBuffer.IsEqual(_trailOff, _trailLen, value)) return; var r = MetadataBuffer.Store(value); _trailOff = r.Offset; _trailLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotTrail, _trailOff, _trailLen); 
+            set => LiveWriteString(LiveSlotTrail, ref _trailOff, ref _trailLen, value, nameof(TrailerUrl));
         }
         
         public string Year 
         { 
-            get => MetadataBuffer.GetString(_yearOff, _yearLen); 
-            set { if (MetadataBuffer.IsEqual(_yearOff, _yearLen, value)) return; var r = MetadataBuffer.Store(value); _yearOff = r.Offset; _yearLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotYear, _yearOff, _yearLen); 
+            set => LiveWriteString(LiveSlotYear, ref _yearOff, ref _yearLen, value, nameof(Year));
         }
         
         [JsonIgnore]
@@ -204,8 +289,8 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("name")]
         public string Name 
         { 
-            get => MetadataBuffer.GetString(_nameOff, _nameLen); 
-            set { if (MetadataBuffer.IsEqual(_nameOff, _nameLen, value)) return; var r = MetadataBuffer.Store(value); _nameOff = r.Offset; _nameLen = r.Length; OnPropertyChanged(); OnPropertyChanged(nameof(Title)); } 
+            get => LiveReadString(LiveSlotName, _nameOff, _nameLen); 
+            set => LiveWriteString(LiveSlotName, ref _nameOff, ref _nameLen, value, nameof(Name), nameof(Title));
         }
         
         [JsonPropertyName("stream_id")]
@@ -217,8 +302,8 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("stream_icon")]
         public string? IconUrl 
         { 
-            get => MetadataBuffer.GetString(_iconOff, _iconLen); 
-            set { if (MetadataBuffer.IsEqual(_iconOff, _iconLen, value)) return; var r = MetadataBuffer.Store(value); _iconOff = r.Offset; _iconLen = r.Length; OnPropertyChanged(); OnPropertyChanged(nameof(PosterUrl)); } 
+            get => LiveReadString(LiveSlotIcon, _iconOff, _iconLen); 
+            set => LiveWriteString(LiveSlotIcon, ref _iconOff, ref _iconLen, value, nameof(IconUrl), nameof(PosterUrl));
         }
 
         [JsonPropertyName("cover")] // Alternate for Series
@@ -227,22 +312,22 @@ namespace ModernIPTVPlayer
         [JsonPropertyName("container_extension")]
         public string? ContainerExtension 
         { 
-            get => MetadataBuffer.GetString(_extOff, _extLen); 
-            set { if (MetadataBuffer.IsEqual(_extOff, _extLen, value)) return; var r = MetadataBuffer.Store(value); _extOff = r.Offset; _extLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotExt, _extOff, _extLen); 
+            set => LiveWriteString(LiveSlotExt, ref _extOff, ref _extLen, value, nameof(ContainerExtension));
         }
 
         [JsonPropertyName("category_id")]
         public string? CategoryId 
         { 
-            get => MetadataBuffer.GetString(_catOff, _catLen); 
-            set { if (MetadataBuffer.IsEqual(_catOff, _catLen, value)) return; var r = MetadataBuffer.Store(value); _catOff = r.Offset; _catLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotCat, _catOff, _catLen); 
+            set => LiveWriteString(LiveSlotCat, ref _catOff, ref _catLen, value, nameof(CategoryId));
         }
 
         [JsonPropertyName("rating")]
         public string Rating 
         { 
-            get => MetadataBuffer.GetString(_ratOff, _ratLen); 
-            set { if (MetadataBuffer.IsEqual(_ratOff, _ratLen, value)) return; var r = MetadataBuffer.Store(value); _ratOff = r.Offset; _ratLen = r.Length; OnPropertyChanged(); } 
+            get => LiveReadString(LiveSlotRat, _ratOff, _ratLen); 
+            set => LiveWriteString(LiveSlotRat, ref _ratOff, ref _ratLen, value, nameof(Rating));
         }
 
         // Bu alan JSON'dan gelmez, biz oluşturacağız

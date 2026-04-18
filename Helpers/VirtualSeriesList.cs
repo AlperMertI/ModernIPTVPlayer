@@ -31,12 +31,11 @@ namespace ModernIPTVPlayer.Helpers
 
         public int Count => _count;
 
-        public unsafe SeriesStream this[int index]
+        public SeriesStream this[int index]
         {
             get
             {
                 if (index < 0 || index >= _count) throw new IndexOutOfRangeException();
-                if (_session.BasePointer == null) return new SeriesStream { Name = "Error: Disposed" };
 
                 // 1. Identity Check (Double-Checked Locking with WeakReference)
                 var weakRef = Volatile.Read(ref _identityMap[index]);
@@ -55,10 +54,9 @@ namespace ModernIPTVPlayer.Helpers
 
                     // 2. Just-In-Time Hydration (Flyweight)
                     var stream = new SeriesStream();
-                    var record = _session.GetRecordPointer<SeriesRecord>(index);
-                    if (record != null)
+                    if (_session.TryReadRecord<SeriesRecord>(index, out var record))
                     {
-                        stream.LoadFromRecord(*record);
+                        stream.LoadFromRecord(record);
                         
                         // [PHASE 4] Link stream to the session for string/poke access
                         stream.SetCacheSession(_session, index);
@@ -84,20 +82,17 @@ namespace ModernIPTVPlayer.Helpers
         /// PERFORMANCE: Performs a zero-lock parallel scan of the entire dataset.
         /// Bypasses object hydration entirely by reading raw CategoryId from the pointer.
         /// </summary>
-        public unsafe void ParallelScanInto(ConcurrentDictionary<string, ConcurrentBag<int>> indexMap)
+        public void ParallelScanInto(ConcurrentDictionary<string, ConcurrentBag<int>> indexMap)
         {
-            if (_session.BasePointer == null) return;
-
             var partitioner = Partitioner.Create(0, _count, Math.Max(1, _count / (Environment.ProcessorCount * 2)));
 
             Parallel.ForEach(partitioner, range =>
             {
                 for (int i = range.Item1; i < range.Item2; i++)
                 {
-                    var record = _session.GetRecordPointer<SeriesRecord>(i);
-                    if (record != null)
+                    if (_session.TryReadRecord<SeriesRecord>(i, out var record))
                     {
-                        string catId = record->CategoryId.ToString();
+                        string catId = record.CategoryId.ToString();
                         var bag = indexMap.GetOrAdd(catId, _ => new ConcurrentBag<int>());
                         bag.Add(i);
                     }

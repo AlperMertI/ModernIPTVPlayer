@@ -1,11 +1,7 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Net.Http;
-using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,8 +16,15 @@ namespace ModernIPTVPlayer.Services
     /// </summary>
     public static class ZeroAllocJsonParser
     {
-        // Pool for read buffers (64KB chunks)
-        private static readonly ArrayPool<byte> _bufferPool = ArrayPool<byte>.Shared;
+        private static ReadOnlySpan<byte> NameProperty => "name"u8;
+        private static ReadOnlySpan<byte> StreamIdProperty => "stream_id"u8;
+        private static ReadOnlySpan<byte> SeriesIdProperty => "series_id"u8;
+        private static ReadOnlySpan<byte> StreamIconProperty => "stream_icon"u8;
+        private static ReadOnlySpan<byte> CoverProperty => "cover"u8;
+        private static ReadOnlySpan<byte> ContainerExtensionProperty => "container_extension"u8;
+        private static ReadOnlySpan<byte> CategoryIdProperty => "category_id"u8;
+        private static ReadOnlySpan<byte> CategoryNameProperty => "category_name"u8;
+        private static ReadOnlySpan<byte> RatingProperty => "rating"u8;
 
         /// <summary>
         /// Parses live streams from HTTP response stream with zero intermediate allocations.
@@ -151,7 +154,7 @@ namespace ModernIPTVPlayer.Services
                 reader.Read(); // Move to value
 
                 // Fast property name matching (byte comparison, no string allocation)
-                if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("name")))
+                if (propName.SequenceEqual(NameProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
@@ -164,15 +167,15 @@ namespace ModernIPTVPlayer.Services
                         }
                     }
                 }
-                else if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("stream_id")))
+                else if (propName.SequenceEqual(StreamIdProperty))
                 {
                     data.StreamId = reader.GetInt32();
                 }
-                else if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("series_id")))
+                else if (propName.SequenceEqual(SeriesIdProperty))
                 {
                     data.StreamId = reader.GetInt32();
                 }
-                else if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("stream_icon")))
+                else if (propName.SequenceEqual(StreamIconProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
@@ -185,7 +188,7 @@ namespace ModernIPTVPlayer.Services
                         }
                     }
                 }
-                else if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("cover")))
+                else if (propName.SequenceEqual(CoverProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
@@ -198,7 +201,7 @@ namespace ModernIPTVPlayer.Services
                         }
                     }
                 }
-                else if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("container_extension")))
+                else if (propName.SequenceEqual(ContainerExtensionProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
@@ -211,7 +214,7 @@ namespace ModernIPTVPlayer.Services
                         }
                     }
                 }
-                else if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("category_id")))
+                else if (propName.SequenceEqual(CategoryIdProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
@@ -232,7 +235,7 @@ namespace ModernIPTVPlayer.Services
                         data.CatLen = stored.Length;
                     }
                 }
-                else if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("rating")))
+                else if (propName.SequenceEqual(RatingProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
@@ -268,12 +271,12 @@ namespace ModernIPTVPlayer.Services
                 var propName = reader.ValueSpan;
                 reader.Read();
 
-                if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("category_name")))
+                if (propName.SequenceEqual(CategoryNameProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                         name = reader.GetString();
                 }
-                else if (propName.SequenceEqual((ReadOnlySpan<byte>)Encoding.UTF8.GetBytes("category_id")))
+                else if (propName.SequenceEqual(CategoryIdProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                         id = reader.GetString();

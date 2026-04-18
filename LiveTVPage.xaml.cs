@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Collections.Concurrent;
 using System.Threading;
@@ -41,7 +42,8 @@ namespace ModernIPTVPlayer
 
         // Phase A/B: Pre-computed search structures
         private ushort[] _channelFlags = Array.Empty<ushort>();  // Bit field for quality/health/tech filters
-        private Dictionary<LiveStream, int> _channelToIndex = new();  // Fast reverse lookup: channel object → index
+        private int[] _allChannelIndices = Array.Empty<int>();
+        private readonly Dictionary<string, int[]> _categoryChannelIndices = new(StringComparer.Ordinal);
         
         // State
         private LiveCategory? _selectedCategory;
@@ -335,8 +337,7 @@ namespace ModernIPTVPlayer
                     _allChannels = cachedStreams; // Raw list
 
                     // -------------------------------------------------------
-                    // 2. Group channels by category (single-pass, ~50-100ms for 50k channels)
-                    var grouped = new Dictionary<string, List<LiveStream>>();
+                    // 2. Build category shell + compact runtime indices.
                     var catsCopy = _allCategories.ToList(); // Need mutable list for category structure enrichment if needed
                     var allCat = catsCopy.FirstOrDefault(c => c.CategoryId == "-1");
                     if (allCat == null)
@@ -344,22 +345,10 @@ namespace ModernIPTVPlayer
                         allCat = new LiveCategory { CategoryName = "Tüm Kanallar", CategoryId = "-1" };
                         catsCopy.Insert(0, allCat);
                     }
-                    allCat.Channels = _allChannels.ToList();
                     _allCategories = catsCopy;
-                    foreach (var s in _allChannels)
-                    {
-                        if (!grouped.TryGetValue(s.CategoryId, out var list))
-                            grouped[s.CategoryId] = list = new List<LiveStream>();
-                        list.Add(s);
-                    }
-                    foreach (var cat in _allCategories)
-                    {
-                        if (cat.CategoryId != "-1")
-                            cat.Channels = grouped.TryGetValue(cat.CategoryId, out var list) ? list : new List<LiveStream>();
-                    }
 
-                    // 3. Build flags immediately (needed for filtering)
-                    BuildChannelFlags();
+                    // 3. Build runtime indices immediately (needed for filtering)
+                    BuildChannelRuntimeIndexes();
 
                     // 4. Show UI
                     CategoryListView.ItemsSource = _allCategories;
@@ -405,12 +394,18 @@ namespace ModernIPTVPlayer
 
                     List<LiveCategory> categories = null;
                     List<LiveStream> streams = null;
+                    byte[] streamJsonBytes = null;
 
                     try
                     {
                         // Parse in parallel with zero-allocation parser
-                        var catTask = Services.ZeroAllocJsonParser.ParseLiveCategoriesAsync(_httpClient, api, cancellationToken);
-                        var streamTask = Services.ZeroAllocJsonParser.ParseLiveStreamsAsync(_httpClient, streamApi, cancellationToken);
+                        var catBytesTask = _httpClient.GetByteArrayAsync(api, cancellationToken);
+                        var streamBytesTask = _httpClient.GetByteArrayAsync(streamApi, cancellationToken);
+                        await Task.WhenAll(catBytesTask, streamBytesTask);
+
+                        streamJsonBytes = streamBytesTask.Result;
+                        var catTask = Task.Run(() => Services.ZeroAllocJsonParser.ParseLiveCategoriesFromBytes(catBytesTask.Result), cancellationToken);
+                        var streamTask = Task.Run(() => Services.ZeroAllocJsonParser.ParseLiveStreamsFromBytes(streamJsonBytes), cancellationToken);
                         await Task.WhenAll(catTask, streamTask);
                         categories = catTask.Result;
                         streams = streamTask.Result;
@@ -426,6 +421,7 @@ namespace ModernIPTVPlayer
 
                         string catJson = catTask.Result;
                         string streamJson = streamTask.Result;
+                        streamJsonBytes = Encoding.UTF8.GetBytes(streamJson);
 
                         categories = HttpHelper.TryDeserializeList<LiveCategory>(catJson);
                         streams = HttpHelper.TryDeserializeList<LiveStream>(streamJson);
@@ -441,7 +437,9 @@ namespace ModernIPTVPlayer
 
                         // 3. CACHE SAVE (Background)
                         _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_cats", categories ?? new List<LiveCategory>());
-                        _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_streams", streams);
+                        _ = streamJsonBytes is { Length: > 0 }
+                            ? Services.ContentCacheService.Instance.SaveLiveStreamsBinaryFromJsonAsync(playlistId, streamJsonBytes)
+                            : Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_streams", streams);
 
                         // 4. SINGLE-PASS CATEGORY GROUPING (O(N) instead of O(N×M))
                         categories ??= new List<LiveCategory>();
@@ -451,23 +449,8 @@ namespace ModernIPTVPlayer
                         _allCategories = tempList;
                         _allChannels = streams;
 
-                        // Group channels by category in a single pass
-                        var grouped = new Dictionary<string, List<LiveStream>>(categories.Count + 1, StringComparer.Ordinal);
-                        foreach (var s in _allChannels)
-                        {
-                            if (!grouped.TryGetValue(s.CategoryId, out var list))
-                                grouped[s.CategoryId] = list = new List<LiveStream>();
-                            list.Add(s);
-                        }
-
-                        allCat.Channels = _allChannels;
-                        foreach (var cat in categories)
-                        {
-                            cat.Channels = grouped.TryGetValue(cat.CategoryId, out var list) ? list : new List<LiveStream>();
-                        }
-
-                        // Phase B: Build flags immediately (needed for filtering)
-                        BuildChannelFlags();
+                        // Phase B: Build compact runtime indices immediately (needed for filtering)
+                        BuildChannelRuntimeIndexes();
 
                         // LAZY PROBE CACHE (Phase 3.2): Initialize in background, don't block UI
                         // The probe worker checks cache before each probe — if not loaded yet, it proceeds normally
@@ -540,10 +523,7 @@ namespace ModernIPTVPlayer
 
                 // Immediate UI
                 var allCat = _allCategories.FirstOrDefault(c => c.CategoryId == "-1");
-                if (allCat != null)
-                {
-                    allCat.Channels = _allChannels;
-                }
+                BuildChannelRuntimeIndexes();
 
                 CategoryListView.ItemsSource = _allCategories;
                 CategoryListView.SelectedIndex = 0;
@@ -597,18 +577,20 @@ namespace ModernIPTVPlayer
 
                 // Populate All Channels (single pass — SelectMany is efficient here)
                 _allChannels = categories.SelectMany(c => c.Channels).ToList();
-                allCat.Channels = _allChannels;
-
                 var tempCats = new List<LiveCategory> { allCat };
                 tempCats.AddRange(categories);
                 _allCategories = tempCats;
+                foreach (var category in categories)
+                {
+                    category.Channels = Array.Empty<LiveStream>();
+                }
 
                 // SAVE TO BINARY CACHE (background, fire-and-forget)
                 _ = Services.ContentCacheService.Instance.SaveLiveStreamsBinaryAsync(playlistId, _allChannels);
                 _ = Services.ContentCacheService.Instance.SaveCacheAsync(playlistId, "live_cats_m3u", _allCategories);
 
-                // Phase B: Build flags immediately (needed for filtering)
-                BuildChannelFlags();
+                // Phase B: Build compact runtime indices immediately (needed for filtering)
+                BuildChannelRuntimeIndexes();
 
                 // Search index: lazy (built on first search)
 
@@ -844,22 +826,114 @@ namespace ModernIPTVPlayer
         // Phase A/B: Search Index + Flags Builder
         // ==========================================
 
+        private void BuildChannelRuntimeIndexes()
+        {
+            Services.ChannelSearchIndex.Clear();
+            BuildCategoryChannelIndexMap();
+            BuildChannelFlags();
+        }
+
         /// <summary>
-        /// Build ONLY channel flags + reverse index map (fast ~50ms for 50k channels).
-        /// Called immediately after cache load so filters work.
+        /// Keeps one canonical channel list in memory and maps categories to channel indices.
+        /// This avoids duplicating LiveStream references inside every LiveCategory.
+        /// </summary>
+        private void BuildCategoryChannelIndexMap()
+        {
+            try
+            {
+                _categoryChannelIndices.Clear();
+                _allChannelIndices = new int[_allChannels.Count];
+
+                var grouped = new Dictionary<string, List<int>>(Math.Max(_allCategories.Count, 1), StringComparer.Ordinal);
+
+                for (int i = 0; i < _allChannels.Count; i++)
+                {
+                    _allChannelIndices[i] = i;
+
+                    string categoryId = _allChannels[i].CategoryId ?? string.Empty;
+                    if (!grouped.TryGetValue(categoryId, out var indices))
+                    {
+                        indices = new List<int>();
+                        grouped[categoryId] = indices;
+                    }
+
+                    indices.Add(i);
+                }
+
+                foreach (var pair in grouped)
+                {
+                    _categoryChannelIndices[pair.Key] = pair.Value.ToArray();
+                }
+
+                AppLogger.Info($"[LiveTV] Category index built | channels={_allChannels.Count} | categories={_categoryChannelIndices.Count}");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[LiveTV] Category index build failed", ex);
+                _categoryChannelIndices.Clear();
+                _allChannelIndices = Array.Empty<int>();
+                throw;
+            }
+        }
+
+        private int[] GetSelectedCategoryIndices()
+        {
+            string? categoryId = _selectedCategory?.CategoryId;
+            if (string.IsNullOrEmpty(categoryId))
+            {
+                return Array.Empty<int>();
+            }
+
+            return _categoryChannelIndices.TryGetValue(categoryId, out var indices)
+                ? indices
+                : Array.Empty<int>();
+        }
+
+        private static int[] IntersectSortedIndices(int[] left, int[] right)
+        {
+            if (left.Length == 0 || right.Length == 0)
+            {
+                return Array.Empty<int>();
+            }
+
+            var result = new List<int>(Math.Min(left.Length, right.Length));
+            int i = 0;
+            int j = 0;
+
+            while (i < left.Length && j < right.Length)
+            {
+                int a = left[i];
+                int b = right[j];
+
+                if (a == b)
+                {
+                    result.Add(a);
+                    i++;
+                    j++;
+                }
+                else if (a < b)
+                {
+                    i++;
+                }
+                else
+                {
+                    j++;
+                }
+            }
+
+            return result.ToArray();
+        }
+
+        /// <summary>
+        /// Build only channel flags. Category membership is handled by compact index arrays.
+        /// Called immediately after cache/load so filters work.
         /// </summary>
         private void BuildChannelFlags()
         {
-            if (_channelFlags.Length == _allChannels.Count) return; // Already built
-
-            // Build reverse map (channel object → index) — needed for category filtering
-            _channelToIndex.Clear();
-
             _channelFlags = new ushort[_allChannels.Count];
             for (int i = 0; i < _allChannels.Count; i++)
             {
                 var c = _allChannels[i];
-                _channelToIndex[c] = i;
 
                 ushort flags = 0;
 
@@ -894,7 +968,6 @@ namespace ModernIPTVPlayer
 
         /// <summary>
         /// Build search index only (deferred until first search).
-        /// Reverse map is already built by BuildChannelFlags().
         /// </summary>
         private void BuildChannelSearchStructures()
         {
@@ -980,24 +1053,10 @@ namespace ModernIPTVPlayer
                 int[] searchResults = Services.ChannelSearchIndex.Search(_searchQuery);
                 if (searchResults.Length == 0) return new List<LiveStream>();
 
-                // If not global, filter to only indices within the selected category
-                if (!isGlobal && _selectedCategory?.Channels != null)
+                // If not global, intersect search results with the selected category indices.
+                if (!isGlobal)
                 {
-                    // Use pre-built reverse index for O(1) lookup
-                    var categorySet = new HashSet<int>();
-                    foreach (var ch in _selectedCategory.Channels)
-                    {
-                        if (_channelToIndex.TryGetValue(ch, out int idx))
-                            categorySet.Add(idx);
-                    }
-
-                    // Intersect search results with category indices
-                    var filtered = new List<int>(Math.Min(searchResults.Length, categorySet.Count));
-                    foreach (var idx in searchResults)
-                    {
-                        if (categorySet.Contains(idx)) filtered.Add(idx);
-                    }
-                    candidateIndices = filtered.ToArray();
+                    candidateIndices = IntersectSortedIndices(searchResults, GetSelectedCategoryIndices());
                 }
                 else
                 {
@@ -1009,22 +1068,11 @@ namespace ModernIPTVPlayer
                 // No search query — use all channels or category channels
                 if (isGlobal)
                 {
-                    candidateIndices = new int[_allChannels.Count];
-                    for (int i = 0; i < _allChannels.Count; i++) candidateIndices[i] = i;
-                }
-                else if (_selectedCategory?.Channels != null)
-                {
-                    var indices = new List<int>(_selectedCategory.Channels.Count);
-                    foreach (var ch in _selectedCategory.Channels)
-                    {
-                        if (_channelToIndex.TryGetValue(ch, out int idx))
-                            indices.Add(idx);
-                    }
-                    candidateIndices = indices.ToArray();
+                    candidateIndices = _allChannelIndices;
                 }
                 else
                 {
-                    return new List<LiveStream>();
+                    candidateIndices = GetSelectedCategoryIndices();
                 }
             }
 

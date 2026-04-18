@@ -9,7 +9,7 @@ using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer.Helpers
 {
-    public static class TitleHelper
+    public static partial class TitleHelper
     {
         // NO GLOBAL UNBOUNDED CACHE (Project Zero Phase 2)
         // Static caches removed to prevent heap bloat with large playlists.
@@ -23,7 +23,6 @@ namespace ModernIPTVPlayer.Helpers
             "the", "a", "an", "der", "die", "das", "le", "la", "les", "el", "la", "los", "las", 
             "of", "and", "in", "or", "to", "for", "with", "from", "at", "by", "on", "as", "is", "it", "its" 
         };
-        private static readonly Regex YearRegex = new Regex(@"\b(19|20)\d{2}\b", RegexOptions.Compiled);
 
         /// <summary>
         /// Robustly compares two titles using token-based fuzzy matching.
@@ -169,17 +168,14 @@ namespace ModernIPTVPlayer.Helpers
             if (title.Length > 10000) AppLogger.Warn($"[TitleDebug] Unusually long title for Normalize: {title.Length} chars.");
 
             // 1. Initial Regex Cleaning (still necessary for complex patterns)
-            string cleaned = Regex.Replace(title, @"^.{1,4}\s*[:\-\|]\s*", " ", RegexOptions.IgnoreCase);
-            cleaned = Regex.Replace(cleaned, @"\[.*?\]|\(.*?\)", " ");
+            string cleaned = PrefixRegex().Replace(title, " ");
+            cleaned = BracketContentRegex().Replace(cleaned, " ");
             
-            const string langPattern = @"\b(TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR|NF|IR|GR|EN|US|UK|CA|AU)\b";
-            cleaned = Regex.Replace(cleaned, langPattern, " ", RegexOptions.IgnoreCase);
+            cleaned = IptvLangRegex().Replace(cleaned, " ");
 
-            const string adultPattern = @"\b(XXX|ADULT|PORN|PURN|MATURE|NSFW|HENTAI|JAV|PVR|EROTIC|SEX|SEKS)\b";
-            cleaned = Regex.Replace(cleaned, adultPattern, " ", RegexOptions.IgnoreCase);
+            cleaned = AdultTagRegex().Replace(cleaned, " ");
 
-            const string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|REPACK|EXTENDED|DIRECTORS)\b";
-            cleaned = Regex.Replace(cleaned, techPattern, " ", RegexOptions.IgnoreCase);
+            cleaned = TechTagRegex().Replace(cleaned, " ");
 
             // 2. High-Performance Span Filtering
             string normalized = cleaned.Normalize(NormalizationForm.FormD);
@@ -215,17 +211,15 @@ namespace ModernIPTVPlayer.Helpers
             if (string.IsNullOrEmpty(title)) return string.Empty;
 
             // 1. Strip Common IPTV Prefixes (e.g. "TR - ", "4K | ")
-            string cleaned = Regex.Replace(title, @"^.{1,4}\s*[:\-\|]\s*", " ", RegexOptions.IgnoreCase);
+            string cleaned = PrefixRegex().Replace(title, " ");
 
             // 2. Strip brackets/parentheses and their content
-            cleaned = Regex.Replace(cleaned, @"\[.*?\]|\(.*?\)", " ");
+            cleaned = BracketContentRegex().Replace(cleaned, " ");
             
             // 3. Strip Tech/Language Tags (Keep as words)
-            string langPattern = @"\b(TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR|NF|IR|GR|EN|US|UK|CA|AU)\b";
-            cleaned = Regex.Replace(cleaned, langPattern, " ", RegexOptions.IgnoreCase);
+            cleaned = IptvLangRegex().Replace(cleaned, " ");
 
-            string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|REPACK|EXTENDED|DIRECTORS)\b";
-            cleaned = Regex.Replace(cleaned, techPattern, " ", RegexOptions.IgnoreCase);
+            cleaned = TechTagRegex().Replace(cleaned, " ");
 
             // 4. Strip non-alphanumeric except spaces
             var sb = new StringBuilder();
@@ -235,7 +229,7 @@ namespace ModernIPTVPlayer.Helpers
                 else sb.Append(' ');
             }
 
-            return Regex.Replace(sb.ToString(), @"\s+", " ").Trim().ToLowerInvariant();
+            return WhitespaceRegex().Replace(sb.ToString(), " ").Trim().ToLowerInvariant();
         }
 
         public static HashSet<string> GetSignificantTokens(string title)
@@ -253,17 +247,15 @@ namespace ModernIPTVPlayer.Helpers
         private static HashSet<string> GetSignificantTokensInternal(string title, bool includeComposite)
         {
             // 1. Strip technical and language tags completely before tokenizing
-            string cleaned = Regex.Replace(title, @"\[.*?\]|\(.*?\)", " ");
+            string cleaned = BracketContentRegex().Replace(title, " ");
             
             // Remove common IPTV country/source prefixes at the start (e.g., "IL - ", "TR | ")
-            cleaned = Regex.Replace(cleaned, @"^.{1,4}\s*[:\-\|]\s*", " ", RegexOptions.IgnoreCase);
+            cleaned = PrefixRegex().Replace(cleaned, " ");
 
             // [FIX] Removed "NO" from language list because it's a common word in English titles
-            string langPattern = @"\b(IL|TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR)\b\s*[:\-\|]?\s*";
-            cleaned = Regex.Replace(cleaned, langPattern, " ", RegexOptions.IgnoreCase);
+            cleaned = TokenLangRegex().Replace(cleaned, " ");
 
-            string techPattern = @"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|XXX|ADULT|PORN)\b";
-            cleaned = Regex.Replace(cleaned, techPattern, " ", RegexOptions.IgnoreCase);
+            cleaned = TokenTechTagRegex().Replace(cleaned, " ");
 
             // 2. Unicode decomposition to handle accents
             cleaned = cleaned.Normalize(NormalizationForm.FormD);
@@ -280,7 +272,7 @@ namespace ModernIPTVPlayer.Helpers
             var words = sb.ToString().Replace("İ", "i").Replace("I", "i").ToLowerInvariant()
                           .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
 
-            var tokens = words.Where(w => !Articles.Contains(w) && !YearRegex.IsMatch(w) && (w.Length > 1 || (w.Length == 1 && (char.IsDigit(w[0]) || IsRomanNumeral(w)))))
+            var tokens = words.Where(w => !Articles.Contains(w) && !YearRegex().IsMatch(w) && (w.Length > 1 || (w.Length == 1 && (char.IsDigit(w[0]) || IsRomanNumeral(w)))))
                         .ToHashSet();
 
             if (includeComposite && tokens.Count > 1 && tokens.Count <= 3)
@@ -323,18 +315,54 @@ namespace ModernIPTVPlayer.Helpers
             }
 
             // 2. Bracketed year: (2024), [2024]
-            var bracketMatch = Regex.Match(input, @"[\(\[]\s*((?:19|20)\d{2})\s*[\)\]]");
+            var bracketMatch = BracketYearRegex().Match(input);
             if (bracketMatch.Success) return bracketMatch.Groups[1].Value;
 
             // 3. Year at the end or after a separator: "Title - 2024" or "Title: 2024"
-            var suffixMatch = Regex.Match(input, @"[:\-]\s*((?:19|20)\d{2})\b");
+            var suffixMatch = SuffixYearRegex().Match(input);
             if (suffixMatch.Success) return suffixMatch.Groups[1].Value;
 
             // 4. Standalone 4-digit year: "Title 2024 Subtitle"
-            var standaloneMatch = Regex.Match(input, @"\b((?:19|20)\d{2})\b");
+            var standaloneMatch = StandaloneYearRegex().Match(input);
             if (standaloneMatch.Success) return standaloneMatch.Groups[1].Value;
 
             return "";
         }
+
+        [GeneratedRegex(@"\b(19|20)\d{2}\b")]
+        private static partial Regex YearRegex();
+
+        [GeneratedRegex(@"^.{1,4}\s*[:\-\|]\s*", RegexOptions.IgnoreCase)]
+        private static partial Regex PrefixRegex();
+
+        [GeneratedRegex(@"\[.*?\]|\(.*?\)")]
+        private static partial Regex BracketContentRegex();
+
+        [GeneratedRegex(@"\b(TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR|NF|IR|GR|EN|US|UK|CA|AU)\b", RegexOptions.IgnoreCase)]
+        private static partial Regex IptvLangRegex();
+
+        [GeneratedRegex(@"\b(IL|TR|ENG|TUR|GER|FRA|IT|ES|DE|FR|PL|RO|RU|AR|PT|BR|HE|NL|HI|ZH|JA|KO|SV|FI|DA|CS|HU|SK|EL|VI|TH|ID|MS|FA|UK|KA|AZ|BE|ET|LV|LT|MK|SQ|SR|HR|BS|SL|IS|AF|ZU|XH|ST|TN|SS|NR)\b\s*[:\-\|]?\s*", RegexOptions.IgnoreCase)]
+        private static partial Regex TokenLangRegex();
+
+        [GeneratedRegex(@"\b(XXX|ADULT|PORN|PURN|MATURE|NSFW|HENTAI|JAV|PVR|EROTIC|SEX|SEKS)\b", RegexOptions.IgnoreCase)]
+        private static partial Regex AdultTagRegex();
+
+        [GeneratedRegex(@"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|REPACK|EXTENDED|DIRECTORS)\b", RegexOptions.IgnoreCase)]
+        private static partial Regex TechTagRegex();
+
+        [GeneratedRegex(@"\b(4K|2K|FHD|HD|SD|1080p|720p|480p|BluRay|BRRip|DVDRip|WebRip|Web-DL|x264|x265|h264|h265|HEVC|HDR|Dual|Multi|UHD|10BIT|8BIT|XXX|ADULT|PORN)\b", RegexOptions.IgnoreCase)]
+        private static partial Regex TokenTechTagRegex();
+
+        [GeneratedRegex(@"\s+")]
+        private static partial Regex WhitespaceRegex();
+
+        [GeneratedRegex(@"[\(\[]\s*((?:19|20)\d{2})\s*[\)\]]")]
+        private static partial Regex BracketYearRegex();
+
+        [GeneratedRegex(@"[:\-]\s*((?:19|20)\d{2})\b")]
+        private static partial Regex SuffixYearRegex();
+
+        [GeneratedRegex(@"\b((?:19|20)\d{2})\b")]
+        private static partial Regex StandaloneYearRegex();
     }
 }

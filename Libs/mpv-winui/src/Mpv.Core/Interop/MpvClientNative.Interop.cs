@@ -107,7 +107,7 @@ public partial class MpvClientNative
     private static partial void mpv_wakeup(MpvHandle handle);
 
     [LibraryImport(MpvIdentifier)]
-    private static partial void mpv_set_wakeup_callback(MpvHandle handle, MpvWakeupCallback<IntPtr> callback, IntPtr data);
+    private static partial void mpv_set_wakeup_callback(MpvHandle handle, MpvWakeupCallback callback, IntPtr data);
 
     [LibraryImport(MpvIdentifier)]
     private static partial void mpv_wait_async_requests(MpvHandle handle);
@@ -128,6 +128,6 @@ public partial class MpvClientNative
 
     #region Delegate
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-    public delegate void MpvWakeupCallback<in T>(T data);
+    public delegate void MpvWakeupCallback(IntPtr data);
     #endregion
 }

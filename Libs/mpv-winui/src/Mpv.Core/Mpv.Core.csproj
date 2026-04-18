@@ -3,7 +3,7 @@
     <PropertyGroup>
         <AssemblyName>Richasy.Mpv.Core</AssemblyName>
         <RootNamespace>Richasy.Mpv</RootNamespace>
-        <TargetFramework>net8.0</TargetFramework>
+        <TargetFramework>net11.0</TargetFramework>
         <LangVersion>latest</LangVersion>
         <Nullable>enable</Nullable>
         <Platforms>x86;x64;ARM64</Platforms>

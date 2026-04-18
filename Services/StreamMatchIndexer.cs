@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using ModernIPTVPlayer.Helpers;
@@ -11,18 +10,23 @@ namespace ModernIPTVPlayer.Services
 {
     /// <summary>
     /// Project Zero Persistent Match Indexer.
-    /// Maps significant title tokens to local stream IDs for instant library matching.
+    /// Maps significant title tokens to local record indices for instant library matching.
     /// </summary>
     public class StreamMatchIndexer
     {
         private Dictionary<string, int[]> _tokenMap = new(StringComparer.OrdinalIgnoreCase);
-        private Dictionary<string, int[]> _idMap = new(StringComparer.OrdinalIgnoreCase); // IMDbId -> StreamIds[]
+        private Dictionary<string, int[]> _idMap = new(StringComparer.OrdinalIgnoreCase); // IMDbId -> record indices
+        private const int CurrentVersion = 5;
+        private const int MaxIndexKeys = 1_000_000;
+        private const int MaxIndicesPerKey = 1_000_000;
         private readonly object _syncRoot = new();
         private long _sourceFingerprint = 0;
         private bool _isLoaded = false;
 
         public bool IsLoaded => _isLoaded;
         public long SourceFingerprint => _sourceFingerprint;
+        public int TokenCount { get { lock (_syncRoot) return _tokenMap.Count; } }
+        public int IdCount { get { lock (_syncRoot) return _idMap.Count; } }
 
         /// <summary>
         /// Builds the index from a collection of streams using TitleHelper normalization.
@@ -66,7 +70,7 @@ namespace ModernIPTVPlayer.Services
             Commit(rawTokenMap, rawIdMap, fingerprint);
         }
 
-        public unsafe void Build(VirtualVodList vvl)
+        public void Build(VirtualVodList vvl)
         {
             var rawTokenMap = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
             var rawIdMap = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
@@ -74,31 +78,30 @@ namespace ModernIPTVPlayer.Services
             
             for (int i = 0; i < vvl.Count; i++)
             {
-                var record = session.GetRecordPointer<Models.Metadata.VodRecord>(i);
-                if (record == null) continue;
+                if (!session.TryReadRecord<Models.Metadata.VodRecord>(i, out var record)) continue;
 
                 // 1. IMDb ID
-                string imdb = session.GetString(record->ImdbIdOff, record->ImdbIdLen);
+                string imdb = session.GetString(record.ImdbIdOff, record.ImdbIdLen);
                 if (!string.IsNullOrEmpty(imdb))
                 {
                     if (!rawIdMap.TryGetValue(imdb, out var idList)) rawIdMap[imdb] = idList = new List<int>();
-                    idList.Add(record->StreamId);
+                    idList.Add(i);
                 }
 
                 // 2. Title
-                string name = session.GetString(record->NameOff, record->NameLen);
+                string name = session.GetString(record.NameOff, record.NameLen);
                 var tokens = TitleHelper.GetSignificantTokens(name);
                 foreach (var token in tokens)
                 {
                     if (!rawTokenMap.TryGetValue(token, out var list)) rawTokenMap[token] = list = new List<int>();
-                    list.Add(record->StreamId);
+                    list.Add(i);
                 }
             }
 
             Commit(rawTokenMap, rawIdMap, vvl.Fingerprint);
         }
 
-        public unsafe void Build(VirtualSeriesList vsl)
+        public void Build(VirtualSeriesList vsl)
         {
             var rawTokenMap = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
             var rawIdMap = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
@@ -106,24 +109,23 @@ namespace ModernIPTVPlayer.Services
 
             for (int i = 0; i < vsl.Count; i++)
             {
-                var record = session.GetRecordPointer<Models.Metadata.SeriesRecord>(i);
-                if (record == null) continue;
+                if (!session.TryReadRecord<Models.Metadata.SeriesRecord>(i, out var record)) continue;
 
                 // 1. IMDb ID
-                string imdb = session.GetString(record->ImdbIdOff, record->ImdbIdLen);
+                string imdb = session.GetString(record.ImdbIdOff, record.ImdbIdLen);
                 if (!string.IsNullOrEmpty(imdb))
                 {
                     if (!rawIdMap.TryGetValue(imdb, out var idList)) rawIdMap[imdb] = idList = new List<int>();
-                    idList.Add(record->SeriesId);
+                    idList.Add(i);
                 }
 
                 // 2. Name
-                string name = session.GetString(record->NameOff, record->NameLen);
+                string name = session.GetString(record.NameOff, record.NameLen);
                 var tokens = TitleHelper.GetSignificantTokens(name);
                 foreach (var token in tokens)
                 {
                     if (!rawTokenMap.TryGetValue(token, out var list)) rawTokenMap[token] = list = new List<int>();
-                    list.Add(record->SeriesId);
+                    list.Add(i);
                 }
             }
 
@@ -134,11 +136,41 @@ namespace ModernIPTVPlayer.Services
         {
             lock (_syncRoot)
             {
-                _tokenMap = rawTokenMap.ToDictionary(k => k.Key, v => v.Value.Distinct().ToArray(), StringComparer.OrdinalIgnoreCase);
-                _idMap = rawIdMap.ToDictionary(k => k.Key, v => v.Value.Distinct().ToArray(), StringComparer.OrdinalIgnoreCase);
+                _tokenMap = PackIndex(rawTokenMap);
+                _idMap = PackIndex(rawIdMap);
                 _sourceFingerprint = fingerprint;
                 _isLoaded = true;
             }
+        }
+
+        private static Dictionary<string, int[]> PackIndex(Dictionary<string, List<int>> raw)
+        {
+            var packed = new Dictionary<string, int[]>(raw.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in raw)
+            {
+                int[] values = kvp.Value.ToArray();
+                if (values.Length > 1)
+                {
+                    Array.Sort(values);
+                    int unique = 1;
+                    for (int i = 1; i < values.Length; i++)
+                    {
+                        if (values[i] != values[unique - 1])
+                        {
+                            values[unique++] = values[i];
+                        }
+                    }
+
+                    if (unique != values.Length)
+                    {
+                        Array.Resize(ref values, unique);
+                    }
+                }
+
+                packed[kvp.Key] = values;
+            }
+
+            return packed;
         }
 
         /// <summary>
@@ -150,6 +182,38 @@ namespace ModernIPTVPlayer.Services
             lock (_syncRoot)
             {
                 return _idMap.TryGetValue(imdbId, out int[] ids) ? ids : Array.Empty<int>();
+            }
+        }
+
+        public int[] FindByToken(string? token)
+        {
+            if (string.IsNullOrEmpty(token) || !_isLoaded) return Array.Empty<int>();
+            lock (_syncRoot)
+            {
+                return _tokenMap.TryGetValue(token, out int[] ids) ? ids : Array.Empty<int>();
+            }
+        }
+
+        public void AddId(string imdbId, int recordIndex)
+        {
+            if (string.IsNullOrWhiteSpace(imdbId) || recordIndex < 0) return;
+
+            lock (_syncRoot)
+            {
+                if (!_idMap.TryGetValue(imdbId, out var ids))
+                {
+                    _idMap[imdbId] = new[] { recordIndex };
+                    _isLoaded = true;
+                    return;
+                }
+
+                if (Array.IndexOf(ids, recordIndex) >= 0) return;
+
+                var updated = new int[ids.Length + 1];
+                Array.Copy(ids, updated, ids.Length);
+                updated[ids.Length] = recordIndex;
+                Array.Sort(updated);
+                _idMap[imdbId] = updated;
             }
         }
 
@@ -172,14 +236,37 @@ namespace ModernIPTVPlayer.Services
                         return Array.Empty<int>();
                     }
 
-                    if (result == null) result = ids;
-                    else result = result.Intersect(ids).ToArray();
+                    result = result == null ? ids : IntersectSorted(result, ids);
 
                     if (result.Length == 0) break;
                 }
             }
 
             return result ?? Array.Empty<int>();
+        }
+
+        private static int[] IntersectSorted(int[] left, int[] right)
+        {
+            if (left.Length == 0 || right.Length == 0) return Array.Empty<int>();
+
+            var result = new List<int>(Math.Min(left.Length, right.Length));
+            int i = 0;
+            int j = 0;
+            while (i < left.Length && j < right.Length)
+            {
+                int a = left[i];
+                int b = right[j];
+                if (a == b)
+                {
+                    result.Add(a);
+                    i++;
+                    j++;
+                }
+                else if (a < b) i++;
+                else j++;
+            }
+
+            return result.Count == 0 ? Array.Empty<int>() : result.ToArray();
         }
 
         /// <summary>
@@ -197,7 +284,7 @@ namespace ModernIPTVPlayer.Services
 
                     // Header
                     bw.Write(0x4D5A4958); // 'MZIX'
-                    bw.Write(4);          // Version 4 (Multi-source IMDb ID support)
+                    bw.Write(CurrentVersion);
                     bw.Write(_sourceFingerprint);
                     
                     // 1. Token Map
@@ -230,61 +317,69 @@ namespace ModernIPTVPlayer.Services
 
             try
             {
-                await Task.Run(() =>
-                {
-                    using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
-                    using var br = new BinaryReader(fs, Encoding.UTF8);
-
-                    if (br.ReadInt32() != 0x4D5A4958) return;
-                    int version = br.ReadInt32();
-                    long loadedFingerprint = (version >= 3) ? br.ReadInt64() : 0;
-                    
-                    // Load Token Map
-                    int tokenCount = br.ReadInt32();
-                    var newTokenMap = new Dictionary<string, int[]>(tokenCount, StringComparer.OrdinalIgnoreCase);
-                    for (int i = 0; i < tokenCount; i++)
-                    {
-                        string token = br.ReadString();
-                        int idCount = br.ReadInt32();
-                        int[] ids = new int[idCount];
-                        for (int j = 0; j < idCount; j++) ids[j] = br.ReadInt32();
-                        newTokenMap[token] = ids;
-                    }
-
-                    // Load ID Map (Version 2+)
-                    var newIdMap = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
-                    if (version >= 2)
-                    {
-                        int idCount = br.ReadInt32();
-                        for (int i = 0; i < idCount; i++)
-                        {
-                            string imdbId = br.ReadString();
-                            if (version >= 4)
-                            {
-                                int subCount = br.ReadInt32();
-                                int[] subIds = new int[subCount];
-                                for (int j = 0; j < subCount; j++) subIds[j] = br.ReadInt32();
-                                newIdMap[imdbId] = subIds;
-                            }
-                            else
-                            {
-                                int streamId = br.ReadInt32();
-                                newIdMap[imdbId] = new[] { streamId };
-                            }
-                        }
-                    }
-
-                    lock (_syncRoot)
-                    {
-                        _tokenMap = newTokenMap;
-                        _idMap = newIdMap;
-                        _sourceFingerprint = loadedFingerprint;
-                        _isLoaded = true;
-                    }
-                });
-                return true;
+                return await Task.Run(() => LoadCore(filePath));
             }
-            catch { return false; }
+            catch (Exception ex)
+            {
+                AppLogger.Warn($"[MatchIndex] Failed to load index '{Path.GetFileName(filePath)}': {ex.Message}");
+                return false;
+            }
+        }
+
+        private bool LoadCore(string filePath)
+        {
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var br = new BinaryReader(fs, Encoding.UTF8);
+
+            if (br.ReadInt32() != 0x4D5A4958) return false;
+            int version = br.ReadInt32();
+            if (version != CurrentVersion) return false;
+
+            long loadedFingerprint = br.ReadInt64();
+
+            if (!TryReadCount(br, MaxIndexKeys, "token keys", out int tokenCount)) return false;
+            var newTokenMap = new Dictionary<string, int[]>(tokenCount, StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < tokenCount; i++)
+            {
+                string token = br.ReadString();
+                if (!TryReadCount(br, MaxIndicesPerKey, "token indices", out int idCount)) return false;
+
+                int[] ids = new int[idCount];
+                for (int j = 0; j < idCount; j++) ids[j] = br.ReadInt32();
+                newTokenMap[token] = ids;
+            }
+
+            if (!TryReadCount(br, MaxIndexKeys, "id keys", out int imdbCount)) return false;
+            var newIdMap = new Dictionary<string, int[]>(imdbCount, StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < imdbCount; i++)
+            {
+                string imdbId = br.ReadString();
+                if (!TryReadCount(br, MaxIndicesPerKey, "id indices", out int subCount)) return false;
+
+                int[] subIds = new int[subCount];
+                for (int j = 0; j < subCount; j++) subIds[j] = br.ReadInt32();
+                newIdMap[imdbId] = subIds;
+            }
+
+            lock (_syncRoot)
+            {
+                _tokenMap = newTokenMap;
+                _idMap = newIdMap;
+                _sourceFingerprint = loadedFingerprint;
+                _isLoaded = true;
+            }
+
+            return true;
+        }
+
+        private static bool TryReadCount(BinaryReader br, int max, string label, out int count)
+        {
+            count = br.ReadInt32();
+            if ((uint)count <= (uint)max) return true;
+
+            AppLogger.Warn($"[MatchIndex] Invalid {label} count in binary index: {count}");
+            count = 0;
+            return false;
         }
 
         public void Clear()
@@ -298,14 +393,5 @@ namespace ModernIPTVPlayer.Services
             }
         }
 
-        public Dictionary<string, int[]> GetTokenMap()
-        {
-            lock (_syncRoot) return new Dictionary<string, int[]>(_tokenMap, StringComparer.OrdinalIgnoreCase);
-        }
-
-        public Dictionary<string, int[]> GetIdMap()
-        {
-            lock (_syncRoot) return new Dictionary<string, int[]>(_idMap, StringComparer.OrdinalIgnoreCase);
-        }
     }
 }

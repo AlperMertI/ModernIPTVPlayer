@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.IO.MemoryMappedFiles;
 using System.Linq;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -44,11 +45,6 @@ namespace ModernIPTVPlayer.Services
         // **NEW: RAM Cache for Full Stream Lists (VOD/Series/Live)**
         private ConcurrentDictionary<string, object> _streamListsCache = new();
 
-        // **NEW: RAM Cache for Live Streams (instant re-navigation)**
-        // Key: playlistId, Value: (Streams, Categories, Timestamp)
-        private ConcurrentDictionary<string, (IReadOnlyList<LiveStream> Streams, IReadOnlyList<LiveCategory> Categories, DateTime Timestamp)> _liveRamCache = new();
-        private const int RAM_CACHE_TTL_MINUTES = 60; // Invalidate after 60 minutes
-
         private CancellationTokenSource _syncCts;
         private readonly StreamMatchIndexer _vodMatchIndex = new();
         private readonly StreamMatchIndexer _seriesMatchIndex = new();
@@ -83,6 +79,7 @@ namespace ModernIPTVPlayer.Services
         
         private readonly SemaphoreSlim _diskSemaphore = new(1, 1);
         private readonly SemaphoreSlim _indexRefreshSemaphore = new(1, 1);
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _binaryWriteSemaphores = new(StringComparer.Ordinal);
 
         /// <summary>
         /// PROJECT ZERO: Surgical In-Place Patching.
@@ -106,11 +103,12 @@ namespace ModernIPTVPlayer.Services
                 // Surgical Patching Fix: Use single BinaryCacheSession
                 int count, version, bufferLen;
                 using (var mmf = BinaryCacheSession.OpenMemoryMappedFile(file.Path, MemoryMappedFileAccess.Read))
-                using (var accessor = mmf.CreateViewAccessor(0, 32, MemoryMappedFileAccess.Read))
+                using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
-                    version = accessor.ReadInt32(4);
-                    count = accessor.ReadInt32(8);
-                    bufferLen = accessor.ReadInt32(12);
+                    var header = BinaryCacheLayout.ReadHeader(accessor);
+                    version = header.Version;
+                    count = header.Count;
+                    bufferLen = header.StringsLength;
                 }
 
                 if (version < 2) 
@@ -120,9 +118,9 @@ namespace ModernIPTVPlayer.Services
                 }
 
                 int recordSize = isSeries ? Marshal.SizeOf<Models.Metadata.SeriesRecord>() : Marshal.SizeOf<Models.Metadata.VodRecord>();
-                long recordsOffset = 32;
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
                 long indexOffset = recordsOffset + (count * (long)recordSize);
-                long stringsOffset = isSeries ? indexOffset : indexOffset + (count * 8L);
+                long stringsOffset = isSeries ? indexOffset : indexOffset + (count * (long)BinaryCacheLayout.VodIndexEntrySize);
 
                 using var session = new BinaryCacheSession(file.Path, stringsOffset, bufferLen, recordsOffset, count, recordSize, readOnlySession: false);
 
@@ -160,6 +158,8 @@ namespace ModernIPTVPlayer.Services
                         if (isSeries)
                         {
                             var recordPtr = session.GetRecordPointer<Models.Metadata.SeriesRecord>(i);
+                            if (recordPtr == null) continue;
+
                             string currentImdb = session.GetString(recordPtr->ImdbIdOff, recordPtr->ImdbIdLen);
                             
                             if (currentImdb == imdbId && !string.IsNullOrEmpty(imdbId)) isMatch = true;
@@ -197,6 +197,8 @@ namespace ModernIPTVPlayer.Services
                         else
                         {
                             var recordPtr = session.GetRecordPointer<Models.Metadata.VodRecord>(i);
+                            if (recordPtr == null) continue;
+
                             string currentImdb = session.GetString(recordPtr->ImdbIdOff, recordPtr->ImdbIdLen);
                             
                             isMatch = (currentImdb == imdbId && !string.IsNullOrEmpty(imdbId));
@@ -329,46 +331,43 @@ namespace ModernIPTVPlayer.Services
                 var file = await folder.GetFileAsync(fileName);
                 int count, bufferLen, version;
                 using (var mmf = BinaryCacheSession.OpenMemoryMappedFile(file.Path, MemoryMappedFileAccess.Read))
-                using (var acc = mmf.CreateViewAccessor(0, 32, MemoryMappedFileAccess.Read))
+                using (var acc = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
-                    int magic = acc.ReadInt32(0);
-                    if (magic != (isSeries ? 0x53455244 : 0x564F4444)) return results;
-                    version = acc.ReadInt32(4);
+                    var header = BinaryCacheLayout.ReadHeader(acc);
+                    if (header.Magic != (isSeries ? BinaryCacheLayout.SeriesMagic : BinaryCacheLayout.VodMagic)) return results;
+                    version = header.Version;
                     if (version < 2) return results;
-                    count = acc.ReadInt32(8);
-                    bufferLen = acc.ReadInt32(12);
+                    count = header.Count;
+                    bufferLen = header.StringsLength;
                 }
 
                 if (count <= 0) return results;
 
                 int recordSize = isSeries ? Marshal.SizeOf<Models.Metadata.SeriesRecord>() : Marshal.SizeOf<Models.Metadata.VodRecord>();
-                long recordsOffset = 32;
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
                 long stringsOffset = isSeries
                     ? recordsOffset + (count * (long)recordSize)
-                    : recordsOffset + (count * (long)recordSize) + (count * 8L);
+                    : recordsOffset + (count * (long)recordSize) + (count * (long)BinaryCacheLayout.VodIndexEntrySize);
 
                 using var session = new BinaryCacheSession(file.Path, stringsOffset, bufferLen, recordsOffset, count, recordSize, readOnlySession: true);
-                unsafe
+                if (isSeries)
                 {
-                    if (isSeries)
+                    for (int i = 0; i < count; i++)
                     {
-                        for (int i = 0; i < count; i++)
-                        {
-                            var p = session.GetRecordPointer<Models.Metadata.SeriesRecord>(i);
-                            if (p == null) continue;
-                            string name = session.GetString(p->NameOff, p->NameLen);
-                            if (TitleContainsBaseToken(name, token)) results.Add(i);
-                        }
+                        if (!session.TryReadRecord<Models.Metadata.SeriesRecord>(i, out var record)) continue;
+
+                        string name = session.GetString(record.NameOff, record.NameLen);
+                        if (TitleContainsBaseToken(name, token)) results.Add(i);
                     }
-                    else
+                }
+                else
+                {
+                    for (int i = 0; i < count; i++)
                     {
-                        for (int i = 0; i < count; i++)
-                        {
-                            var p = session.GetRecordPointer<Models.Metadata.VodRecord>(i);
-                            if (p == null) continue;
-                            string name = session.GetString(p->NameOff, p->NameLen);
-                            if (TitleContainsBaseToken(name, token)) results.Add(i);
-                        }
+                        if (!session.TryReadRecord<Models.Metadata.VodRecord>(i, out var record)) continue;
+
+                        string name = session.GetString(record.NameOff, record.NameLen);
+                        if (TitleContainsBaseToken(name, token)) results.Add(i);
                     }
                 }
 
@@ -391,7 +390,6 @@ namespace ModernIPTVPlayer.Services
                 {
                     AppLogger.Info($"[ContentCache] Login detected for {login.PlaylistName}. Triggering background sync.");
                     _ = SyncPlaylistAsync(login);
-                    _ = RefreshIptvMatchIndexAsync();
                 }
             };
 
@@ -416,7 +414,6 @@ namespace ModernIPTVPlayer.Services
                     await Task.Delay(1000);
 
                     System.Diagnostics.Debug.WriteLine("[BackgroundSync] Triggering initial index refresh...");
-                    await RefreshIptvMatchIndexAsync();
                 }
                 catch (Exception ex)
                 {
@@ -534,152 +531,7 @@ namespace ModernIPTVPlayer.Services
             }
         }
 
-        public async Task RefreshIptvMatchIndexAsync(string? playlistId = null)
-        {
-            var login = App.CurrentLogin;
-            if (login == null) return;
-            string targetId = playlistId ?? login.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
-            string cid = LifecycleLog.NewId("idx");
-            using var lifecycle = LifecycleLog.Begin("Index.Refresh.Legacy", cid, new Dictionary<string, object?>
-            {
-                ["playlistId"] = targetId,
-                ["source"] = "RefreshIptvMatchIndexAsync(string?)"
-            });
 
-            await _indexRefreshSemaphore.WaitAsync();
-            try
-            {
-                var swTotal = System.Diagnostics.Stopwatch.StartNew();
-                System.Diagnostics.Debug.WriteLine($"[ContentCache] RefreshIptvMatchIndexAsync STARTED for {targetId} at {DateTime.Now}");
-
-                await Task.Run(async () => {
-                    IsIndexing = true;
-                    AppLogger.Info($"[Index] Refreshing Global Index (Project Zero) for Playlist: {targetId}");
-                    try
-                    {
-                    // 1. Get Current Hashes
-                    string vodHash = await ReadTextAsync($"cache_{targetId}_vod.json.gz" + HASH_EXT) ?? "";
-                    string seriesHash = await ReadTextAsync($"cache_{targetId}_series.json.gz" + HASH_EXT) ?? "";
-
-                    // 2. Load lists (necessary for mapping)
-                    var vods = await LoadCacheAsync<VodStream>(targetId, "vod") ?? new List<VodStream>();
-                    var series = await LoadCacheAsync<SeriesStream>(targetId, "series") ?? new List<SeriesStream>();
-                    lifecycle.Step("data_loaded", new Dictionary<string, object?> { ["vodCount"] = vods.Count, ["seriesCount"] = series.Count });
-
-                    if (vods.Count == 0 && series.Count == 0) return;
-
-                    // 3. Try Binary Load
-                    var result = await LoadMatchIndexBinaryAsync(targetId, vodHash, seriesHash, vods, series);
-                    if (result.Success)
-                    {
-                        lifecycle.Step("binary_loaded", new Dictionary<string, object?>
-                        {
-                            ["imdbKeys"] = result.Index?.ImdbIndex?.Count ?? 0,
-                            ["tokenKeys"] = result.Index?.TokenIndex?.Count ?? 0
-                        });
-                        AppLogger.Info($"[Index] Project Zero Binary Index Loaded!");
-                        return;
-                    }
-
-                    AppLogger.Warn($"[Index] Building Index from scratch (Project Zero Build)...");
-                    
-                    // 4. Build Index (thread-safe aggregation + deterministic merge)
-                    var persistImdb = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-                    var persistToken = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-                    var mergeLock = new object();
-
-                    void ProcessItems(IReadOnlyList<IMediaStream> items, bool isSeriesType)
-                    {
-                        System.Threading.Tasks.Parallel.ForEach(System.Linq.Enumerable.Range(0, items.Count),
-                            () => (
-                                Imdb: new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase),
-                                Token: new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase)
-                            ),
-                            (idx, _, local) =>
-                        {
-                            var item = items[idx];
-                            int packedIdx = isSeriesType ? -(idx + 1) : idx;
-
-                            if (!string.IsNullOrEmpty(item.IMDbId))
-                            {
-                                string norm = item.IMDbId.Contains(":") ? item.IMDbId.Split(':').Last() : item.IMDbId;
-                                if (!local.Imdb.TryGetValue(norm, out var list))
-                                {
-                                    list = new List<int>(1);
-                                    local.Imdb[norm] = list;
-                                }
-                                list.Add(packedIdx);
-                            }
-
-                            if (!string.IsNullOrEmpty(item.Title))
-                            {
-                                var tokens = TitleHelper.GetSignificantTokens(item.Title);
-                                foreach (var t in tokens)
-                                {
-                                    if (!local.Token.TryGetValue(t, out var list))
-                                    {
-                                        list = new List<int>(1);
-                                        local.Token[t] = list;
-                                    }
-                                    list.Add(packedIdx);
-                                }
-                            }
-                            return local;
-                        },
-                        local =>
-                        {
-                            lock (mergeLock)
-                            {
-                                foreach (var kvp in local.Imdb)
-                                {
-                                    if (!persistImdb.TryGetValue(kvp.Key, out var list)) persistImdb[kvp.Key] = kvp.Value;
-                                    else list.AddRange(kvp.Value);
-                                }
-                                foreach (var kvp in local.Token)
-                                {
-                                    if (!persistToken.TryGetValue(kvp.Key, out var list)) persistToken[kvp.Key] = kvp.Value;
-                                    else list.AddRange(kvp.Value);
-                                }
-                            }
-                        });
-                    }
-
-                    ProcessItems(vods, false);
-                    ProcessItems(series, true);
-
-                    // 5. Binary Save (Atomic & Streamed)
-                    await SaveMatchIndexBinaryOptimizedAsync(targetId, vodHash, seriesHash, persistImdb, persistToken);
-
-                    // 6. Update Runtime Service (Direct to ID-Only)
-                    // PERFORMANCE: Pre-allocate and build directly to avoid doubling RAM with .ToDictionary copies
-                    var imdbRun = new Dictionary<string, int[]>(persistImdb.Count, StringComparer.OrdinalIgnoreCase);
-                    foreach (var kvp in persistImdb) imdbRun[kvp.Key] = kvp.Value.ToArray();
-                    persistImdb.Clear(); // Critical: release lists ASAP
-
-                    var tokenRun = new Dictionary<string, int[]>(persistToken.Count, StringComparer.OrdinalIgnoreCase);
-                    foreach (var kvp in persistToken) tokenRun[kvp.Key] = kvp.Value.ToArray();
-                    persistToken.Clear(); // Critical: release lists ASAP
-                    
-                    IptvMatchService.Instance.UpdateIndices(vods, series, imdbRun, tokenRun, cid, "legacy_refresh");
-                    lifecycle.Step("published", new Dictionary<string, object?> { ["imdbKeys"] = imdbRun.Count, ["tokenKeys"] = tokenRun.Count });
-
-                    // Final cleanup hint
-                    GC.Collect(1, GCCollectionMode.Optimized);
-                    }
-                    catch (Exception ex) { AppLogger.Error($"[Index] Refresh Failed", ex); }
-                    finally 
-                    { 
-                        IsIndexing = false; 
-                        lifecycle.Step("finalize", new Dictionary<string, object?> { ["durationMs"] = swTotal.ElapsedMilliseconds });
-                        System.Diagnostics.Debug.WriteLine($"[ContentCache] RefreshIptvMatchIndexAsync COMPLETED in {swTotal.ElapsedMilliseconds}ms");
-                    }
-                });
-            }
-            finally
-            {
-                _indexRefreshSemaphore.Release();
-            }
-        }
 
         public Task SyncPlaylistAsync(LoginParams login)
         {
@@ -728,7 +580,6 @@ namespace ModernIPTVPlayer.Services
             {
                 AppLogger.Info($"[ContentCache] Background Sync: Fetching data for {login.PlaylistName} (VOD: {needsVod}, Series: {needsSeries})");
                 
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 var tasks = new List<Task>();
 
                 if (needsVod)
@@ -737,14 +588,13 @@ namespace ModernIPTVPlayer.Services
                         try
                         {
                             string api = $"{login.Host}/player_api.php?username={login.Username}&password={login.Password}&action=get_vod_streams";
-                            using var stream = await HttpHelper.Client.GetStreamAsync(api);
-                            
-                            var vods = await JsonSerializer.DeserializeAsync<List<VodStream>>(stream, options) ?? new();
-                            if (vods.Count > 0)
-                            {
-                                await SaveCacheAsync(playlistId, "vod", vods);
-                                AppSettings.LastVodCacheTime = DateTime.Now;
-                            }
+                            MemoryTelemetryService.LogCheckpoint("Sync.VOD.fetch.start", $"playlist={playlistId}");
+                            using var response = await HttpHelper.Client.GetAsync(api, HttpCompletionOption.ResponseHeadersRead);
+                            response.EnsureSuccessStatusCode();
+                            await using var stream = await response.Content.ReadAsStreamAsync();
+                            await SaveVodStreamsBinaryFromJsonStreamAsync(playlistId, stream);
+                            AppSettings.LastVodCacheTime = DateTime.Now;
+                            MemoryTelemetryService.LogCheckpoint("Sync.VOD.binary.done", "streamed=true");
                         }
                         catch (Exception ex) { AppLogger.Error("[ContentCache] BG VOD Sync Failed", ex); }
                     }));
@@ -756,16 +606,13 @@ namespace ModernIPTVPlayer.Services
                         try
                         {
                             string api = $"{login.Host}/player_api.php?username={login.Username}&password={login.Password}&action=get_series";
-                            using var stream = await HttpHelper.Client.GetStreamAsync(api);
-                            
-                            var series = await JsonSerializer.DeserializeAsync<List<SeriesStream>>(stream, options) ?? new();
-                            AppLogger.Info($"[ContentCache] Series Deserialized: {series.Count} items.");
-                            
-                            if (series.Count > 0)
-                            {
-                                await SaveCacheAsync(playlistId, "series", series);
-                                AppSettings.LastSeriesCacheTime = DateTime.Now;
-                            }
+                            MemoryTelemetryService.LogCheckpoint("Sync.Series.fetch.start", $"playlist={playlistId}");
+                            using var response = await HttpHelper.Client.GetAsync(api, HttpCompletionOption.ResponseHeadersRead);
+                            response.EnsureSuccessStatusCode();
+                            await using var stream = await response.Content.ReadAsStreamAsync();
+                            await SaveSeriesStreamsBinaryFromJsonStreamAsync(playlistId, stream);
+                            AppSettings.LastSeriesCacheTime = DateTime.Now;
+                            MemoryTelemetryService.LogCheckpoint("Sync.Series.binary.done", "streamed=true");
                         }
                         catch (Exception ex) { AppLogger.Error("[ContentCache] BG Series Sync Failed", ex); }
                     }));
@@ -780,7 +627,6 @@ namespace ModernIPTVPlayer.Services
             // [PROJECT ZERO] Always ensure index is built/refreshed after sync check
             // This ensures search is active even if we didn't need to fetch new data.
             AppLogger.Info($"[Checkpoint] [ContentCache] Phase 3: Activating Search Index...");
-            await RefreshIptvMatchIndexAsync(playlistId, login);
             lifecycle.Step("index_activated");
             
             AppLogger.Info($"[Checkpoint] [ContentCache] Background Sync Cycle FINISHED in {startSw.ElapsedMilliseconds}ms.");
@@ -818,7 +664,7 @@ namespace ModernIPTVPlayer.Services
                 if (_streamListsCache.TryGetValue(cacheKey, out var ram)) return ram as IReadOnlyList<T>;
 
                 // 2. PROJECT ZERO: Binary Redirects
-                if (category.EndsWith("_categories"))
+                if (IsCategoryCache(category))
                 {
                     return await LoadCategoriesBinaryAsync(playlistId, category) as IReadOnlyList<T>;
                 }
@@ -845,154 +691,7 @@ namespace ModernIPTVPlayer.Services
         }
 
         // ==========================================
-        // PROJECT ZERO - BINARY BUNDLE
-        // ==========================================
 
-        public async Task SaveMatchIndexBinaryOptimizedAsync(string playlistId, string vodHash, string seriesHash, Dictionary<string, List<int>> imdb, Dictionary<string, List<int>> token)
-        {
-            string fileName = $"cache_{playlistId}_match_index.bin.gz";
-            string tempName = fileName + ".tmp";
-            await _diskSemaphore.WaitAsync();
-            try
-            {
-                var folder = ApplicationData.Current.LocalFolder;
-                using (var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting))
-                using (var gzip = new GZipStream(fileStream, CompressionLevel.Fastest))
-                using (var writer = new BinaryWriter(gzip, Encoding.UTF8))
-                {
-                    // 1. Header
-                    writer.Write("IPTVB"); // Magic
-                    writer.Write(2); // Version 2 (Packed Indexes)
-                    writer.Write(vodHash ?? "");
-                    writer.Write(seriesHash ?? "");
-
-                    // 3. Indices
-                    WriteBinaryIndexOptimized(writer, imdb);
-                    WriteBinaryIndexOptimized(writer, token);
-                    
-                    writer.Flush();
-                }
-
-                // Atomic Swap
-                var tempFile = await folder.GetFileAsync(tempName);
-                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
-                AppLogger.Info($"[BinarySave] Optimized Index saved to {fileName}.");
-            }
-            catch (Exception ex) { AppLogger.Error("[BinarySave] Index FAILED", ex); }
-            finally { _diskSemaphore.Release(); }
-        }
-
-        private void WriteBinaryIndexOptimized(BinaryWriter writer, Dictionary<string, List<int>> index)
-        {
-            writer.Write(index.Count);
-            foreach (var kvp in index)
-            {
-                writer.Write(kvp.Key);
-                writer.Write(kvp.Value.Count);
-                foreach (var packedIdx in kvp.Value)
-                {
-                    writer.Write(packedIdx);
-                }
-            }
-        }
-
-        public async Task<(bool Success, PersistentIptvIndex Index)> LoadMatchIndexBinaryAsync(string playlistId, string vodHash, string seriesHash, IReadOnlyList<VodStream> vods, IReadOnlyList<SeriesStream> series)
-        {
-            string fileName = $"cache_{playlistId}_match_index.bin.gz";
-            await _diskSemaphore.WaitAsync();
-            try
-            {
-                var folder = ApplicationData.Current.LocalFolder;
-                var item = await folder.TryGetItemAsync(fileName);
-                if (item == null) return (false, null);
-
-                using var stream = await folder.OpenStreamForReadAsync(fileName);
-                using var gzip = new GZipStream(stream, CompressionMode.Decompress);
-                using var reader = new BinaryReader(gzip, Encoding.UTF8);
-
-                if (reader.ReadString() != "IPTVB") return (false, null);
-                int version = reader.ReadInt32();
-                string vHash = reader.ReadString();
-                string sHash = reader.ReadString();
-
-                if (vHash != vodHash || sHash != seriesHash) return (false, null);
-
-                // 3. Indices (Fast Load)
-                Dictionary<string, int[]> imdbRun, tokenRun;
-                if (version >= 2)
-                {
-                    imdbRun = ReadBinaryIndexOptimized(reader);
-                    tokenRun = ReadBinaryIndexOptimized(reader);
-                }
-                else
-                {
-                    // Legacy conversion (slower but safe for first run after update)
-                    imdbRun = ReadBinaryIndexLegacy(reader, vods, series);
-                    tokenRun = ReadBinaryIndexLegacy(reader, vods, series);
-                }
-
-                IptvMatchService.Instance.UpdateIndices(vods, series, imdbRun, tokenRun);
-                return (true, null);
-            }
-            catch (Exception ex) 
-            { 
-                AppLogger.Error("[BinaryLoad] FAILED", ex); 
-                return (false, null);
-            }
-            finally { _diskSemaphore.Release(); }
-        }
-
-        private Dictionary<string, int[]> ReadBinaryIndexOptimized(BinaryReader reader)
-        {
-            int count = reader.ReadInt32();
-            var dict = new Dictionary<string, int[]>(count, StringComparer.OrdinalIgnoreCase);
-            
-            for (int i = 0; i < count; i++)
-            {
-                string key = reader.ReadString();
-                int idCount = reader.ReadInt32();
-                var ids = new int[idCount];
-                for (int j = 0; j < idCount; j++)
-                {
-                    ids[j] = reader.ReadInt32(); // Already packed list index
-                }
-                if (ids.Length > 0) dict[key] = ids;
-            }
-            return dict;
-        }
-
-        private Dictionary<string, int[]> ReadBinaryIndexLegacy(BinaryReader reader, IReadOnlyList<VodStream> vods, IReadOnlyList<SeriesStream> series)
-        {
-            int count = reader.ReadInt32();
-            var dict = new Dictionary<string, int[]>(count, StringComparer.OrdinalIgnoreCase);
-            
-            // For legacy load, we have IDs and need to find the indexes.
-            // This is slow, but only happens once when the user updates the app.
-            var vodIdMap = new Dictionary<int, int>();
-            for(int i=0; i<vods.Count; i++) vodIdMap[vods[i].StreamId] = i;
-
-            var seriesIdMap = new Dictionary<int, int>();
-            for(int i=0; i<series.Count; i++) seriesIdMap[series[i].SeriesId] = i;
-
-            for (int i = 0; i < count; i++)
-            {
-                string key = reader.ReadString();
-                int idCount = reader.ReadInt32();
-                var ids = new List<int>(idCount);
-                for (int j = 0; j < idCount; j++)
-                {
-                    int id = reader.ReadInt32();
-                    bool isSeries = reader.ReadBoolean();
-                    if (isSeries) {
-                        if (seriesIdMap.TryGetValue(id, out int sIdx)) ids.Add(-(sIdx + 1));
-                    } else {
-                        if (vodIdMap.TryGetValue(id, out int vIdx)) ids.Add(vIdx);
-                    }
-                }
-                if (ids.Count > 0) dict[key] = ids.ToArray();
-            }
-            return dict;
-        }
 
         // ==========================================
         // PROJECT ZERO - BINARY STREAM BUNDLE (LIVE)
@@ -1005,10 +704,17 @@ namespace ModernIPTVPlayer.Services
             finally { _diskSemaphore.Release(); }
         }
 
+        public async Task SaveLiveStreamsBinaryFromJsonAsync(string playlistId, byte[] jsonBytes)
+        {
+            if (jsonBytes == null || jsonBytes.Length == 0) return;
+
+            await _diskSemaphore.WaitAsync();
+            try { await SaveLiveStreamsBinaryFromJsonInternalAsync(playlistId, jsonBytes); }
+            finally { _diskSemaphore.Release(); }
+        }
+
         private async Task SaveLiveStreamsBinaryInternalAsync(string playlistId, IReadOnlyList<LiveStream> streams)
         {
-            // UNCOMPRESSED BINARY CACHE (Phase 3.3): GZip adds CPU overhead with minimal savings on struct data.
-            // SSDs read 5MB uncompressed faster than 2MB compressed + decompress.
             string fileName = $"cache_{playlistId}_live_streams.bin";
             string tempName = fileName + ".tmp";
             try
@@ -1018,36 +724,37 @@ namespace ModernIPTVPlayer.Services
                 using (var buffered = new BufferedStream(fileStream, 1 * 1024 * 1024)) // 1MB buffer
                 using (var writer = new BinaryWriter(buffered, Encoding.UTF8))
                 {
-                    // 1. Header (32 bytes)
-                    writer.Write(0x4256494C); // Magic: "LIVB"
-                    writer.Write(2); // Version 2
-                    writer.Write(streams.Count);
-                    
-                    // 2. Metadata Buffer (Strings)
-                    byte[] rawBuffer = MetadataBuffer.GetRawBuffer();
-                    int bufferPos = MetadataBuffer.GetPosition();
+                    int recordSize = Marshal.SizeOf<LiveStreamData>();
+                    long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
+
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.LiveMagic, BinaryCacheLayout.LiveVersion, streams.Count, 0, dirty: true);
+                    writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
+                    using var stringHeap = new MemoryStream();
+                    var heap = new Utf8StringWriter(stringHeap, 0);
+
+                    for (int i = 0; i < streams.Count; i++)
+                    {
+                        WriteLiveRecord(writer, BuildLiveDataForBinarySave(streams[i], heap));
+                    }
+
+                    int bufferPos = heap.TotalBytesWritten;
+                    stringHeap.Position = 0;
+                    stringHeap.CopyTo(writer.BaseStream);
+                    writer.Flush();
+
+                    writer.BaseStream.Seek(BinaryCacheLayout.StringsLengthOffset, SeekOrigin.Begin);
                     writer.Write(bufferPos);
+                    writer.BaseStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
+                    writer.Write((byte)0);
 
-                    // DirtyBit + Padding
-                    writer.Write((byte)0); 
-                    writer.Write(new byte[15]);
-
-                    writer.Write(rawBuffer, 0, bufferPos);
-
-                    // 3. Streams (PROJECT ZERO: Bulk Write)
-                    writer.Write(streams.Count);
-
-                    // Extract structs into a contiguous array for bulk writing
-                    var dataArray = new LiveStreamData[streams.Count];
-                    for (int i = 0; i < streams.Count; i++) dataArray[i] = streams[i].ToData();
-
-                    // Write the entire struct array as one raw byte blob
-                    byte[] structBytes = CastLiveRecordsToBytes(dataArray);
-                    writer.Write(structBytes.Length);
-                    writer.Write(structBytes);
-
-                    writer.BaseStream.SetLength(writer.BaseStream.Position + 5*1024*1024); writer.Flush();
+                    writer.Flush();
                     AppLogger.Info($"[BinarySave] Live Streams saved (Atomic). Items: {streams.Count}, Buffer: {bufferPos} bytes.");
+                }
+
+                string safeId = GetSafePlaylistId(playlistId);
+                if (_streamListsCache.TryRemove($"{safeId}_live", out var oldSession))
+                {
+                    (oldSession as IDisposable)?.Dispose();
                 }
 
                 // Atomic Swap
@@ -1055,38 +762,376 @@ namespace ModernIPTVPlayer.Services
                 await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
             }
             catch (Exception ex) { AppLogger.Error("[BinarySave] LIVE FAILED", ex); }
+        }
 
-            // POPULATE RAM CACHE (Phase 3.1): Instant re-navigation
-            _liveRamCache[playlistId] = (streams, null, DateTime.UtcNow);
+        private async Task SaveLiveStreamsBinaryFromJsonInternalAsync(string playlistId, byte[] jsonBytes)
+        {
+            string fileName = $"cache_{playlistId}_live_streams.bin";
+            string tempName = fileName + ".tmp";
+
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                int recordSize = Marshal.SizeOf<LiveStreamData>();
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
+                int count;
+                int stringsLength;
+
+                using (var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting))
+                using (var buffered = new BufferedStream(fileStream, 1 * 1024 * 1024))
+                using (var writer = new BinaryWriter(buffered, Encoding.UTF8))
+                using (var stringHeap = new MemoryStream(Math.Min(jsonBytes.Length, 8 * 1024 * 1024)))
+                {
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.LiveMagic, BinaryCacheLayout.LiveVersion, 0, 0, dirty: true);
+                    writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
+
+                    var heap = new Utf8StringWriter(stringHeap, 0);
+                    count = WriteLiveRecordsFromJson(jsonBytes, writer, heap);
+                    stringsLength = heap.TotalBytesWritten;
+
+                    stringHeap.Position = 0;
+                    stringHeap.CopyTo(writer.BaseStream);
+                    writer.Flush();
+
+                    writer.BaseStream.Seek(BinaryCacheLayout.CountOffset, SeekOrigin.Begin);
+                    writer.Write(count);
+                    writer.BaseStream.Seek(BinaryCacheLayout.StringsLengthOffset, SeekOrigin.Begin);
+                    writer.Write(stringsLength);
+                    writer.BaseStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
+                    writer.Write((byte)0);
+
+                    writer.Flush();
+                }
+
+                string safeId = GetSafePlaylistId(playlistId);
+                if (_streamListsCache.TryRemove($"{safeId}_live", out var oldSession))
+                {
+                    (oldSession as IDisposable)?.Dispose();
+                }
+
+                var tempFile = await folder.GetFileAsync(tempName);
+                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+                AppLogger.Info($"[BinarySave] Live Streams saved from JSON. Items: {count}, RecordBytes: {count * recordSize}, Buffer: {stringsLength} bytes.");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[BinarySave] LIVE JSON->BINARY FAILED", ex);
+            }
+        }
+
+        public async Task SaveVodStreamsBinaryFromJsonAsync(string playlistId, byte[] jsonBytes)
+        {
+            if (jsonBytes == null || jsonBytes.Length == 0) return;
+
             string safeId = GetSafePlaylistId(playlistId);
-            _streamListsCache[$"{safeId}_live"] = streams;
+            var gate = GetBinaryWriteSemaphore(safeId, "vod");
+            await gate.WaitAsync();
+            try { await SaveVodStreamsBinaryFromJsonInternalAsync(playlistId, jsonBytes); }
+            finally { gate.Release(); }
+        }
+
+        public async Task SaveSeriesStreamsBinaryFromJsonAsync(string playlistId, byte[] jsonBytes)
+        {
+            if (jsonBytes == null || jsonBytes.Length == 0) return;
+
+            string safeId = GetSafePlaylistId(playlistId);
+            var gate = GetBinaryWriteSemaphore(safeId, "series");
+            await gate.WaitAsync();
+            try { await SaveSeriesStreamsBinaryFromJsonInternalAsync(playlistId, jsonBytes); }
+            finally { gate.Release(); }
+        }
+
+        public async Task SaveVodStreamsBinaryFromJsonStreamAsync(string playlistId, Stream jsonStream, CancellationToken cancellationToken = default)
+        {
+            if (jsonStream == null) return;
+
+            string safeId = GetSafePlaylistId(playlistId);
+            var gate = GetBinaryWriteSemaphore(safeId, "vod");
+            await gate.WaitAsync(cancellationToken);
+            try { await SaveVodStreamsBinaryFromJsonStreamInternalAsync(playlistId, jsonStream, cancellationToken); }
+            finally { gate.Release(); }
+        }
+
+        public async Task SaveSeriesStreamsBinaryFromJsonStreamAsync(string playlistId, Stream jsonStream, CancellationToken cancellationToken = default)
+        {
+            if (jsonStream == null) return;
+
+            string safeId = GetSafePlaylistId(playlistId);
+            var gate = GetBinaryWriteSemaphore(safeId, "series");
+            await gate.WaitAsync(cancellationToken);
+            try { await SaveSeriesStreamsBinaryFromJsonStreamInternalAsync(playlistId, jsonStream, cancellationToken); }
+            finally { gate.Release(); }
+        }
+
+        private SemaphoreSlim GetBinaryWriteSemaphore(string safeId, string kind)
+        {
+            return _binaryWriteSemaphores.GetOrAdd($"{safeId}_{kind}", _ => new SemaphoreSlim(1, 1));
+        }
+
+        private async Task SaveVodStreamsBinaryFromJsonStreamInternalAsync(string playlistId, Stream jsonStream, CancellationToken cancellationToken)
+        {
+            string safeId = GetSafePlaylistId(playlistId);
+            string fileName = $"cache_{safeId}_vod.bin";
+            string tempName = fileName + ".tmp";
+
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                int recordSize = Marshal.SizeOf<Models.Metadata.VodRecord>();
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
+
+                using var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting);
+                using var writer = new BinaryWriter(fileStream, Encoding.UTF8);
+                using var stringHeap = new MemoryStream(1024 * 1024);
+                var heap = new Utf8StringWriter(stringHeap, 0);
+
+                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, BinaryCacheLayout.VodSeriesVersion, 0, 0, dirty: true);
+                writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
+
+                var indexEntries = new List<(uint Fingerprint, int Index)>();
+                int count = 0;
+                long datasetFingerprint = 0;
+
+                await foreach (var item in JsonSerializer.DeserializeAsyncEnumerable<JsonElement>(jsonStream, cancellationToken: cancellationToken))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (item.ValueKind != JsonValueKind.Object) continue;
+
+                    var record = ParseVodRecordForBinary(item, heap);
+                    WriteVodRecordToStream(writer, record);
+                    indexEntries.Add((record.Fingerprint, count));
+                    datasetFingerprint ^= ((long)record.Fingerprint << 32) | (uint)(count % 0xFFFFFFFF);
+                    count++;
+                }
+
+                datasetFingerprint ^= count;
+                long indexOffset = recordsOffset + count * (long)recordSize;
+
+                writer.BaseStream.Seek(indexOffset, SeekOrigin.Begin);
+                indexEntries.Sort((a, b) => a.Fingerprint.CompareTo(b.Fingerprint));
+                foreach (var entry in indexEntries)
+                {
+                    writer.Write(entry.Fingerprint);
+                    writer.Write(entry.Index);
+                }
+
+                int bufferPos = heap.TotalBytesWritten;
+                stringHeap.Position = 0;
+                stringHeap.CopyTo(writer.BaseStream);
+
+                writer.BaseStream.Seek(BinaryCacheLayout.CountOffset, SeekOrigin.Begin);
+                writer.Write(count);
+                writer.BaseStream.Seek(BinaryCacheLayout.StringsLengthOffset, SeekOrigin.Begin);
+                writer.Write(bufferPos);
+                writer.BaseStream.Seek(BinaryCacheLayout.FingerprintOffset, SeekOrigin.Begin);
+                writer.Write(datasetFingerprint);
+                writer.BaseStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
+                writer.Write((byte)0);
+                writer.Flush();
+
+                if (_streamListsCache.TryRemove($"{safeId}_vod", out var oldSession))
+                {
+                    (oldSession as IDisposable)?.Dispose();
+                }
+
+                var tempFile = await folder.GetFileAsync(tempName);
+                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+
+                AppLogger.Info($"[BinarySave] VOD streamed to binary. Items: {count}, Buffer: {bufferPos} bytes.");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                AppLogger.Error("[BinarySave] VOD STREAM->BINARY FAILED", ex);
+            }
+        }
+
+        private async Task SaveSeriesStreamsBinaryFromJsonStreamInternalAsync(string playlistId, Stream jsonStream, CancellationToken cancellationToken)
+        {
+            string safeId = GetSafePlaylistId(playlistId);
+            string fileName = $"cache_{safeId}_series.bin";
+            string tempName = fileName + ".tmp";
+
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
+
+                using var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting);
+                using var writer = new BinaryWriter(fileStream, Encoding.UTF8);
+                using var stringHeap = new MemoryStream(1024 * 1024);
+                var heap = new Utf8StringWriter(stringHeap, 0);
+
+                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, BinaryCacheLayout.VodSeriesVersion, 0, 0, dirty: true);
+                writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
+
+                int count = 0;
+                long datasetFingerprint = 0;
+
+                await foreach (var item in JsonSerializer.DeserializeAsyncEnumerable<JsonElement>(jsonStream, cancellationToken: cancellationToken))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (item.ValueKind != JsonValueKind.Object) continue;
+
+                    var record = ParseSeriesRecordForBinary(item, heap);
+                    WriteSeriesRecordToStream(writer, record);
+                    datasetFingerprint ^= ((long)record.Fingerprint << 32) | (uint)(count % 0xFFFFFFFF);
+                    count++;
+                }
+
+                datasetFingerprint ^= count;
+                int bufferPos = heap.TotalBytesWritten;
+                stringHeap.Position = 0;
+                stringHeap.CopyTo(writer.BaseStream);
+
+                writer.BaseStream.Seek(BinaryCacheLayout.CountOffset, SeekOrigin.Begin);
+                writer.Write(count);
+                writer.BaseStream.Seek(BinaryCacheLayout.StringsLengthOffset, SeekOrigin.Begin);
+                writer.Write(bufferPos);
+                writer.BaseStream.Seek(BinaryCacheLayout.FingerprintOffset, SeekOrigin.Begin);
+                writer.Write(datasetFingerprint);
+                writer.BaseStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
+                writer.Write((byte)0);
+                writer.Flush();
+
+                if (_streamListsCache.TryRemove($"{safeId}_series", out var oldSession))
+                {
+                    (oldSession as IDisposable)?.Dispose();
+                }
+
+                var tempFile = await folder.GetFileAsync(tempName);
+                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+
+                AppLogger.Info($"[BinarySave] Series streamed to binary. Items: {count}, Buffer: {bufferPos} bytes.");
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                AppLogger.Error("[BinarySave] SERIES STREAM->BINARY FAILED", ex);
+            }
+        }
+
+        private async Task SaveVodStreamsBinaryFromJsonInternalAsync(string playlistId, byte[] jsonBytes)
+        {
+            string safeId = GetSafePlaylistId(playlistId);
+            string fileName = $"cache_{safeId}_vod.bin";
+            string tempName = fileName + ".tmp";
+
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                int recordSize = Marshal.SizeOf<Models.Metadata.VodRecord>();
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
+
+                using var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting);
+                using var writer = new BinaryWriter(fileStream, Encoding.UTF8);
+                using var stringHeap = new MemoryStream(Math.Min(jsonBytes.Length, 16 * 1024 * 1024));
+                var heap = new Utf8StringWriter(stringHeap, 0);
+
+                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, BinaryCacheLayout.VodSeriesVersion, 0, 0, dirty: true);
+                writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
+
+                var indexEntries = new List<(uint Fingerprint, int Index)>();
+                int count = WriteVodRecordsFromJson(jsonBytes, writer, heap, indexEntries, out long datasetFingerprint);
+                long indexOffset = recordsOffset + count * (long)recordSize;
+
+                writer.BaseStream.Seek(indexOffset, SeekOrigin.Begin);
+                indexEntries.Sort((a, b) => a.Fingerprint.CompareTo(b.Fingerprint));
+                foreach (var entry in indexEntries)
+                {
+                    writer.Write(entry.Fingerprint);
+                    writer.Write(entry.Index);
+                }
+
+                int bufferPos = heap.TotalBytesWritten;
+                stringHeap.Position = 0;
+                stringHeap.CopyTo(writer.BaseStream);
+                writer.Flush();
+
+                writer.BaseStream.Seek(BinaryCacheLayout.CountOffset, SeekOrigin.Begin);
+                writer.Write(count);
+                writer.BaseStream.Seek(BinaryCacheLayout.StringsLengthOffset, SeekOrigin.Begin);
+                writer.Write(bufferPos);
+                writer.BaseStream.Seek(BinaryCacheLayout.FingerprintOffset, SeekOrigin.Begin);
+                writer.Write(datasetFingerprint);
+                writer.BaseStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
+                writer.Write((byte)0);
+                writer.Flush();
+
+                if (_streamListsCache.TryRemove($"{safeId}_vod", out var oldSession))
+                {
+                    (oldSession as IDisposable)?.Dispose();
+                }
+
+                var tempFile = await folder.GetFileAsync(tempName);
+                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+
+                AppLogger.Info($"[BinarySave] VOD saved from JSON. Items: {count}, Buffer: {bufferPos} bytes.");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[BinarySave] VOD JSON->BINARY FAILED", ex);
+            }
+        }
+
+        private async Task SaveSeriesStreamsBinaryFromJsonInternalAsync(string playlistId, byte[] jsonBytes)
+        {
+            string safeId = GetSafePlaylistId(playlistId);
+            string fileName = $"cache_{safeId}_series.bin";
+            string tempName = fileName + ".tmp";
+
+            try
+            {
+                var folder = ApplicationData.Current.LocalFolder;
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
+
+                using var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting);
+                using var writer = new BinaryWriter(fileStream, Encoding.UTF8);
+                using var stringHeap = new MemoryStream(Math.Min(jsonBytes.Length, 16 * 1024 * 1024));
+                var heap = new Utf8StringWriter(stringHeap, 0);
+
+                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, BinaryCacheLayout.VodSeriesVersion, 0, 0, dirty: true);
+                writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
+
+                int count = WriteSeriesRecordsFromJson(jsonBytes, writer, heap, out long datasetFingerprint);
+                int bufferPos = heap.TotalBytesWritten;
+                stringHeap.Position = 0;
+                stringHeap.CopyTo(writer.BaseStream);
+                writer.Flush();
+
+                writer.BaseStream.Seek(BinaryCacheLayout.CountOffset, SeekOrigin.Begin);
+                writer.Write(count);
+                writer.BaseStream.Seek(BinaryCacheLayout.StringsLengthOffset, SeekOrigin.Begin);
+                writer.Write(bufferPos);
+                writer.BaseStream.Seek(BinaryCacheLayout.FingerprintOffset, SeekOrigin.Begin);
+                writer.Write(datasetFingerprint);
+                writer.BaseStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
+                writer.Write((byte)0);
+                writer.Flush();
+
+                if (_streamListsCache.TryRemove($"{safeId}_series", out var oldSession))
+                {
+                    (oldSession as IDisposable)?.Dispose();
+                }
+
+                var tempFile = await folder.GetFileAsync(tempName);
+                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+
+                AppLogger.Info($"[BinarySave] Series saved from JSON. Items: {count}, Buffer: {bufferPos} bytes.");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error("[BinarySave] Series JSON->BINARY FAILED", ex);
+            }
         }
 
         public async Task<IReadOnlyList<LiveStream>> LoadLiveStreamsBinaryAsync(string playlistId)
         {
-            // RAM CACHE CHECK (Phase 3.1): Instant return if cached
-            if (_liveRamCache.TryGetValue(playlistId, out var cached))
-            {
-                if ((DateTime.UtcNow - cached.Timestamp).TotalMinutes < RAM_CACHE_TTL_MINUTES)
-                {
-                    AppLogger.Info($"[BinaryLoad] RAM CACHE HIT for {playlistId}. Items: {cached.Streams.Count}");
-                    return cached.Streams;
-                }
-                else
-                {
-                    _liveRamCache.TryRemove(playlistId, out _);
-                }
-            }
-
-            // Also check _streamListsCache
             string safeId = GetSafePlaylistId(playlistId);
             if (_streamListsCache.TryGetValue($"{safeId}_live", out var ramCached))
             {
-                AppLogger.Info($"[BinaryLoad] STREAM_LISTS CACHE HIT for {playlistId}");
-                return ramCached as List<LiveStream>;
+                AppLogger.Info($"[BinaryLoad] LIVE SESSION HIT for {playlistId}");
+                return ramCached as IReadOnlyList<LiveStream>;
             }
 
-            // UNCOMPRESSED BINARY LOAD (Phase 3.3): No GZip decompression
             string fileName = $"cache_{playlistId}_live_streams.bin";
             await _diskSemaphore.WaitAsync();
             try
@@ -1095,49 +1140,57 @@ namespace ModernIPTVPlayer.Services
                 var item = await folder.TryGetItemAsync(fileName);
                 if (item == null) return null;
 
+                int count, bufferLen, version;
+                string filePath = Path.Combine(folder.Path, fileName);
+                using (var mmf = BinaryCacheSession.OpenMemoryMappedFile(filePath, MemoryMappedFileAccess.Read))
+                using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
+                {
+                    var header = BinaryCacheLayout.ReadHeader(accessor);
+                    if (header.Magic != BinaryCacheLayout.LiveMagic) return null;
+                    version = header.Version;
+                    if (version < 2) return null;
+                    count = header.Count;
+                    bufferLen = header.StringsLength;
+                }
+
+                if (version >= 3)
+                {
+                    int recordSize = Marshal.SizeOf<LiveStreamData>();
+                    long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
+                    long stringsOffset = recordsOffset + count * (long)recordSize;
+
+                    var session = new BinaryCacheSession(filePath, stringsOffset, bufferLen, recordsOffset, count, recordSize, readOnlySession: true);
+                    var results = new VirtualLiveList(session);
+                    _streamListsCache[$"{safeId}_live"] = results;
+
+                    AppLogger.Info($"[BinaryLoad] Live Virtual Session Ready: {count} items.");
+                    return results;
+                }
+
                 using var stream = await folder.OpenStreamForReadAsync(fileName);
-                using var buffered = new BufferedStream(stream, 1 * 1024 * 1024); // 1MB buffer
+                using var buffered = new BufferedStream(stream, 1 * 1024 * 1024);
 
                 var reader = new BinaryReader(buffered, Encoding.UTF8);
 
                 using (reader)
                 {
-                    // Magic Check (int is faster than string)
-                    int magic = reader.ReadInt32();
-                    if (magic != 0x4256494C) return null;
-                    int version = reader.ReadInt32();
-                    if (version < 2) return null;
-
-                    // 1. Metadata Buffer
-                    int count_header = reader.ReadInt32(); // count in header
-                    int bufferPos = reader.ReadInt32();
-                    
-                    // Skip to offset 32 (end of header)
-                    reader.BaseStream.Seek(32, SeekOrigin.Begin);
+                    var header = BinaryCacheLayout.ReadHeader(reader);
+                    int bufferPos = header.StringsLength;
                     
                     byte[] buffer = reader.ReadBytes(bufferPos); 
                     int baseOffset = MetadataBuffer.AppendRawBuffer(buffer, bufferPos);
 
-
-                    // 2. Streams (PROJECT ZERO: Sync Parsing to allow Span/Casting)
-                    int count = reader.ReadInt32();
+                    int legacyCount = reader.ReadInt32();
                     byte[]? structBytes = null;
-                    if (version >= 2)
+                    if (header.Version >= 2)
                     {
                         int structBytesLen = reader.ReadInt32();
                         structBytes = reader.ReadBytes(structBytesLen);
                     }
 
-                    var results = ParseLiveStreamDataBulk(structBytes, count, version, reader, baseOffset);
+                    var results = ParseLiveStreamDataBulk(structBytes, legacyCount, header.Version, reader, baseOffset);
 
-                    // POPULATE RAM CACHE
-                    if (results != null)
-                    {
-                        _liveRamCache[playlistId] = (results, null, DateTime.UtcNow);
-                        _streamListsCache[$"{safeId}_live"] = results;
-                    }
-
-                    AppLogger.Info($"[BinaryLoad] Live Streams loaded. Items: {results?.Count ?? 0}");
+                    AppLogger.Info($"[BinaryLoad] Live legacy cache loaded. Items: {results?.Count ?? 0}");
                     return results;
                 }
             }
@@ -1147,6 +1200,830 @@ namespace ModernIPTVPlayer.Services
                 return null;
             }
             finally { _diskSemaphore.Release(); }
+        }
+
+        private static LiveStreamData BuildLiveDataForBinarySave(LiveStream s, Utf8StringWriter heap)
+        {
+            var name = heap.Add(s.Name);
+            var icon = heap.Add(s.IconUrl);
+            var imdb = heap.Add(s.ImdbId);
+            var desc = heap.Add(s.Description);
+            var bg = heap.Add(s.BackdropUrl);
+            var genre = heap.Add(s.Genres);
+            var cast = heap.Add(s.Cast);
+            var dir = heap.Add(s.Director);
+            var trail = heap.Add(s.TrailerUrl);
+            var year = heap.Add(s.Year);
+            var ext = heap.Add(s.ContainerExtension);
+            var cat = heap.Add(s.CategoryId);
+            var rating = heap.Add(s.Rating);
+
+            return new LiveStreamData
+            {
+                StreamId = s.StreamId,
+                NameOff = name.Off, NameLen = name.Len,
+                IconOff = icon.Off, IconLen = icon.Len,
+                ImdbOff = imdb.Off, ImdbLen = imdb.Len,
+                DescOff = desc.Off, DescLen = desc.Len,
+                BgOff = bg.Off, BgLen = bg.Len,
+                GenreOff = genre.Off, GenreLen = genre.Len,
+                CastOff = cast.Off, CastLen = cast.Len,
+                DirOff = dir.Off, DirLen = dir.Len,
+                TrailOff = trail.Off, TrailLen = trail.Len,
+                YearOff = year.Off, YearLen = year.Len,
+                ExtOff = ext.Off, ExtLen = ext.Len,
+                CatOff = cat.Off, CatLen = cat.Len,
+                RatOff = rating.Off, RatLen = rating.Len
+            };
+        }
+
+        private int WriteVodRecordsFromJson(ReadOnlySpan<byte> jsonBytes, BinaryWriter writer, Utf8StringWriter heap, List<(uint Fingerprint, int Index)> indexEntries, out long datasetFingerprint)
+        {
+            datasetFingerprint = 0;
+            var reader = new Utf8JsonReader(jsonBytes, isFinalBlock: true, new JsonReaderState());
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartArray) return 0;
+
+            int count = 0;
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                if (reader.TokenType != JsonTokenType.StartObject)
+                {
+                    reader.Skip();
+                    continue;
+                }
+
+                var record = ParseVodRecordForBinary(ref reader, heap);
+                WriteVodRecordToStream(writer, record);
+                indexEntries.Add((record.Fingerprint, count));
+                datasetFingerprint ^= ((long)record.Fingerprint << 32) | (uint)(count % 0xFFFFFFFF);
+                count++;
+            }
+
+            datasetFingerprint ^= count;
+            return count;
+        }
+
+        private static Models.Metadata.VodRecord ParseVodRecordForBinary(ref Utf8JsonReader reader, Utf8StringWriter heap)
+        {
+            var record = new Models.Metadata.VodRecord
+            {
+                NameOff = -1,
+                IconOff = -1,
+                ImdbIdOff = -1,
+                PlotOff = -1,
+                YearOff = -1,
+                GenresOff = -1,
+                CastOff = -1,
+                DirectorOff = -1,
+                TrailerOff = -1,
+                BackdropOff = -1,
+                SourceTitleOff = -1,
+                RatingOff = -1,
+                ExtOff = -1,
+                LastModified = DateTime.UtcNow.Ticks,
+                Flags = 16
+            };
+
+            string? name = null;
+            string? imdb = null;
+            string? year = null;
+            string? releaseDate = null;
+            string? airDate = null;
+            string? released = null;
+            string? rating = null;
+
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName) continue;
+
+                ReadOnlySpan<byte> property = reader.ValueSpan;
+                if (!reader.Read()) break;
+
+                if (property.SequenceEqual("name"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.NameOff, out record.NameLen, out name);
+                }
+                else if (property.SequenceEqual("stream_id"u8))
+                {
+                    record.StreamId = ReadJsonInt32(ref reader);
+                }
+                else if (property.SequenceEqual("stream_icon"u8) || property.SequenceEqual("cover"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.IconOff, out record.IconLen, out _);
+                }
+                else if (property.SequenceEqual("container_extension"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.ExtOff, out record.ExtLen, out _);
+                }
+                else if (property.SequenceEqual("category_id"u8))
+                {
+                    string? category = ReadJsonStringValue(ref reader);
+                    record.CategoryId = int.TryParse(category, out int catId) ? catId : 0;
+                }
+                else if (property.SequenceEqual("rating"u8) || property.SequenceEqual("rating_5based"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.RatingOff, out record.RatingLen, out rating);
+                }
+                else if (property.SequenceEqual("imdb_id"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.ImdbIdOff, out record.ImdbIdLen, out imdb);
+                }
+                else if (property.SequenceEqual("plot"u8) || property.SequenceEqual("description"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.PlotOff, out record.PlotLen, out _);
+                }
+                else if (property.SequenceEqual("genre"u8) || property.SequenceEqual("genres"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.GenresOff, out record.GenresLen, out _);
+                }
+                else if (property.SequenceEqual("cast"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.CastOff, out record.CastLen, out _);
+                }
+                else if (property.SequenceEqual("director"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.DirectorOff, out record.DirectorLen, out _);
+                }
+                else if (property.SequenceEqual("youtube_trailer"u8) || property.SequenceEqual("trailer"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.TrailerOff, out record.TrailerLen, out _);
+                }
+                else if (property.SequenceEqual("backdrop_path"u8) || property.SequenceEqual("backdrop"u8))
+                {
+                    StoreJsonStringOrArray(ref reader, heap, out record.BackdropOff, out record.BackdropLen, out _);
+                }
+                else if (property.SequenceEqual("source_title"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.SourceTitleOff, out record.SourceTitleLen, out _);
+                }
+                else if (property.SequenceEqual("year"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.YearOff, out record.YearLen, out year);
+                }
+                else if (property.SequenceEqual("releaseDate"u8) || property.SequenceEqual("releasedate"u8))
+                {
+                    releaseDate = ReadJsonStringValue(ref reader);
+                }
+                else if (property.SequenceEqual("air_date"u8))
+                {
+                    airDate = ReadJsonStringValue(ref reader);
+                }
+                else if (property.SequenceEqual("released"u8))
+                {
+                    released = ReadJsonStringValue(ref reader);
+                }
+                else
+                {
+                    reader.Skip();
+                }
+            }
+
+            if (record.YearOff < 0)
+            {
+                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? released ?? name);
+                var stored = heap.Add(extractedYear);
+                record.YearOff = stored.Off;
+                record.YearLen = stored.Len;
+                year = extractedYear;
+            }
+
+            if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+            {
+                record.RatingScaled = (short)(r * 100);
+            }
+
+            record.Fingerprint = CalculateStreamFingerprint(name, year, imdb);
+            return record;
+        }
+
+        private static Models.Metadata.VodRecord ParseVodRecordForBinary(JsonElement element, Utf8StringWriter heap)
+        {
+            var record = new Models.Metadata.VodRecord
+            {
+                NameOff = -1,
+                IconOff = -1,
+                ImdbIdOff = -1,
+                PlotOff = -1,
+                YearOff = -1,
+                GenresOff = -1,
+                CastOff = -1,
+                DirectorOff = -1,
+                TrailerOff = -1,
+                BackdropOff = -1,
+                SourceTitleOff = -1,
+                RatingOff = -1,
+                ExtOff = -1,
+                LastModified = DateTime.UtcNow.Ticks,
+                Flags = 16
+            };
+
+            string? name = null;
+            string? imdb = null;
+            string? year = null;
+            string? releaseDate = null;
+            string? airDate = null;
+            string? released = null;
+            string? rating = null;
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.NameEquals("name"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.NameOff, out record.NameLen, out name);
+                }
+                else if (property.NameEquals("stream_id"))
+                {
+                    record.StreamId = ReadJsonElementInt32(property.Value);
+                }
+                else if (property.NameEquals("stream_icon") || property.NameEquals("cover"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.IconOff, out record.IconLen, out _);
+                }
+                else if (property.NameEquals("container_extension"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.ExtOff, out record.ExtLen, out _);
+                }
+                else if (property.NameEquals("category_id"))
+                {
+                    string? category = ReadJsonElementString(property.Value);
+                    record.CategoryId = int.TryParse(category, out int catId) ? catId : 0;
+                }
+                else if (property.NameEquals("rating") || property.NameEquals("rating_5based"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.RatingOff, out record.RatingLen, out rating);
+                }
+                else if (property.NameEquals("imdb_id"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.ImdbIdOff, out record.ImdbIdLen, out imdb);
+                }
+                else if (property.NameEquals("plot") || property.NameEquals("description"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.PlotOff, out record.PlotLen, out _);
+                }
+                else if (property.NameEquals("genre") || property.NameEquals("genres"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.GenresOff, out record.GenresLen, out _);
+                }
+                else if (property.NameEquals("cast"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.CastOff, out record.CastLen, out _);
+                }
+                else if (property.NameEquals("director"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.DirectorOff, out record.DirectorLen, out _);
+                }
+                else if (property.NameEquals("youtube_trailer") || property.NameEquals("trailer"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.TrailerOff, out record.TrailerLen, out _);
+                }
+                else if (property.NameEquals("backdrop_path") || property.NameEquals("backdrop"))
+                {
+                    StoreJsonElementStringOrArray(property.Value, heap, out record.BackdropOff, out record.BackdropLen, out _);
+                }
+                else if (property.NameEquals("source_title"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.SourceTitleOff, out record.SourceTitleLen, out _);
+                }
+                else if (property.NameEquals("year"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.YearOff, out record.YearLen, out year);
+                }
+                else if (property.NameEquals("releaseDate") || property.NameEquals("releasedate"))
+                {
+                    releaseDate = ReadJsonElementString(property.Value);
+                }
+                else if (property.NameEquals("air_date"))
+                {
+                    airDate = ReadJsonElementString(property.Value);
+                }
+                else if (property.NameEquals("released"))
+                {
+                    released = ReadJsonElementString(property.Value);
+                }
+            }
+
+            if (record.YearOff < 0)
+            {
+                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? released ?? name);
+                var stored = heap.Add(extractedYear);
+                record.YearOff = stored.Off;
+                record.YearLen = stored.Len;
+                year = extractedYear;
+            }
+
+            if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+            {
+                record.RatingScaled = (short)(r * 100);
+            }
+
+            record.Fingerprint = CalculateStreamFingerprint(name, year, imdb);
+            return record;
+        }
+
+        private int WriteSeriesRecordsFromJson(ReadOnlySpan<byte> jsonBytes, BinaryWriter writer, Utf8StringWriter heap, out long datasetFingerprint)
+        {
+            datasetFingerprint = 0;
+            var reader = new Utf8JsonReader(jsonBytes, isFinalBlock: true, new JsonReaderState());
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartArray) return 0;
+
+            int count = 0;
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                if (reader.TokenType != JsonTokenType.StartObject)
+                {
+                    reader.Skip();
+                    continue;
+                }
+
+                var record = ParseSeriesRecordForBinary(ref reader, heap);
+                WriteSeriesRecordToStream(writer, record);
+                datasetFingerprint ^= ((long)record.Fingerprint << 32) | (uint)(count % 0xFFFFFFFF);
+                count++;
+            }
+
+            datasetFingerprint ^= count;
+            return count;
+        }
+
+        private static Models.Metadata.SeriesRecord ParseSeriesRecordForBinary(ref Utf8JsonReader reader, Utf8StringWriter heap)
+        {
+            var record = new Models.Metadata.SeriesRecord
+            {
+                NameOff = -1,
+                IconOff = -1,
+                ImdbIdOff = -1,
+                PlotOff = -1,
+                YearOff = -1,
+                GenresOff = -1,
+                CastOff = -1,
+                DirectorOff = -1,
+                TrailerOff = -1,
+                BackdropOff = -1,
+                SourceTitleOff = -1,
+                RatingOff = -1,
+                ExtOff = -1,
+                LastModified = DateTime.UtcNow.Ticks,
+                Flags = 16
+            };
+
+            string? name = null;
+            string? imdb = null;
+            string? year = null;
+            string? releaseDate = null;
+            string? airDate = null;
+            string? rating = null;
+
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName) continue;
+
+                ReadOnlySpan<byte> property = reader.ValueSpan;
+                if (!reader.Read()) break;
+
+                if (property.SequenceEqual("name"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.NameOff, out record.NameLen, out name);
+                }
+                else if (property.SequenceEqual("series_id"u8) || property.SequenceEqual("stream_id"u8))
+                {
+                    record.SeriesId = ReadJsonInt32(ref reader);
+                }
+                else if (property.SequenceEqual("cover"u8) || property.SequenceEqual("stream_icon"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.IconOff, out record.IconLen, out _);
+                }
+                else if (property.SequenceEqual("category_id"u8))
+                {
+                    string? category = ReadJsonStringValue(ref reader);
+                    record.CategoryId = int.TryParse(category, out int catId) ? catId : 0;
+                }
+                else if (property.SequenceEqual("imdb_id"u8) || property.SequenceEqual("tmdb"u8) || property.SequenceEqual("tmdb_id"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.ImdbIdOff, out record.ImdbIdLen, out imdb);
+                }
+                else if (property.SequenceEqual("plot"u8) || property.SequenceEqual("description"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.PlotOff, out record.PlotLen, out _);
+                }
+                else if (property.SequenceEqual("genre"u8) || property.SequenceEqual("genres"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.GenresOff, out record.GenresLen, out _);
+                }
+                else if (property.SequenceEqual("cast"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.CastOff, out record.CastLen, out _);
+                }
+                else if (property.SequenceEqual("director"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.DirectorOff, out record.DirectorLen, out _);
+                }
+                else if (property.SequenceEqual("youtube_trailer"u8) || property.SequenceEqual("trailer"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.TrailerOff, out record.TrailerLen, out _);
+                }
+                else if (property.SequenceEqual("backdrop_path"u8) || property.SequenceEqual("backdrop"u8))
+                {
+                    StoreJsonStringOrArray(ref reader, heap, out record.BackdropOff, out record.BackdropLen, out _);
+                }
+                else if (property.SequenceEqual("rating"u8) || property.SequenceEqual("rating_5based"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.RatingOff, out record.RatingLen, out rating);
+                }
+                else if (property.SequenceEqual("container_extension"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.ExtOff, out record.ExtLen, out _);
+                }
+                else if (property.SequenceEqual("year"u8))
+                {
+                    StoreJsonString(ref reader, heap, out record.YearOff, out record.YearLen, out year);
+                }
+                else if (property.SequenceEqual("releaseDate"u8) || property.SequenceEqual("releasedate"u8))
+                {
+                    releaseDate = ReadJsonStringValue(ref reader);
+                }
+                else if (property.SequenceEqual("air_date"u8))
+                {
+                    airDate = ReadJsonStringValue(ref reader);
+                }
+                else if (property.SequenceEqual("episode_run_time"u8))
+                {
+                    record.AirTime = ReadJsonInt32(ref reader);
+                }
+                else
+                {
+                    reader.Skip();
+                }
+            }
+
+            if (record.YearOff < 0)
+            {
+                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? name);
+                var stored = heap.Add(extractedYear);
+                record.YearOff = stored.Off;
+                record.YearLen = stored.Len;
+                year = extractedYear;
+            }
+
+            if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+            {
+                record.RatingScaled = (short)(r * 100);
+            }
+
+            record.Fingerprint = CalculateStreamFingerprint(name, year, imdb);
+            return record;
+        }
+
+        private static Models.Metadata.SeriesRecord ParseSeriesRecordForBinary(JsonElement element, Utf8StringWriter heap)
+        {
+            var record = new Models.Metadata.SeriesRecord
+            {
+                NameOff = -1,
+                IconOff = -1,
+                ImdbIdOff = -1,
+                PlotOff = -1,
+                YearOff = -1,
+                GenresOff = -1,
+                CastOff = -1,
+                DirectorOff = -1,
+                TrailerOff = -1,
+                BackdropOff = -1,
+                SourceTitleOff = -1,
+                RatingOff = -1,
+                ExtOff = -1,
+                LastModified = DateTime.UtcNow.Ticks,
+                Flags = 16
+            };
+
+            string? name = null;
+            string? imdb = null;
+            string? year = null;
+            string? releaseDate = null;
+            string? airDate = null;
+            string? rating = null;
+
+            foreach (var property in element.EnumerateObject())
+            {
+                if (property.NameEquals("name"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.NameOff, out record.NameLen, out name);
+                }
+                else if (property.NameEquals("series_id") || property.NameEquals("stream_id"))
+                {
+                    record.SeriesId = ReadJsonElementInt32(property.Value);
+                }
+                else if (property.NameEquals("cover") || property.NameEquals("stream_icon"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.IconOff, out record.IconLen, out _);
+                }
+                else if (property.NameEquals("category_id"))
+                {
+                    string? category = ReadJsonElementString(property.Value);
+                    record.CategoryId = int.TryParse(category, out int catId) ? catId : 0;
+                }
+                else if (property.NameEquals("imdb_id") || property.NameEquals("tmdb") || property.NameEquals("tmdb_id"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.ImdbIdOff, out record.ImdbIdLen, out imdb);
+                }
+                else if (property.NameEquals("plot") || property.NameEquals("description"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.PlotOff, out record.PlotLen, out _);
+                }
+                else if (property.NameEquals("genre") || property.NameEquals("genres"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.GenresOff, out record.GenresLen, out _);
+                }
+                else if (property.NameEquals("cast"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.CastOff, out record.CastLen, out _);
+                }
+                else if (property.NameEquals("director"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.DirectorOff, out record.DirectorLen, out _);
+                }
+                else if (property.NameEquals("youtube_trailer") || property.NameEquals("trailer"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.TrailerOff, out record.TrailerLen, out _);
+                }
+                else if (property.NameEquals("backdrop_path") || property.NameEquals("backdrop"))
+                {
+                    StoreJsonElementStringOrArray(property.Value, heap, out record.BackdropOff, out record.BackdropLen, out _);
+                }
+                else if (property.NameEquals("rating") || property.NameEquals("rating_5based"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.RatingOff, out record.RatingLen, out rating);
+                }
+                else if (property.NameEquals("container_extension"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.ExtOff, out record.ExtLen, out _);
+                }
+                else if (property.NameEquals("year"))
+                {
+                    StoreJsonElementString(property.Value, heap, out record.YearOff, out record.YearLen, out year);
+                }
+                else if (property.NameEquals("releaseDate") || property.NameEquals("releasedate"))
+                {
+                    releaseDate = ReadJsonElementString(property.Value);
+                }
+                else if (property.NameEquals("air_date"))
+                {
+                    airDate = ReadJsonElementString(property.Value);
+                }
+                else if (property.NameEquals("episode_run_time"))
+                {
+                    record.AirTime = ReadJsonElementInt32(property.Value);
+                }
+            }
+
+            if (record.YearOff < 0)
+            {
+                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? name);
+                var stored = heap.Add(extractedYear);
+                record.YearOff = stored.Off;
+                record.YearLen = stored.Len;
+                year = extractedYear;
+            }
+
+            if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+            {
+                record.RatingScaled = (short)(r * 100);
+            }
+
+            record.Fingerprint = CalculateStreamFingerprint(name, year, imdb);
+            return record;
+        }
+
+        private static void StoreJsonString(ref Utf8JsonReader reader, Utf8StringWriter heap, out int offset, out int length, out string? value)
+        {
+            value = ReadJsonStringValue(ref reader);
+            var stored = heap.Add(value);
+            offset = stored.Off;
+            length = stored.Len;
+        }
+
+        private static void StoreJsonStringOrArray(ref Utf8JsonReader reader, Utf8StringWriter heap, out int offset, out int length, out string? value)
+        {
+            value = ReadJsonStringOrArray(ref reader);
+            var stored = heap.Add(value);
+            offset = stored.Off;
+            length = stored.Len;
+        }
+
+        private static void StoreJsonElementString(JsonElement element, Utf8StringWriter heap, out int offset, out int length, out string? value)
+        {
+            value = ReadJsonElementString(element);
+            var stored = heap.Add(value);
+            offset = stored.Off;
+            length = stored.Len;
+        }
+
+        private static void StoreJsonElementStringOrArray(JsonElement element, Utf8StringWriter heap, out int offset, out int length, out string? value)
+        {
+            value = ReadJsonElementStringOrArray(element);
+            var stored = heap.Add(value);
+            offset = stored.Off;
+            length = stored.Len;
+        }
+
+        private static string? ReadJsonStringValue(ref Utf8JsonReader reader)
+        {
+            return reader.TokenType switch
+            {
+                JsonTokenType.String => reader.GetString(),
+                JsonTokenType.Number => reader.TryGetInt64(out long n)
+                    ? n.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : reader.GetDouble().ToString(System.Globalization.CultureInfo.InvariantCulture),
+                JsonTokenType.True => "true",
+                JsonTokenType.False => "false",
+                _ => null
+            };
+        }
+
+        private static string? ReadJsonElementString(JsonElement element)
+        {
+            return element.ValueKind switch
+            {
+                JsonValueKind.String => element.GetString(),
+                JsonValueKind.Number => element.TryGetInt64(out long n)
+                    ? n.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    : element.GetRawText(),
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => null
+            };
+        }
+
+        private static string? ReadJsonElementStringOrArray(JsonElement element)
+        {
+            if (element.ValueKind != JsonValueKind.Array)
+            {
+                return ReadJsonElementString(element);
+            }
+
+            var values = new List<string>();
+            foreach (var item in element.EnumerateArray())
+            {
+                string? value = ReadJsonElementString(item);
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    values.Add(value);
+                }
+            }
+
+            return values.Count == 0 ? null : string.Join("|", values);
+        }
+
+        private static int ReadJsonElementInt32(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Number && element.TryGetInt32(out int value))
+            {
+                return value;
+            }
+
+            if (element.ValueKind == JsonValueKind.String && int.TryParse(element.GetString(), out value))
+            {
+                return value;
+            }
+
+            return 0;
+        }
+
+        private static string? ReadJsonStringOrArray(ref Utf8JsonReader reader)
+        {
+            if (reader.TokenType != JsonTokenType.StartArray) return ReadJsonStringValue(ref reader);
+
+            var values = new List<string>();
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                string? value = ReadJsonStringValue(ref reader);
+                if (!string.IsNullOrEmpty(value)) values.Add(value);
+                else reader.Skip();
+            }
+
+            return values.Count == 0 ? null : string.Join("|", values);
+        }
+
+        private static uint CalculateStreamFingerprint(string? title, string? year, string? imdb)
+        {
+            string cleanTitle = TitleHelper.Normalize(title ?? "");
+            string cleanYear = year ?? "";
+            string cleanImdb = imdb ?? "";
+
+            uint hash = 2166136261;
+            foreach (char c in cleanTitle) hash = (hash ^ c) * 16777619;
+            foreach (char c in cleanYear) hash = (hash ^ c) * 16777619;
+            foreach (char c in cleanImdb) hash = (hash ^ c) * 16777619;
+            return hash;
+        }
+
+        private static int WriteLiveRecordsFromJson(ReadOnlySpan<byte> jsonBytes, BinaryWriter writer, Utf8StringWriter heap)
+        {
+            var reader = new Utf8JsonReader(jsonBytes, isFinalBlock: true, new JsonReaderState());
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartArray) return 0;
+
+            int count = 0;
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                if (reader.TokenType != JsonTokenType.StartObject)
+                {
+                    reader.Skip();
+                    continue;
+                }
+
+                var data = ParseLiveRecordForBinary(ref reader, heap);
+                WriteLiveRecord(writer, data);
+                count++;
+            }
+
+            return count;
+        }
+
+        private static LiveStreamData ParseLiveRecordForBinary(ref Utf8JsonReader reader, Utf8StringWriter heap)
+        {
+            var data = CreateEmptyLiveRecord();
+
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+            {
+                if (reader.TokenType != JsonTokenType.PropertyName) continue;
+
+                ReadOnlySpan<byte> property = reader.ValueSpan;
+                if (!reader.Read()) break;
+
+                if (property.SequenceEqual("name"u8)) AddJsonString(ref reader, heap, out data.NameOff, out data.NameLen);
+                else if (property.SequenceEqual("stream_id"u8) || property.SequenceEqual("series_id"u8)) data.StreamId = ReadJsonInt32(ref reader);
+                else if (property.SequenceEqual("stream_icon"u8) || property.SequenceEqual("cover"u8)) AddJsonString(ref reader, heap, out data.IconOff, out data.IconLen);
+                else if (property.SequenceEqual("container_extension"u8)) AddJsonString(ref reader, heap, out data.ExtOff, out data.ExtLen);
+                else if (property.SequenceEqual("category_id"u8)) AddJsonString(ref reader, heap, out data.CatOff, out data.CatLen);
+                else if (property.SequenceEqual("category_name"u8)) { }
+                else if (property.SequenceEqual("rating"u8)) AddJsonString(ref reader, heap, out data.RatOff, out data.RatLen);
+                else reader.Skip();
+            }
+
+            return data;
+        }
+
+        private static LiveStreamData CreateEmptyLiveRecord() => new()
+        {
+            NameOff = -1,
+            IconOff = -1,
+            ImdbOff = -1,
+            DescOff = -1,
+            BgOff = -1,
+            GenreOff = -1,
+            CastOff = -1,
+            DirOff = -1,
+            TrailOff = -1,
+            YearOff = -1,
+            ExtOff = -1,
+            CatOff = -1,
+            RatOff = -1
+        };
+
+        private static void AddJsonString(ref Utf8JsonReader reader, Utf8StringWriter heap, out int offset, out int length)
+        {
+            offset = -1;
+            length = 0;
+
+            if (reader.TokenType == JsonTokenType.String)
+            {
+                string? value = reader.GetString();
+                var stored = heap.Add(value);
+                offset = stored.Off;
+                length = stored.Len;
+                return;
+            }
+
+            if (reader.TokenType == JsonTokenType.Number)
+            {
+                string value = reader.GetInt32().ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var stored = heap.Add(value);
+                offset = stored.Off;
+                length = stored.Len;
+            }
+        }
+
+        private static int ReadJsonInt32(ref Utf8JsonReader reader)
+        {
+            if (reader.TokenType == JsonTokenType.Number && reader.TryGetInt32(out int number)) return number;
+            if (reader.TokenType == JsonTokenType.String && int.TryParse(reader.GetString(), out number)) return number;
+            return 0;
+        }
+
+        private static void WriteLiveRecord(BinaryWriter writer, LiveStreamData data)
+        {
+            writer.Write(data.StreamId);
+            writer.Write(data.NameOff); writer.Write(data.NameLen);
+            writer.Write(data.IconOff); writer.Write(data.IconLen);
+            writer.Write(data.ImdbOff); writer.Write(data.ImdbLen);
+            writer.Write(data.DescOff); writer.Write(data.DescLen);
+            writer.Write(data.BgOff); writer.Write(data.BgLen);
+            writer.Write(data.GenreOff); writer.Write(data.GenreLen);
+            writer.Write(data.CastOff); writer.Write(data.CastLen);
+            writer.Write(data.DirOff); writer.Write(data.DirLen);
+            writer.Write(data.TrailOff); writer.Write(data.TrailLen);
+            writer.Write(data.YearOff); writer.Write(data.YearLen);
+            writer.Write(data.ExtOff); writer.Write(data.ExtLen);
+            writer.Write(data.CatOff); writer.Write(data.CatLen);
+            writer.Write(data.RatOff); writer.Write(data.RatLen);
         }
 
         private static List<LiveStream> ParseLiveStreamDataBulk(byte[]? structBytes, int count, int version, BinaryReader reader, int baseOffset)
@@ -1384,48 +2261,28 @@ namespace ModernIPTVPlayer.Services
                 using var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting);
                 using var writer = new BinaryWriter(fileStream, Encoding.UTF8);
 
-                writer.Write(0x564F4444); // Magic
-                writer.Write(4);          // Version (v4: Fixed truncation and missing scan)
-                writer.Write(streams.Count);
-                
-                // Placeholder for StringsLen (will update later)
-                long stringsLenPos = writer.BaseStream.Position;
-                writer.Write(0); 
-
-                writer.Write((byte)1); // DirtyBit (Starting write)
-                writer.Write(new byte[15]); // Reserved
+                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, BinaryCacheLayout.VodSeriesVersion, streams.Count, 0, dirty: true);
 
                 // 2. Sequential Streaming Write
-                // Calculate Fixed Offsets: Header(32) + Records + Index
+                // Calculate Fixed Offsets: Header + Records + Index
                 int recordSize = Marshal.SizeOf<Models.Metadata.VodRecord>();
-                int indexEntrySize = 8; // uint(4) + int(4)
-                long recordsOffset = 32;
+                int indexEntrySize = BinaryCacheLayout.VodIndexEntrySize; // uint(4) + int(4)
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
                 long indexOffset = recordsOffset + (streams.Count * (long)recordSize);
-                long stringsOffset = indexOffset + (streams.Count * (long)indexEntrySize);
+                writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
+                using var stringHeap = new MemoryStream();
+                var heap = new Utf8StringWriter(stringHeap, 0);
 
-                // Prepare Heap Writer at the end of the file
-                writer.BaseStream.Seek(stringsOffset, SeekOrigin.Begin);
-                var heap = new Utf8StringWriter(writer.BaseStream, (int)stringsOffset);
-
-                // Pass 1: Build Records & Write Strings
-                var records = new Models.Metadata.VodRecord[streams.Count];
                 var indexEntries = new (uint Fingerprint, int Index)[streams.Count];
                 
                 for (int i = 0; i < streams.Count; i++)
                 {
-                    records[i] = BuildVodRecordForBinarySave(streams[i], heap);
-                    indexEntries[i] = (records[i].Fingerprint, i);
+                    var record = BuildVodRecordForBinarySave(streams[i], heap);
+                    WriteVodRecordToStream(writer, record);
+                    indexEntries[i] = (record.Fingerprint, i);
                 }
 
                 int bufferPos = heap.TotalBytesWritten;
-
-                // Pass 2: Write Records (Seek back)
-                writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
-                for (int i = 0; i < streams.Count; i++)
-                {
-                    // Use a direct write to avoid large byte[] allocation from CastToBytes
-                    WriteVodRecordToStream(writer, records[i]);
-                }
 
                 // Pass 3: Write Index
                 writer.BaseStream.Seek(indexOffset, SeekOrigin.Begin);
@@ -1436,11 +2293,15 @@ namespace ModernIPTVPlayer.Services
                     writer.Write(indexEntries[i].Index);
                 }
 
+                stringHeap.Position = 0;
+                stringHeap.CopyTo(writer.BaseStream);
+                writer.Flush();
+
                 // 5. Finalize Header
                 long finalSize = writer.BaseStream.Position;
-                writer.BaseStream.Seek(stringsLenPos, SeekOrigin.Begin);
+                writer.BaseStream.Seek(BinaryCacheLayout.StringsLengthOffset, SeekOrigin.Begin);
                 writer.Write(bufferPos); 
-                writer.BaseStream.Seek(16, SeekOrigin.Begin);
+                writer.BaseStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
                 writer.Write((byte)0); // Mark Clean
                 
                 writer.Flush();
@@ -1491,11 +2352,11 @@ namespace ModernIPTVPlayer.Services
 
                 int count, bufferLen, version;
                 using (var mmf = BinaryCacheSession.OpenMemoryMappedFile(Path.Combine(folder.Path, fileName), MemoryMappedFileAccess.Read))
-                using (var accessor = mmf.CreateViewAccessor(0, 32, MemoryMappedFileAccess.Read))
+                using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
-                    int magic = accessor.ReadInt32(0);
-                    if (magic != 0x564F4444) return null;
-                    version = accessor.ReadInt32(4);
+                    var header = BinaryCacheLayout.ReadHeader(accessor);
+                    if (header.Magic != BinaryCacheLayout.VodMagic) return null;
+                    version = header.Version;
                     
                     // Force rebuild if version is legacy
                     if (version < 4) 
@@ -1504,16 +2365,16 @@ namespace ModernIPTVPlayer.Services
                         return null;
                     }
 
-                    count = accessor.ReadInt32(8);
-                    bufferLen = accessor.ReadInt32(12);
+                    count = header.Count;
+                    bufferLen = header.StringsLength;
                 }
 
                 // [PHASE 4] 0ms Virtual Binary Session
                 int recordSize = Marshal.SizeOf<Models.Metadata.VodRecord>();
-                long recordsOffset = 32;
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
                 long indexOffset = recordsOffset + (count * (long)recordSize);
                 // VOD index entry is 8 bytes: uint Fingerprint (4) + int Index (4)
-                long stringsOffset = indexOffset + (count * 8L);
+                long stringsOffset = indexOffset + (count * (long)BinaryCacheLayout.VodIndexEntrySize);
 
                 var session = new BinaryCacheSession(Path.Combine(folder.Path, fileName), stringsOffset, bufferLen, recordsOffset, count, recordSize, readOnlySession: true);
                 
@@ -1526,12 +2387,6 @@ namespace ModernIPTVPlayer.Services
 
                 _streamListsCache[cacheKey] = results;
                 
-                // [NEW] Proactive Index Load: Ensure the search index is ready
-                _ = Task.Run(async () => {
-                    string matchIdxPath = Path.Combine(folder.Path, $"cache_{safeId}_vod_match.bin");
-                    await _vodMatchIndex.LoadAsync(matchIdxPath);
-                });
-
                 AppLogger.Info($"[BinaryLoad] VOD Virtual Session Ready: {count} items.");
                 return results;
             }
@@ -1564,42 +2419,29 @@ namespace ModernIPTVPlayer.Services
                 using (var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting))
                 using (var writer = new BinaryWriter(fileStream, Encoding.UTF8))
                 {
-                    writer.Write(0x53455244); // Magic
-                    writer.Write(4);          // Version (v4: Fixed truncation and missing scan)
-                    writer.Write(streams.Count);
-                    
-                    long stringsLenPos = writer.BaseStream.Position;
-                    writer.Write(0); // Placeholder
-
-                    writer.Write((byte)1); // DirtyBit
-                    writer.Write(new byte[15]); // Reserved
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, BinaryCacheLayout.VodSeriesVersion, streams.Count, 0, dirty: true);
 
                     // Sequential Streaming Write
                     int recordSize = Marshal.SizeOf<Models.Metadata.SeriesRecord>();
-                    long recordsOffset = 32;
-                    long stringsOffset = recordsOffset + (streams.Count * (long)recordSize);
+                    long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
+                    writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
+                    using var stringHeap = new MemoryStream();
+                    var heap = new Utf8StringWriter(stringHeap, 0);
 
-                    writer.BaseStream.Seek(stringsOffset, SeekOrigin.Begin);
-                    var heap = new Utf8StringWriter(writer.BaseStream, (int)stringsOffset);
-
-                    var records = new Models.Metadata.SeriesRecord[streams.Count];
                     for (int i = 0; i < streams.Count; i++)
                     {
-                        records[i] = BuildSeriesRecordForBinarySave(streams[i], heap);
+                        WriteSeriesRecordToStream(writer, BuildSeriesRecordForBinarySave(streams[i], heap));
                     }
 
                     int bufferPos = heap.TotalBytesWritten;
-
-                    writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
-                    for (int i = 0; i < streams.Count; i++)
-                    {
-                        WriteSeriesRecordToStream(writer, records[i]);
-                    }
+                    stringHeap.Position = 0;
+                    stringHeap.CopyTo(writer.BaseStream);
+                    writer.Flush();
 
                     long finalSize = writer.BaseStream.Position;
-                    writer.BaseStream.Seek(stringsLenPos, SeekOrigin.Begin);
+                    writer.BaseStream.Seek(BinaryCacheLayout.StringsLengthOffset, SeekOrigin.Begin);
                     writer.Write(bufferPos); 
-                    writer.BaseStream.Seek(16, SeekOrigin.Begin);
+                    writer.BaseStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
                     writer.Write((byte)0); // Mark Clean
                     
                     writer.Flush();
@@ -1648,24 +2490,24 @@ namespace ModernIPTVPlayer.Services
 
                 int count, bufferLen, version;
                 using (var mmf = BinaryCacheSession.OpenMemoryMappedFile(item.Path, MemoryMappedFileAccess.Read))
-                using (var accessor = mmf.CreateViewAccessor(0, 32, MemoryMappedFileAccess.Read))
+                using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
-                    int magic = accessor.ReadInt32(0);
-                    if (magic != 0x53455244) return null; 
-                    version = accessor.ReadInt32(4);
+                    var header = BinaryCacheLayout.ReadHeader(accessor);
+                    if (header.Magic != BinaryCacheLayout.SeriesMagic) return null; 
+                    version = header.Version;
                     if (version < 4)
                     {
                         AppLogger.Warn($"[BinaryLoad] Discarding legacy Version {version} Series cache.");
                         return null; 
                     }
 
-                    count = accessor.ReadInt32(8);
-                    bufferLen = accessor.ReadInt32(12);
+                    count = header.Count;
+                    bufferLen = header.StringsLength;
                 }
 
                 // [PHASE 4] 0ms Virtual Binary Session
                 int recordSize = Marshal.SizeOf<Models.Metadata.SeriesRecord>();
-                long recordsOffset = 32;
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
                 long stringsOffset = recordsOffset + (count * (long)recordSize);
 
                 var session = new BinaryCacheSession(item.Path, stringsOffset, bufferLen, recordsOffset, count, recordSize, readOnlySession: true);
@@ -1678,29 +2520,11 @@ namespace ModernIPTVPlayer.Services
 
                 _streamListsCache[cacheKey] = results;
                 
-                // [NEW] Load Persistent Match Index
-                _ = _seriesMatchIndex.LoadAsync(Path.Combine(folder.Path, $"cache_{safeId}_series_match.bin"));
-
                 AppLogger.Info($"[BinaryLoad] Series Virtual Session Ready: {count} items.");
                 return results;
             }
             catch (Exception ex) { AppLogger.Error("[BinaryLoad] Series Virtual Session FAILED", ex); return null; }
             finally { _diskSemaphore.Release(); }
-        }
-
-        private static byte[] CastLiveRecordsToBytes(LiveStreamData[] records)
-        {
-            return MemoryMarshal.AsBytes(records.AsSpan()).ToArray();
-        }
-
-        private static byte[] CastVodRecordsToBytes(Models.Metadata.VodRecord[] records)
-        {
-            return MemoryMarshal.AsBytes(records.AsSpan()).ToArray();
-        }
-
-        private static byte[] CastSeriesRecordsToBytes(Models.Metadata.SeriesRecord[] records)
-        {
-            return MemoryMarshal.AsBytes(records.AsSpan()).ToArray();
         }
 
         #region CATEGORY BINARY (PROJECT ZERO PHASE 4)
@@ -1723,17 +2547,9 @@ namespace ModernIPTVPlayer.Services
                 using var writer = new BinaryWriter(fileStream, Encoding.UTF8);
 
                 // 1. Header (32 bytes)
-                writer.Write(0x43415443); // Magic
-                writer.Write(2);          // Version
-                writer.Write(categories.Count);
+                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.CategoryMagic, 2, categories.Count, 0, dirty: true);
                 
-                long stringsLenPos = writer.BaseStream.Position;
-                writer.Write(0); // StringsLen Placeholder
-
-                writer.Write((byte)1); // DirtyBit
-                writer.Write(new byte[15]); // Reserved
-                
-                // 2. Construct records and strings in memory first for Categories
+                // 2. Construct category strings first; records are fixed-size and streamed directly.
                 using var stringsMs = new MemoryStream();
                 var records = new Models.Metadata.CategoryRecord[categories.Count];
                 for (int i = 0; i < categories.Count; i++)
@@ -1755,17 +2571,23 @@ namespace ModernIPTVPlayer.Services
 
                 // 3. Write Records
                 long recordsStart = writer.BaseStream.Position;
-                byte[] recordBytes = CastCategoryRecordsToBytes(records);
-                writer.Write(recordBytes);
+                for (int i = 0; i < records.Length; i++)
+                {
+                    writer.Write(records[i].IdOff);
+                    writer.Write(records[i].IdLen);
+                    writer.Write(records[i].NameOff);
+                    writer.Write(records[i].NameLen);
+                }
 
                 int bufferPos = (int)stringsMs.Length;
-                writer.Write(stringsMs.ToArray());
+                stringsMs.Position = 0;
+                stringsMs.CopyTo(writer.BaseStream);
 
                 // Finalize
                 long finalSize = writer.BaseStream.Position;
-                writer.BaseStream.Position = stringsLenPos;
+                writer.BaseStream.Position = BinaryCacheLayout.StringsLengthOffset;
                 writer.Write(bufferPos);
-                writer.BaseStream.Position = 16;
+                writer.BaseStream.Position = BinaryCacheLayout.DirtyOffset;
                 writer.Write((byte)0);
 
                 writer.BaseStream.SetLength(finalSize + 5*1024*1024); writer.Flush();
@@ -1805,19 +2627,19 @@ namespace ModernIPTVPlayer.Services
 
                 int count, bufferLen, version;
                 using (var mmf = BinaryCacheSession.OpenMemoryMappedFile(item.Path, MemoryMappedFileAccess.Read))
-                using (var accessor = mmf.CreateViewAccessor(0, 32, MemoryMappedFileAccess.Read))
+                using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
-                    int magic = accessor.ReadInt32(0);
-                    if (magic != 0x43415443) return null;
-                    version = accessor.ReadInt32(4);
+                    var header = BinaryCacheLayout.ReadHeader(accessor);
+                    if (header.Magic != BinaryCacheLayout.CategoryMagic) return null;
+                    version = header.Version;
                     if (version < 2) return null;
 
-                    count = accessor.ReadInt32(8);
-                    bufferLen = accessor.ReadInt32(12);
+                    count = header.Count;
+                    bufferLen = header.StringsLength;
                 }
 
                 int recordSize = Marshal.SizeOf<Models.Metadata.CategoryRecord>();
-                long recordsOffset = 32;
+                long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
                 long stringsOffset = recordsOffset + (count * (long)recordSize);
 
                 var session = new Helpers.BinaryCacheSession(item.Path, stringsOffset, bufferLen, recordsOffset, count, recordSize, readOnlySession: true);
@@ -1832,10 +2654,6 @@ namespace ModernIPTVPlayer.Services
             finally { _diskSemaphore.Release(); }
         }
 
-        private static byte[] CastCategoryRecordsToBytes(Models.Metadata.CategoryRecord[] records)
-        {
-            return MemoryMarshal.AsBytes(records.AsSpan()).ToArray();
-        }
         #endregion
         #endregion
 
@@ -1843,12 +2661,12 @@ namespace ModernIPTVPlayer.Services
         public async Task SaveCacheAsync<T>(string playlistId, string category, IReadOnlyList<T> data) where T : class
         {
             // PROJECT ZERO: Exclusive Binary Persistence
-            if (category.EndsWith("_categories") && data is IReadOnlyList<LiveCategory> cats)
+            if (IsCategoryCache(category) && data is IReadOnlyList<LiveCategory> cats)
             {
                 await SaveCategoriesBinaryAsync(playlistId, category, cats);
                 return;
             }
-            if (category == "live_streams" && data is List<LiveStream> liveStreams)
+            if (category == "live_streams" && data is IReadOnlyList<LiveStream> liveStreams)
             {
                 await SaveLiveStreamsBinaryAsync(playlistId, liveStreams);
                 return;
@@ -1891,6 +2709,13 @@ namespace ModernIPTVPlayer.Services
             return playlistId;
         }
 
+        private static bool IsCategoryCache(string category)
+        {
+            return category.EndsWith("_categories", StringComparison.Ordinal)
+                || category == "live_cats"
+                || category == "live_cats_m3u";
+        }
+
         private async Task<string> ReadTextAsync(string filename)
         {
             try 
@@ -1919,176 +2744,30 @@ namespace ModernIPTVPlayer.Services
         }
         
         
-        /// <summary>
-        /// Convenience overload for background refresh using current login.
-        /// </summary>
-        public async Task RefreshIptvMatchIndexAsync()
-        {
-            var login = App.CurrentLogin;
-            if (login == null) return;
-            await RefreshIptvMatchIndexAsync(login.PlaylistId, login);
-        }
-
-        public async Task RefreshIptvMatchIndexAsync(string playlistId, LoginParams login)
-        {
-            await _indexRefreshSemaphore.WaitAsync();
-            try
-            {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            string safeId = GetSafePlaylistId(playlistId);
-            var folder = ApplicationData.Current.LocalFolder;
-            string cid = LifecycleLog.NewId("idx");
-            using var lifecycle = LifecycleLog.Begin("Index.Refresh.Virtual", cid, new Dictionary<string, object?>
-            {
-                ["playlistId"] = playlistId,
-                ["safeId"] = safeId,
-                ["source"] = "RefreshIptvMatchIndexAsync(string,LoginParams)"
-            });
-            
-            // 1. Get Virtual Lists (Try RAM cache first, else load from disk)
-            Helpers.VirtualVodList? vvl = null;
-            if (_streamListsCache.TryGetValue($"{safeId}_vod", out var vodList) && vodList is Helpers.VirtualVodList vvlCached)
-            {
-                vvl = vvlCached;
-            }
-            else
-            {
-                var loaded = await LoadVodStreamsBinaryAsync(playlistId);
-                vvl = loaded as Helpers.VirtualVodList;
-                if (vvl == null) AppLogger.Warn($"[MatchIndex] VOD data missing or stale on disk for {playlistId}");
-            }
-
-            Helpers.VirtualSeriesList? vsl = null;
-            if (_streamListsCache.TryGetValue($"{safeId}_series", out var serList) && serList is Helpers.VirtualSeriesList vslCached)
-            {
-                vsl = vslCached;
-            }
-            else
-            {
-                var loaded = await LoadSeriesStreamsBinaryAsync(playlistId);
-                vsl = loaded as Helpers.VirtualSeriesList;
-                if (vsl == null) AppLogger.Warn($"[MatchIndex] Series data missing or stale on disk for {playlistId}");
-            }
-
-            if (vvl == null && vsl == null)
-            {
-                AppLogger.Warn($"[MatchIndex] ABORT: Both VOD and Series data missing on disk for {playlistId}");
-                return;
-            }
-
-            lifecycle.Step("lists_ready", new Dictionary<string, object?> { ["vodCount"] = vvl?.Count ?? 0, ["seriesCount"] = vsl?.Count ?? 0 });
-
-            AppLogger.Info($"[Checkpoint] [MatchIndex] Phase 1: Validating Local Search Indices for {safeId}...");
-            
-            // 2. SMART LOAD: Check VOD Index
-            if (vvl != null)
-            {
-                string vodIdxPath = Path.Combine(folder.Path, $"cache_{safeId}_vod_match.bin");
-                bool vodLoaded = await _vodMatchIndex.LoadAsync(vodIdxPath);
-                if (!vodLoaded || _vodMatchIndex.SourceFingerprint != vvl.Fingerprint)
-                {
-                    AppLogger.Info($"[MatchIndex] VOD Index Stale or Missing (Disk:{_vodMatchIndex.SourceFingerprint} vs RAM:{vvl.Fingerprint}). Rebuilding...");
-                    _vodMatchIndex.Build(vvl);
-                    await _vodMatchIndex.SaveAsync(vodIdxPath);
-                    lifecycle.Step("vod_rebuilt");
-                }
-                else AppLogger.Info($"[MatchIndex] VOD Index Valid (Fingerprint: {_vodMatchIndex.SourceFingerprint}). Loaded from disk.");
-            }
-
-            // 3. SMART LOAD: Check Series Index
-            if (vsl != null)
-            {
-                string serIdxPath = Path.Combine(folder.Path, $"cache_{safeId}_series_match.bin");
-                bool serLoaded = await _seriesMatchIndex.LoadAsync(serIdxPath);
-                if (!serLoaded || _seriesMatchIndex.SourceFingerprint != vsl.Fingerprint)
-                {
-                    AppLogger.Info($"[MatchIndex] Series Index Stale or Missing (Disk:{_seriesMatchIndex.SourceFingerprint} vs RAM:{vsl.Fingerprint}). Rebuilding...");
-                    _seriesMatchIndex.Build(vsl);
-                    await _seriesMatchIndex.SaveAsync(serIdxPath);
-                    lifecycle.Step("series_rebuilt");
-                }
-                else AppLogger.Info($"[MatchIndex] Series Index Valid (Fingerprint: {_seriesMatchIndex.SourceFingerprint}). Loaded from disk.");
-            }
-
-            // 4. PUBLISH TO GLOBAL SERVICE (Project Zero Activation)
-            AppLogger.Info($"[Checkpoint] [MatchIndex] Phase 2: Synchronizing with Global Search Service...");
-            
-            var vodTokenMap = _vodMatchIndex.GetTokenMap();
-            var serTokenMap = _seriesMatchIndex.GetTokenMap();
-            var vodIdMap = _vodMatchIndex.GetIdMap();
-            var serIdMap = _seriesMatchIndex.GetIdMap();
-
-            // Merge into unified indices for IptvMatchService
-            var imdbIndex = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
-            var tokenIndex = new Dictionary<string, int[]>(StringComparer.OrdinalIgnoreCase);
-
-            // Merge IDs (imdbId -> streamIds[])
-            foreach (var kvp in vodIdMap) imdbIndex[kvp.Key] = kvp.Value;
-            foreach (var kvp in serIdMap) 
-            {
-                var packedSer = kvp.Value.Select(i => -i).ToArray();
-                if (imdbIndex.TryGetValue(kvp.Key, out var existing))
-                {
-                    var newArr = new int[existing.Length + packedSer.Length];
-                    Array.Copy(existing, newArr, existing.Length);
-                    Array.Copy(packedSer, 0, newArr, existing.Length, packedSer.Length);
-                    imdbIndex[kvp.Key] = newArr;
-                }
-                else imdbIndex[kvp.Key] = packedSer;
-            }
-
-            // Merge Tokens
-            foreach (var kvp in vodTokenMap) tokenIndex[kvp.Key] = kvp.Value;
-            foreach (var kvp in serTokenMap)
-            {
-                var packedSer = kvp.Value.Select(i => -i).ToArray();
-                if (tokenIndex.TryGetValue(kvp.Key, out var existing))
-                {
-                    var newArr = new int[existing.Length + packedSer.Length];
-                    Array.Copy(existing, newArr, existing.Length);
-                    Array.Copy(packedSer, 0, newArr, existing.Length, packedSer.Length);
-                    tokenIndex[kvp.Key] = newArr;
-                }
-                else tokenIndex[kvp.Key] = packedSer;
-            }
-
-            IptvMatchService.Instance.UpdateIndices(vvl, vsl, imdbIndex, tokenIndex, cid, "virtual_refresh");
-            lifecycle.Step("published", new Dictionary<string, object?> { ["imdbKeys"] = imdbIndex.Count, ["tokenKeys"] = tokenIndex.Count });
-
-            AppLogger.Info($"[Checkpoint] [MatchIndex] ✅ LOCAL SEARCH ACTIVATED in {sw.ElapsedMilliseconds}ms. Tokens: {tokenIndex.Count}, Streams: {(vvl?.Count ?? 0) + (vsl?.Count ?? 0)}");
-            }
-            finally
-            {
-                _indexRefreshSemaphore.Release();
-            }
-        }
 
         public async Task<List<IMediaStream>> FindLocalMatchesAsync(string title, string? imdbId = null)
         {
             var results = new List<IMediaStream>();
 
-            // --- STAGE 1: ID MATCHING (%100 Accurate) ---
             if (!string.IsNullOrEmpty(imdbId))
             {
                 // Check VOD ID Index
-                int[] vodIdsFound = _vodMatchIndex.FindById(imdbId);
-                if (vodIdsFound.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_vod", out var vodList) && vodList is VirtualVodList vvl)
+                int[] vodIndicesFound = _vodMatchIndex.FindById(imdbId);
+                if (vodIndicesFound.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_vod", out var vodList) && vodList is VirtualVodList vvl)
                 {
-                    foreach (var vid in vodIdsFound)
+                    foreach (var index in vodIndicesFound)
                     {
-                        var match = vvl.FirstOrDefault(v => v.StreamId == vid);
-                        if (match != null) results.Add(match);
+                        if ((uint)index < (uint)vvl.Count) results.Add(vvl[index]);
                     }
                 }
 
                 // Check Series ID Index
-                int[] serIdsFound = _seriesMatchIndex.FindById(imdbId);
-                if (serIdsFound.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_series", out var serList) && serList is VirtualSeriesList vsl)
+                int[] serIndicesFound = _seriesMatchIndex.FindById(imdbId);
+                if (serIndicesFound.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_series", out var serList) && serList is VirtualSeriesList vsl)
                 {
-                    foreach (var sid in serIdsFound)
+                    foreach (var index in serIndicesFound)
                     {
-                        var match = vsl.FirstOrDefault(s => s.SeriesId == sid);
-                        if (match != null) results.Add(match);
+                        if ((uint)index < (uint)vsl.Count) results.Add(vsl[index]);
                     }
                 }
 
@@ -2101,24 +2780,22 @@ namespace ModernIPTVPlayer.Services
             if (tokens.Count == 0) return results;
 
             // Check VOD Token Index
-            var vodIds = _vodMatchIndex.FindByTokens(tokens);
-            if (vodIds.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_vod", out var vodList2) && vodList2 is VirtualVodList vvl2)
+            var vodIndices = _vodMatchIndex.FindByTokens(tokens);
+            if (vodIndices.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_vod", out var vodList2) && vodList2 is VirtualVodList vvl2)
             {
-                foreach (var id in vodIds)
+                foreach (var index in vodIndices)
                 {
-                    var match = vvl2.FirstOrDefault(v => v.StreamId == id);
-                    if (match != null) results.Add(match);
+                    if ((uint)index < (uint)vvl2.Count) results.Add(vvl2[index]);
                 }
             }
 
             // Check Series Token Index
-            var serIds = _seriesMatchIndex.FindByTokens(tokens);
-            if (serIds.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_series", out var serList2) && serList2 is VirtualSeriesList vsl2)
+            var serIndices = _seriesMatchIndex.FindByTokens(tokens);
+            if (serIndices.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_series", out var serList2) && serList2 is VirtualSeriesList vsl2)
             {
-                foreach (var id in serIds)
+                foreach (var index in serIndices)
                 {
-                    var match = vsl2.FirstOrDefault(s => s.SeriesId == id);
-                    if (match != null) results.Add(match);
+                    if ((uint)index < (uint)vsl2.Count) results.Add(vsl2[index]);
                 }
             }
 
@@ -2739,7 +3416,7 @@ namespace ModernIPTVPlayer.Services
                         var list = seriesRo as List<SeriesStream> ?? seriesRo.ToList();
                         await SaveSeriesStreamsBinaryInternalAsync(playlistId, list);
                     }
-                    else if (category == "live" && data is IReadOnlyList<LiveStream> liveRo)
+                    else if (category == "live_streams" && data is IReadOnlyList<LiveStream> liveRo)
                     {
                         var list = liveRo as List<LiveStream> ?? liveRo.ToList();
                         await SaveLiveStreamsBinaryInternalAsync(playlistId, list);
@@ -2796,21 +3473,19 @@ namespace ModernIPTVPlayer.Services
                 int version = reader.ReadInt32();
                 int count = reader.ReadInt32();
                 int bufferLen = reader.ReadInt32();
-                bool magicOk = magic == 0x564F4444 || magic == 0x53455244 || magic == 0x43415443 || magic == 0x4256494C;
+                bool magicOk = BinaryCacheLayout.IsKnownMagic(magic);
                 if (!magicOk || version < 2 || count < 0 || bufferLen < 0)
                 {
                     AppLogger.Warn($"[Repair] {fileName}: invalid header (magic=0x{magic:X8}, ver={version}, count={count}).");
                     return;
                 }
 
-                if (magic != 0x4256494C)
+                if (magic != BinaryCacheLayout.LiveMagic)
                 {
-                    int recordSize = magic == 0x53455244 ? Marshal.SizeOf<Models.Metadata.SeriesRecord>()
-                        : magic == 0x564F4444 ? Marshal.SizeOf<Models.Metadata.VodRecord>()
+                    int recordSize = magic == BinaryCacheLayout.SeriesMagic ? Marshal.SizeOf<Models.Metadata.SeriesRecord>()
+                        : magic == BinaryCacheLayout.VodMagic ? Marshal.SizeOf<Models.Metadata.VodRecord>()
                         : Marshal.SizeOf<Models.Metadata.CategoryRecord>();
-                    long stringsOffset = magic == 0x564F4444
-                        ? 32L + (count * (long)recordSize) + (count * 8L)
-                        : 32L + (count * (long)recordSize);
+                    long stringsOffset = BinaryCacheLayout.GetStringsOffset(magic, count, recordSize);
                     long minLen = stringsOffset + bufferLen;
                     if (stream.Length < minLen)
                     {
@@ -2819,7 +3494,7 @@ namespace ModernIPTVPlayer.Services
                     }
                 }
 
-                stream.Seek(16, SeekOrigin.Begin);
+                stream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
                 byte dirtyBit = reader.ReadByte();
 
                 if (dirtyBit == 1)
@@ -2829,7 +3504,7 @@ namespace ModernIPTVPlayer.Services
                     {
                         using (var writeStream = randomStream.AsStreamForWrite())
                         {
-                            writeStream.Seek(16, SeekOrigin.Begin);
+                            writeStream.Seek(BinaryCacheLayout.DirtyOffset, SeekOrigin.Begin);
                             writeStream.WriteByte(0);
                             await writeStream.FlushAsync();
                         }

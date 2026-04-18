@@ -23,6 +23,8 @@ namespace ModernIPTVPlayer.Helpers
         private MemoryMappedViewAccessor _accessor;
         private byte* _ptr;
         private long _currentCapacity;
+        private readonly object _accessorLock = new();
+        private bool _disposed;
         
         private readonly long _stringBufferOffset;
         private int _stringBufferLen;
@@ -83,7 +85,7 @@ namespace ModernIPTVPlayer.Helpers
         {
             if (_ptr != null && !_readOnlySession)
             {
-                *(_ptr + 16) = (byte)(dirty ? 1 : 0);
+                *(_ptr + BinaryCacheLayout.DirtyOffset) = (byte)(dirty ? 1 : 0);
             }
         }
 
@@ -91,7 +93,7 @@ namespace ModernIPTVPlayer.Helpers
         {
             if (_ptr != null && !_readOnlySession)
             {
-                *(int*)(_ptr + 12) = newLen;
+                *(int*)(_ptr + BinaryCacheLayout.StringsLengthOffset) = newLen;
                 _stringBufferLen = newLen;
             }
         }
@@ -100,7 +102,7 @@ namespace ModernIPTVPlayer.Helpers
         {
             if (_ptr != null && !_readOnlySession)
             {
-                *(long*)(_ptr + 24) = fingerprint;
+                *(long*)(_ptr + BinaryCacheLayout.FingerprintOffset) = fingerprint;
             }
         }
 
@@ -108,7 +110,7 @@ namespace ModernIPTVPlayer.Helpers
         {
             if (_ptr != null)
             {
-                return *(long*)(_ptr + 24);
+                return *(long*)(_ptr + BinaryCacheLayout.FingerprintOffset);
             }
             return 0;
         }
@@ -116,7 +118,6 @@ namespace ModernIPTVPlayer.Helpers
         public string GetString(int offset, int length)
         {
             if (offset < 0 || length <= 0) return string.Empty;
-            if (_ptr == null) return "Error: Disposed";
 
             // [PHASE 2.4] Security Guard: Prevent massive RAM spike from corrupted/misaligned binary records
             if (length > 65536) 
@@ -129,15 +130,37 @@ namespace ModernIPTVPlayer.Helpers
             if (_stringCache.TryGetValue(key, out var cached)) return cached;
 
             long absOffset = _stringBufferOffset + offset;
-            if (absOffset + length > _currentCapacity || absOffset < 0) 
+            long stringEnd = (long)offset + length;
+            long absoluteEnd = absOffset + length;
+            if (absOffset < 0 || absoluteEnd < absOffset || absoluteEnd > _currentCapacity || stringEnd > _stringBufferLen) 
             {
-                AppLogger.Warn($"[BinarySession] Offset out of bounds: off={absOffset}, len={length}, cap={_currentCapacity}");
+                AppLogger.Warn($"[BinarySession] Offset out of bounds: off={absOffset}, relOff={offset}, len={length}, stringsLen={_stringBufferLen}, cap={_currentCapacity}");
                 return string.Empty;
             }
 
-            var s = Encoding.UTF8.GetString(_ptr + absOffset, length).TrimEnd('\0');
-            if (_stringCache.Count < 5000) _stringCache.TryAdd(key, s);
-            return s;
+            byte[] rented = ArrayPool<byte>.Shared.Rent(length);
+            try
+            {
+                int read;
+                lock (_accessorLock)
+                {
+                    if (_disposed || _accessor == null) return string.Empty;
+                    read = _accessor.ReadArray(absOffset, rented, 0, length);
+                }
+
+                var s = Encoding.UTF8.GetString(rented, 0, read).TrimEnd('\0');
+                if (_stringCache.Count < 5000) _stringCache.TryAdd(key, s);
+                return s;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[BinarySession] Safe string read failed: off={absOffset}, len={length}", ex);
+                return string.Empty;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
         }
 
         public (int NewOffset, int NewLength) PokeString(int offset, int length, string value)
@@ -222,11 +245,12 @@ namespace ModernIPTVPlayer.Helpers
 
         public T* GetRecordPointer<T>(int index) where T : struct
         {
-            if (index < 0 || index >= _recordCount || _ptr == null) return null;
+            if (index < 0 || index >= _recordCount || _ptr == null || _disposed) return null;
             
             long offset = _recordsOffset + (index * (long)_recordSize);
+            long end = offset + _recordSize;
             // Safety: Ensure the entire record struct fits within the current file capacity
-            if (offset + _recordSize > _currentCapacity)
+            if (offset < 0 || end < offset || end > _currentCapacity)
             {
                 AppLogger.Error($"[BinarySession] Record pointer out of bounds: index={index}, offset={offset}, size={_recordSize}, cap={_currentCapacity}");
                 return null;
@@ -235,19 +259,56 @@ namespace ModernIPTVPlayer.Helpers
             return (T*)(_ptr + offset);
         }
 
+        public bool TryReadRecord<T>(int index, out T record) where T : struct
+        {
+            record = default;
+            if (index < 0 || index >= _recordCount) return false;
+
+            long offset = _recordsOffset + (index * (long)_recordSize);
+            long end = offset + _recordSize;
+            if (offset < 0 || end < offset || end > _currentCapacity)
+            {
+                AppLogger.Error($"[BinarySession] Record read out of bounds: index={index}, offset={offset}, size={_recordSize}, cap={_currentCapacity}");
+                return false;
+            }
+
+            try
+            {
+                lock (_accessorLock)
+                {
+                    if (_disposed || _accessor == null) return false;
+                    _accessor.Read(offset, out record);
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppLogger.Error($"[BinarySession] Safe record read failed: index={index}, offset={offset}, type={typeof(T).Name}", ex);
+                return false;
+            }
+        }
+
         public void AddRef() => Interlocked.Increment(ref _useCount);
 
         public void Dispose()
         {
             if (Interlocked.Decrement(ref _useCount) <= 0)
             {
-                if (!_readOnlySession) SetDirty(false);
-                if (_accessor != null)
+                lock (_accessorLock)
                 {
-                    _accessor.SafeMemoryMappedViewHandle.ReleasePointer();
-                    _accessor.Dispose();
+                    if (_disposed) return;
+                    if (!_readOnlySession) SetDirty(false);
+                    if (_accessor != null)
+                    {
+                        _accessor.SafeMemoryMappedViewHandle.ReleasePointer();
+                        _accessor.Dispose();
+                    }
+                    _mmf?.Dispose();
+                    _ptr = null;
+                    _disposed = true;
                 }
-                _mmf?.Dispose();
+
                 _stringCache.Clear();
             }
         }

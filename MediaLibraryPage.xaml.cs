@@ -492,9 +492,13 @@ namespace ModernIPTVPlayer
                         {
                             AppLogger.Warn("[MediaLibraryPage] Cache Empty. Fetching VOD streams from network...");
                             string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams";
-                            string json = await _httpClient.GetStringAsync(api, token);
-                            movies = HttpHelper.TryDeserializeList<VodStream>(json, options);
-                            await ContentCacheService.Instance.SaveCacheAsync(playlistId, "vod", movies);
+                            MemoryTelemetryService.LogCheckpoint("MediaLibrary.VOD.fetch.start", $"playlist={playlistId}");
+                            using var response = await _httpClient.GetAsync(api, HttpCompletionOption.ResponseHeadersRead, token);
+                            response.EnsureSuccessStatusCode();
+                            await using var stream = await response.Content.ReadAsStreamAsync(token);
+                            await ContentCacheService.Instance.SaveVodStreamsBinaryFromJsonStreamAsync(playlistId, stream, token);
+                            movies = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod");
+                            MemoryTelemetryService.LogCheckpoint("MediaLibrary.VOD.binary.ready", "streamed=true");
                         }
 
                         if (movies != null)
@@ -513,10 +517,13 @@ namespace ModernIPTVPlayer
                         {
                             AppLogger.Warn("[MediaLibraryPage] Cache Empty. Fetching Series from network...");
                             string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series";
-                            string json = await _httpClient.GetStringAsync(api, token);
-                            series = HttpHelper.TryDeserializeList<SeriesStream>(json, options);
-                            await ContentCacheService.Instance.SaveCacheAsync(playlistId, "series", series);
-                            _ = ContentCacheService.Instance.RefreshIptvMatchIndexAsync(playlistId);
+                            MemoryTelemetryService.LogCheckpoint("MediaLibrary.Series.fetch.start", $"playlist={playlistId}");
+                            using var response = await _httpClient.GetAsync(api, HttpCompletionOption.ResponseHeadersRead, token);
+                            response.EnsureSuccessStatusCode();
+                            await using var stream = await response.Content.ReadAsStreamAsync(token);
+                            await ContentCacheService.Instance.SaveSeriesStreamsBinaryFromJsonStreamAsync(playlistId, stream, token);
+                            series = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
+                            MemoryTelemetryService.LogCheckpoint("MediaLibrary.Series.binary.ready", "streamed=true");
                         }
 
                         if (series != null) items = series;
