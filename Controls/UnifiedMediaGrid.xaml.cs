@@ -10,6 +10,7 @@ using System.Windows.Input;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class UnifiedMediaGrid : UserControl
     {
         public event EventHandler<MediaNavigationArgs>? ItemClicked;
@@ -51,8 +52,25 @@ namespace ModernIPTVPlayer.Controls
                 if (_items == value) return; // ENGINEERED: No-op if reference is identical
 
                 _items = value;
-                MediaGridView.ItemsSource = _items;
-                IsLoading = false; 
+
+                if (_items != null)
+                {
+                    var wrapped = new List<UnifiedMediaItemContext>();
+                    foreach (var item in _items)
+                    {
+                        if (item is IMediaStream stream)
+                        {
+                            wrapped.Add(new UnifiedMediaItemContext(stream, this));
+                        }
+                    }
+                    MediaGridView.ItemsSource = wrapped;
+                }
+                else
+                {
+                    MediaGridView.ItemsSource = null;
+                }
+
+                IsLoading = false;
             }
         }
 
@@ -222,7 +240,17 @@ namespace ModernIPTVPlayer.Controls
 
         private void MediaGridView_ItemClick(object sender, ItemClickEventArgs e)
         {
-            if (e.ClickedItem is IMediaStream stream)
+            IMediaStream? stream = null;
+            if (e.ClickedItem is UnifiedMediaItemContext context)
+            {
+                stream = context.Data;
+            }
+            else if (e.ClickedItem is IMediaStream directStream)
+            {
+                stream = directStream;
+            }
+
+            if (stream != null)
             {
                 var container = MediaGridView.ContainerFromItem(e.ClickedItem) as GridViewItem;
                 UIElement source = (container?.ContentTemplateRoot as PosterCard)?.ImageElement;
@@ -287,6 +315,21 @@ namespace ModernIPTVPlayer.Controls
                 if (result != null) return result;
             }
             return null;
+        }
+    }
+ 
+    [Microsoft.UI.Xaml.Data.Bindable]
+    public class UnifiedMediaItemContext
+    {
+        private readonly UnifiedMediaGrid _parent;
+        public IMediaStream Data { get; }
+        public bool ShowTitles => _parent.ShowTitles;
+        public bool ShowIptvBadge => _parent.ShowIptvBadge;
+ 
+        public UnifiedMediaItemContext(IMediaStream data, UnifiedMediaGrid parent)
+        {
+            Data = data;
+            _parent = parent;
         }
     }
 }

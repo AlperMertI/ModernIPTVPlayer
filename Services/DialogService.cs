@@ -10,7 +10,7 @@ namespace ModernIPTVPlayer.Services
     public static class DialogService
     {
         private static bool _isAnyDialogShowing = false;
-        private static readonly object _lock = new object();
+        private static readonly System.Threading.Lock _lock = new();
 
         /// <summary>
         /// Shows a ContentDialog and ensures no other dialog is currently visible.

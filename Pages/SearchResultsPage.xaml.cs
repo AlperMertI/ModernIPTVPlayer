@@ -17,6 +17,7 @@ using System.Threading.Tasks;
 
 namespace ModernIPTVPlayer.Pages
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class SearchArgs
     {
         public string Query { get; set; }

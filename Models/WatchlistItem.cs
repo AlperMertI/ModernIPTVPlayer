@@ -5,9 +5,10 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Models
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class WatchlistItem : IMediaStream
     {
-        private readonly object _metaLock = new();
+        private readonly System.Threading.Lock _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
         public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
         public uint Fingerprint { get; set; }

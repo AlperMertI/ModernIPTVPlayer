@@ -10,16 +10,18 @@ namespace ModernIPTVPlayer
     public static class HttpHelper
     {
         public const string UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-        private static readonly HttpClientHandler _handler;
+        private static readonly SocketsHttpHandler _handler;
         private static readonly HttpClient _client;
 
         static HttpHelper()
         {
-            _handler = new HttpClientHandler
+            _handler = new SocketsHttpHandler
             {
                 CookieContainer = new CookieContainer(),
                 UseCookies = true,
-                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate | DecompressionMethods.Brotli
+                AutomaticDecompression = DecompressionMethods.All,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                EnableMultipleHttp2Connections = true
             };
 
             _client = new HttpClient(_handler);

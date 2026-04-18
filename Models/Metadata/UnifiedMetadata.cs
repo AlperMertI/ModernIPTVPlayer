@@ -8,7 +8,7 @@ namespace ModernIPTVPlayer.Models.Metadata
 {
     public class UnifiedMetadata
     {
-        private readonly object _lock = new object();
+        private readonly System.Threading.Lock _lock = new();
         [JsonIgnore]
         public object SyncRoot => _lock;
 

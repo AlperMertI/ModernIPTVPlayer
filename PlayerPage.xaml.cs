@@ -82,6 +82,7 @@ namespace ModernIPTVPlayer
 
         // ---------- SUBTITLE & SYNC STATE ----------
         private bool _isAudioDelayMode = false; // true = Audio, false = Subtitle
+        public bool IsAudioDelayMode => _isAudioDelayMode;
         private double _audioDelayMs = 0;
         private double _subDelayMs = 0;
         private List<SubtitleLanguageViewModel> _subtitleLanguages = new();
@@ -89,25 +90,6 @@ namespace ModernIPTVPlayer
         private List<SubtitleTrackViewModel> _cachedAddonSubtitles = new(); // Cache for fetched addon subs
         private string _lastAddonFetchId = null; // Track which ID we cached for
         private bool _isFetchingAddonSubs = false;
-
-        public class SubtitleLanguageViewModel
-        {
-            public string Code { get; set; }
-            public string Name { get; set; }
-            public int Count { get; set; }
-            public bool IsLoadingItem { get; set; } // For Shimmer
-        }
-
-        public class SubtitleTrackViewModel
-        {
-            public int Id { get; set; } // MPV Track ID
-            public string Text { get; set; }
-            public string Lang { get; set; }
-            public bool IsAddon { get; set; }
-            public string Url { get; set; } // For external/addon subs
-            public bool IsSelected { get; set; }
-            public string AddonName { get; set; } = "ADDON";
-        }
 
         // Helper class to deserialize MPV track-list
         private class MpvTrack
@@ -155,7 +137,7 @@ namespace ModernIPTVPlayer
         private int _nativePlaybackGeneration = 0;
         private long _nativeSessionId = 0;
         private long _activeNativePlayerSessionId = 0;
-        private readonly object _nativeTeardownLock = new();
+        private readonly System.Threading.Lock _nativeTeardownLock = new();
         private Task _nativeTeardownTask = Task.CompletedTask;
         
         // Auto-Hide Logic
@@ -3781,20 +3763,28 @@ namespace ModernIPTVPlayer
             public int Y;
         }
 
-        [DllImport("user32.dll")]
-        private static extern bool GetCursorPos(out POINT lpPoint);
+        [LibraryImport("user32.dll")]
+        [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static partial bool GetCursorPos(out POINT lpPoint);
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern IntPtr GetForegroundWindow();
+        [LibraryImport("user32.dll")]
+        private static partial IntPtr GetForegroundWindow();
 
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern IntPtr CreateCursor(IntPtr hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight, byte[] pvANDPlane, byte[] pvXORPlane);
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern bool SetSystemCursor(IntPtr hcur, uint id);
-        [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern IntPtr CopyIcon(IntPtr hcur);
+        [LibraryImport("user32.dll")]
+        private static partial IntPtr CreateCursor(IntPtr hInst, int xHotSpot, int yHotSpot, int nWidth, int nHeight, byte[] pvANDPlane, byte[] pvXORPlane);
+
+        [LibraryImport("user32.dll")]
+        private static partial IntPtr LoadCursorW(IntPtr hInstance, IntPtr lpCursorName);
+
+        [LibraryImport("user32.dll")]
+        [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static partial bool SetSystemCursor(IntPtr hcur, uint id);
+
+        [LibraryImport("user32.dll")]
+        private static partial IntPtr CopyIcon(IntPtr hcur);
+
+        // Alias for LoadCursorW if used elsewhere
+        private static IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName) => LoadCursorW(hInstance, lpCursorName);
 
         private const uint OCR_WAIT = 32514;
         private const uint OCR_APPSTARTING = 32516; // Arrow + Wait
@@ -5352,16 +5342,6 @@ namespace ModernIPTVPlayer
 
         // ---------- UNIFIED TRACKS OVERLAY LOGIC ----------
 
-        private class TrackItem
-        {
-            public long Id { get; set; }
-            public string Text { get; set; } = "";
-            public bool IsSelected { get; set; }
-            public string Type { get; set; } = "";
-            public bool IsNone { get; set; }
-
-            public override string ToString() => Text; // Fallback
-        }
         private bool IsPlayerActive => _isPageLoaded && (_mpvPlayer != null || (_nativeMediaPlayer != null && MediaFoundationPlayer.Visibility == Visibility.Visible));
 
         // ---------- SUBTITLE & SYNC STATE ----------
@@ -5747,6 +5727,7 @@ namespace ModernIPTVPlayer
             if (sender is Button btn && btn.Tag is string tag)
             {
                 _isAudioDelayMode = tag == "Audio";
+                this.Bindings?.Update();
                 UpdateDelayUI();
             }
         }
@@ -7456,5 +7437,38 @@ namespace ModernIPTVPlayer
                 }
             });
         }
+    }
+
+    [Microsoft.UI.Xaml.Data.Bindable]
+    public class SubtitleLanguageViewModel
+    {
+        public string Code { get; set; }
+        public string Name { get; set; }
+        public int Count { get; set; }
+        public bool IsLoadingItem { get; set; } // For Shimmer
+    }
+
+    [Microsoft.UI.Xaml.Data.Bindable]
+    public class SubtitleTrackViewModel
+    {
+        public int Id { get; set; } // MPV Track ID
+        public string Text { get; set; }
+        public string Lang { get; set; }
+        public bool IsAddon { get; set; }
+        public string Url { get; set; } // For external/addon subs
+        public bool IsSelected { get; set; }
+        public string AddonName { get; set; } = "ADDON";
+    }
+
+    [Microsoft.UI.Xaml.Data.Bindable]
+    public class TrackItem
+    {
+        public long Id { get; set; }
+        public string Text { get; set; } = "";
+        public bool IsSelected { get; set; }
+        public string Type { get; set; } = "";
+        public bool IsNone { get; set; }
+
+        public override string ToString() => Text; // Fallback
     }
 }

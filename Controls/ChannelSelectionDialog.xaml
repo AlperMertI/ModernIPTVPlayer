@@ -4,6 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:local="using:ModernIPTVPlayer"
     mc:Ignorable="d"
     Title="Yayın Ekle"
     PrimaryButtonText="Ekle"
@@ -27,7 +28,7 @@
 
         <ListView x:Name="ChannelList" Grid.Row="1" SelectionMode="Single">
             <ListView.ItemTemplate>
-                <DataTemplate>
+                <DataTemplate x:DataType="local:LiveStream">
                     <Grid Padding="5">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="40"/>
@@ -35,12 +36,12 @@
                         </Grid.ColumnDefinitions>
                         <Image Width="32" Height="32" VerticalAlignment="Center" Stretch="Uniform" Margin="0,0,10,0">
                              <Image.Source>
-                                <BitmapImage UriSource="{Binding IconUrl}" DecodePixelWidth="32" />
+                                <BitmapImage UriSource="{x:Bind IconUrl, Mode=OneWay}" DecodePixelWidth="32" />
                             </Image.Source>
                         </Image>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding StreamId}" FontSize="10" Opacity="0.6" />
+                            <TextBlock Text="{x:Bind Name, Mode=OneWay}" FontWeight="SemiBold" />
+                            <TextBlock Text="{x:Bind StreamId, Mode=OneWay}" FontSize="10" Opacity="0.6" />
                         </StackPanel>
                     </Grid>
                 </DataTemplate>

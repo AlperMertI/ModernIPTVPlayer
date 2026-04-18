@@ -64,8 +64,7 @@ namespace ModernIPTVPlayer.Services
 
         private DownloadManager()
         {
-            _client = new HttpClient();
-            _client.Timeout = TimeSpan.FromHours(24);
+            _client = HttpHelper.Client;
             // Don't capture DispatcherQueue here - it will be set via Initialize()
             // GetForCurrentThread() can fail if called before UI thread is fully initialized
         }
@@ -461,8 +460,8 @@ namespace ModernIPTVPlayer.Services
 
             try
             {
-                // Use a transient client with short timeout for metadata check
-                using (var headClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) })
+                // Use the singleton client for metadata check
+                var headClient = HttpHelper.Client;
                 {
                     using (var request = new HttpRequestMessage(HttpMethod.Head, item.Url))
                     {

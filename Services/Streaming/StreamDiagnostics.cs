@@ -24,7 +24,7 @@ namespace ModernIPTVPlayer.Services.Streaming
         public void UpdateStat(string streamId, Action<StreamHealth> updateAction)
         {
             var health = _stats.GetOrAdd(streamId, id => new StreamHealth { StreamId = id });
-            lock (health)
+            lock (health.SyncRoot)
             {
                 updateAction(health);
             }
@@ -45,7 +45,7 @@ namespace ModernIPTVPlayer.Services.Streaming
         {
             if (_stats.TryGetValue(streamId, out var health))
             {
-                lock (health) return health.MpvBufferSeconds;
+                lock (health.SyncRoot) return health.MpvBufferSeconds;
             }
             return 0;
         }
@@ -57,7 +57,7 @@ namespace ModernIPTVPlayer.Services.Streaming
             Debug.WriteLine("\n--- [STREAM DIAGNOSTICS] ---");
             foreach (var health in _stats.Values.OrderBy(h => h.StreamId))
             {
-                lock (health)
+                lock (health.SyncRoot)
                 {
                     Debug.WriteLine($"Stream: {health.StreamId} | Status: {health.Status} " +
                                     $"| Buffer: {health.BufferSeconds:F1}s | Mpv: {health.MpvBufferSeconds:F1}s " +
@@ -73,6 +73,7 @@ namespace ModernIPTVPlayer.Services.Streaming
 
     public class StreamHealth
     {
+        public readonly System.Threading.Lock SyncRoot = new();
         public string StreamId { get; set; }
         public string Status { get; set; } = "Idle";
         public double BufferSeconds { get; set; }

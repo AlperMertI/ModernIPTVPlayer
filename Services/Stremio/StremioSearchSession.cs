@@ -17,7 +17,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         private readonly List<Action<List<StremioMediaStream>>> _subscribers = new();
         private readonly CancellationTokenSource _cts = new();
         private readonly Task _searchTask;
-        private readonly object _lock = new();
+        private readonly System.Threading.Lock _lock = new();
         private DateTime _lastRankingTime = DateTime.MinValue;
         private const int RANKING_THROTTLE_MS = 600;
 

@@ -23,7 +23,7 @@ namespace ModernIPTVPlayer.Helpers
         private MemoryMappedViewAccessor _accessor;
         private byte* _ptr;
         private long _currentCapacity;
-        private readonly object _accessorLock = new();
+        private readonly System.Threading.Lock _accessorLock = new();
         private bool _disposed;
         
         private readonly long _stringBufferOffset;

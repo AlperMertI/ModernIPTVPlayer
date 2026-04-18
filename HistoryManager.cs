@@ -43,7 +43,7 @@ namespace ModernIPTVPlayer
         private Dictionary<string, HistoryItem> _history = new();
         private const string FILENAME = "watch_history.json";
         private bool _loaded = false;
-        private readonly object _lock = new();
+        private readonly System.Threading.Lock _lock = new();
         private readonly System.Threading.SemaphoreSlim _fileLock = new(1, 1);
 
         private HistoryManager() { }

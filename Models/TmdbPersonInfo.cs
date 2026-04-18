@@ -4,6 +4,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Models
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbPersonInfo
     {
         public int TmdbId { get; set; }
@@ -18,6 +19,7 @@ namespace ModernIPTVPlayer.Models
         public bool HasTmdbData => TmdbId > 0;
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class PersonRoleItem
     {
         public string Title { get; set; }

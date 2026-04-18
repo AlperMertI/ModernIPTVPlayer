@@ -26,7 +26,7 @@ namespace ModernIPTVPlayer.Services.Streaming
     {
         private readonly string _streamId;
         private readonly Channel<byte[]> _channel;
-        private readonly object _lock = new object();
+        private readonly System.Threading.Lock _lock = new();
 
         // Stats tracking
         private long _totalBytesReceived;

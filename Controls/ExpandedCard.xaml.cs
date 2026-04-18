@@ -21,6 +21,7 @@ using Microsoft.UI.Xaml.Input;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class ExpandedCard : UserControl
     {
         public event EventHandler PlayClicked;
@@ -1943,16 +1944,6 @@ namespace ModernIPTVPlayer.Controls
             };
         }
 
-        public class CastItem
-        {
-            public string Name { get; set; }
-            public string FullProfileUrl { get; set; }
-            public string Initials { get; set; }
-            public SolidColorBrush ProfileBackground { get; set; }
-            public Visibility ImageVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Collapsed : Visibility.Visible;
-            public Visibility InitialsVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Visible : Visibility.Collapsed;
-        }
-
         private void StaggeredRevealContent()
         {
             if (_compositor == null || RealContentPanel == null) return;
@@ -2184,5 +2175,16 @@ namespace ModernIPTVPlayer.Controls
                 target.Source = new BitmapImage(new Uri(newUrl));
             }
         }
+    }
+
+    [Microsoft.UI.Xaml.Data.Bindable]
+    public class CastItem
+    {
+        public string Name { get; set; }
+        public string FullProfileUrl { get; set; }
+        public string Initials { get; set; }
+        public SolidColorBrush ProfileBackground { get; set; }
+        public Visibility ImageVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility InitialsVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Visible : Visibility.Collapsed;
     }
 }

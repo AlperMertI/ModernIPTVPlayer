@@ -18,6 +18,11 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <DefaultItemExcludes>$(DefaultItemExcludes);Libs\**</DefaultItemExcludes>
+
+    <!-- NativeAOT Compatibility & Performance -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <IsTrimmable>true</IsTrimmable>
   </PropertyGroup>
   <ItemGroup>
     <None Remove="LiveTVPage.xaml" />
@@ -177,5 +182,22 @@
     <AppxBundle>Always</AppxBundle>
     <AppxBundlePlatforms>x64</AppxBundlePlatforms>
     <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <!-- Max Performance NativeAOT (Release Only) -->
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+    <TieredPGO>true</TieredPGO>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+    
+    <!-- WinUI 3 AOT Workarounds -->
+    <EmbedXbfInPri>false</EmbedXbfInPri>
+    <DisableEmbeddedXbf>true</DisableEmbeddedXbf>
+    
+    <!-- Binary Size & Debugging -->
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>none</DebugType>
+    <DebuggerSupport>false</DebuggerSupport>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
   </PropertyGroup>
 </Project>

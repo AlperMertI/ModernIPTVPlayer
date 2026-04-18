@@ -9124,6 +9124,7 @@ namespace ModernIPTVPlayer
             return null;
         }
     }
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class SeasonItem
     {
         public string Name { get; set; }
@@ -9133,6 +9134,7 @@ namespace ModernIPTVPlayer
         public bool IsEnrichedByTmdb { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class EpisodeItem : System.ComponentModel.INotifyPropertyChanged
     {
         public string Id { get; set; }
@@ -9209,6 +9211,7 @@ namespace ModernIPTVPlayer
         protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class CastItem
     {
         public string Name { get; set; }
@@ -9217,6 +9220,7 @@ namespace ModernIPTVPlayer
         public Microsoft.UI.Xaml.Media.ImageSource ProfileImage { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StremioStreamViewModel : System.ComponentModel.INotifyPropertyChanged
     {
         public string Title { get; set; }
@@ -9257,6 +9261,7 @@ namespace ModernIPTVPlayer
         protected void OnPropertyChanged(string name) => PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(name));
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StremioAddonViewModel : System.ComponentModel.INotifyPropertyChanged
     {
         private string _name;

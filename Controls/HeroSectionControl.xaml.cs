@@ -51,7 +51,7 @@ namespace ModernIPTVPlayer.Controls
         private string? _currentHeroId;
         private DispatcherTimer? _heroAutoTimer;
         private readonly Queue<int> _navigationQueue = new();
-        private readonly object _navigationQueueLock = new();
+        private readonly System.Threading.Lock _navigationQueueLock = new();
         private bool _isNavigationPumpActive = false;
 
         // Data

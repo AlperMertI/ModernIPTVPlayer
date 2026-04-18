@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class LiveCategory
     {
         private Helpers.BinaryCacheSession? _session;

@@ -14,7 +14,7 @@ namespace ModernIPTVPlayer.Helpers
     {
         private readonly IReadOnlyList<IMediaStream> _parent;
         private readonly int[] _indices;
-        private readonly object _syncRoot = new object();
+        private readonly System.Threading.Lock _syncRoot = new();
 
         public VirtualStreamSubList(IReadOnlyList<IMediaStream> parent, IEnumerable<int> indices)
         {

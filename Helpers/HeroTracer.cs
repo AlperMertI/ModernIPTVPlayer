@@ -13,7 +13,7 @@ namespace ModernIPTVPlayer.Helpers
     /// </summary>
     internal static class HeroTracer
     {
-        private static readonly object _lock = new();
+        private static readonly System.Threading.Lock _lock = new();
         private static StreamWriter? _writer;
         private static readonly string _logPath = Path.Combine(Path.GetTempPath(), "hero_perf_log.txt");
 

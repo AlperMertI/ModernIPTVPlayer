@@ -10,6 +10,7 @@ using ModernIPTVPlayer.Services.Stremio;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class AddonDisplayItem
     {
         public string Id { get; set; }
@@ -18,6 +19,7 @@ namespace ModernIPTVPlayer.Controls
         public StremioManifest Manifest { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class CatalogDisplayItem
     {
         public string Name { get; set; }

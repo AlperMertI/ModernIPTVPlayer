@@ -19,7 +19,7 @@ namespace ModernIPTVPlayer.Services
         private const int CurrentVersion = 5;
         private const int MaxIndexKeys = 1_000_000;
         private const int MaxIndicesPerKey = 1_000_000;
-        private readonly object _syncRoot = new();
+        private readonly System.Threading.Lock _syncRoot = new();
         private long _sourceFingerprint = 0;
         private bool _isLoaded = false;
 

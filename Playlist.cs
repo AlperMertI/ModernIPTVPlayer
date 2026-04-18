@@ -8,6 +8,7 @@ namespace ModernIPTVPlayer
         XtreamCodes
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class Playlist
     {
         public Guid Id { get; set; } = Guid.NewGuid();

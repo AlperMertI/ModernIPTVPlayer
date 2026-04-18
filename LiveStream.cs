@@ -38,6 +38,7 @@ namespace ModernIPTVPlayer
         public int RatOff, RatLen;
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class LiveStream : INotifyPropertyChanged, IMediaStream
     {
         private BinaryCacheSession? _session;

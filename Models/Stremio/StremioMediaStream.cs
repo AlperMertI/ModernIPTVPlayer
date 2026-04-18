@@ -11,13 +11,14 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Models.Stremio
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StremioMediaStream : IMediaStream, INotifyPropertyChanged
     {
         public StremioMeta Meta { get; set; }
         
         public StremioMediaStream() { Meta = new StremioMeta(); }
         
-        private readonly object _metaLock = new();
+        private readonly System.Threading.Lock _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
         public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
         public uint Fingerprint { get; set; }

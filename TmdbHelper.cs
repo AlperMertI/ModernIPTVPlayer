@@ -450,6 +450,7 @@ namespace ModernIPTVPlayer
                 };
 
                 var allResults = new List<StremioMediaStream>();
+                var resultsLock = new System.Threading.Lock();
                 var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 var tasks = catalogs.Select(async url =>
                 {
@@ -467,7 +468,7 @@ namespace ModernIPTVPlayer
                         if (result?.Metas != null)
                         {
                             var batch = result.Metas.Select(m => new StremioMediaStream(m)).ToList();
-                            lock (allResults)
+                            lock (resultsLock)
                             {
                                 allResults.AddRange(batch);
                             }
@@ -923,6 +924,7 @@ namespace ModernIPTVPlayer
         public List<TmdbMovieResult> Results { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbMovieResult
     {
         [JsonPropertyName("id")]
@@ -1017,6 +1019,7 @@ namespace ModernIPTVPlayer
         public List<TmdbVideo> Results { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbVideo
     {
         [JsonPropertyName("key")]
@@ -1068,6 +1071,7 @@ namespace ModernIPTVPlayer
         public string Iso639_1 { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbCast
     {
         [JsonPropertyName("name")]
@@ -1082,6 +1086,7 @@ namespace ModernIPTVPlayer
         public string FullProfileUrl => !string.IsNullOrEmpty(ProfilePath) ? $"https://image.tmdb.org/t/p/w185{ProfilePath}" : null;
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbCrew
     {
         [JsonPropertyName("name")]
@@ -1114,12 +1119,14 @@ namespace ModernIPTVPlayer
         public string ImdbId { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbGenre
     {
         [JsonPropertyName("name")]
         public string Name { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbSeason
     {
         [JsonPropertyName("id")]
@@ -1144,6 +1151,7 @@ namespace ModernIPTVPlayer
         public List<TmdbEpisode> Episodes { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbEpisode
     {
         [JsonPropertyName("episode_number")]
@@ -1238,6 +1246,7 @@ namespace ModernIPTVPlayer
     }
 
     // [NEW] Person Credit
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TmdbPersonCredit
     {
         [JsonPropertyName("id")]

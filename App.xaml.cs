@@ -57,8 +57,8 @@ namespace ModernIPTVPlayer
         public static MpvWinUI.MpvPlayer? HandoffPlayer = null;
         public static Dictionary<string, object>? LastPlayerIntent { get; set; }
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        public static extern int MessageBox(IntPtr hWnd, String text, String caption, uint type);
+        [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+        public static partial int MessageBox(IntPtr hWnd, string text, string caption, uint type);
 
         /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
@@ -228,14 +228,14 @@ namespace ModernIPTVPlayer
             }
         }
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern bool SetDllDirectory(string lpPathName);
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+        private static partial bool SetDllDirectory(string lpPathName);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        private static extern IntPtr LoadLibrary(string lpFileName);
+        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+        private static partial IntPtr LoadLibrary(string lpFileName);
 
-        [DllImport("kernel32.dll")]
-        private static extern uint GetLastError();
+        [LibraryImport("kernel32.dll")]
+        private static partial uint GetLastError();
 
         /// <summary>
         /// Invoked when the application is launched.

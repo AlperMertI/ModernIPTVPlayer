@@ -223,8 +223,8 @@
                                           MaxHeight="300" BorderThickness="0" 
                                           SelectionChanged="YearListView_SelectionChanged">
                                     <ListView.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding}" FontSize="14" Padding="0,4"/>
+                                        <DataTemplate x:DataType="x:String">
+                                            <TextBlock Text="{x:Bind}" FontSize="14" Padding="0,4"/>
                                         </DataTemplate>
                                     </ListView.ItemTemplate>
                                 </ListView>

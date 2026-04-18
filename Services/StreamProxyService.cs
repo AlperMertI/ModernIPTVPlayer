@@ -38,14 +38,7 @@ namespace ModernIPTVPlayer.Services
             _listener = new HttpListener();
             _listener.Prefixes.Add($"http://127.0.0.1:{_port}/stream/");
             
-            _httpClient = new HttpClient(new HttpClientHandler 
-            { 
-                AllowAutoRedirect = true,
-                UseCookies = false 
-            });
-            
-            // Inject the same browser signature used elsewhere in the app
-            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(HttpHelper.UserAgent);
+            _httpClient = HttpHelper.Client;
         }
 
         public void Start()

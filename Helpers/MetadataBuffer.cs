@@ -15,7 +15,7 @@ namespace ModernIPTVPlayer.Helpers
     {
         private static byte[] _buffer = new byte[10 * 1024 * 1024]; // Start with 10MB
         private static int _position = 0;
-        private static readonly object _lock = new();
+        private static readonly System.Threading.Lock _lock = new();
         private static int _storeCount = 0;
 
         // PROJECT ZERO: String Interning Pool

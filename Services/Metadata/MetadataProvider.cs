@@ -46,7 +46,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             public StremioMeta? Meta { get; init; }
         }
 
-        private static readonly object _instanceLock = new object();
+        private static readonly System.Threading.Lock _instanceLock = new();
         private static MetadataProvider _instance;
         public static MetadataProvider Instance
         {

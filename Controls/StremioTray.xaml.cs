@@ -68,6 +68,7 @@ namespace ModernIPTVPlayer.Controls
         }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StreamGroupViewModel
     {
         public ObservableCollection<StremioStream> Streams { get; set; }

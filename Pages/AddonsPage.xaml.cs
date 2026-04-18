@@ -148,6 +148,7 @@ namespace ModernIPTVPlayer.Pages
         }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class AddonItem
     {
         public string Url { get; set; }

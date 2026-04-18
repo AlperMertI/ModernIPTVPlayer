@@ -18,7 +18,7 @@ using System.Numerics;
 
 namespace MpvWinUI.Common;
 
-public class D3D11RenderControl : ContentControl
+public partial class D3D11RenderControl : ContentControl
 {
     private SwapChainPanel _swapChainPanel;
     private ComPtr<ID3D11Device1> _device;
@@ -31,14 +31,14 @@ public class D3D11RenderControl : ContentControl
     // Threading & Synchronization
     private Task _renderTask;
     private CancellationTokenSource _cts;
-    private readonly object _renderLock = new();
+    private readonly System.Threading.Lock _renderLock = new();
     private IntPtr _frameLatencyWaitHandle = IntPtr.Zero;
     private readonly ManualResetEventSlim _resizeEvent = new(false);
     private readonly ManualResetEventSlim _mpvUpdateEvent = new(false);
     private readonly TaskCompletionSource<bool> _hdrInitTcs = new();
     
     // Resize State
-    private readonly object _sizeLock = new();
+    private readonly System.Threading.Lock _sizeLock = new();
     private bool _resizePending = false;
     private bool _pendingResizeForce = false;
     private bool _disposed = false;
@@ -162,20 +162,22 @@ public class D3D11RenderControl : ContentControl
     private IntPtr _cachedNativePanel = IntPtr.Zero;
     private IntPtr _lastLinkedHandle = IntPtr.Zero;
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static partial bool EnumDisplaySettings(string? lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr GetForegroundWindow();
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetActiveWindow();
+    [LibraryImport("user32.dll")]
+    private static partial IntPtr GetActiveWindow();
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
+    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static partial bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     private struct MONITORINFOEX
@@ -201,8 +203,9 @@ public class D3D11RenderControl : ContentControl
 
     private static readonly Guid IID_IDisplayInformation = Guid.Parse("bed11288-c17d-4dc9-bc77-1d167f0d6536");
 
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern bool EnumDisplayDevices(string lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
+    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static partial bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
 
     private const uint EDD_GET_DEVICE_INTERFACE_NAME = 0x00000001;
 
@@ -221,8 +224,8 @@ public class D3D11RenderControl : ContentControl
         public string DeviceKey;
     }
 
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static unsafe extern uint WaitForMultipleObjects(uint nCount, IntPtr* lpHandles, bool bWaitAll, uint dwMilliseconds);
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    private static unsafe partial uint WaitForMultipleObjects(uint nCount, IntPtr* lpHandles, [MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)] bool bWaitAll, uint dwMilliseconds);
 
     private const uint WAIT_OBJECT_0 = 0x00000000;
 

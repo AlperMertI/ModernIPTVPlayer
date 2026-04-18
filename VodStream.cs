@@ -15,7 +15,7 @@ namespace ModernIPTVPlayer
     public class VodStream : INotifyPropertyChanged, IMediaStream
     {
         private Helpers.BinaryCacheSession? _session;
-        private readonly object _metaLock = new();
+        private readonly System.Threading.Lock _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
         [JsonIgnore]
         public bool IsLoading { get; set; } = false;

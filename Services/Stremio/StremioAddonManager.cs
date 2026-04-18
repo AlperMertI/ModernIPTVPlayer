@@ -10,7 +10,7 @@ namespace ModernIPTVPlayer.Services.Stremio
 {
     public class StremioAddonManager
     {
-        private static readonly object _instanceLock = new();
+        private static readonly System.Threading.Lock _instanceLock = new();
         private static StremioAddonManager _instance;
         public static StremioAddonManager Instance
         {
@@ -30,12 +30,12 @@ namespace ModernIPTVPlayer.Services.Stremio
         private const string ADDONS_KEY = "StremioInstalledAddons";
         private const string MANIFEST_CACHE_FILE = "stremio_manifests.json";
         
-        private readonly object _addonLock = new();
+        private readonly System.Threading.Lock _addonLock = new();
         private List<string> _addonUrls = new();
         private Dictionary<string, StremioManifest> _manifestCache = new Dictionary<string, StremioManifest>();
         
         private bool _isInitializing = false;
-        private readonly object _initLock = new();
+        private readonly System.Threading.Lock _initLock = new();
 
         // Manifests-from-disk readiness signal — consumers (discovery) can await this to avoid the startup
         // race where GetAddonsWithManifests() returns entries with null manifests before disk load finishes.

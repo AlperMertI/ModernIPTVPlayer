@@ -61,16 +61,16 @@
             <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Hidden">
                 <ItemsControl x:Name="StreamGroupsControl">
                     <ItemsControl.ItemTemplate>
-                        <DataTemplate>
+                        <DataTemplate x:DataType="local:StreamGroupViewModel">
                             <StackPanel Spacing="12" Margin="0,0,0,24">
                                 <!-- Groups titles are implied content or can be added back if needed -->
-                                <GridView ItemsSource="{Binding Streams}" 
+                                <GridView ItemsSource="{x:Bind Streams}" 
                                           SelectionMode="None" 
                                           IsItemClickEnabled="True" 
                                           ItemClick="GridView_ItemClick">
                                     <GridView.ItemTemplate>
-                                        <DataTemplate>
-                                            <local:StreamCard ViewModel="{Binding}"/>
+                                        <DataTemplate x:DataType="models:StremioStream">
+                                            <local:StreamCard ViewModel="{x:Bind}"/>
                                         </DataTemplate>
                                     </GridView.ItemTemplate>
                                     <GridView.ItemsPanel>

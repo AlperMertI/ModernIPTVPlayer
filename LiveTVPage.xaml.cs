@@ -58,8 +58,9 @@ namespace ModernIPTVPlayer
         private System.Collections.ObjectModel.ObservableCollection<LiveStream> _recentChannels = new();
 
         // Auto-Probe Queue
-        private ConcurrentQueue<LiveStream> _probingQueue = new();
-        private HashSet<string> _queuedUrls = new();
+        private readonly ConcurrentQueue<LiveStream> _probingQueue = new();
+        private readonly HashSet<string> _queuedUrls = new();
+        private readonly System.Threading.Lock _probingLock = new();
         private CancellationTokenSource _workerCts = new();
         private bool _isWorkerRunning = false;
         private bool _canAutoProbe = false;
@@ -146,7 +147,7 @@ namespace ModernIPTVPlayer
             int lastIndex = Math.Min(list.Count, (lastRow + 1) * itemsPerRow);
 
             // Queue items in visible range
-            lock (_probingQueue)
+            lock (_probingLock)
             {
                 for (int i = firstIndex; i < lastIndex; i++)
                 {

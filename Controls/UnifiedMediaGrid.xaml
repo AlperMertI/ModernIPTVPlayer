@@ -57,22 +57,22 @@
             </GridView.ItemsPanel>
 
             <GridView.ItemTemplate>
-                <DataTemplate x:DataType="models:IMediaStream">
+                <DataTemplate x:DataType="local:UnifiedMediaItemContext">
                     <Grid Width="212" Height="312" Margin="2">
                         <!-- Phase 0: Immediate Light Skeleton (Automatic) -->
                         <local:ShimmerCard x:Name="Skeleton" Width="212" Height="312" Padding="6"/>
                         
                         <!-- Phase 1: Full Heavy Card -->
                         <local:PosterCard x:Phase="1"
-                            ImageUrl="{x:Bind PosterUrl}" 
-                            Title="{x:Bind Title}" 
-                            ProgressValue="{x:Bind ProgressValue}"
-                            BadgeText="{x:Bind BadgeText}"
-                            IsAvailableOnIptv="{x:Bind IsAvailableOnIptv}"
-                            ShowProgress="{x:Bind ShowProgress}"
-                            ShowIptvBadge="{Binding ShowIptvBadge, ElementName=RootGridControl}"
-                            ShowBadge="{x:Bind ShowBadge}"
-                            IsTitleVisible="{Binding ShowTitles, ElementName=RootGridControl}"
+                            ImageUrl="{x:Bind Data.PosterUrl}" 
+                            Title="{x:Bind Data.Title}" 
+                            ProgressValue="{x:Bind Data.ProgressValue}"
+                            BadgeText="{x:Bind Data.BadgeText}"
+                            IsAvailableOnIptv="{x:Bind Data.IsAvailableOnIptv}"
+                            ShowProgress="{x:Bind Data.ShowProgress}"
+                            ShowIptvBadge="{x:Bind ShowIptvBadge}"
+                            ShowBadge="{x:Bind Data.ShowBadge}"
+                            IsTitleVisible="{x:Bind ShowTitles}"
                             Width="212" 
                             Height="312"
                             ColorsExtracted="PosterCard_ColorsExtracted"

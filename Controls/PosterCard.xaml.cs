@@ -11,6 +11,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class PosterCard : UserControl
     {
         public bool IsHovered { get; private set; }

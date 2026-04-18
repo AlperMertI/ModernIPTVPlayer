@@ -19,7 +19,7 @@ namespace ModernIPTVPlayer.Services.Iptv
         private StreamMatchIndexer? _vodIndexer;
         private StreamMatchIndexer? _seriesIndexer;
         private bool _isInitialized = false;
-        private readonly object _indexLock = new();
+        private readonly System.Threading.Lock _indexLock = new();
 
         private IptvMatchService() { }
 

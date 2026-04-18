@@ -18,7 +18,7 @@ namespace ModernIPTVPlayer.Services
         private List<WatchlistItem> _watchlist = new();
         private const string FILENAME = "watchlist.json";
         private bool _loaded = false;
-        private readonly object _lock = new();
+        private readonly System.Threading.Lock _lock = new();
         private readonly System.Threading.SemaphoreSlim _fileLock = new(1, 1);
 
         public event EventHandler WatchlistChanged;

@@ -3,6 +3,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Models
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class CatalogRowViewModel : System.ComponentModel.INotifyPropertyChanged
     {
         private string _catalogName;

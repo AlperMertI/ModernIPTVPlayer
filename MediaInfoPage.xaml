@@ -161,7 +161,7 @@
 
                             <!-- Selection Background -->
                             <Border x:Name="SelectionBackground" Background="White" Opacity="0.15" CornerRadius="14"
-                                    Visibility="{Binding IsSelected, RelativeSource={RelativeSource Mode=TemplatedParent}, Converter={StaticResource BoolToVis}}"/>
+                                    Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
                             
                             <!-- Hover Overlay -->
                             <Border x:Name="HoverOverlay" Background="White" Opacity="0" CornerRadius="14"/>
@@ -169,7 +169,7 @@
                             <!-- Selection Indicator (Left accent pill) -->
                             <Border x:Name="SelectionIndicator" Background="{StaticResource GoldGradient}" 
                                     Width="4" Height="24" CornerRadius="2" HorizontalAlignment="Left" Margin="4,0,0,0" 
-                                    Visibility="{Binding IsSelected, RelativeSource={RelativeSource Mode=TemplatedParent}, Converter={StaticResource BoolToVis}}"/>
+                                    Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
 
                             <ContentPresenter x:Name="ContentPresenter"
                                             Content="{TemplateBinding Content}"
@@ -659,7 +659,7 @@
                                 </ItemsPanelTemplate>
                             </ListView.ItemsPanel>
                             <ListView.ItemTemplate>
-                                <DataTemplate>
+                                <DataTemplate x:DataType="local:CastItem">
                                     <Grid Width="80"
                                           PointerEntered="CastItem_PointerEntered"
                                           PointerExited="CastItem_PointerExited"
@@ -675,12 +675,12 @@
                                         <Border CornerRadius="6" Height="100" Width="80" Background="#1AFFFFFF">
                                             <Grid CornerRadius="6">
                                                 <FontIcon Glyph="&#xE77B;" FontSize="32" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                <Image Source="{Binding ProfileImage}" Stretch="UniformToFill"/>
+                                                <Image Source="{x:Bind ProfileImage, Mode=OneWay}" Stretch="UniformToFill"/>
                                             </Grid>
                                         </Border>
 
-                                        <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
-                                        <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="10" Foreground="#888" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Grid.Row="1" Text="{x:Bind Name, Mode=OneWay}" FontSize="11" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
+                                        <TextBlock Grid.Row="2" Text="{x:Bind Character, Mode=OneWay}" FontSize="10" Foreground="#888" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>
@@ -728,7 +728,7 @@
                                 </ItemsPanelTemplate>
                             </ListView.ItemsPanel>
                             <ListView.ItemTemplate>
-                                <DataTemplate>
+                                <DataTemplate x:DataType="local:CastItem">
                                     <Grid Width="80"
                                           PointerEntered="CastItem_PointerEntered"
                                           PointerExited="CastItem_PointerExited"
@@ -744,12 +744,12 @@
                                         <Border CornerRadius="6" Height="100" Width="80" Background="#1AFFFFFF">
                                             <Grid CornerRadius="6">
                                                 <FontIcon Glyph="&#xE77B;" FontSize="32" Foreground="#33FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                <Image Source="{Binding ProfileImage}" Stretch="UniformToFill"/>
+                                                <Image Source="{x:Bind ProfileImage, Mode=OneWay}" Stretch="UniformToFill"/>
                                             </Grid>
                                         </Border>
 
-                                        <TextBlock Grid.Row="1" Text="{Binding Name}" FontSize="11" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
-                                        <TextBlock Grid.Row="2" Text="{Binding Character}" FontSize="10" Foreground="#888" TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Grid.Row="1" Text="{x:Bind Name, Mode=OneWay}" FontSize="11" FontWeight="SemiBold" Foreground="White" TextTrimming="CharacterEllipsis" Margin="0,6,0,0"/>
+                                        <TextBlock Grid.Row="2" Text="{x:Bind Character, Mode=OneWay}" FontSize="10" Foreground="#888" TextTrimming="CharacterEllipsis"/>
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>
@@ -801,7 +801,13 @@
                                      </Grid.ColumnDefinitions>
                                      <TextBlock Text="Bölümler" FontSize="22" FontWeight="Bold" Foreground="White" VerticalAlignment="Center"/>
                                      <ComboBox x:Name="SeasonComboBox" Grid.Column="1" SelectionChanged="SeasonComboBox_SelectionChanged" MinWidth="140"
-                                               CornerRadius="18" Background="#22FFFFFF" DisplayMemberPath="Name" Foreground="White"/>
+                                               CornerRadius="18" Background="#22FFFFFF" Foreground="White">
+                                         <ComboBox.ItemTemplate>
+                                             <DataTemplate x:DataType="local:SeasonItem">
+                                                 <TextBlock Text="{x:Bind Name}"/>
+                                             </DataTemplate>
+                                         </ComboBox.ItemTemplate>
+                                     </ComboBox>
                                  </Grid>
                 
                                  <ListView x:Name="EpisodesListView" Grid.Row="1" SelectionMode="Single" 
@@ -1057,15 +1063,15 @@
                                          </ItemsPanelTemplate>
                                      </ListView.ItemsPanel>
                                      <ListView.ItemTemplate>
-                                         <DataTemplate>
+                                         <DataTemplate x:DataType="local:StremioAddonViewModel">
                                              <Grid VerticalAlignment="Center">
                                                  <!-- Loaded State -->
-                                                 <TextBlock Text="{Binding Name}" FontSize="13" FontWeight="Bold" Opacity="0.7"
-                                                            Visibility="{Binding IsLoaded, Converter={StaticResource BoolToVis}}"/>
+                                                 <TextBlock Text="{x:Bind Name, Mode=OneWay}" FontSize="13" FontWeight="Bold" Opacity="0.7"
+                                                            Visibility="{x:Bind IsLoaded, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
                                                  
                                                  <!-- Loading State -->
                                                  <ctl:ShimmerControl Width="80" Height="14" CornerRadius="4" Opacity="0.5"
-                                                                     Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}"/>
+                                                                     Visibility="{x:Bind IsLoading, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
                                              </Grid>
                                          </DataTemplate>
                                      </ListView.ItemTemplate>
@@ -1085,7 +1091,7 @@
                                           </Style>
                                       </ListView.ItemContainerStyle>
                                       <ListView.ItemTemplate>
-                                          <DataTemplate>
+                                          <DataTemplate x:DataType="local:StremioStreamViewModel">
                                               <Grid CornerRadius="10">
                                                <Grid Padding="8,10" Background="#1AFFFFFF" CornerRadius="10" BorderThickness="1" BorderBrush="#10FFFFFF">
                                                    <Grid.ColumnDefinitions>
@@ -1096,7 +1102,7 @@
                                                    
                                                    <!-- Provider Name Column -->
                                                    <Grid Grid.Column="0" VerticalAlignment="Center">
-                                                       <TextBlock Text="{Binding ProviderText}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" 
+                                                       <TextBlock Text="{x:Bind ProviderText, Mode=OneWay}" FontSize="10" FontWeight="Black" Foreground="{StaticResource GoldGradient}" 
                                                                   HorizontalAlignment="Center" VerticalAlignment="Center" 
                                                                   TextAlignment="Center" TextWrapping="Wrap" LineHeight="12" Opacity="0.9"
                                                                   MaxLines="3" TextTrimming="CharacterEllipsis" Margin="4,0"/>
@@ -1108,39 +1114,39 @@
 
                                                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Spacing="6">
                                                       <!-- File Name -->
-                                                      <TextBlock Text="{Binding SourceDisplayName}" ToolTipService.ToolTip="{Binding SourceDisplayName}" FontWeight="Bold" FontSize="15" Foreground="White" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+                                                      <TextBlock Text="{x:Bind SourceDisplayName, Mode=OneWay}" ToolTipService.ToolTip="{x:Bind SourceDisplayName, Mode=OneWay}" FontWeight="Bold" FontSize="15" Foreground="White" TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
                                                       
                                                       <StackPanel Orientation="Horizontal" Spacing="8">
                                                           <!-- Quality -->
-                                                          <Border Background="#26FFFFFF" CornerRadius="4" Padding="6,2" Visibility="{Binding HasQuality, Converter={StaticResource BoolToVis}}">
-                                                              <TextBlock Text="{Binding Quality}" FontSize="10" FontWeight="Bold" Foreground="White"/>
+                                                          <Border Background="#26FFFFFF" CornerRadius="4" Padding="6,2" Visibility="{x:Bind HasQuality, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                                              <TextBlock Text="{x:Bind Quality, Mode=OneWay}" FontSize="10" FontWeight="Bold" Foreground="White"/>
                                                           </Border>
                                                           <!-- Size -->
-                                                          <Border Background="#1AFFFFFF" CornerRadius="4" Padding="6,2" Visibility="{Binding HasSize, Converter={StaticResource BoolToVis}}">
-                                                              <TextBlock Text="{Binding Size}" FontSize="10" FontWeight="Bold" Foreground="#AAA"/>
+                                                          <Border Background="#1AFFFFFF" CornerRadius="4" Padding="6,2" Visibility="{x:Bind HasSize, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                                              <TextBlock Text="{x:Bind Size, Mode=OneWay}" FontSize="10" FontWeight="Bold" Foreground="#AAA"/>
                                                           </Border>
                                                           <!-- HDR Badge -->
-                                                          <Border Background="#26FF0000" CornerRadius="4" Padding="6,2" Visibility="{Binding IsHdr, Converter={StaticResource BoolToVis}}" BorderBrush="#33FF0000" BorderThickness="1">
+                                                          <Border Background="#26FF0000" CornerRadius="4" Padding="6,2" Visibility="{x:Bind IsHdr, Mode=OneWay, Converter={StaticResource BoolToVis}}" BorderBrush="#33FF0000" BorderThickness="1">
                                                               <TextBlock Text="HDR" FontSize="10" FontWeight="Bold" Foreground="#FFFF5555"/>
                                                           </Border>
                                                           <!-- Codec Badge -->
-                                                          <Border Background="#1AFFFFFF" CornerRadius="4" Padding="6,2" Visibility="{Binding HasCodec, Converter={StaticResource BoolToVis}}">
-                                                              <TextBlock Text="{Binding Codec}" FontSize="10" FontWeight="Bold" Foreground="#AAA"/>
+                                                          <Border Background="#1AFFFFFF" CornerRadius="4" Padding="6,2" Visibility="{x:Bind HasCodec, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                                              <TextBlock Text="{x:Bind Codec, Mode=OneWay}" FontSize="10" FontWeight="Bold" Foreground="#AAA"/>
                                                           </Border>
                                                           <!-- Cached Badge -->
-                                                          <Border Background="#1A00FF88" CornerRadius="4" Padding="6,2" Visibility="{Binding IsCached, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
+                                                          <Border Background="#1A00FF88" CornerRadius="4" Padding="6,2" Visibility="{x:Bind IsCached, Mode=OneWay, Converter={StaticResource BoolToVis}}" BorderBrush="#3300FF88" BorderThickness="1">
                                                               <TextBlock Text="⚡ CACHED" FontSize="9" FontWeight="Black" Foreground="#FF00FF88"/>
                                                           </Border>
                                                       </StackPanel>
 
                                                       <!-- Metadata Info -->
-                                                      <TextBlock Text="{Binding Name}" ToolTipService.ToolTip="{Binding Name}" FontSize="12" Foreground="#CCC" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
+                                                      <TextBlock Text="{x:Bind Name, Mode=OneWay}" ToolTipService.ToolTip="{x:Bind Name, Mode=OneWay}" FontSize="12" Foreground="#CCC" Opacity="0.9" TextWrapping="Wrap" MaxLines="3"/>
                                                   </StackPanel>
                                               </Grid>
                                               
                                               <!-- Active State Overlay -->
                                               <Border CornerRadius="10" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" 
-                                                      Visibility="{Binding IsActive, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False"/>
+                                                      Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False"/>
                                               </Grid>
                                           </DataTemplate>
                                       </ListView.ItemTemplate>

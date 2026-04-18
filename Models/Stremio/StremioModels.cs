@@ -9,6 +9,7 @@ namespace ModernIPTVPlayer.Models.Stremio
     // ==========================================
     // 1. MANIFEST
     // ==========================================
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StremioManifest
     {
         [JsonPropertyName("id")]
@@ -108,6 +109,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StremioCatalog
     {
         [JsonPropertyName("type")]
@@ -153,6 +155,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public List<StremioMeta> Metas { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StremioMeta
     {
         [JsonPropertyName("id")]
@@ -433,6 +436,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public string Type { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StremioVideo
     {
         [JsonPropertyName("id")]
@@ -516,6 +520,7 @@ namespace ModernIPTVPlayer.Models.Stremio
         public List<StremioStream> Streams { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StremioStream
     {
         [JsonPropertyName("name")]

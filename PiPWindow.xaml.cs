@@ -289,17 +289,23 @@ namespace ModernIPTVPlayer
             public int Y;
         }
 
-        [DllImport("user32.dll")]
-        public static extern bool GetCursorPos(out POINT lpPoint);
+        [LibraryImport("user32.dll")]
+        [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        public static partial bool GetCursorPos(out POINT lpPoint);
 
-        [DllImport("user32.dll", SetLastError = true)]
-        static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+        [LibraryImport("user32.dll", SetLastError = true)]
+        private static partial int GetWindowLongW(IntPtr hWnd, int nIndex);
 
-        [DllImport("user32.dll")]
-        static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+        [LibraryImport("user32.dll")]
+        private static partial int SetWindowLongW(IntPtr hWnd, int nIndex, int dwNewLong);
 
-        [DllImport("user32.dll")]
-        static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+        [LibraryImport("user32.dll")]
+        [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+        private static partial bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+
+        // Alias for compatibility with existing code
+        private static int GetWindowLong(IntPtr hWnd, int nIndex) => GetWindowLongW(hWnd, nIndex);
+        private static int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong) => SetWindowLongW(hWnd, nIndex, dwNewLong);
 
         const int GWL_STYLE = -16;
         const int GWL_EXSTYLE = -20;

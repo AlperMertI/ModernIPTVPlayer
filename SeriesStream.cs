@@ -163,7 +163,7 @@ namespace ModernIPTVPlayer
             set { if (value == true) _bitFlags |= 8; else _bitFlags &= 247; OnPropertyChanged(); } 
         }
 
-        private readonly object _metaLock = new();
+        private readonly System.Threading.Lock _metaLock = new();
         public int MetadataPriority { get; set; } = 0;
         
         // IMediaStream Implementation

@@ -16,7 +16,7 @@ namespace ModernIPTVPlayer.Services.Stremio
 {
     public class StremioService
     {
-        private static readonly object _instanceLock = new object();
+        private static readonly System.Threading.Lock _instanceLock = new();
         private static StremioService _instance;
         public static StremioService Instance
         {
@@ -47,7 +47,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         private System.Collections.Concurrent.ConcurrentQueue<string> _catalogCacheKeys = new();
 
         private readonly Dictionary<string, HashSet<StremioMediaStream>> _globalMetaIndex = new();
-        private readonly object _indexLock = new();
+        private readonly System.Threading.Lock _indexLock = new();
 
         // **NEW: Search Session Sharing (Handoff)**
         private StremioSearchSession? _activeSession;
@@ -328,6 +328,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             });
             var enabledAddons = StremioAddonManager.Instance.GetAddonsWithManifests();
             var allResults = new List<StremioMediaStream>();
+            var resultsLock = new System.Threading.Lock();
             DateTime lastRankingTime = DateTime.MinValue;
 
             bool includeIptv = scope == "all" || scope == "iptv";
@@ -424,7 +425,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                     cancellationToken.ThrowIfCancellationRequested(); // Add cancellation check
                     if (results != null && results.Count > 0)
                     {
-                        lock (allResults)
+                        lock (resultsLock)
                         {
                             foreach (var item in results)
                             {

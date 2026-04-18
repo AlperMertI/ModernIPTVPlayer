@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace ModernIPTVPlayer.Services
 {
-    public static class SleepPreventionService
+    public static partial class SleepPreventionService
     {
         [Flags]
         private enum EXECUTION_STATE : uint
@@ -14,8 +14,8 @@ namespace ModernIPTVPlayer.Services
             ES_SYSTEM_REQUIRED = 0x00000001
         }
 
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern uint SetThreadExecutionState(EXECUTION_STATE esFlags);
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        private static partial uint SetThreadExecutionState(EXECUTION_STATE esFlags);
 
         public static void PreventSleep()
         {
