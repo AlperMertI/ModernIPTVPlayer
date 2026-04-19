@@ -12,6 +12,7 @@
     <Page.Resources>
         <root:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
         <root:BooleanInverseToVisibilityConverter x:Key="InverseBoolToVisibilityConverter"/>
+        <root:StringToImageSourceConverter x:Key="StringToImageSourceConverter"/>
     </Page.Resources>
 
     <Grid Padding="30">
@@ -71,7 +72,7 @@
                             <Grid>
                                 <FontIcon Glyph="&#xE74C;" FontSize="24" Foreground="{ThemeResource SystemAccentColor}"
                                           Visibility="{x:Bind HasIcon, Mode=OneWay, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
-                                <Image Source="{x:Bind IconUrl, Mode=OneWay}" Stretch="UniformToFill"
+                                <Image Source="{x:Bind StreamIcon, Mode=OneWay, Converter={StaticResource StringToImageSourceConverter}}" Stretch="UniformToFill"
                                        Visibility="{x:Bind HasIcon, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"/>
                             </Grid>
                         </Border>

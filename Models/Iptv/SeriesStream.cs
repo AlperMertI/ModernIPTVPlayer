@@ -6,7 +6,7 @@ using System;
 using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Models;
 
-namespace ModernIPTVPlayer
+namespace ModernIPTVPlayer.Models.Iptv
 {
     [JsonConverter(typeof(SeriesStreamConverter))]
     public class SeriesStream : IMediaStream, System.ComponentModel.INotifyPropertyChanged
@@ -170,28 +170,25 @@ namespace ModernIPTVPlayer
         public int Id => SeriesId;
 
 
-        [JsonPropertyName("imdb_id")]
         public string? ImdbId 
         { 
             get => SerReadString(SerSlotImdb, _imdbOff, _imdbLen);
             set => SerWriteString(SerSlotImdb, ref _imdbOff, ref _imdbLen, value, nameof(ImdbId));
         }
 
-        [JsonPropertyName("tmdb")]
-        public string? TmdbIdRaw 
+        public string? Tmdb 
         { 
             get => SerReadString(SerSlotTmdbRaw, _tmdbRawOff, _tmdbRawLen);
-            set => SerWriteString(SerSlotTmdbRaw, ref _tmdbRawOff, ref _tmdbRawLen, value, nameof(TmdbIdRaw));
+            set => SerWriteString(SerSlotTmdbRaw, ref _tmdbRawOff, ref _tmdbRawLen, value, nameof(Tmdb));
         }
 
-        [JsonPropertyName("tmdb_id")]
-        public string? TmdbIdAlt 
+        public string? TmdbId 
         { 
             get => SerReadString(SerSlotTmdbAlt, _tmdbAltOff, _tmdbAltLen);
-            set => SerWriteString(SerSlotTmdbAlt, ref _tmdbAltOff, ref _tmdbAltLen, value, nameof(TmdbIdAlt));
+            set => SerWriteString(SerSlotTmdbAlt, ref _tmdbAltOff, ref _tmdbAltLen, value, nameof(TmdbId));
         }
 
-        public string? IMDbId => !string.IsNullOrEmpty(ImdbId) ? ImdbId : (!string.IsNullOrEmpty(TmdbIdRaw) ? TmdbIdRaw : (!string.IsNullOrEmpty(TmdbIdAlt) ? TmdbIdAlt : string.Empty));
+        public string? IMDbId => !string.IsNullOrEmpty(ImdbId) ? ImdbId : (!string.IsNullOrEmpty(Tmdb) ? Tmdb : (!string.IsNullOrEmpty(TmdbId) ? TmdbId : string.Empty));
         
         [JsonIgnore]
         public string Title 
@@ -280,7 +277,7 @@ namespace ModernIPTVPlayer
                     stored = _year;
                 if (!string.IsNullOrEmpty(stored)) return stored;
 
-                string? dateYear = Helpers.TitleHelper.ExtractYear(ReleaseDate ?? AirDate);
+                string? dateYear = Helpers.TitleHelper.ExtractYear(Releasedate ?? Airdate);
                 if (!string.IsNullOrEmpty(dateYear)) return dateYear;
                 return Helpers.TitleHelper.ExtractYear(Name) ?? "";
             }
@@ -323,7 +320,7 @@ namespace ModernIPTVPlayer
         
         // IMediaStream.Rating implementation
         [JsonIgnore]
-        public string Rating { get => string.IsNullOrEmpty(RatingRaw) || RatingRaw == "N/A" || RatingRaw == "Unknown" ? "" : RatingRaw; set { if (RatingRaw != value) { RatingRaw = value; OnPropertyChanged(); } } }
+        public string Rating { get => string.IsNullOrEmpty(Rating_json) || Rating_json == "N/A" || Rating_json == "Unknown" ? "" : Rating_json; set { if (Rating_json != value) { Rating_json = value; OnPropertyChanged(); } } }
 
         // UI Binding Implementation
         public double ProgressValue => 0;
@@ -346,7 +343,6 @@ namespace ModernIPTVPlayer
             set => Genres = value;
         }
 
-        [JsonPropertyName("container_extension")]
         public string? ContainerExtension
         {
             get => SerReadString(SerSlotExt, _extOff, _extLen);
@@ -356,78 +352,58 @@ namespace ModernIPTVPlayer
         [JsonIgnore]
         public TmdbMovieResult TmdbInfo { get; set; }
 
-        [JsonPropertyName("num")]
         [JsonConverter(typeof(Helpers.UniversalStringConverter))]
         public string? Num { get; set; } // Sometimes int, sometimes string
 
-        [JsonPropertyName("name")]
         public string Name 
         { 
             get => SerReadString(SerSlotName, _nameOff, _nameLen);
             set => SerWriteString(SerSlotName, ref _nameOff, ref _nameLen, value, nameof(Name), nameof(Title));
         }
 
-        [JsonPropertyName("series_id")]
         public int SeriesId { get; set; }
 
-        [JsonPropertyName("cover")]
         public string? Cover 
         { 
             get => SerReadString(SerSlotCover, _coverOff, _coverLen);
             set => SerWriteString(SerSlotCover, ref _coverOff, ref _coverLen, value, nameof(Cover), nameof(PosterUrl));
         }
 
-        [JsonPropertyName("plot")]
         public string? Plot { get; set; }
 
-        [JsonPropertyName("cast")]
         public string? Cast 
         { 
             get => SerReadString(SerSlotCast, _castOff, _castLen);
             set => SerWriteString(SerSlotCast, ref _castOff, ref _castLen, value, nameof(Cast));
         }
 
-        [JsonPropertyName("director")]
         public string? Director 
         { 
             get => SerReadString(SerSlotDir, _dirOff, _dirLen);
             set => SerWriteString(SerSlotDir, ref _dirOff, ref _dirLen, value, nameof(Director));
         }
 
-        
-
-        [JsonPropertyName("releaseDate")]
-        public string? ReleaseDate { get; set; }
-
-        [JsonPropertyName("air_date")]
-        public string? AirDate { get; set; }
-
-        [JsonPropertyName("last_modified")]
+        public string? Releasedate { get; set; }
+        public string? Airdate { get; set; }
         public string? LastModified { get; set; }
 
-        [JsonPropertyName("rating")]
         [JsonConverter(typeof(Helpers.UniversalStringConverter))]
-        public string? RatingRaw
+        public string? Rating_json
         {
             get => SerReadString(SerSlotRat, _ratOff, _ratLen);
-            set => SerWriteString(SerSlotRat, ref _ratOff, ref _ratLen, value, nameof(RatingRaw), nameof(Rating));
+            set => SerWriteString(SerSlotRat, ref _ratOff, ref _ratLen, value, nameof(Rating_json), nameof(Rating));
         }
 
-        [JsonPropertyName("rating_5based")]
         [JsonConverter(typeof(Helpers.UniversalStringConverter))]
         public string? Rating5Based { get; set; }
 
-        [JsonPropertyName("backdrop_path")]
         [JsonConverter(typeof(Helpers.UniversalStringListConverter))]
         public System.Collections.Generic.List<string>? BackdropPath { get; set; }
 
-        [JsonPropertyName("youtube_trailer")]
         public string? YoutubeTrailer { get; set; }
 
-        [JsonPropertyName("episode_run_time")]
         public string? EpisodeRunTime { get; set; }
 
-        [JsonPropertyName("category_id")]
         public string? CategoryId 
         { 
             get => _categoryId;
@@ -560,46 +536,56 @@ namespace ModernIPTVPlayer
                 while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
                 {
                     if (reader.TokenType != JsonTokenType.PropertyName) continue;
-                    string propName = reader.GetString();
+                    
+                    var propName = reader.ValueSpan;
                     reader.Read();
 
                     if (reader.TokenType == JsonTokenType.Null) continue;
 
-                    switch (propName)
+                    // PROJECT ZERO: Span-based matching (Zero-alloc)
+                    if (propName.SequenceEqual("name"u8))
                     {
-                        case "name":
-                            stream.Name = reader.GetString();
-                            break;
-                        case "series_id":
-                            stream.SeriesId = reader.GetInt32();
-                            break;
-                        case "cover":
-                            stream.Cover = reader.GetString();
-                            break;
-                        case "plot":
-                            stream.Plot = reader.GetString();
-                            break;
-                        case "cast":
-                            stream.Cast = reader.GetString();
-                            break;
-                        case "genre":
-                            stream.Genre = FastStringPool.Intern(reader.GetString());
-                            break;
-                        case "category_id":
-                            stream.CategoryId = FastStringPool.Intern(reader.GetString());
-                            break;
-                        case "imdb_id":
-                            stream.ImdbId = reader.GetString();
-                            break;
-                        case "rating":
-                            stream.RatingRaw = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
-                            break;
-                        case "releaseDate":
-                            stream.ReleaseDate = FastStringPool.Intern(reader.GetString());
-                            break;
-                        case "air_date":
-                            stream.AirDate = FastStringPool.Intern(reader.GetString());
-                            break;
+                        stream.Name = reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("series_id"u8))
+                    {
+                        stream.SeriesId = reader.GetInt32();
+                    }
+                    else if (propName.SequenceEqual("cover"u8))
+                    {
+                        stream.Cover = reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("plot"u8))
+                    {
+                        stream.Plot = reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("cast"u8))
+                    {
+                        stream.Cast = reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("genre"u8))
+                    {
+                        stream.Genre = FastStringPool.Intern(reader.GetString());
+                    }
+                    else if (propName.SequenceEqual("category_id"u8))
+                    {
+                        stream.CategoryId = FastStringPool.Intern(reader.GetString());
+                    }
+                    else if (propName.SequenceEqual("imdb_id"u8))
+                    {
+                        stream.ImdbId = reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("rating"u8))
+                    {
+                        stream.Rating_json = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("releaseDate"u8))
+                    {
+                        stream.Releasedate = FastStringPool.Intern(reader.GetString());
+                    }
+                    else if (propName.SequenceEqual("air_date"u8))
+                    {
+                        stream.Airdate = FastStringPool.Intern(reader.GetString());
                     }
                 }
             }

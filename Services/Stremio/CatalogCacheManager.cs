@@ -7,6 +7,8 @@ using System.Threading.Tasks;
 using Windows.Storage;
 using ModernIPTVPlayer.Models.Stremio;
 using System.Text.Json;
+using ModernIPTVPlayer.Services.Json;
+using ZstdSharp;
 
 namespace ModernIPTVPlayer.Services.Stremio
 {
@@ -46,14 +48,14 @@ namespace ModernIPTVPlayer.Services.Stremio
                 var file = await folder.CreateFileAsync(tmpName, CreationCollisionOption.ReplaceExisting);
 
                 using (var stream = await file.OpenStreamForWriteAsync())
-                using (var gzip = new GZipStream(stream, CompressionLevel.Fastest))
-                using (var writer = new BinaryWriter(gzip, Encoding.UTF8))
+                using (var decompressor = new CompressionStream(stream, 3))
+                using (var writer = new BinaryWriter(decompressor, Encoding.UTF8))
                 {
                     writer.Write(MAGIC);
                     writer.Write(VERSION);
                     writer.Write(DateTime.UtcNow.Ticks);
                     writer.Write(etag ?? "");
-                    string json = JsonSerializer.Serialize(items);
+                    var json = JsonSerializer.Serialize(items, AppJsonContext.Default.ListStremioMediaStream);
                     writer.Write(json);
                 }
 
@@ -99,16 +101,16 @@ namespace ModernIPTVPlayer.Services.Stremio
                 // StremioService.Log($"[CatalogCache] LOADING: {fileName} ({props.Size} bytes)");
 
                 using var stream = await folder.OpenStreamForReadAsync(fileName);
-                using var gzip = new GZipStream(stream, CompressionMode.Decompress);
-                using var reader = new BinaryReader(gzip, Encoding.UTF8);
+                using var decompressor = new DecompressionStream(stream);
+                using var reader = new BinaryReader(decompressor, Encoding.UTF8);
 
                 if (reader.ReadString() != MAGIC) return (null, null, DateTime.MinValue);
                 int version = reader.ReadInt32();
                 long ticks = reader.ReadInt64();
                 string etag = reader.ReadString();
                 string json = reader.ReadString();
-
-                var items = JsonSerializer.Deserialize<List<StremioMediaStream>>(json);
+ 
+                var items = JsonSerializer.Deserialize(json, AppJsonContext.Default.ListStremioMediaStream);
                 int count = items?.Count ?? 0;
                 // StremioService.Log($"[CatalogCache] HIT: Loaded {count} items for {url} | ETag: {etag} | Age: {(DateTime.UtcNow - new DateTime(ticks)).TotalMinutes:F1} min");
                 return (etag, items, new DateTime(ticks));
@@ -154,7 +156,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             string norm = CanonicalizeCatalogUrl(url);
             using var sha1 = System.Security.Cryptography.SHA1.Create();
             byte[] hash = sha1.ComputeHash(Encoding.UTF8.GetBytes(norm));
-            return $"{Convert.ToHexString(hash).ToLowerInvariant()}.bin.gz";
+            return $"{Convert.ToHexString(hash).ToLowerInvariant()}.bin.zst";
         }
     }
 }

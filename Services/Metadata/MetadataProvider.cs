@@ -13,6 +13,8 @@ using ModernIPTVPlayer.Services.Iptv;
 using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer;
 using ModernIPTVPlayer.Helpers;
+using ModernIPTVPlayer.Models.Iptv;
+using ModernIPTVPlayer.Models.Common;
 using System.IO;
 
 namespace ModernIPTVPlayer.Services.Metadata
@@ -213,7 +215,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // [FIX] KEY ALIGNMENT: Normalize ID and Type logic exactly like GetMetadataAsync
                 string normalizedId = NormalizeId(id) ?? id;
                 string streamType = (stream as Models.Stremio.StremioMediaStream)?.Meta?.Type;
-                string normalizedType = (stream is ModernIPTVPlayer.SeriesStream || string.Equals(streamType, "series", StringComparison.OrdinalIgnoreCase) || string.Equals(streamType, "tv", StringComparison.OrdinalIgnoreCase)) ? "series" : "movie";
+                string normalizedType = (stream is SeriesStream || string.Equals(streamType, "series", StringComparison.OrdinalIgnoreCase) || string.Equals(streamType, "tv", StringComparison.OrdinalIgnoreCase)) ? "series" : "movie";
                 
                 string addonHash = GetAddonOrderHash();
                 string tmdbLang = AppSettings.TmdbLanguage;
@@ -409,7 +411,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             string streamType = (stream as Models.Stremio.StremioMediaStream)?.Meta?.Type;
-            string normalizedType = (stream is ModernIPTVPlayer.SeriesStream || string.Equals(streamType, "series", StringComparison.OrdinalIgnoreCase) || string.Equals(streamType, "tv", StringComparison.OrdinalIgnoreCase)) ? "series" : "movie";
+            string normalizedType = (stream is SeriesStream || string.Equals(streamType, "series", StringComparison.OrdinalIgnoreCase) || string.Equals(streamType, "tv", StringComparison.OrdinalIgnoreCase)) ? "series" : "movie";
             
             string fetchType = normalizedType;
             string normalizedId = NormalizeId(id) ?? id;
@@ -621,7 +623,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (IsImdbId(baseId) || (!string.IsNullOrWhiteSpace(baseId) && baseId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase)))
                 return baseId;
 
-            if (meta.MovieDbId != null && int.TryParse(meta.MovieDbId.ToString(), out int tmdbId) && tmdbId > 0)
+            if (meta.MoviedbId != null && int.TryParse(meta.MoviedbId.ToString(), out int tmdbId) && tmdbId > 0)
                 return $"tmdb:{tmdbId}";
 
             return baseId;
@@ -708,7 +710,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 BackdropUrl = sourceStream?.BackdropUrl ?? sourceStream?.PosterUrl,
                 Genres = sourceStream?.Genres,
                 Rating = double.TryParse(sourceStream?.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var r) ? r : 0,
-                IsFromIptv = sourceStream is ModernIPTVPlayer.VodStream || sourceStream is ModernIPTVPlayer.SeriesStream
+                IsFromIptv = sourceStream is VodStream || sourceStream is SeriesStream
             };
 
             // [FIX] Ensure IsSeries is correctly synced if we are using a seed (cached result)
@@ -1351,12 +1353,12 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
             }
 
-            // OriginalName handling (as a secondary SubTitle source)
-            if (!string.IsNullOrWhiteSpace(stream.Meta.OriginalName) &&
-                !string.Equals(stream.Meta.OriginalName, metadata.Title, StringComparison.OrdinalIgnoreCase) &&
-                string.IsNullOrWhiteSpace(metadata.SubTitle))
+            // Originalname handling (as a secondary SubTitle source)
+            if (!string.IsNullOrWhiteSpace(stream.Meta.Originalname) &&
+                !string.Equals(stream.Meta.Originalname, metadata.Title, StringComparison.OrdinalIgnoreCase) &&
+                !IsGenericEpisodeTitle(stream.Meta.Originalname, metadata.Title))
             {
-                metadata.SubTitle = stream.Meta.OriginalName;
+                metadata.SubTitle = stream.Meta.Originalname;
             }
 
             bool isCurrentSeed = string.IsNullOrWhiteSpace(metadata.MetadataSourceInfo) || metadata.MetadataSourceInfo.Contains("Catalog Seed", StringComparison.OrdinalIgnoreCase);
@@ -1372,9 +1374,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                   MergeStremioEpisodes(stream.Meta, metadata, GetHostSafe(addonUrl), canOverwriteSeedFields);
             }
 
-            if (stream.Meta.ImdbRating != null)
+            if (stream.Meta.Imdbrating != null)
             {
-                string ratingStr = stream.Meta.ImdbRating.ToString().Replace(",", ".");
+                string ratingStr = stream.Meta.Imdbrating.ToString().Replace(",", ".");
                 if ((canOverwriteSeedFields || metadata.Rating <= 0) && double.TryParse(ratingStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var parsedRating) && parsedRating > 0)
                 {
                     metadata.Rating = parsedRating;
@@ -1416,7 +1418,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 if (string.IsNullOrEmpty(metadata.ImdbId)) metadata.ImdbId = bestImdb;
             }
-            else if (stream.Meta.MovieDbId != null && int.TryParse(stream.Meta.MovieDbId.ToString(), out int movieDbId) && movieDbId > 0)
+            else if (stream.Meta.MoviedbId != null && int.TryParse(stream.Meta.MoviedbId.ToString(), out int movieDbId) && movieDbId > 0)
             {
                 if (string.IsNullOrEmpty(metadata.ImdbId)) metadata.ImdbId = $"tmdb:{movieDbId}";
             }
@@ -1744,7 +1746,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                             
                             // Seed basic info from the match early
                             if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = match.Name;
-                            if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.IconUrl;
+                            if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.StreamIcon;
                             if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.Year;
                             if (metadata.Rating == 0 && double.TryParse(match.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r)) metadata.Rating = r;
                         }
@@ -1763,7 +1765,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     // If we already have a VodStream from the library, set availability immediately
                     metadata.IsAvailableOnIptv = true;
                     if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = vs.Name;
-                    if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = vs.IconUrl;
+                    if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = vs.StreamIcon;
                     if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = vs.Year;
                 }
 
@@ -1852,7 +1854,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         // 6. Rating
                         if (metadata.Rating == 0)
                         {
-                            if (double.TryParse(result.Info.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double ratingValue))
+                            if (double.TryParse(result.Info.Rating?.ToString(), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double ratingValue))
                             {
                                 metadata.Rating = ratingValue;
                             }
@@ -1860,7 +1862,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                         // 7. Year
                         if (string.IsNullOrEmpty(metadata.Year))
-                            metadata.Year = result.Info.ReleaseDate;
+                            metadata.Year = result.Info.Releasedate;
 
                         // 8. Cast & Crew
                         if (result.Info.Director != null && (metadata.Directors == null || metadata.Directors.Count == 0))
@@ -1979,7 +1981,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                             if (shouldPromoteMatchName) metadata.Title = match.Name;
                             if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.Cover;
-                            if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.ReleaseDate;
+                            if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.Year;
                             if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = match.Plot;
                         }
                         else
@@ -1998,7 +2000,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     metadata.IsAvailableOnIptv = true;
                     if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = series.Name;
                     if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = series.Cover;
-                    if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = series.ReleaseDate;
+                    if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = series.Year;
                     if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = series.Plot;
                 }
 
@@ -2014,7 +2016,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     // 1. Series Level Metadata
                     if (info.Info != null)
                     {
-                        AppLogger.Info($"[Enrich-Iptv] Received series info (Name: {info.Info.Name}, Rating: {info.Info.Rating}, Release: {info.Info.ReleaseDate})");
+                        AppLogger.Info($"[Enrich-Iptv] Received series info (Name: {info.Info.Name}, Rating: {info.Info.Rating}, Release: {info.Info.Releasedate})");
                         
                         // Map Basic Info
                         if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = info.Info.Plot;
@@ -2026,12 +2028,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                         // info.Info.Cover is a poster, not a logo. Rely on TMDB for real logos.
 
                         // Map Rating & Year
-                        string ratingStr = !string.IsNullOrEmpty(info.Info.Rating) ? info.Info.Rating : series.Rating;
+                        string ratingStr = info.Info.Rating?.ToString();
+                        if (string.IsNullOrEmpty(ratingStr)) ratingStr = series.Rating;
+
                         if (double.TryParse(ratingStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
                         {
                             metadata.Rating = r;
                         }
-                        if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = info.Info.ReleaseDate;
+                        if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = info.Info.Releasedate?.ToString();
 
                         // Classification
                         if (string.IsNullOrEmpty(metadata.AgeRating))
@@ -2299,11 +2303,11 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             if (string.IsNullOrWhiteSpace(unified.SubTitle) &&
-                !string.IsNullOrWhiteSpace(stremio.OriginalName) &&
-                !string.Equals(stremio.OriginalName, unified.Title, StringComparison.OrdinalIgnoreCase) && 
-                !IsGenericEpisodeTitle(stremio.OriginalName, unified.Title))
+                !string.IsNullOrWhiteSpace(stremio.Originalname) &&
+                !string.Equals(stremio.Originalname, unified.Title, StringComparison.OrdinalIgnoreCase) && 
+                !IsGenericEpisodeTitle(stremio.Originalname, unified.Title))
             {
-                unified.SubTitle = stremio.OriginalName;
+                unified.SubTitle = stremio.Originalname;
             }
 
             // If a higher-priority source replaced title, keep previous title as subtitle.
@@ -2389,8 +2393,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
             }
 
-            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.ReleaseInfo)) || string.IsNullOrEmpty(unified.Year))
-                unified.Year = stremio.ReleaseInfo;
+            if ((overwritePrimary && !string.IsNullOrEmpty(stremio.Releaseinfo)) || string.IsNullOrEmpty(unified.Year))
+                unified.Year = stremio.Releaseinfo;
 
             if ((overwritePrimary && stremio.Genres?.Count > 0) || string.IsNullOrEmpty(unified.Genres))
                 unified.Genres = (stremio.Genres != null && stremio.Genres.Count > 0) ? string.Join(", ", stremio.Genres) : "";
@@ -2462,7 +2466,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                             Name = c.Name,
                             Character = c.Character,
                             ProfileUrl = !string.IsNullOrEmpty(c.ProfilePath) ? $"https://image.tmdb.org/t/p/w185{c.ProfilePath}" : null,
-                            TmdbId = c.Id is int idVal ? idVal : (int.TryParse(c.Id?.ToString(), out var parsed) ? parsed : null)
+                            TmdbId = (c.Id.ValueKind == System.Text.Json.JsonValueKind.Number && c.Id.TryGetInt32(out var idVal)) ? idVal : (int.TryParse(c.Id.ToString(), out var parsed) ? parsed : null)
                         }).ToList();
                     }
                     else if (stremio.Cast?.Count > 0)
@@ -2597,10 +2601,10 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (string.IsNullOrEmpty(unified.MetadataId) || !IsImdbId(unified.MetadataId))
                 unified.MetadataId = stremio.Id;
             
-            if (stremio.ImdbRating != null)
+            if (stremio.Imdbrating != null)
             {
                 // [FIX] Culture-proof rating parsing. AioStreams returns strings with ".", while system culture might use ",".
-                string ratingStr = stremio.ImdbRating.ToString().Replace(",", ".");
+                string ratingStr = stremio.Imdbrating.ToString().Replace(",", ".");
                 if (double.TryParse(ratingStr, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var r) && r > 0)
                 {
                     if (overwritePrimary || unified.Rating == 0)
@@ -3088,8 +3092,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 existingEpisode.IsAvailable = vid.Available;
                             if (overwrite || string.IsNullOrEmpty(existingEpisode.Runtime))
                                 existingEpisode.Runtime = vid.Runtime;
-                            if (overwrite || existingEpisode.ReleaseDate == null)
-                                existingEpisode.ReleaseDate = existingEpisode.AirDate;
+                            if (overwrite || existingEpisode.Releasedate == null)
+                                existingEpisode.Releasedate = existingEpisode.AirDate;
 
                             updated++;
                         }
@@ -3104,7 +3108,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 Overview = !string.IsNullOrEmpty(vid.Overview) ? vid.Overview : vid.Description,
                                 ThumbnailUrl = vid.Thumbnail,
                                 AirDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d3) ? d3 : null,
-                                ReleaseDate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d4) ? d4 : null,
+                                Releasedate = !string.IsNullOrEmpty(vid.Released) && DateTime.TryParse(vid.Released, out var d4) ? d4 : null,
                                 IsAvailable = vid.Available,
                                 Runtime = vid.Runtime
                             };

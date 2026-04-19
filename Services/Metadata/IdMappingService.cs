@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using ModernIPTVPlayer.Services.Json;
 
 namespace ModernIPTVPlayer.Services.Metadata
 {
@@ -24,14 +25,14 @@ namespace ModernIPTVPlayer.Services.Metadata
         private ConcurrentDictionary<string, string> _tmdbToImdb = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly SemaphoreSlim _fileLock = new(1, 1);
-        private const string MAPPING_FILE = "IdMappings.json";
+        private const string MAPPING_FILE = "IdMappings.bin.zst";
+        private const uint MAGIC = 0x49444D31; // IDM1
         private bool _isDirty = false;
         private Timer _saveTimer;
         private readonly string _dataFolderPath;
 
         private IdMappingService()
         {
-            // Use System.IO paths instead of WinRT ApplicationData for thread safety
             _dataFolderPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ModernIPTVPlayer");
             Directory.CreateDirectory(_dataFolderPath);
             
@@ -45,17 +46,22 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 await _fileLock.WaitAsync();
                 var filePath = Path.Combine(_dataFolderPath, MAPPING_FILE);
+
                 if (File.Exists(filePath))
                 {
-                    using var stream = File.OpenRead(filePath);
-                    var loaded = await JsonSerializer.DeserializeAsync<Dictionary<string, string>>(stream);
-                    if (loaded != null)
+                    using var fs = File.OpenRead(filePath);
+                    using var decompressor = new ZstdSharp.DecompressionStream(fs);
+                    using var reader = new BinaryReader(decompressor, System.Text.Encoding.UTF8);
+
+                    if (reader.ReadUInt32() != MAGIC) return;
+
+                    int count = reader.ReadInt32();
+                    for (int i = 0; i < count; i++)
                     {
-                        foreach (var kvp in loaded)
-                        {
-                            _imdbToTmdb[kvp.Key] = kvp.Value;
-                            _tmdbToImdb[kvp.Value] = kvp.Key;
-                        }
+                        string imdb = reader.ReadString();
+                        string tmdb = reader.ReadString();
+                        _imdbToTmdb[imdb] = tmdb;
+                        _tmdbToImdb[tmdb] = imdb;
                     }
                 }
             }
@@ -70,9 +76,20 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 await _fileLock.WaitAsync();
                 var filePath = Path.Combine(_dataFolderPath, MAPPING_FILE);
-                using var stream = File.Create(filePath);
-                var snapshot = _imdbToTmdb.ToDictionary(k => k.Key, v => v.Value);
-                await JsonSerializer.SerializeAsync(stream, snapshot);
+                
+                var snapshot = _imdbToTmdb.ToList();
+                using (var fs = File.Create(filePath))
+                using (var compressor = new ZstdSharp.CompressionStream(fs, 3))
+                using (var writer = new BinaryWriter(compressor, System.Text.Encoding.UTF8))
+                {
+                    writer.Write(MAGIC);
+                    writer.Write(snapshot.Count);
+                    foreach (var kvp in snapshot)
+                    {
+                        writer.Write(kvp.Key);
+                        writer.Write(kvp.Value);
+                    }
+                }
                 _isDirty = false;
             }
             catch { /* Silent fail */ }
@@ -82,8 +99,6 @@ namespace ModernIPTVPlayer.Services.Metadata
         public void RegisterMapping(string imdbId, string tmdbId)
         {
             if (string.IsNullOrWhiteSpace(imdbId) || string.IsNullOrWhiteSpace(tmdbId)) return;
-            
-            // Normalize
             if (!imdbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase)) return;
 
             bool changed = false;
@@ -97,7 +112,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (changed)
             {
                 _isDirty = true;
-                _saveTimer.Change(5000, -1); // Save in 5s
+                _saveTimer.Change(10000, -1); // Save in 10s
             }
         }
 
@@ -118,11 +133,9 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (string.IsNullOrWhiteSpace(idA) || string.IsNullOrWhiteSpace(idB)) return false;
             if (string.Equals(idA, idB, StringComparison.OrdinalIgnoreCase)) return true;
 
-            // Normalize IDs to simple formats (tt... or tmdb_id)
             string normA = idA.Replace("tmdb:", "").Trim();
             string normB = idB.Replace("tmdb:", "").Trim();
 
-            // Try direct mapping
             if (normA.StartsWith("tt") && !normB.StartsWith("tt"))
                 return GetTmdbForImdb(normA) == normB;
             

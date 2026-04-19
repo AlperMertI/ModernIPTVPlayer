@@ -24,10 +24,7 @@ namespace ModernIPTVPlayer.Helpers
                     return null;
                 case JsonTokenType.StartObject:
                 case JsonTokenType.StartArray:
-                    using (var doc = JsonDocument.ParseValue(ref reader))
-                    {
-                        return doc.RootElement.GetRawText();
-                    }
+                    return JsonElement.ParseValue(ref reader).GetRawText();
                 default:
                     return null;
             }
@@ -58,17 +55,11 @@ namespace ModernIPTVPlayer.Helpers
                     if (reader.TokenType == JsonTokenType.String) list.Add(reader.GetString() ?? "");
                     else if (reader.TokenType == JsonTokenType.Number) 
                     {
-                        using (var doc = JsonDocument.ParseValue(ref reader))
-                        {
-                            list.Add(doc.RootElement.GetRawText());
-                        }
+                        list.Add(JsonElement.ParseValue(ref reader).GetRawText());
                     }
                     else
                     {
-                        using (var doc = JsonDocument.ParseValue(ref reader))
-                        {
-                            list.Add(doc.RootElement.GetRawText());
-                        }
+                        list.Add(JsonElement.ParseValue(ref reader).GetRawText());
                     }
                 }
                 return list;

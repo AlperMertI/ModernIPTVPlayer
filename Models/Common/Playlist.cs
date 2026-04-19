@@ -1,6 +1,6 @@
-using System;
+﻿using System;
 
-namespace ModernIPTVPlayer
+namespace ModernIPTVPlayer.Models.Common
 {
     public enum PlaylistType
     {

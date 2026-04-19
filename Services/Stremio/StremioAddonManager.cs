@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Windows.Storage;
 using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Services.Json;
 
 namespace ModernIPTVPlayer.Services.Stremio
 {
@@ -28,7 +30,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         }
 
         private const string ADDONS_KEY = "StremioInstalledAddons";
-        private const string MANIFEST_CACHE_FILE = "stremio_manifests.json";
+        private const string MANIFEST_CACHE_FILE = "stremio_manifests.bin.zst";
         
         private readonly System.Threading.Lock _addonLock = new();
         private List<string> _addonUrls = new();
@@ -87,7 +89,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 if (localSettings.Values.ContainsKey(ADDONS_KEY))
                 {
                     string json = localSettings.Values[ADDONS_KEY] as string;
-                    _addonUrls = JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
+                    _addonUrls = JsonSerializer.Deserialize(json, AppJsonContext.Default.ListString) ?? new List<string>();
                 }
                 else
                 {
@@ -108,7 +110,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             lock (_addonLock)
             {
                 var localSettings = ApplicationData.Current.LocalSettings;
-                string json = JsonSerializer.Serialize(_addonUrls);
+                string json = JsonSerializer.Serialize(_addonUrls, AppJsonContext.Default.ListString);
                 localSettings.Values[ADDONS_KEY] = json;
             }
         }
@@ -118,12 +120,13 @@ namespace ModernIPTVPlayer.Services.Stremio
             try
             {
                 var folder = ApplicationData.Current.LocalFolder;
+
                 var item = await folder.TryGetItemAsync(MANIFEST_CACHE_FILE);
                 if (item != null)
                 {
-                    var file = await folder.GetFileAsync(MANIFEST_CACHE_FILE);
-                    string json = await FileIO.ReadTextAsync(file);
-                    var cache = JsonSerializer.Deserialize<Dictionary<string, StremioManifest>>(json);
+                    using var stream = await folder.OpenStreamForReadAsync(MANIFEST_CACHE_FILE);
+                    using var decompressor = new ZstdSharp.DecompressionStream(stream);
+                    var cache = await JsonSerializer.DeserializeAsync(decompressor, AppJsonContext.Default.DictionaryStringStremioManifest);
                     
                     if (cache != null)
                     {
@@ -131,7 +134,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         {
                             _manifestCache = cache;
                         }
-                        AppLogger.Info($"[StremioAddonManager] Loaded {cache.Count} manifests from disk.");
+                        AppLogger.Info($"[StremioAddonManager] Loaded {cache.Count} manifests from Zstd binary.");
                     }
                 }
             }
@@ -145,15 +148,15 @@ namespace ModernIPTVPlayer.Services.Stremio
         {
             try
             {
-                string json;
-                lock (_addonLock)
-                {
-                    json = JsonSerializer.Serialize(_manifestCache);
-                }
-
                 var folder = ApplicationData.Current.LocalFolder;
-                var file = await folder.CreateFileAsync(MANIFEST_CACHE_FILE, CreationCollisionOption.ReplaceExisting);
-                await FileIO.WriteTextAsync(file, json);
+                using (var stream = await folder.OpenStreamForWriteAsync(MANIFEST_CACHE_FILE, CreationCollisionOption.ReplaceExisting))
+                using (var compressor = new ZstdSharp.CompressionStream(stream, 3))
+                {
+                    lock (_addonLock)
+                    {
+                        JsonSerializer.Serialize(compressor, _manifestCache, AppJsonContext.Default.DictionaryStringStremioManifest);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -180,7 +183,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                     if (response.IsSuccessStatusCode)
                     {
                         string json = await response.Content.ReadAsStringAsync();
-                        var manifest = JsonSerializer.Deserialize<StremioManifest>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                        var manifest = JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioManifest);
                         if (manifest != null)
                         {
                             lock (_addonLock)

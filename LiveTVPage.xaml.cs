@@ -424,8 +424,8 @@ namespace ModernIPTVPlayer
                         string streamJson = streamTask.Result;
                         streamJsonBytes = Encoding.UTF8.GetBytes(streamJson);
 
-                        categories = HttpHelper.TryDeserializeList<LiveCategory>(catJson);
-                        streams = HttpHelper.TryDeserializeList<LiveStream>(streamJson);
+                        categories = HttpHelper.TryDeserializeList(catJson, Services.Json.AppJsonContext.Default.ListLiveCategory);
+                        streams = HttpHelper.TryDeserializeList(streamJson, Services.Json.AppJsonContext.Default.ListLiveStream);
                     }
 
                     if (streams != null && streams.Count > 0)
@@ -666,7 +666,7 @@ namespace ModernIPTVPlayer
                         StreamId = m3uId,
                         Name = currentName,
                         StreamUrl = trimLine,
-                        IconUrl = currentLogo
+                        StreamIcon = currentLogo
                     });
 
                     currentName = null; currentLogo = null; currentGroup = null;
@@ -742,7 +742,7 @@ namespace ModernIPTVPlayer
                         StreamId = m3uId,
                         Name = currentName,
                         StreamUrl = trimLine,
-                        IconUrl = currentLogo
+                        StreamIcon = currentLogo
                     });
 
                     currentName = null; currentLogo = null; currentGroup = null;
@@ -1380,7 +1380,7 @@ namespace ModernIPTVPlayer
         {
             if (e.ClickedItem is LiveStream stream)
             {
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name, LogoUrl: stream.IconUrl, Type: "live"));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name, LogoUrl: stream.StreamIcon, Type: "live"));
             }
         }
 
@@ -1447,7 +1447,7 @@ namespace ModernIPTVPlayer
                         StreamId = int.TryParse(item.Id, out var id) ? id : 0,
                         Name = item.Title,
                         StreamUrl = item.StreamUrl,
-                        IconUrl = item.PosterUrl
+                        StreamIcon = item.PosterUrl
                     });
                 }
             }
@@ -1466,7 +1466,7 @@ namespace ModernIPTVPlayer
         {
             if (e.ClickedItem is LiveStream stream)
             {
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name, LogoUrl: stream.IconUrl, Type: "live"));
+                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name, LogoUrl: stream.StreamIcon, Type: "live"));
             }
         }
 

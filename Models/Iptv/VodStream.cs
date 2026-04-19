@@ -9,7 +9,7 @@ using System.Text.Json.Serialization;
 using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Models;
 
-namespace ModernIPTVPlayer
+namespace ModernIPTVPlayer.Models.Iptv
 {
     [JsonConverter(typeof(VodStreamConverter))]
     public class VodStream : INotifyPropertyChanged, IMediaStream
@@ -109,7 +109,6 @@ namespace ModernIPTVPlayer
         // IMediaStream Implementation
         public int Id => StreamId;
         
-        [JsonPropertyName("imdb_id")]
         public string? ImdbId 
         { 
             get => VodReadString(VodSlotImdb, _imdbOffset, _imdbLen);
@@ -133,8 +132,8 @@ namespace ModernIPTVPlayer
         [JsonIgnore]
         public string PosterUrl 
         { 
-            get => IconUrl; 
-            set => IconUrl = value; 
+            get => StreamIcon; 
+            set => StreamIcon = value; 
         }
 
         public string? BackdropUrl 
@@ -210,16 +209,15 @@ namespace ModernIPTVPlayer
             set => _streamUrlOverride = value; 
         }
 
-        [JsonPropertyName("rating")]
         [JsonConverter(typeof(Helpers.UniversalStringConverter))]
-        public string? RatingRaw 
+        public string? Rating_json 
         { 
             get => VodReadString(VodSlotRat, _ratOff, _ratLen);
-            set => VodWriteString(VodSlotRat, ref _ratOff, ref _ratLen, value, nameof(RatingRaw), nameof(Rating));
+            set => VodWriteString(VodSlotRat, ref _ratOff, ref _ratLen, value, nameof(Rating_json), nameof(Rating));
         }
 
         [JsonIgnore]
-        public string Rating { get => RatingRaw ?? ""; set => RatingRaw = value; }
+        public string Rating { get => Rating_json ?? ""; set => Rating_json = value; }
 
         // UI Binding Implementation
         public double ProgressValue => 0;
@@ -273,13 +271,12 @@ namespace ModernIPTVPlayer
             set => VodWriteString(VodSlotName, ref _nameOffset, ref _nameLen, value, nameof(Name), nameof(Title));
         }
         
-        [JsonPropertyName("stream_id")]
         public int StreamId { get; set; }
         
-        public string? IconUrl 
+        public string? StreamIcon 
         { 
             get => VodReadString(VodSlotIcon, _iconOffset, _iconLen);
-            set => VodWriteString(VodSlotIcon, ref _iconOffset, ref _iconLen, value, nameof(IconUrl), nameof(PosterUrl));
+            set => VodWriteString(VodSlotIcon, ref _iconOffset, ref _iconLen, value, nameof(StreamIcon), nameof(PosterUrl));
         }
 
         public string? ContainerExtension 
@@ -295,17 +292,12 @@ namespace ModernIPTVPlayer
         }
         private string? _categoryId;
         
-        [JsonPropertyName("added")]
-        public string? DateAdded { get; set; }
-
-        [JsonPropertyName("air_date")]
-        public string? AirDate { get; set; }
-
-        [JsonPropertyName("releasedate")]
-        public string? ReleaseDate { get; set; }
-
-        [JsonPropertyName("released")]
+        public string? Dateadded { get; set; }
+        public string? Airdate { get; set; }
         public string? Released { get; set; }
+        public string? Releasedate { get; set; }
+
+        public string? LastModified { get; set; }
 
         public string Year 
         { 
@@ -320,7 +312,7 @@ namespace ModernIPTVPlayer
                     stored = _year;
                 if (!string.IsNullOrEmpty(stored)) return stored;
 
-                string? dateYear = Helpers.TitleHelper.ExtractYear(ReleaseDate ?? AirDate ?? Released);
+                string? dateYear = Helpers.TitleHelper.ExtractYear(Releasedate ?? Airdate ?? Released);
                 if (!string.IsNullOrEmpty(dateYear)) return dateYear;
                 return Helpers.TitleHelper.ExtractYear(Name) ?? "";
             }
@@ -468,7 +460,7 @@ namespace ModernIPTVPlayer
         public Models.Metadata.VodRecord ToRecord()
         {
             float ratingValue = 0;
-            if (double.TryParse(RatingRaw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+            if (double.TryParse(Rating_json, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
                 ratingValue = (float)r;
 
             return new Models.Metadata.VodRecord
@@ -523,7 +515,7 @@ namespace ModernIPTVPlayer
             _bitFlags = data.Flags;
             
             OnPropertyChanged(nameof(Name));
-            OnPropertyChanged(nameof(IconUrl));
+            OnPropertyChanged(nameof(StreamIcon));
             OnPropertyChanged(nameof(Year));
             OnPropertyChanged(nameof(Rating));
             OnPropertyChanged(nameof(SourceTitle));
@@ -541,9 +533,6 @@ namespace ModernIPTVPlayer
             _session = session;
             _recordIndex = recordIndex;
         }
-
-        [JsonPropertyName("last_modified")]
-        public string? LastModified { get; set; }
     }
 
     public class VodStreamConverter : JsonConverter<VodStream>
@@ -557,37 +546,44 @@ namespace ModernIPTVPlayer
                 while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
                 {
                     if (reader.TokenType != JsonTokenType.PropertyName) continue;
-                    string propName = reader.GetString();
+                    
+                    var propName = reader.ValueSpan;
                     reader.Read();
 
                     if (reader.TokenType == JsonTokenType.Null) continue;
 
-                    switch (propName)
+                    // PROJECT ZERO: Span-based matching (Zero-alloc)
+                    if (propName.SequenceEqual("name"u8))
                     {
-                        case "name":
-                            stream.Name = reader.GetString(); // MetadataBuffer internally handles this through property setter
-                            break;
-                        case "stream_id":
-                            stream.StreamId = reader.GetInt32();
-                            break;
-                        case "stream_icon":
-                            stream.IconUrl = reader.GetString();
-                            break;
-                        case "container_extension":
-                            stream.ContainerExtension = FastStringPool.Intern(reader.GetString());
-                            break;
-                        case "category_id":
-                            stream.CategoryId = FastStringPool.Intern(reader.GetString());
-                            break;
-                        case "imdb_id":
-                            stream.ImdbId = reader.GetString();
-                            break;
-                        case "rating":
-                            stream.RatingRaw = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
-                            break;
-                        case "added":
-                            stream.DateAdded = FastStringPool.Intern(reader.GetString());
-                            break;
+                        stream.Name = reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("stream_id"u8))
+                    {
+                        stream.StreamId = reader.GetInt32();
+                    }
+                    else if (propName.SequenceEqual("stream_icon"u8))
+                    {
+                        stream.StreamIcon = reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("container_extension"u8))
+                    {
+                        stream.ContainerExtension = FastStringPool.Intern(reader.GetString());
+                    }
+                    else if (propName.SequenceEqual("category_id"u8))
+                    {
+                        stream.CategoryId = FastStringPool.Intern(reader.GetString());
+                    }
+                    else if (propName.SequenceEqual("imdb_id"u8))
+                    {
+                        stream.ImdbId = reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("rating"u8))
+                    {
+                        stream.Rating_json = reader.TokenType == JsonTokenType.Number ? reader.GetDouble().ToString() : reader.GetString();
+                    }
+                    else if (propName.SequenceEqual("added"u8))
+                    {
+                        stream.Dateadded = FastStringPool.Intern(reader.GetString());
                     }
                 }
             }
@@ -603,11 +599,11 @@ namespace ModernIPTVPlayer
             writer.WriteStartObject();
             writer.WriteString("name", value.Name);
             writer.WriteNumber("stream_id", value.StreamId);
-            writer.WriteString("stream_icon", value.IconUrl);
+            writer.WriteString("stream_icon", value.StreamIcon);
             writer.WriteString("container_extension", value.ContainerExtension);
             writer.WriteString("category_id", value.CategoryId);
             writer.WriteString("imdb_id", value.ImdbId);
-            writer.WriteString("rating", value.RatingRaw);
+            writer.WriteString("rating", value.Rating_json);
             writer.WriteString("stream_url", value.StreamUrl);
             writer.WriteEndObject();
         }

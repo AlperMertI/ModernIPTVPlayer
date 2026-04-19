@@ -5,6 +5,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Threading.Tasks;
+using ZstdSharp;
 using Windows.Storage;
 
 namespace ModernIPTVPlayer.Services
@@ -102,7 +103,7 @@ namespace ModernIPTVPlayer.Services
 
         private async Task LoadCacheAsync()
         {
-            string fileName = $"cache_{_currentPlaylistId}_probe.bin.gz";
+            string fileName = $"cache_{_currentPlaylistId}_probe.bin.zst";
             try
             {
                 var folder = ApplicationData.Current.LocalFolder;
@@ -111,8 +112,8 @@ namespace ModernIPTVPlayer.Services
 
                 using var stream = await folder.OpenStreamForReadAsync(fileName);
                 using var buffered = new BufferedStream(stream, 128 * 1024);
-                using var gzip = new GZipStream(buffered, CompressionMode.Decompress);
-                using var reader = new BinaryReader(gzip, System.Text.Encoding.UTF8);
+                using var decompressor = new DecompressionStream(buffered);
+                using var reader = new BinaryReader(decompressor, System.Text.Encoding.UTF8);
                 
                 int magic = reader.ReadInt32();
                 if (magic != 0x50524231) // Magic: PRB1
@@ -150,14 +151,14 @@ namespace ModernIPTVPlayer.Services
             if (!_isDirty || _cache.IsEmpty) return;
             if ((DateTime.Now - _lastSaveTime).TotalSeconds < 5) return; 
 
-            string fileName = $"cache_{_currentPlaylistId}_probe.bin.gz";
+            string fileName = $"cache_{_currentPlaylistId}_probe.bin.zst";
             try
             {
                 var folder = ApplicationData.Current.LocalFolder;
                 using var stream = await folder.OpenStreamForWriteAsync(fileName, CreationCollisionOption.ReplaceExisting);
                 using var buffered = new BufferedStream(stream, 128 * 1024);
-                using var gzip = new GZipStream(buffered, CompressionLevel.Fastest);
-                using var writer = new BinaryWriter(gzip, System.Text.Encoding.UTF8);
+                using var compressor = new CompressionStream(buffered, 3);
+                using var writer = new BinaryWriter(compressor, System.Text.Encoding.UTF8);
                 
                 writer.Write(0x50524231); // Magic: PRB1
                 writer.Write(_cache.Count);

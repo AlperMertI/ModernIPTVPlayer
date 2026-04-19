@@ -8,10 +8,12 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Threading.Tasks;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services;
+using ModernIPTVPlayer.Services.Json;
 using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Services.Metadata;
 using ModernIPTVPlayer.Models.Metadata;
@@ -103,7 +105,7 @@ namespace ModernIPTVPlayer.Controls
         private bool _isSourceActive = true;
 
         // Hero Priority Logic
-        private enum RowState { Pending, Success, Failed }
+        internal enum RowState { Pending, Success, Failed }
         private Dictionary<string, RowState> _rowStates = new();
         private Dictionary<string, ObservableCollection<StremioMediaStream>> _rowItemsBuffer = new();
         private List<string> _heroPriorityOrder = new();
@@ -127,9 +129,9 @@ namespace ModernIPTVPlayer.Controls
         // --- OPTIMIZATION FIELDS ---
         private static Dictionary<string, List<CachedSlot>> _slotMapCache = new();
         private static Task _historyInitTask;
-        private const string LAYOUT_CACHE_FILE = "discovery_layout.json";
+        private const string LAYOUT_CACHE_FILE = "discovery_layout.bin.zst";
 
-        private class CachedSlot
+        internal class CachedSlot
         {
             public string BaseUrl { get; set; }
             public StremioCatalog Catalog { get; set; }
@@ -139,7 +141,7 @@ namespace ModernIPTVPlayer.Controls
         // ---------------------------
 
         // Memory Cache for instant switching
-        private class DiscoveryState
+        internal class DiscoveryState
         {
             public List<CatalogRowViewModel> Rows { get; set; } = new();
             public Dictionary<string, RowState> RowStates { get; set; } = new();
@@ -222,20 +224,21 @@ namespace ModernIPTVPlayer.Controls
             try
             {
                 var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
-                var file = await folder.TryGetItemAsync(LAYOUT_CACHE_FILE);
-                if (file != null)
+                var item = await folder.TryGetItemAsync(LAYOUT_CACHE_FILE);
+                
+                if (item == null) return;
+
+                var zstFile = await folder.GetFileAsync(LAYOUT_CACHE_FILE);
+                using (var stream = await zstFile.OpenStreamForReadAsync())
+                using (var decompressor = new ZstdSharp.DecompressionStream(stream))
                 {
-                    var fileObj = await folder.GetFileAsync(LAYOUT_CACHE_FILE);
-                    var json = await Windows.Storage.FileIO.ReadTextAsync(fileObj);
-                    var diskCache = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, List<CachedSlot>>>(json);
+                    var diskCache = await JsonSerializer.DeserializeAsync(decompressor, AppJsonContext.Default.DictionaryStringListCachedSlot);
                     if (diskCache != null)
                     {
                         lock(_slotMapCache)
                         {
                             foreach(var kv in diskCache)
                             {
-                                // Skip poisoned empty entries from previous runs — they would cause
-                                // the slot-map-cached path to emit an empty slot list and stall discovery.
                                 if (kv.Value == null || kv.Value.Count == 0) continue;
                                 _slotMapCache[kv.Key] = kv.Value;
                             }
@@ -250,11 +253,16 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                string json;
-                lock (_slotMapCache) json = System.Text.Json.JsonSerializer.Serialize(_slotMapCache);
                 var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
                 var file = await folder.CreateFileAsync(LAYOUT_CACHE_FILE, Windows.Storage.CreationCollisionOption.ReplaceExisting);
-                await Windows.Storage.FileIO.WriteTextAsync(file, json);
+                
+                using (var stream = await file.OpenStreamForWriteAsync())
+                using (var compressor = new ZstdSharp.CompressionStream(stream, 3))
+                {
+                    Dictionary<string, List<CachedSlot>> copy;
+                    lock (_slotMapCache) copy = new Dictionary<string, List<CachedSlot>>(_slotMapCache);
+                    await JsonSerializer.SerializeAsync(compressor, copy, AppJsonContext.Default.DictionaryStringListCachedSlot);
+                }
             }
             catch { }
         }
@@ -687,7 +695,7 @@ namespace ModernIPTVPlayer.Controls
                         
                         var relevantCatalogs = manifest.Catalogs
                             .Where(c => string.Equals(c.Type, contentType, StringComparison.OrdinalIgnoreCase))
-                            .Where(c => !(c.Extra != null && c.Extra.Any(e => string.Equals(e.Name, "search", StringComparison.OrdinalIgnoreCase) && e.IsRequired)))
+                            .Where(c => !(c.Extra != null && c.Extra.Any(e => string.Equals(e.Name, "search", StringComparison.OrdinalIgnoreCase) && e.Isrequired)))
                             .Where(c => (c.Id != null) && !c.Id.Contains("search", StringComparison.OrdinalIgnoreCase))
                             .Where(c => (c.Id != null) && !c.Id.Contains("search_movie", StringComparison.OrdinalIgnoreCase))
                             .Where(c => (c.Id != null) && !c.Id.Contains("search_series", StringComparison.OrdinalIgnoreCase))

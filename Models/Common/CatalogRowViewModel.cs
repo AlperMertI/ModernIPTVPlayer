@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Models

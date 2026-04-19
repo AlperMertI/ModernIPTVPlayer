@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Windows.Storage;
+using ModernIPTVPlayer.Services.Json;
 
 namespace ModernIPTVPlayer.Services
 {
@@ -16,7 +17,8 @@ namespace ModernIPTVPlayer.Services
         public static WatchlistManager Instance => _instance ??= new WatchlistManager();
 
         private List<WatchlistItem> _watchlist = new();
-        private const string FILENAME = "watchlist.json";
+        private const string FILENAME = "watchlist.bin.zst";
+        private const string LEGACY_FILENAME = "watchlist.json";
         private bool _loaded = false;
         private readonly System.Threading.Lock _lock = new();
         private readonly System.Threading.SemaphoreSlim _fileLock = new(1, 1);
@@ -33,15 +35,21 @@ namespace ModernIPTVPlayer.Services
                 await _fileLock.WaitAsync();
                 var folder = ApplicationData.Current.LocalFolder;
                 var item = await folder.TryGetItemAsync(FILENAME);
-                if (item != null)
+                
+                if (item == null)
                 {
-                    var file = await folder.GetFileAsync(FILENAME);
-                    var json = await FileIO.ReadTextAsync(file);
-                    var list = JsonSerializer.Deserialize<List<WatchlistItem>>(json);
-                    
-                    lock (_lock)
+                    _loaded = true;
+                    return;
+                }
+
+                var zstFile = await folder.GetFileAsync(FILENAME);
+                using (var stream = await zstFile.OpenStreamForReadAsync())
+                using (var decompressor = new ZstdSharp.DecompressionStream(stream))
+                {
+                    var list = await JsonSerializer.DeserializeAsync(decompressor, AppJsonContext.Default.ListWatchlistItem);
+                    if (list != null)
                     {
-                         _watchlist = list ?? new List<WatchlistItem>();
+                        lock (_lock) _watchlist = list;
                     }
                 }
                 _loaded = true;
@@ -58,29 +66,27 @@ namespace ModernIPTVPlayer.Services
 
         private async Task SaveAsync()
         {
+            await _fileLock.WaitAsync();
+            try { await SaveAsyncInternal(); }
+            finally { _fileLock.Release(); }
+        }
+
+        private async Task SaveAsyncInternal()
+        {
             try
             {
-                await _fileLock.WaitAsync();
-                string json;
-                lock (_lock)
-                {
-                    json = JsonSerializer.Serialize(_watchlist);
-                }
-
                 var folder = ApplicationData.Current.LocalFolder;
                 var file = await folder.CreateFileAsync(FILENAME, CreationCollisionOption.ReplaceExisting);
-                await FileIO.WriteTextAsync(file, json);
-                
+                using (var stream = await file.OpenStreamForWriteAsync())
+                using (var compressor = new ZstdSharp.CompressionStream(stream, 3))
+                {
+                    List<WatchlistItem> copy;
+                    lock (_lock) copy = new List<WatchlistItem>(_watchlist);
+                    await JsonSerializer.SerializeAsync(compressor, copy, AppJsonContext.Default.ListWatchlistItem);
+                }
                 WatchlistChanged?.Invoke(this, EventArgs.Empty);
             }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[WatchlistManager] Save Error: {ex.Message}");
-            }
-            finally
-            {
-                _fileLock.Release();
-            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[WatchlistManager] Save Error: {ex.Message}"); }
         }
 
         public async Task AddToWatchlist(IMediaStream stream)

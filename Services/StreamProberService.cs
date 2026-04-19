@@ -7,8 +7,6 @@ using Mpv.Core;
 using Mpv.Core.Interop;
 using System.Globalization;
 using System.Linq;
-using System.Reflection;
-using System.Collections;
 using System.Net;
 using System.Timers;
 
@@ -350,38 +348,17 @@ namespace ModernIPTVPlayer.Services
             string header = "";
             try
             {
+                if (string.IsNullOrEmpty(url)) return "";
+
                 var targetUri = new Uri(url);
                 var cookies = HttpHelper.CookieContainer.GetCookies(targetUri);
                 
-                // Fallback to all cookies if strict domain match fails
-                if (cookies.Count == 0)
+                if (cookies != null && cookies.Count > 0)
                 {
-                    var domainTableField = HttpHelper.CookieContainer.GetType().GetRuntimeFields().FirstOrDefault(x => x.Name == "m_domainTable" || x.Name == "_domainTable");
-                    var domains = domainTableField?.GetValue(HttpHelper.CookieContainer) as IDictionary;
-
-                    if (domains != null)
+                    foreach (System.Net.Cookie c in cookies)
                     {
-                        foreach (var val in domains.Values)
-                        {
-                            var listField = val.GetType().GetRuntimeFields().FirstOrDefault(x => x.Name == "m_list" || x.Name == "_list");
-                            var cookieList = listField?.GetValue(val) as IDictionary;
-
-                            if (cookieList != null)
-                            {
-                                foreach (System.Net.CookieCollection col in cookieList.Values)
-                                {
-                                    foreach (System.Net.Cookie c in col)
-                                    {
-                                        if (url.Contains(c.Domain)) header += $"{c.Name}={c.Value}; ";
-                                    }
-                                }
-                            }
-                        }
+                         header += $"{c.Name}={c.Value}; ";
                     }
-                }
-                else
-                {
-                    foreach (System.Net.Cookie c in cookies) header += $"{c.Name}={c.Value}; ";
                 }
 
                 return header.TrimEnd(' ', ';');

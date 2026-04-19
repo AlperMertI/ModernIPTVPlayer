@@ -94,24 +94,15 @@ namespace ModernIPTVPlayer
         // Helper class to deserialize MPV track-list
         private class MpvTrack
         {
-            [JsonPropertyName("id")]
             public int Id { get; set; }
-            [JsonPropertyName("type")]
             public string Type { get; set; } // "video", "audio", "sub"
-            [JsonPropertyName("lang")]
             public string Lang { get; set; }
-            [JsonPropertyName("title")]
             public string Title { get; set; }
-            [JsonPropertyName("selected")]
             public bool Selected { get; set; }
-            [JsonPropertyName("codec")]
             public string Codec { get; set; }
-            [JsonPropertyName("audio-channels")]
-            public int? AudioChannels { get; set; }
-            [JsonPropertyName("demux-w")]
-            public int? Width { get; set; }
-            [JsonPropertyName("demux-h")]
-            public int? Height { get; set; }
+            public int? Audio_channels { get; set; }
+            public int? Demux_w { get; set; }
+            public int? Demux_h { get; set; }
         }
 
 

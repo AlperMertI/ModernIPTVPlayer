@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using System.Text.Json;
 using Microsoft.UI.Xaml;
+using ModernIPTVPlayer.Services.Json;
 
 // Assuming LiveStream model is available in global namespace or we need to define a local DTO?
 // Based on logs, LiveStream is likely in ModernIPTVPlayer namespace.
@@ -107,7 +108,7 @@ namespace ModernIPTVPlayer.Controls
                     try 
                     {
                         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                        _allChannels = JsonSerializer.Deserialize<List<LiveStream>>(json, options) ?? new List<LiveStream>();
+                        _allChannels = JsonSerializer.Deserialize(json, AppJsonContext.Default.ListLiveStream) ?? new List<LiveStream>();
                         
                         
                         foreach (var ch in _allChannels)
@@ -218,7 +219,7 @@ namespace ModernIPTVPlayer.Controls
                         { 
                             Name = name, 
                             StreamUrl = trim, 
-                            IconUrl = icon ?? "/Assets/def_station.png" 
+                            StreamIcon = icon ?? "/Assets/def_station.png" 
                         });
                         name = null; icon = null;
                     }

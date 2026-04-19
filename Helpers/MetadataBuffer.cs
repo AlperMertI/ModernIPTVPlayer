@@ -78,6 +78,35 @@ namespace ModernIPTVPlayer.Helpers
         }
 
         /// <summary>
+        /// PROJECT ZERO: Zero-Allocation Byte Storage.
+        /// Directly stores a raw UTF-8 byte span into the buffer.
+        /// This bypasses string object creation entirely.
+        /// </summary>
+        public static (int Offset, int Length) StoreRaw(ReadOnlySpan<byte> data)
+        {
+            if (data.IsEmpty) return (-1, 0);
+
+            int len = data.Length;
+            int offset;
+
+            lock (_lock)
+            {
+                if (_position + len > _buffer.Length)
+                {
+                    int newSize = Math.Max(_buffer.Length * 2, _position + len + 1024 * 1024);
+                    System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] CRITICAL: Resizing buffer to {newSize / 1024 / 1024}MB (StoreRaw)");
+                    Array.Resize(ref _buffer, newSize);
+                }
+
+                offset = _position;
+                data.CopyTo(new Span<byte>(_buffer, offset, len));
+                _position += len;
+            }
+
+            return (offset, len);
+        }
+
+        /// <summary>
         /// Compares a string against the stored UTF-8 bytes without allocating a new string object.
         /// This is used as a high-performance "loop breaker" in property setters.
         /// </summary>

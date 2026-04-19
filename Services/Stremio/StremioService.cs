@@ -9,6 +9,7 @@ using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Services.Iptv;
 using ModernIPTVPlayer.Services.Metadata;
 using ModernIPTVPlayer.Services;
+using ModernIPTVPlayer.Services.Json;
 using ModernIPTVPlayer;
 using System.Linq;
 
@@ -83,7 +84,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
 
                 string json = await _client.GetStringAsync(url);
-                return JsonSerializer.Deserialize<StremioManifest>(json, _jsonOptions);
+                return JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioManifest);
             }
             catch (Exception ex)
             {
@@ -169,7 +170,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 response.EnsureSuccessStatusCode();
                 string json = await response.Content.ReadAsStringAsync();
 
-                var result = JsonSerializer.Deserialize<StremioMetaResponse>(json, _jsonOptions);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioMetaResponse);
                 return result?.Meta;
             }
             catch (TaskCanceledException ex)
@@ -198,7 +199,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                     {
                         string url = $"{baseUrl.TrimEnd('/')}/stream/{type}/{id}.json";
                         string json = await _client.GetStringAsync(url);
-                        var response = JsonSerializer.Deserialize<StremioStreamResponse>(json, _jsonOptions);
+                        var response = JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioStreamResponse);
                         if (response?.Streams != null)
                         {
                             foreach (var s in response.Streams)
@@ -276,7 +277,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 AppLogger.Info($"[StremioService] Fetching subtitles from: {url}");
 
                 string json = await _client.GetStringAsync(url);
-                var response = JsonSerializer.Deserialize<StremioSubtitleResponse>(json, _jsonOptions);
+                var response = JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioSubtitleResponse);
                 return response?.Subtitles ?? new List<StremioSubtitle>();
             }
             catch (Exception ex)
@@ -667,7 +668,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             // 4. Handle 200 OK
             string json = await response.Content.ReadAsStringAsync(cancellationToken);
             
-            var root = JsonSerializer.Deserialize<StremioCatalogRoot>(json, _jsonOptions);
+            var root = JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioCatalogRoot);
 
             // 5. Update Cache asynchronously in background
             if (root?.Metas != null)
@@ -788,7 +789,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             AddToIndex(stream.Meta.Id);
             AddToIndex(stream.Meta.ImdbId);
             AddToIndex(stream.IMDbId);
-            if (stream.Meta.MovieDbId != null) AddToIndex($"tmdb:{stream.Meta.MovieDbId}");
+            if (stream.Meta.MoviedbId != null) AddToIndex($"tmdb:{stream.Meta.MoviedbId}");
         }
 
         public List<StremioMediaStream> GetGlobalMetaCache(string id)
@@ -814,8 +815,8 @@ namespace ModernIPTVPlayer.Services.Stremio
                 if (existing.IMDbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase) && current.IMDbId.StartsWith("tt", StringComparison.OrdinalIgnoreCase)) return existing.IMDbId == current.IMDbId;
             }
 
-            var titles1 = new[] { existing.Title, existing.Meta?.OriginalName }.Where(t => !string.IsNullOrWhiteSpace(t)).Concat(existing.Meta?.Aliases ?? Enumerable.Empty<string>());
-            var titles2 = new[] { current.Title, current.Meta?.OriginalName }.Where(t => !string.IsNullOrWhiteSpace(t)).Concat(current.Meta?.Aliases ?? Enumerable.Empty<string>());
+            var titles1 = new[] { existing.Title, existing.Meta?.Originalname }.Where(t => !string.IsNullOrWhiteSpace(t)).Concat(existing.Meta?.Aliases ?? Enumerable.Empty<string>());
+            var titles2 = new[] { current.Title, current.Meta?.Originalname }.Where(t => !string.IsNullOrWhiteSpace(t)).Concat(current.Meta?.Aliases ?? Enumerable.Empty<string>());
             return TitleHelper.IsMatch(titles1, current.Title, existing.Year, current.Year) || TitleHelper.IsMatch(titles2, existing.Title, existing.Year, current.Year);
         }
 

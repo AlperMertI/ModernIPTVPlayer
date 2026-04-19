@@ -30,7 +30,7 @@ namespace ModernIPTVPlayer.Pages
                 { 
                     Url = url, 
                     Name = name,
-                    IconUrl = icon
+                    StreamIcon = icon
                 });
             }
             AddonListView.ItemsSource = InstalledAddons;
@@ -153,9 +153,9 @@ namespace ModernIPTVPlayer.Pages
     {
         public string Url { get; set; }
         public string Name { get; set; }
-        public string IconUrl { get; set; }
+        public string StreamIcon { get; set; }
 
         public string DisplayName => !string.IsNullOrEmpty(Name) ? Name : Url;
-        public bool HasIcon => !string.IsNullOrEmpty(IconUrl);
+        public bool HasIcon => !string.IsNullOrEmpty(StreamIcon);
     }
 }

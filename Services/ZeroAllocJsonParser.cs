@@ -158,13 +158,9 @@ namespace ModernIPTVPlayer.Services
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
-                        string val = reader.GetString();
-                        if (!string.IsNullOrEmpty(val))
-                        {
-                            var stored = MetadataBuffer.Store(val);
-                            data.NameOff = stored.Offset;
-                            data.NameLen = stored.Length;
-                        }
+                        var stored = StoreReaderValue(ref reader);
+                        data.NameOff = stored.Offset;
+                        data.NameLen = stored.Length;
                     }
                 }
                 else if (propName.SequenceEqual(StreamIdProperty))
@@ -179,52 +175,36 @@ namespace ModernIPTVPlayer.Services
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
-                        string val = reader.GetString();
-                        if (!string.IsNullOrEmpty(val))
-                        {
-                            var stored = MetadataBuffer.Store(val);
-                            data.IconOff = stored.Offset;
-                            data.IconLen = stored.Length;
-                        }
+                        var stored = StoreReaderValue(ref reader);
+                        data.IconOff = stored.Offset;
+                        data.IconLen = stored.Length;
                     }
                 }
                 else if (propName.SequenceEqual(CoverProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
-                        string val = reader.GetString();
-                        if (!string.IsNullOrEmpty(val))
-                        {
-                            var stored = MetadataBuffer.Store(val);
-                            data.IconOff = stored.Offset;
-                            data.IconLen = stored.Length;
-                        }
+                        var stored = StoreReaderValue(ref reader);
+                        data.IconOff = stored.Offset;
+                        data.IconLen = stored.Length;
                     }
                 }
                 else if (propName.SequenceEqual(ContainerExtensionProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
-                        string val = reader.GetString();
-                        if (!string.IsNullOrEmpty(val))
-                        {
-                            var stored = MetadataBuffer.Store(val);
-                            data.ExtOff = stored.Offset;
-                            data.ExtLen = stored.Length;
-                        }
+                        var stored = StoreReaderValue(ref reader);
+                        data.ExtOff = stored.Offset;
+                        data.ExtLen = stored.Length;
                     }
                 }
                 else if (propName.SequenceEqual(CategoryIdProperty))
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
-                        string val = reader.GetString();
-                        if (!string.IsNullOrEmpty(val))
-                        {
-                            var stored = MetadataBuffer.Store(val);
-                            data.CatOff = stored.Offset;
-                            data.CatLen = stored.Length;
-                        }
+                        var stored = StoreReaderValue(ref reader);
+                        data.CatOff = stored.Offset;
+                        data.CatLen = stored.Length;
                     }
                     else if (reader.TokenType == JsonTokenType.Number)
                     {
@@ -239,13 +219,9 @@ namespace ModernIPTVPlayer.Services
                 {
                     if (reader.TokenType == JsonTokenType.String)
                     {
-                        string val = reader.GetString();
-                        if (!string.IsNullOrEmpty(val))
-                        {
-                            var stored = MetadataBuffer.Store(val);
-                            data.RatOff = stored.Offset;
-                            data.RatLen = stored.Length;
-                        }
+                        var stored = StoreReaderValue(ref reader);
+                        data.RatOff = stored.Offset;
+                        data.RatLen = stored.Length;
                     }
                 }
                 else
@@ -258,11 +234,49 @@ namespace ModernIPTVPlayer.Services
             return data;
         }
 
+        /// <summary>
+        /// PROJECT ZERO: Zero-Allocation Reader Extraction.
+        /// Extracts the current reader value as UTF-8 bytes and stores it in MetadataBuffer 
+        /// without ever creating a System.String object on the heap.
+        /// </summary>
+        private static (int Offset, int Length) StoreReaderValue(ref Utf8JsonReader reader)
+        {
+            if (reader.ValueIsEscaped)
+            {
+                // Decouple escaped sequence via stackalloc buffer
+                int maxChars = reader.HasValueSequence ? (int)reader.ValueSequence.Length : reader.ValueSpan.Length;
+                
+                // Safety: limit stackalloc for extremely long values (rare in metadata)
+                if (maxChars < 1024)
+                {
+                    Span<char> chars = stackalloc char[maxChars];
+                    int charsWritten = reader.CopyString(chars);
+                    var charSpan = chars.Slice(0, charsWritten);
+                    
+                    int byteCount = System.Text.Encoding.UTF8.GetByteCount(charSpan);
+                    Span<byte> bytes = stackalloc byte[byteCount];
+                    System.Text.Encoding.UTF8.GetBytes(charSpan, bytes);
+                    
+                    return MetadataBuffer.StoreRaw(bytes);
+                }
+                else
+                {
+                    // Fallback for massive strings
+                    return MetadataBuffer.Store(reader.GetString());
+                }
+            }
+            else
+            {
+                // Pure Zero-Allocation: Directly copy the UTF-8 span from JSON source to MetadataBuffer
+                return MetadataBuffer.StoreRaw(reader.ValueSpan);
+            }
+        }
+
         private static LiveCategory ParseLiveCategoryObject(ref Utf8JsonReader reader)
         {
             var cat = new LiveCategory();
-            string name = null;
-            string id = null;
+            string? name = null;
+            string? id = null;
 
             while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
             {

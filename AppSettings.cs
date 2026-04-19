@@ -1,5 +1,7 @@
 using System;
 using Windows.Storage;
+using ModernIPTVPlayer.Models.Common;
+using ModernIPTVPlayer.Services.Json;
 
 namespace ModernIPTVPlayer
 {
@@ -63,7 +65,7 @@ namespace ModernIPTVPlayer
             };
 
             var list = new System.Collections.Generic.List<Playlist> { playlist };
-            var json = System.Text.Json.JsonSerializer.Serialize(list);
+            var json = System.Text.Json.JsonSerializer.Serialize(list, AppJsonContext.Default.ListPlaylist);
             Settings.Values[PlaylistsKey] = json;
 
             // Clear old keys
@@ -275,7 +277,7 @@ namespace ModernIPTVPlayer
                 }
                 try
                 {
-                    return System.Text.Json.JsonSerializer.Deserialize<ModernIPTVPlayer.Models.PlayerSettings>(json);
+                    return System.Text.Json.JsonSerializer.Deserialize(json, AppJsonContext.Default.PlayerSettings);
                 }
                 catch
                 {
@@ -284,7 +286,7 @@ namespace ModernIPTVPlayer
             }
             set
             {
-                var json = System.Text.Json.JsonSerializer.Serialize(value);
+                var json = System.Text.Json.JsonSerializer.Serialize(value, AppJsonContext.Default.PlayerSettings);
                 Settings.Values[PlayerSettingsKey] = json;
             }
         }

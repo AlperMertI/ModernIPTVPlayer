@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="using:ModernIPTVPlayer"
+    xmlns:iptv="using:ModernIPTVPlayer.Models.Iptv"
     xmlns:controls="using:ModernIPTVPlayer.Controls"
     mc:Ignorable="d" 
     NavigationCacheMode="Enabled"
@@ -155,7 +156,7 @@
                                     </Style>
                                 </ListView.ItemContainerStyle>
                                 <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="local:LiveCategory">
+                                    <DataTemplate x:DataType="iptv:LiveCategory">
                                         <TextBlock Text="{x:Bind CategoryName, Mode=OneWay}" FontSize="14" FontWeight="Medium" Opacity="0.85" TextTrimming="CharacterEllipsis"/>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>

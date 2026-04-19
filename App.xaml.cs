@@ -57,7 +57,7 @@ namespace ModernIPTVPlayer
         public static MpvWinUI.MpvPlayer? HandoffPlayer = null;
         public static Dictionary<string, object>? LastPlayerIntent { get; set; }
 
-        [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+        [LibraryImport("user32.dll", EntryPoint = "MessageBoxW", StringMarshalling = StringMarshalling.Utf16)]
         public static partial int MessageBox(IntPtr hWnd, string text, string caption, uint type);
 
         /// <summary>
@@ -67,6 +67,18 @@ namespace ModernIPTVPlayer
         public App()
         {
             this.InitializeComponent();
+
+            // WinUI 3 AOT Gotcha: Load external assembly dictionaries in code-behind
+            // to ensure they aren't trimmed away by the NativeAOT compiler.
+            try
+            {
+                var mpvDict = new ResourceDictionary { Source = new Uri("ms-appx:///Mpv.UI/Themes/Generic.xaml") };
+                this.Resources.MergedDictionaries.Add(mpvDict);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[AOT] Failed to load Mpv.UI dictionary: {ex.Message}");
+            }
 
             // 1. Initialize Logging as early as possible
             try
@@ -228,10 +240,10 @@ namespace ModernIPTVPlayer
             }
         }
 
-        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+        [LibraryImport("kernel32.dll", EntryPoint = "SetDllDirectoryW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
         private static partial bool SetDllDirectory(string lpPathName);
 
-        [LibraryImport("kernel32.dll", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
+        [LibraryImport("kernel32.dll", EntryPoint = "LoadLibraryW", SetLastError = true, StringMarshalling = StringMarshalling.Utf16)]
         private static partial IntPtr LoadLibrary(string lpFileName);
 
         [LibraryImport("kernel32.dll")]

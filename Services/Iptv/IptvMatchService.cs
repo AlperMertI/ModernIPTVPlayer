@@ -504,7 +504,7 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             var titleMatches = FindAllMatches(
                 item.Title, 
-                originalTitle ?? item.Meta?.OriginalName, 
+                originalTitle ?? item.Meta?.Originalname, 
                 subTitle, 
                 localizedTitle,
                 yearOverride ?? item.Year, 

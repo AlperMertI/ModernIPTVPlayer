@@ -40,10 +40,9 @@ namespace ModernIPTVPlayer
         public static CookieContainer CookieContainer => _handler.CookieContainer;
 
         /// <summary>
-        /// Safely deserializes a JSON string into a List of T, handling cases where the API returns 
-        /// an object (e.g. error message) instead of an array.
+        /// [NATIVE AOT] Safely deserializes a JSON string into a List of T using source-generated metadata.
         /// </summary>
-        public static List<T> TryDeserializeList<T>(string json, JsonSerializerOptions? options = null)
+        public static List<T> TryDeserializeList<T>(string json, System.Text.Json.Serialization.Metadata.JsonTypeInfo<List<T>> typeInfo)
         {
             if (string.IsNullOrWhiteSpace(json)) return new List<T>();
 
@@ -67,26 +66,24 @@ namespace ModernIPTVPlayer
                         throw new Exception(serverError);
                     }
                 }
-                catch (Exception ex) when (ex.Source != "System.Text.Json") // Don't catch our own thrown exception
+                catch (Exception ex) when (ex.Source != "System.Text.Json")
                 {
                     throw; 
                 }
                 catch
                 {
-                    // Fallback: It's an object but not a recognized error.
-                    AppLogger.Warn($"[HttpHelper] Expected JSON array for {typeof(T).Name} but received an object: {trimmed.Substring(0, Math.Min(200, trimmed.Length))}...");
+                    AppLogger.Warn($"[HttpHelper] Expected JSON array for {typeof(T).Name} but received an object.");
                 }
                 return new List<T>();
             }
 
             try
             {
-                return JsonSerializer.Deserialize<List<T>>(json, options) ?? new List<T>();
+                return JsonSerializer.Deserialize(json, typeInfo) ?? new List<T>();
             }
             catch (Exception ex)
             {
                 AppLogger.Error($"[HttpHelper] Deserialization failed for {typeof(T).Name}", ex);
-                AppLogger.Info($"[HttpHelper] Failed JSON snippet: {trimmed.Substring(0, Math.Min(500, trimmed.Length))}");
                 return new List<T>();
             }
         }

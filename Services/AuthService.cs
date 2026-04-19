@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using ModernIPTVPlayer.Models;
 using System.Linq;
+using ModernIPTVPlayer.Services.Json;
 
 namespace ModernIPTVPlayer.Services
 {
@@ -20,7 +21,7 @@ namespace ModernIPTVPlayer.Services
             try
             {
                 var json = AppSettings.PlaylistsJson;
-                return JsonSerializer.Deserialize<List<Playlist>>(json) ?? new List<Playlist>();
+                return JsonSerializer.Deserialize(json, AppJsonContext.Default.ListPlaylist) ?? new List<Playlist>();
             }
             catch
             {
@@ -30,7 +31,7 @@ namespace ModernIPTVPlayer.Services
 
         public void SavePlaylists(List<Playlist> playlists)
         {
-            AppSettings.PlaylistsJson = JsonSerializer.Serialize(playlists);
+            AppSettings.PlaylistsJson = JsonSerializer.Serialize(playlists, AppJsonContext.Default.ListPlaylist);
         }
 
         public async Task<bool> CheckAutoLoginAsync()
@@ -58,7 +59,7 @@ namespace ModernIPTVPlayer.Services
                     PlaylistUrl = p.Url,
                     PlaylistId = p.Id.ToString(),
                     PlaylistName = p.Name,
-                    MaxConnections = 1 // Default
+                    MaxConnectionsCount = 1 // Default
                 };
                 AppSettings.LastPlaylistId = p.Id;
                 return true;
@@ -78,10 +79,10 @@ namespace ModernIPTVPlayer.Services
                         int maxCons = 1;
                         try
                         {
-                            var authData = JsonSerializer.Deserialize<XtreamAuthResponse>(authJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                            var authData = JsonSerializer.Deserialize(authJson, AppJsonContext.Default.XtreamAuthResponse);
                             if (authData?.UserInfo != null)
                             {
-                                maxCons = authData.UserInfo.MaxConnections;
+                                maxCons = authData.UserInfo.MaxConnectionsCount;
                                 p.ExpiryDate = authData.UserInfo.FormattedExpiryDate;
                                 
                                 // Update saved playlist with new expiry metadata if it changed
@@ -104,7 +105,7 @@ namespace ModernIPTVPlayer.Services
                             Host = cleanHost,
                             Username = p.Username,
                             Password = p.Password,
-                            MaxConnections = maxCons
+                            MaxConnectionsCount = maxCons
                         };
                         AppSettings.LastPlaylistId = p.Id;
                         AppLogger.Info($"[AuthService] Login Successful for {p.Name}. ID: {p.Id}");

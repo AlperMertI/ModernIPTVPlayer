@@ -1,4 +1,4 @@
-namespace ModernIPTVPlayer
+namespace ModernIPTVPlayer.Models.Iptv
 {
     public class LoginParams
     {
@@ -8,6 +8,6 @@ namespace ModernIPTVPlayer
         public string? PlaylistUrl { get; set; }
         public string? PlaylistId { get; set; }
         public string? PlaylistName { get; set; }
-        public int MaxConnections { get; set; } = 1;
+        public int MaxConnectionsCount { get; set; } = 1;
     }
 }

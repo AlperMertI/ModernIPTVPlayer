@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="using:ModernIPTVPlayer"
+    xmlns:iptv="using:ModernIPTVPlayer.Models.Iptv"
     xmlns:controls="using:ModernIPTVPlayer.Controls"
     xmlns:converters="using:ModernIPTVPlayer.Converters"
     xmlns:mpv="using:MpvWinUI"
@@ -142,7 +143,7 @@
 
                     <ListView x:Name="CategoryListView" Grid.Row="1" SelectionMode="Single" ItemClick="CategoryListView_ItemClick" IsItemClickEnabled="True" Padding="8,0" ItemContainerStyle="{StaticResource CategoryItemStyle}">
                         <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="local:LiveCategory">
+                            <DataTemplate x:DataType="iptv:LiveCategory">
                                 <Grid Padding="12,6">
                                     <TextBlock Text="{x:Bind CategoryName}" FontSize="15" FontWeight="Medium" Foreground="#EFFFFFFF" TextTrimming="CharacterEllipsis"/>
                                 </Grid>
@@ -341,7 +342,7 @@
                             </ItemsPanelTemplate>
                         </ListView.ItemsPanel>
                         <ListView.ItemTemplate>
-                            <DataTemplate x:DataType="local:LiveStream">
+                            <DataTemplate x:DataType="iptv:LiveStream">
                                     <Grid Width="170" Height="120" CornerRadius="12" 
                                       Background="#1AFFFFFF" 
                                       BorderBrush="#1FFFFFFF" BorderThickness="1"
@@ -352,7 +353,7 @@
                                     </Grid.RowDefinitions>
                                     
                                     <Viewbox VerticalAlignment="Center" HorizontalAlignment="Center">
-                                        <Image Source="{x:Bind IconUrl}" 
+                                        <Image Source="{x:Bind StreamIcon}" 
                                                Stretch="Uniform" 
                                                MaxHeight="60"/>
                                     </Viewbox>
@@ -414,7 +415,7 @@
                           ContainerContentChanging="ChannelGridView_ContainerContentChanging"
                           ItemContainerStyle="{StaticResource ChannelTileStyle}">
                 <GridView.ItemTemplate>
-                    <DataTemplate x:DataType="local:LiveStream">
+                    <DataTemplate x:DataType="iptv:LiveStream">
                         <Grid Height="68" Background="Transparent">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
@@ -428,7 +429,7 @@
                                     Background="#22FFFFFF"
                                     VerticalAlignment="Center">
                                 <Grid>
-                                    <Image Source="{x:Bind IconUrl, Mode=OneTime, Converter={StaticResource ChannelIconConverter}}"
+                                    <Image Source="{x:Bind StreamIcon, Mode=OneTime, Converter={StaticResource ChannelIconConverter}}"
                                            Stretch="Uniform"
                                            HorizontalAlignment="Center"
                                            VerticalAlignment="Center"

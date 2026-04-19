@@ -1,6 +1,9 @@
 using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
+using System.IO;
+using Windows.Storage.Streams;
+using System.Runtime.InteropServices.WindowsRuntime;
 
 namespace ModernIPTVPlayer
 {
@@ -12,15 +15,35 @@ namespace ModernIPTVPlayer
             {
                 try
                 {
-                    if (Uri.TryCreate(url, UriKind.RelativeOrAbsolute, out var uri))
+                    // Handle Data URIs (Base64)
+                    if (url.StartsWith("data:image", StringComparison.OrdinalIgnoreCase))
+                    {
+                        int commaIndex = url.IndexOf(",");
+                        if (commaIndex > 0)
+                        {
+                            string base64Data = url.Substring(commaIndex + 1);
+                            byte[] bytes = System.Convert.FromBase64String(base64Data);
+                            
+                            var stream = new InMemoryRandomAccessStream();
+                            var writer = stream.AsStreamForWrite();
+                            writer.Write(bytes, 0, bytes.Length);
+                            writer.Flush();
+                            
+                            stream.Seek(0);
+
+                            var bmp = new BitmapImage();
+                            bmp.SetSource(stream);
+                            return bmp;
+                        }
+                    }
+
+                    if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
                     {
                         var bmp = new BitmapImage();
                         
                         // Small decoding width for episode thumbs/covers to save RAM and time
-                        // Assuming most UI elements binding this are < 400px wide
                         bmp.DecodePixelWidth = 400; 
                         
-                        // Decode on a background thread instead of UI thread to prevent hitching
                         bmp.UriSource = uri;
                         return bmp;
                     }

@@ -3,19 +3,18 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using ZstdSharp;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.Storage;
+using ModernIPTVPlayer.Services.Json;
+
+using ModernIPTVPlayer.Models.Tmdb;
 
 namespace ModernIPTVPlayer.Services
 {
-    public class TmdbCacheEntry
-    {
-        public string JsonData { get; set; }
-        public DateTime LastUpdated { get; set; }
-        // We handle expiration (7 days) logic in service
-    }
 
     public class TmdbCacheService
     {
@@ -25,7 +24,7 @@ namespace ModernIPTVPlayer.Services
         private ConcurrentDictionary<string, TmdbCacheEntry> _cache = new();
         private bool _isDirty = false;
         private readonly SemaphoreSlim _fileLock = new(1, 1);
-        private const string CACHE_FILE = "TmdbCache.json.gz";
+        private const string CACHE_FILE = "TmdbCache.v2.zst";
         private const int EXPIRE_DAYS = 7;
 
         private Task _initTask;
@@ -46,14 +45,15 @@ namespace ModernIPTVPlayer.Services
             {
                 await _fileLock.WaitAsync();
                 var folder = ApplicationData.Current.LocalFolder;
-                if (await folder.TryGetItemAsync(CACHE_FILE) is StorageFile file)
+                var filePath = Path.Combine(folder.Path, CACHE_FILE);
+                if (File.Exists(filePath))
                 {
-                    using var stream = await file.OpenStreamForReadAsync();
-                    using var gzip = new GZipStream(stream, CompressionMode.Decompress);
-                    using var reader = new StreamReader(gzip);
+                    using var stream = File.OpenRead(filePath);
+                    using var decompressor = new DecompressionStream(stream);
+                    using var reader = new StreamReader(decompressor);
                     var json = await reader.ReadToEndAsync();
                     
-                    var loaded = JsonSerializer.Deserialize<Dictionary<string, TmdbCacheEntry>>(json);
+                    var loaded = JsonSerializer.Deserialize(json, AppJsonContext.Default.DictionaryStringTmdbCacheEntry);
                     if (loaded != null)
                     {
                         var now = DateTime.UtcNow;
@@ -90,10 +90,10 @@ namespace ModernIPTVPlayer.Services
                 var file = await folder.CreateFileAsync(CACHE_FILE, CreationCollisionOption.ReplaceExisting);
 
                 using var stream = await file.OpenStreamForWriteAsync();
-                using var gzip = new GZipStream(stream, CompressionLevel.Optimal);
-                using var writer = new StreamWriter(gzip);
+                using var compressor = new CompressionStream(stream, 3); // Level 3 is balanced
+                using var writer = new StreamWriter(compressor);
                 
-                var json = JsonSerializer.Serialize(_cache);
+                var json = JsonSerializer.Serialize(_cache, AppJsonContext.Default.DictionaryStringTmdbCacheEntry);
                 await writer.WriteAsync(json);
                 
                 _isDirty = false;
@@ -118,7 +118,7 @@ namespace ModernIPTVPlayer.Services
             }
         }
 
-        public T? Get<T>(string key)
+        public T? Get<T>(string key, JsonTypeInfo<T> typeInfo)
         {
             if (_cache.TryGetValue(key, out var entry))
             {
@@ -126,7 +126,7 @@ namespace ModernIPTVPlayer.Services
                 {
                     try
                     {
-                        var data = JsonSerializer.Deserialize<T>(entry.JsonData);
+                        var data = JsonSerializer.Deserialize(entry.JsonData, typeInfo);
                         Services.CacheLogger.Info(Services.CacheLogger.Category.TMDB, "HIT", key);
                         return data;
                     }
@@ -147,18 +147,17 @@ namespace ModernIPTVPlayer.Services
                     _isDirty = true;
                 }
             }
-            else
-            {
-                System.Diagnostics.Debug.WriteLine($"[TMDB Cache] MISS: {key}");
-            }
             return default;
         }
 
-        public void Set<T>(string key, T data)
+        [Obsolete("Use Get<T>(string key, JsonTypeInfo<T> typeInfo) for AOT compatibility")]
+        public T? Get<T>(string key) => default;
+
+        public void Set<T>(string key, T data, JsonTypeInfo<T> typeInfo)
         {
             if (data == null) return;
             
-            var json = JsonSerializer.Serialize(data);
+            var json = JsonSerializer.Serialize(data, typeInfo);
             _cache[key] = new TmdbCacheEntry
             {
                 JsonData = json,
@@ -169,6 +168,9 @@ namespace ModernIPTVPlayer.Services
             // Debounce Save (5s)
             _saveTimer.Change(5000, -1);
         }
+
+        [Obsolete("Use Set<T>(string key, T data, JsonTypeInfo<T> typeInfo) for AOT compatibility")]
+        public void Set<T>(string key, T data) { }
 
         public async Task ClearCacheAsync()
         {

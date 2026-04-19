@@ -9,6 +9,7 @@
     xmlns:Media="using:Microsoft.UI.Xaml.Media"
     xmlns:local="using:ModernIPTVPlayer"
     xmlns:converters="using:ModernIPTVPlayer.Converters"
+    xmlns:tmdb="using:ModernIPTVPlayer.Models.Tmdb"
 
     mc:Ignorable="d"
     Background="Black">
@@ -1152,7 +1153,7 @@
                         </ItemsPanelTemplate>
                     </ListView.ItemsPanel>
                     <ListView.ItemTemplate>
-                        <DataTemplate x:DataType="local:TmdbMovieResult">
+                        <DataTemplate x:DataType="tmdb:TmdbMovieResult">
                             <Button Click="RecommendationItem_Click" Tag="{x:Bind}" Background="Transparent" Padding="0" BorderThickness="0">
                                 <StackPanel Width="280">
                                     <Border CornerRadius="8" Height="158" Background="#33FFFFFF">

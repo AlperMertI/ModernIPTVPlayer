@@ -11,6 +11,8 @@ using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Metadata; // [NEW] For IdMappingService
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Models.Tmdb;
+using ModernIPTVPlayer.Services.Json;
 using System.Collections.Concurrent;
 
 namespace ModernIPTVPlayer
@@ -33,7 +35,7 @@ namespace ModernIPTVPlayer
             try
             {
                 var cacheKey = $"movie_images_{tmdbId}";
-                if (TmdbCacheService.Instance.Get<List<string>>(cacheKey) is List<string> cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.ListString) is List<string> cached) return cached;
 
                 var language = AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
@@ -54,7 +56,7 @@ namespace ModernIPTVPlayer
                     }
                 }
                 
-                TmdbCacheService.Instance.Set(cacheKey, backdrops);
+                TmdbCacheService.Instance.Set(cacheKey, backdrops, AppJsonContext.Default.ListString);
                 return backdrops;
             }
             catch (Exception ex)
@@ -70,7 +72,7 @@ namespace ModernIPTVPlayer
             try
             {
                 var cacheKey = $"tv_images_{tmdbId}";
-                if (TmdbCacheService.Instance.Get<List<string>>(cacheKey) is List<string> cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.ListString) is List<string> cached) return cached;
 
                 var language = AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
@@ -91,7 +93,7 @@ namespace ModernIPTVPlayer
                     }
                 }
                 
-                TmdbCacheService.Instance.Set(cacheKey, backdrops);
+                TmdbCacheService.Instance.Set(cacheKey, backdrops, AppJsonContext.Default.ListString);
                 return backdrops;
             }
             catch (Exception ex)
@@ -120,7 +122,7 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 var cacheKey = $"search_movie_{cleanTitle}_{year}_{language}";
                 
-                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbMovieResult) is TmdbMovieResult cached) return cached;
 
                 var query = Uri.EscapeDataString(cleanTitle);
                 var url = $"{BASE_URL}/search/movie?api_key={API_KEY}&query={query}&language={language}";
@@ -132,13 +134,13 @@ namespace ModernIPTVPlayer
 
                 var json = await _client.GetStringAsync(url);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Movie Search Request: {url}");
-                var result = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Movie Search Found: {result?.Results?.Count ?? 0} results");
 
                 if (result?.Results != null && result.Results.Count > 0)
                 {
                     var match = result.Results[0];
-                    TmdbCacheService.Instance.Set(cacheKey, match);
+                    TmdbCacheService.Instance.Set(cacheKey, match, AppJsonContext.Default.TmdbMovieResult);
                     return match;
                 }
                 
@@ -149,14 +151,14 @@ namespace ModernIPTVPlayer
                      url = $"{BASE_URL}/search/movie?api_key={API_KEY}&query={query}&language={language}";
                      
                      json = await _client.GetStringAsync(url);
-                     result = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+                     result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                      
                      if (result?.Results != null && result.Results.Count > 0)
                      {
                         System.Diagnostics.Debug.WriteLine($"[TMDB] Fallback Search Found: {result.Results.Count} results");
                         var match = result.Results[0];
                         // Cache it under the original key too to save future lookups
-                        TmdbCacheService.Instance.Set(cacheKey, match);
+                        TmdbCacheService.Instance.Set(cacheKey, match, AppJsonContext.Default.TmdbMovieResult);
                         return match;
                      }
                 }
@@ -188,7 +190,7 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 var cacheKey = $"search_tv_{cleanTitle}_{year}_{language}";
 
-                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbMovieResult) is TmdbMovieResult cached) return cached;
 
                 var query = Uri.EscapeDataString(cleanTitle);
                 var url = $"{BASE_URL}/search/tv?api_key={API_KEY}&query={query}&language={language}";
@@ -200,13 +202,13 @@ namespace ModernIPTVPlayer
                 
                 var json = await _client.GetStringAsync(url);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] TV Search Request: {url}");
-                var result = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] TV Search Found: {result?.Results?.Count ?? 0} results");
 
                 if (result?.Results != null && result.Results.Count > 0)
                 {
                     var match = result.Results[0];
-                    TmdbCacheService.Instance.Set(cacheKey, match);
+                    TmdbCacheService.Instance.Set(cacheKey, match, AppJsonContext.Default.TmdbMovieResult);
                     return match;
                 }
                 
@@ -217,13 +219,13 @@ namespace ModernIPTVPlayer
                      url = $"{BASE_URL}/search/tv?api_key={API_KEY}&query={query}&language={language}";
                      
                      json = await _client.GetStringAsync(url);
-                     result = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+                     result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                      
                      if (result?.Results != null && result.Results.Count > 0)
                      {
                         System.Diagnostics.Debug.WriteLine($"[TMDB] Fallback Search Found: {result.Results.Count} results");
                         var match = result.Results[0];
-                        TmdbCacheService.Instance.Set(cacheKey, match);
+                        TmdbCacheService.Instance.Set(cacheKey, match, AppJsonContext.Default.TmdbMovieResult);
                         return match;
                      }
                 }
@@ -249,7 +251,7 @@ namespace ModernIPTVPlayer
 
                 // 1. Try with localized language FIRST
                 var cacheKey = $"trailer_{type}_{tmdbId}_{language}";
-                if (TmdbCacheService.Instance.Get<string>(cacheKey) is string cached) 
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.String) is string cached) 
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] Cache HIT for {cacheKey}: {cached}");
                     return cached;
@@ -257,7 +259,7 @@ namespace ModernIPTVPlayer
 
                 var url = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}&language={language}";
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbVideosResponse>(json);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbVideosResponse);
 
                 string? trailerKey = null;
                 if (result?.Results != null && result.Results.Count > 0)
@@ -284,7 +286,7 @@ namespace ModernIPTVPlayer
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] No localized trailer found for {language}. Retrying with English (en-US) fallback...");
                     var fallbackUrl = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}&language=en-US";
                     var fallbackJson = await _client.GetStringAsync(fallbackUrl);
-                    var fallbackResult = JsonSerializer.Deserialize<TmdbVideosResponse>(fallbackJson);
+                    var fallbackResult = JsonSerializer.Deserialize(fallbackJson, AppJsonContext.Default.TmdbVideosResponse);
 
                     if (fallbackResult?.Results != null && fallbackResult.Results.Count > 0)
                     {
@@ -308,7 +310,7 @@ namespace ModernIPTVPlayer
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] No English trailer found. Retrying with NO language parameter (Global)...");
                     var lastUrl = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}";
                     var lastJson = await _client.GetStringAsync(lastUrl);
-                    var lastResult = JsonSerializer.Deserialize<TmdbVideosResponse>(lastJson);
+                    var lastResult = JsonSerializer.Deserialize(lastJson, AppJsonContext.Default.TmdbVideosResponse);
                     
                     if (lastResult?.Results != null && lastResult.Results.Count > 0)
                     {
@@ -327,7 +329,7 @@ namespace ModernIPTVPlayer
 
                 if (!string.IsNullOrEmpty(trailerKey))
                 {
-                    TmdbCacheService.Instance.Set(cacheKey, trailerKey);
+                    TmdbCacheService.Instance.Set(cacheKey, trailerKey, AppJsonContext.Default.String);
                 }
                 else
                 {
@@ -351,13 +353,13 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 string type = isTv ? "tv" : "movie";
                 var cacheKey = $"credits_{type}_{id}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbCreditsResponse>(cacheKey) is TmdbCreditsResponse cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbCreditsResponse) is TmdbCreditsResponse cached) return cached;
 
                 var url = $"{BASE_URL}/{type}/{id}/credits?api_key={API_KEY}&language={language}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Fetching Credits ({language}): {url}");
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbCreditsResponse>(json);
-                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbCreditsResponse);
+                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbCreditsResponse);
                 return result;
             }
             catch { return null; }
@@ -370,18 +372,18 @@ namespace ModernIPTVPlayer
             try
             {
                 var lang = AppSettings.TmdbLanguage;
-                var cacheKey = $"person_search_{name}";
-                if (TmdbCacheService.Instance.Get<TmdbPersonSearchResponse>(cacheKey) is TmdbPersonSearchResponse cached)
+                var cacheKey = $"search_person_{name}_{lang}";
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbPersonSearchResponse) is TmdbPersonSearchResponse cached)
                     return cached.Results?.FirstOrDefault();
 
                 var encoded = Uri.EscapeDataString(name);
                 var url = $"{BASE_URL}/search/person?api_key={API_KEY}&query={encoded}&language={lang}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Person Search: {url}");
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbPersonSearchResponse>(json);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbPersonSearchResponse);
                 if (result?.Results?.Count > 0)
                 {
-                    TmdbCacheService.Instance.Set(cacheKey, result);
+                    TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbPersonSearchResponse);
                     return result.Results[0];
                 }
             }
@@ -397,13 +399,13 @@ namespace ModernIPTVPlayer
             {
                 var lang = AppSettings.TmdbLanguage;
                 var cacheKey = $"person_details_{personId}_{lang}";
-                if (TmdbCacheService.Instance.Get<TmdbPersonDetails>(cacheKey) is TmdbPersonDetails cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbPersonDetails) is TmdbPersonDetails cached) return cached;
 
                 var url = $"{BASE_URL}/person/{personId}?api_key={API_KEY}&language={lang}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Person Details: {url}");
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbPersonDetails>(json);
-                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbPersonDetails);
+                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbPersonDetails);
                 return result;
             }
             catch { return null; }
@@ -417,13 +419,13 @@ namespace ModernIPTVPlayer
             {
                 var lang = AppSettings.TmdbLanguage;
                 var cacheKey = $"person_credits_{personId}_{lang}";
-                if (TmdbCacheService.Instance.Get<TmdbPersonCreditsResponse>(cacheKey) is TmdbPersonCreditsResponse cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbPersonCreditsResponse) is TmdbPersonCreditsResponse cached) return cached;
 
                 var url = $"{BASE_URL}/person/{personId}/combined_credits?api_key={API_KEY}&language={lang}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Person Credits: {url}");
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbPersonCreditsResponse>(json);
-                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbPersonCreditsResponse);
+                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbPersonCreditsResponse);
                 return result;
             }
             catch { return null; }
@@ -464,7 +466,7 @@ namespace ModernIPTVPlayer
                         
                         if (!response.IsSuccessStatusCode) return;
 
-                        var result = JsonSerializer.Deserialize<StremioMetaResponse>(json, options);
+                        var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioMetaResponse);
                         if (result?.Metas != null)
                         {
                             var batch = result.Metas.Select(m => new StremioMediaStream(m)).ToList();
@@ -498,18 +500,18 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 string type = isTv ? "tv" : "movie";
                 var cacheKey = $"details_{type}_{id}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbMovieDetails>(cacheKey) is TmdbMovieDetails cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbMovieDetails) is TmdbMovieDetails cached) return cached;
 
                 var url = $"{BASE_URL}/{type}/{id}?api_key={API_KEY}&language={language}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Details Request ({language}): {url}");
 
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbMovieDetails>(json);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbMovieDetails);
                 
                 if (result != null)
                 {
                      System.Diagnostics.Debug.WriteLine($"[TMDB] Details Parsed ({language}). Overview Length: {result.Overview?.Length ?? 0}");
-                     TmdbCacheService.Instance.Set(cacheKey, result);
+                     TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbMovieDetails);
                 }
                 else
                 {
@@ -533,18 +535,18 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
                 var cacheKey = $"season_{tvId}_s{seasonNumber}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbSeasonDetails>(cacheKey) is TmdbSeasonDetails cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbSeasonDetails) is TmdbSeasonDetails cached) return cached;
 
                 var url = $"{BASE_URL}/tv/{tvId}/season/{seasonNumber}?api_key={API_KEY}&language={language}&include_image_language={shortLang},en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Season Details Request ({language}): {url}");
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbSeasonDetails>(json);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSeasonDetails);
                 if (result?.Episodes != null)
                 {
                      int withImg = result.Episodes.Count(e => !string.IsNullOrEmpty(e.StillPath));
                      System.Diagnostics.Debug.WriteLine($"[TMDB] Season {seasonNumber} ({language}) loaded. Episodes: {result.Episodes.Count}, With Images: {withImg}");
                 }
-                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result);
+                if (result != null) TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbSeasonDetails);
                 return result;
             }
             catch 
@@ -561,7 +563,7 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
                 var cacheKey = $"movie_id_{movieId}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) 
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbMovieResult) is TmdbMovieResult cached) 
                 {
                     // [NEW] Persist mapping even on cache hits
                     if (!string.IsNullOrEmpty(cached.ResolvedImdbId))
@@ -571,11 +573,11 @@ namespace ModernIPTVPlayer
                 var url = $"{BASE_URL}/movie/{movieId}?api_key={API_KEY}&language={language}&append_to_response=images,external_ids&include_image_language={shortLang},en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Request: {url}");
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbMovieResult);
                 if (result != null) 
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Parsed: {result.Title}. Resolved IMDb: {result.ResolvedImdbId}");
-                    TmdbCacheService.Instance.Set(cacheKey, result);
+                    TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbMovieResult);
 
                     // [NEW] Persist the ID mapping globally for subtitle resolution
                     if (!string.IsNullOrEmpty(result.ResolvedImdbId))
@@ -594,7 +596,7 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
                 var cacheKey = $"tv_id_{tvId}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) 
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbMovieResult) is TmdbMovieResult cached) 
                 {
                     // [NEW] Persist mapping even on cache hits
                     if (!string.IsNullOrEmpty(cached.ResolvedImdbId))
@@ -604,11 +606,11 @@ namespace ModernIPTVPlayer
                 var url = $"{BASE_URL}/tv/{tvId}?api_key={API_KEY}&language={language}&append_to_response=images,external_ids&include_image_language={shortLang},en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Request: {url}");
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbMovieResult>(json);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbMovieResult);
                 if (result != null) 
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Parsed: {result.Name}. Resolved IMDb: {result.ResolvedImdbId}");
-                    TmdbCacheService.Instance.Set(cacheKey, result);
+                    TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbMovieResult);
 
                     // [NEW] Persist the ID mapping globally for subtitle resolution
                     if (!string.IsNullOrEmpty(result.ResolvedImdbId))
@@ -627,14 +629,14 @@ namespace ModernIPTVPlayer
                 language ??= AppSettings.TmdbLanguage;
                 string type = isTv ? "tv" : "movie";
                 var cacheKey = $"recommendations_{type}_{id}_{language}";
-                if (TmdbCacheService.Instance.Get<List<TmdbMovieResult>>(cacheKey) is List<TmdbMovieResult> cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.ListTmdbMovieResult) is List<TmdbMovieResult> cached) return cached;
 
                 var url = $"{BASE_URL}/{type}/{id}/recommendations?api_key={API_KEY}&language={language}";
                 var json = await _client.GetStringAsync(url);
-                var result = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
-
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
+ 
                 var recommendations = result?.Results ?? new List<TmdbMovieResult>();
-                TmdbCacheService.Instance.Set(cacheKey, recommendations);
+                TmdbCacheService.Instance.Set(cacheKey, recommendations, AppJsonContext.Default.ListTmdbMovieResult);
                 return recommendations;
             }
             catch (Exception ex)
@@ -651,7 +653,7 @@ namespace ModernIPTVPlayer
             {
                 language ??= AppSettings.TmdbLanguage;
                 var cacheKey = $"find_tv_{externalId}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbMovieResult) is TmdbMovieResult cached) return cached;
 
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language={language}";
@@ -664,10 +666,10 @@ namespace ModernIPTVPlayer
                  if (root.TryGetProperty("tv_results", out var tvs) && tvs.GetArrayLength() > 0)
                 {
                     var first = tvs[0];
-                    var result = JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    var result = JsonSerializer.Deserialize(first.GetRawText(), AppJsonContext.Default.TmdbMovieResult);
                     if (result != null)
                     {
-                        TmdbCacheService.Instance.Set(cacheKey, result);
+                        TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbMovieResult);
                         // [NEW] Persist the ID mapping globally
                         if (!string.IsNullOrEmpty(result.ImdbId))
                             IdMappingService.Instance.RegisterMapping(result.ImdbId, result.Id.ToString());
@@ -678,10 +680,10 @@ namespace ModernIPTVPlayer
                 if (root.TryGetProperty("movie_results", out var movies) && movies.GetArrayLength() > 0)
                 {
                     var first = movies[0];
-                    var result = JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    var result = JsonSerializer.Deserialize(first.GetRawText(), AppJsonContext.Default.TmdbMovieResult);
                     if (result != null)
                     {
-                        TmdbCacheService.Instance.Set(cacheKey, result);
+                        TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbMovieResult);
                         // [NEW] Persist the ID mapping globally
                         if (!string.IsNullOrEmpty(result.ImdbId))
                             IdMappingService.Instance.RegisterMapping(result.ImdbId, result.Id.ToString());
@@ -701,7 +703,7 @@ namespace ModernIPTVPlayer
             {
                 language ??= AppSettings.TmdbLanguage;
                 var cacheKey = $"find_movie_{externalId}_{language}";
-                if (TmdbCacheService.Instance.Get<TmdbMovieResult>(cacheKey) is TmdbMovieResult cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.TmdbMovieResult) is TmdbMovieResult cached) return cached;
 
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language={language}";
@@ -715,10 +717,10 @@ namespace ModernIPTVPlayer
                 if (root.TryGetProperty("movie_results", out var movies) && movies.GetArrayLength() > 0)
                 {
                     var first = movies[0];
-                    var result = JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    var result = JsonSerializer.Deserialize(first.GetRawText(), AppJsonContext.Default.TmdbMovieResult);
                     if (result != null)
                     {
-                        TmdbCacheService.Instance.Set(cacheKey, result);
+                        TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbMovieResult);
                         // [NEW] Persist the ID mapping globally
                         if (!string.IsNullOrEmpty(result.ImdbId))
                             IdMappingService.Instance.RegisterMapping(result.ImdbId, result.Id.ToString());
@@ -728,10 +730,10 @@ namespace ModernIPTVPlayer
                  if (root.TryGetProperty("tv_results", out var tvs) && tvs.GetArrayLength() > 0)
                 {
                     var first = tvs[0];
-                    var result = JsonSerializer.Deserialize<TmdbMovieResult>(first.GetRawText());
+                    var result = JsonSerializer.Deserialize(first.GetRawText(), AppJsonContext.Default.TmdbMovieResult);
                     if (result != null)
                     {
-                        TmdbCacheService.Instance.Set(cacheKey, result);
+                        TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbMovieResult);
                         // [NEW] Persist the ID mapping globally
                         if (!string.IsNullOrEmpty(result.ImdbId))
                             IdMappingService.Instance.RegisterMapping(result.ImdbId, result.Id.ToString());
@@ -823,14 +825,14 @@ namespace ModernIPTVPlayer
             {
                 language ??= AppSettings.TmdbLanguage;
                 var cacheKey = $"movie_recs_{tmdbId}_{language}";
-                if (TmdbCacheService.Instance.Get<List<TmdbMovieResult>>(cacheKey) is List<TmdbMovieResult> cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.ListTmdbMovieResult) is List<TmdbMovieResult> cached) return cached;
 
                 var url = $"{BASE_URL}/movie/{tmdbId}/recommendations?api_key={API_KEY}&language={language}";
                 var json = await _client.GetStringAsync(url);
-                var response = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+                var response = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                 var results = response?.Results ?? new List<TmdbMovieResult>();
 
-                TmdbCacheService.Instance.Set(cacheKey, results);
+                TmdbCacheService.Instance.Set(cacheKey, results, AppJsonContext.Default.ListTmdbMovieResult);
                 return results;
             }
             catch { return new List<TmdbMovieResult>(); }
@@ -843,14 +845,14 @@ namespace ModernIPTVPlayer
             {
                 language ??= AppSettings.TmdbLanguage;
                 var cacheKey = $"tv_recs_{tmdbId}_{language}";
-                if (TmdbCacheService.Instance.Get<List<TmdbMovieResult>>(cacheKey) is List<TmdbMovieResult> cached) return cached;
+                if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.ListTmdbMovieResult) is List<TmdbMovieResult> cached) return cached;
 
                 var url = $"{BASE_URL}/tv/{tmdbId}/recommendations?api_key={API_KEY}&language={language}";
                 var json = await _client.GetStringAsync(url);
-                var response = JsonSerializer.Deserialize<TmdbSearchResponse>(json);
+                var response = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                 var results = response?.Results ?? new List<TmdbMovieResult>();
 
-                TmdbCacheService.Instance.Set(cacheKey, results);
+                TmdbCacheService.Instance.Set(cacheKey, results, AppJsonContext.Default.ListTmdbMovieResult);
                 return results;
             }
             catch { return new List<TmdbMovieResult>(); }
@@ -915,392 +917,5 @@ namespace ModernIPTVPlayer
             
             return null;
         }
-    }
-
-    // Models for TMDB
-    public class TmdbSearchResponse
-    {
-        [JsonPropertyName("results")]
-        public List<TmdbMovieResult> Results { get; set; }
-    }
-
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class TmdbMovieResult
-    {
-        [JsonPropertyName("id")]
-        public int Id { get; set; }
-        
-        [JsonPropertyName("title")]
-        public string Title { get; set; }
-
-        [JsonPropertyName("original_title")]
-        public string OriginalTitle { get; set; }
-        
-        [JsonPropertyName("name")]
-        public string Name { get; set; } 
-
-        [JsonPropertyName("original_name")]
-        public string OriginalName { get; set; }
-
-        [JsonIgnore]
-        public string DisplayTitle => !string.IsNullOrEmpty(Title) ? Title : Name;
-
-        [JsonIgnore]
-        public string DisplayOriginalTitle => !string.IsNullOrEmpty(OriginalTitle) ? OriginalTitle : OriginalName;
-        
-        [JsonPropertyName("overview")]
-        public string Overview { get; set; }
-        
-        [JsonPropertyName("backdrop_path")]
-        public string BackdropPath { get; set; }
-        
-        [JsonPropertyName("poster_path")]
-        public string PosterPath { get; set; }
-        
-        [JsonPropertyName("vote_average")]
-        public double VoteAverage { get; set; }
-
-        [JsonPropertyName("release_date")]
-        public string ReleaseDate { get; set; }
-
-        [JsonPropertyName("first_air_date")]
-        public string FirstAirDate { get; set; }
-
-        [JsonIgnore]
-        public string DisplayDate => !string.IsNullOrEmpty(ReleaseDate) ? ReleaseDate : FirstAirDate;
-
-        [JsonPropertyName("genre_ids")]
-        public List<int> GenreIds { get; set; }
-
-        [JsonPropertyName("images")]
-        public TmdbImages Images { get; set; }
-
-        [JsonPropertyName("seasons")]
-        public List<TmdbSeason> Seasons { get; set; }
-
-        [JsonPropertyName("imdb_id")]
-        public string? ImdbId { get; set; }
-
-        [JsonPropertyName("external_ids")]
-        public TmdbExternalIds? ExternalIds { get; set; }
-
-        public string? ResolvedImdbId => ImdbId ?? ExternalIds?.ImdbId;
-
-        public string GetGenreNames()
-        {
-            if (GenreIds == null || GenreIds.Count == 0) return "Genel";
-            
-            var names = new List<string>();
-            foreach (var id in GenreIds.Take(3))
-            {
-                if (_genreMap.TryGetValue(id, out string name))
-                    names.Add(name);
-            }
-            
-            return names.Count > 0 ? string.Join(" • ", names) : "Genel";
-        }
-
-        private static readonly Dictionary<int, string> _genreMap = new Dictionary<int, string>
-        {
-            {28, "Aksiyon"}, {12, "Macera"}, {16, "Animasyon"}, {35, "Komedi"}, {80, "Suç"},
-            {99, "Belgesel"}, {18, "Dram"}, {10751, "Aile"}, {14, "Fantastik"}, {36, "Tarih"},
-            {27, "Korku"}, {10402, "Müzik"}, {9648, "Gizem"}, {10749, "Romantik"}, {878, "Bilim Kurgu"},
-            {10770, "TV Film"}, {53, "Gerilim"}, {10752, "Savaş"}, {37, "Vahşi Batı"},
-            {10759, "Aksiyon & Macera"}, {10762, "Çocuk"}, {10763, "Haber"}, {10764, "Reality"},
-            {10765, "Bilim Kurgu & Fantazi"}, {10766, "Pembe Dizi"}, {10767, "Talk Show"}, {10768, "Savaş & Politik"}
-        };
-
-        public string FullBackdropUrl => !string.IsNullOrEmpty(BackdropPath) ? $"https://image.tmdb.org/t/p/w1280{BackdropPath}" : null;
-    }
-
-    public class TmdbVideosResponse
-    {
-        [JsonPropertyName("results")]
-        public List<TmdbVideo> Results { get; set; }
-    }
-
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class TmdbVideo
-    {
-        [JsonPropertyName("key")]
-        public string Key { get; set; } 
-        
-        [JsonPropertyName("site")]
-        public string Site { get; set; }
-        
-        [JsonPropertyName("type")]
-        public string Type { get; set; }
-
-        [JsonPropertyName("iso_639_1")]
-        public string Iso639_1 { get; set; }
-
-        [JsonPropertyName("iso_3166_1")]
-        public string Iso3166_1 { get; set; }
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-    }
-
-    public class TmdbCreditsResponse
-    {
-        [JsonPropertyName("cast")]
-        public List<TmdbCast> Cast { get; set; }
-
-        [JsonPropertyName("crew")]
-        public List<TmdbCrew> Crew { get; set; }
-    }
-
-    public class TmdbImages
-    {
-        [JsonPropertyName("backdrops")]
-        public List<TmdbImage> Backdrops { get; set; }
-
-        [JsonPropertyName("logos")]
-        public List<TmdbImage> Logos { get; set; }
-
-        [JsonPropertyName("posters")]
-        public List<TmdbImage> Posters { get; set; }
-    }
-
-    public class TmdbImage
-    {
-        [JsonPropertyName("file_path")]
-        public string FilePath { get; set; }
-
-        [JsonPropertyName("iso_639_1")]
-        public string Iso639_1 { get; set; }
-    }
-
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class TmdbCast
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-        
-        [JsonPropertyName("character")]
-        public string Character { get; set; }
-        
-        [JsonPropertyName("profile_path")]
-        public string ProfilePath { get; set; }
-
-        public string FullProfileUrl => !string.IsNullOrEmpty(ProfilePath) ? $"https://image.tmdb.org/t/p/w185{ProfilePath}" : null;
-    }
-
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class TmdbCrew
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-
-        [JsonPropertyName("job")]
-        public string Job { get; set; }
-
-        [JsonPropertyName("department")]
-        public string Department { get; set; }
-
-        [JsonPropertyName("profile_path")]
-        public string ProfilePath { get; set; }
-
-        public string FullProfileUrl => !string.IsNullOrEmpty(ProfilePath) ? $"https://image.tmdb.org/t/p/w185{ProfilePath}" : null;
-    }
-
-    public class TmdbMovieDetails
-    {
-        [JsonPropertyName("runtime")]
-        public int? Runtime { get; set; } 
-
-        [JsonPropertyName("overview")]
-        public string Overview { get; set; }
-
-        [JsonPropertyName("genres")]
-        public List<TmdbGenre> Genres { get; set; }
-
-        [JsonPropertyName("imdb_id")]
-        public string ImdbId { get; set; }
-    }
-
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class TmdbGenre
-    {
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-    }
-
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class TmdbSeason
-    {
-        [JsonPropertyName("id")]
-        public int Id { get; set; }
-
-        [JsonPropertyName("season_number")]
-        public int SeasonNumber { get; set; }
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-
-        [JsonPropertyName("episode_count")]
-        public int EpisodeCount { get; set; }
-    }
-
-    public class TmdbSeasonDetails
-    {
-        [JsonPropertyName("poster_path")]
-        public string PosterPath { get; set; }
-
-        [JsonPropertyName("episodes")]
-        public List<TmdbEpisode> Episodes { get; set; }
-    }
-
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class TmdbEpisode
-    {
-        [JsonPropertyName("episode_number")]
-        public int EpisodeNumber { get; set; }
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-
-        [JsonPropertyName("overview")]
-        public string Overview { get; set; }
-        
-        [JsonPropertyName("still_path")]
-        public string StillPath { get; set; }
-
-        [JsonPropertyName("runtime")]
-        public int? Runtime { get; set; }
-
-        [JsonPropertyName("air_date")]
-        public string AirDate { get; set; }
-
-        public DateTime? AirDateDateTime => !string.IsNullOrEmpty(AirDate) && DateTime.TryParse(AirDate, out var d) ? d : null;
-        
-        public string StillUrl => !string.IsNullOrEmpty(StillPath) ? $"https://image.tmdb.org/t/p/w300{StillPath}" : null;
-    }
-
-    public class TmdbExternalIds
-    {
-        [JsonPropertyName("imdb_id")]
-        public string? ImdbId { get; set; }
-
-        [JsonPropertyName("tv_db_id")]
-        public object? TvdbId { get; set; }
-    }
-
-    // [NEW] Person Search Result
-    public class TmdbPersonSearchResult
-    {
-        [JsonPropertyName("id")]
-        public int Id { get; set; }
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-
-        [JsonPropertyName("profile_path")]
-        public string ProfilePath { get; set; }
-
-        [JsonPropertyName("known_for_department")]
-        public string KnownForDepartment { get; set; }
-
-        [JsonPropertyName("known_for")]
-        public List<TmdbPersonKnownFor> KnownFor { get; set; }
-    }
-
-    public class TmdbPersonKnownFor
-    {
-        [JsonPropertyName("title")]
-        public string Title { get; set; }
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-
-        [JsonPropertyName("poster_path")]
-        public string PosterPath { get; set; }
-
-        [JsonPropertyName("media_type")]
-        public string MediaType { get; set; }
-    }
-
-    // [NEW] Person Details
-    public class TmdbPersonDetails
-    {
-        [JsonPropertyName("id")]
-        public int Id { get; set; }
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-
-        [JsonPropertyName("biography")]
-        public string Biography { get; set; }
-
-        [JsonPropertyName("birthday")]
-        public DateTime? Birthday { get; set; }
-
-        [JsonPropertyName("place_of_birth")]
-        public string PlaceOfBirth { get; set; }
-
-        [JsonPropertyName("profile_path")]
-        public string ProfilePath { get; set; }
-
-        [JsonPropertyName("known_for_department")]
-        public string KnownForDepartment { get; set; }
-    }
-
-    // [NEW] Person Credit
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class TmdbPersonCredit
-    {
-        [JsonPropertyName("id")]
-        public int Id { get; set; }
-
-        [JsonPropertyName("title")]
-        public string Title { get; set; }
-
-        [JsonPropertyName("name")]
-        public string Name { get; set; }
-
-        [JsonPropertyName("poster_path")]
-        public string PosterPath { get; set; }
-
-        [JsonPropertyName("character")]
-        public string Character { get; set; }
-
-        [JsonPropertyName("media_type")]
-        public string MediaType { get; set; }
-
-        [JsonPropertyName("release_date")]
-        public string ReleaseDate { get; set; }
-
-        [JsonPropertyName("first_air_date")]
-        public string FirstAirDate { get; set; }
-
-        [JsonPropertyName("vote_average")]
-        public double VoteAverage { get; set; }
-
-        [JsonPropertyName("popularity")]
-        public double Popularity { get; set; }
-
-        [JsonPropertyName("genre_ids")]
-        public List<int> GenreIds { get; set; }
-
-        [JsonPropertyName("job")]
-        public string Job { get; set; }
-
-        [JsonPropertyName("department")]
-        public string Department { get; set; }
-    }
-
-    public class TmdbPersonCreditsResponse
-    {
-        [JsonPropertyName("cast")]
-        public List<TmdbPersonCredit> Cast { get; set; }
-
-        [JsonPropertyName("crew")]
-        public List<TmdbPersonCredit> Crew { get; set; }
-    }
-
-    public class TmdbPersonSearchResponse
-    {
-        [JsonPropertyName("results")]
-        public List<TmdbPersonSearchResult> Results { get; set; }
     }
 }

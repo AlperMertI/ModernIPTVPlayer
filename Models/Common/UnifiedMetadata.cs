@@ -111,7 +111,7 @@ namespace ModernIPTVPlayer.Models.Metadata
             if (!string.IsNullOrEmpty(stream.Director))
             {
                 meta.Directors = stream.Director.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                                                .Select(s => new UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
+                                                .Select(s => new UnifiedCast { Name = s.Trim(), Character = "YÃ¶netmen" }).ToList();
             }
 
             // Map Technical Data
@@ -142,7 +142,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         
         // Use DateTime? for proper date handling and comparison
         public System.DateTime? AirDate { get; set; }
-        public System.DateTime? ReleaseDate { get; set; } // [NEW] Alias for AirDate compatibility
+        public System.DateTime? Releasedate { get; set; } // [NEW] Alias for AirDate compatibility
         public bool IsAvailable { get; set; } = true; // [NEW] From AIOMetadata videos[].available
         public string Runtime { get; set; } // [NEW] Per-episode runtime
 

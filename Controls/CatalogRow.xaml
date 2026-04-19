@@ -139,9 +139,9 @@
                     </Style>
                 </ListView.ItemContainerStyle>
                 <ListView.ItemTemplate>
-                    <DataTemplate>
+                    <DataTemplate x:DataType="models:StremioMediaStream">
                         <!-- Use ContentPresenter to render the passed in template, allowing flexibility -->
-                        <ContentPresenter Content="{Binding}" ContentTemplate="{Binding ElementName=RootControl, Path=ItemTemplate}" />
+                        <ContentPresenter Content="{x:Bind Mode=OneWay}" ContentTemplate="{Binding ItemTemplate, ElementName=RootControl}" />
                     </DataTemplate>
                 </ListView.ItemTemplate>
                 

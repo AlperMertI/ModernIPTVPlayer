@@ -1,14 +1,11 @@
 using System.Collections.Generic;
-using System.Text.Json.Serialization;
 
-namespace ModernIPTVPlayer
+namespace ModernIPTVPlayer.Models.Iptv
 {
     public class SeriesCategory
     {
-        [JsonPropertyName("category_name")]
         public string CategoryName { get; set; } = "Genel";
 
-        [JsonPropertyName("category_id")]
         public string CategoryId { get; set; } = "0";
 
         // Bu alan JSON'dan gelmez, biz dolduracağız

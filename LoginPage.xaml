@@ -5,6 +5,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:local="using:ModernIPTVPlayer"
+    xmlns:common="using:ModernIPTVPlayer.Models.Common"
     mc:Ignorable="d"
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
@@ -84,7 +85,7 @@
                 </GridView.ItemContainerTransitions>
 
                 <GridView.ItemTemplate>
-                    <DataTemplate x:DataType="local:Playlist">
+                    <DataTemplate x:DataType="common:Playlist">
                         <Border Width="300" Height="120"
                                 Background="#1AFFFFFF" 
                                 BorderThickness="1" BorderBrush="#1AFFFFFF"

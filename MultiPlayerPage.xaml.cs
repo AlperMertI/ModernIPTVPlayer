@@ -35,8 +35,8 @@ namespace ModernIPTVPlayer
             // Initialize Slot Simulator with server limits
             if (App.CurrentLogin != null)
             {
-                StreamSlotSimulator.Instance.Initialize(App.CurrentLogin.MaxConnections);
-                Debug.WriteLine($"[MultiView] Initialized StreamSlotSimulator with {App.CurrentLogin.MaxConnections} connections.");
+                StreamSlotSimulator.Instance.Initialize(App.CurrentLogin.MaxConnectionsCount);
+                Debug.WriteLine($"[MultiView] Initialized StreamSlotSimulator with {App.CurrentLogin.MaxConnectionsCount} connections.");
             }
 
             // HANDOFF CHECK

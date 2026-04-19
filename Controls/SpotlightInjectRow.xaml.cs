@@ -180,16 +180,13 @@ namespace ModernIPTVPlayer.Controls
                         }
 
                         // Update sizes and offsets
-                        if (_borderClip != null)
+                        if (_borderClip is CompositionGeometricClip borderGeometricClip && 
+                            borderGeometricClip.Geometry is CompositionRoundedRectangleGeometry borderGeometry)
                         {
                             try
                             {
-                                dynamic dClip = _borderClip;
-                                if (dClip.Geometry != null)
-                                {
-                                    dClip.Geometry.Size = new Vector2((float)ContainerBorder.ActualWidth, (float)ContainerBorder.ActualHeight);
-                                    dClip.Geometry.Offset = Vector2.Zero;
-                                }
+                                borderGeometry.Size = new Vector2((float)ContainerBorder.ActualWidth, (float)ContainerBorder.ActualHeight);
+                                borderGeometry.Offset = Vector2.Zero;
                             }
                             catch (Exception ex)
                             {
@@ -197,28 +194,25 @@ namespace ModernIPTVPlayer.Controls
                             }
                         }
 
-                        if (_videoClip != null)
+                        if (_videoClip is CompositionGeometricClip videoGeometricClip && 
+                            videoGeometricClip.Geometry is CompositionRoundedRectangleGeometry videoGeometry)
                         {
                             try
                             {
-                                dynamic dClip = _videoClip;
-                                if (dClip.Geometry != null)
+                                // 0px inset (clipping is now perfect since source artifacts are gone)
+                                float inset = 0.0f;
+                                float w = (float)ContainerBorder.ActualWidth;
+                                float h = (float)ContainerBorder.ActualHeight;
+                                
+                                if (w > inset * 2 && h > inset * 2)
                                 {
-                                    // 0px inset (clipping is now perfect since source artifacts are gone)
-                                    float inset = 0.0f;
-                                    float w = (float)ContainerBorder.ActualWidth;
-                                    float h = (float)ContainerBorder.ActualHeight;
-                                    
-                                    if (w > inset * 2 && h > inset * 2)
-                                    {
-                                        dClip.Geometry.Size = new Vector2(w - (inset * 2), h - (inset * 2));
-                                        dClip.Geometry.Offset = new Vector2(inset, inset);
-                                    }
-                                    else
-                                    {
-                                        dClip.Geometry.Size = new Vector2(w, h);
-                                        dClip.Geometry.Offset = Vector2.Zero;
-                                    }
+                                    videoGeometry.Size = new Vector2(w - (inset * 2), h - (inset * 2));
+                                    videoGeometry.Offset = new Vector2(inset, inset);
+                                }
+                                else
+                                {
+                                    videoGeometry.Size = new Vector2(w, h);
+                                    videoGeometry.Offset = Vector2.Zero;
                                 }
                             }
                             catch (Exception) { }
@@ -756,11 +750,11 @@ namespace ModernIPTVPlayer.Controls
             // Preserve original catalog title for dual-title use in detail page if TMDB is about to change it
             if (!string.IsNullOrWhiteSpace(unified.Title) && item.Meta.Name != unified.Title)
             {
-                if (string.IsNullOrWhiteSpace(item.Meta.OriginalName) &&
+                if (string.IsNullOrWhiteSpace(item.Meta.Originalname) &&
                     !string.IsNullOrWhiteSpace(item.Meta.Name) &&
                     !string.Equals(item.Meta.Name, unified.Title, StringComparison.OrdinalIgnoreCase))
                 {
-                    item.Meta.OriginalName = item.Meta.Name;
+                    item.Meta.Originalname = item.Meta.Name;
                 }
             }
 

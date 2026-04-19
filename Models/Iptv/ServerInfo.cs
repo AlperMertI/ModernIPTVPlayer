@@ -5,32 +5,25 @@ namespace ModernIPTVPlayer.Models
 {
     public class XtreamAuthResponse
     {
-        [JsonPropertyName("user_info")]
         public XtreamUserInfo UserInfo { get; set; }
 
-        [JsonPropertyName("server_info")]
         public XtreamServerInfo ServerInfo { get; set; }
     }
 
     public class XtreamUserInfo
     {
-        [JsonPropertyName("username")]
         public string Username { get; set; }
 
-        [JsonPropertyName("status")]
         public string Status { get; set; }
 
-        [JsonPropertyName("max_connections")]
-        public string MaxConnectionsStr { get; set; }
+        public string MaxConnections { get; set; }
 
-        [JsonPropertyName("active_cons")]
-        public string ActiveConnectionsStr { get; set; }
+        public string ActiveCons { get; set; }
 
-        [JsonPropertyName("exp_date")]
-        public System.Text.Json.JsonElement ExpiryDateElement { get; set; }
+        public System.Text.Json.JsonElement ExpDate { get; set; }
 
         [JsonIgnore]
-        public string ExpiryDateUnix => ExpiryDateElement.ValueKind == System.Text.Json.JsonValueKind.Null ? null : ExpiryDateElement.ToString();
+        public string ExpiryDateUnix => ExpDate.ValueKind == System.Text.Json.JsonValueKind.Null ? null : ExpDate.ToString();
 
         [JsonIgnore]
         public string FormattedExpiryDate
@@ -57,18 +50,16 @@ namespace ModernIPTVPlayer.Models
         }
 
         [JsonIgnore]
-        public int MaxConnections => int.TryParse(MaxConnectionsStr, out int val) ? val : 1;
+        public int MaxConnectionsCount => int.TryParse(MaxConnections, out int val) ? val : 1;
 
         [JsonIgnore]
-        public int ActiveConnections => int.TryParse(ActiveConnectionsStr, out int val) ? val : 0;
+        public int ActiveConnectionsCount => int.TryParse(ActiveCons, out int val) ? val : 0;
     }
 
     public class XtreamServerInfo
     {
-        [JsonPropertyName("timezone")]
         public string Timezone { get; set; }
 
-        [JsonPropertyName("server_protocol")]
-        public string Protocol { get; set; }
+        public string ServerProtocol { get; set; }
     }
 }

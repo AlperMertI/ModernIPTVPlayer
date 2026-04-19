@@ -476,7 +476,7 @@ namespace ModernIPTVPlayer
                         AppLogger.Warn($"[MediaLibraryPage] Cache Empty. Fetching {typeKey} categories from network...");
                         string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_{typeKey}_categories";
                         string json = await _httpClient.GetStringAsync(api, token);
-                        cats = HttpHelper.TryDeserializeList<LiveCategory>(json, options);
+                        cats = HttpHelper.TryDeserializeList(json, Services.Json.AppJsonContext.Default.ListLiveCategory);
                         await ContentCacheService.Instance.SaveCacheAsync(playlistId, $"{typeKey}_categories", cats);
                     }
 

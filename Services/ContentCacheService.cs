@@ -14,7 +14,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Helpers;
-using ModernIPTVPlayer.Services.Iptv; // NEW
+using ModernIPTVPlayer.Services.Iptv; 
+using ModernIPTVPlayer.Services.Json;
 using Windows.Storage;
 using ModernIPTVPlayer;
 using System.Runtime.InteropServices;
@@ -892,7 +893,7 @@ namespace ModernIPTVPlayer.Services
                 int count = 0;
                 long datasetFingerprint = 0;
 
-                await foreach (var item in JsonSerializer.DeserializeAsyncEnumerable<JsonElement>(jsonStream, cancellationToken: cancellationToken))
+                await foreach (var item in JsonSerializer.DeserializeAsyncEnumerable(jsonStream, AppJsonContext.Default.JsonElement, cancellationToken: cancellationToken))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (item.ValueKind != JsonValueKind.Object) continue;
@@ -967,7 +968,7 @@ namespace ModernIPTVPlayer.Services
                 int count = 0;
                 long datasetFingerprint = 0;
 
-                await foreach (var item in JsonSerializer.DeserializeAsyncEnumerable<JsonElement>(jsonStream, cancellationToken: cancellationToken))
+                await foreach (var item in JsonSerializer.DeserializeAsyncEnumerable(jsonStream, AppJsonContext.Default.JsonElement, cancellationToken: cancellationToken))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (item.ValueKind != JsonValueKind.Object) continue;
@@ -1205,7 +1206,7 @@ namespace ModernIPTVPlayer.Services
         private static LiveStreamData BuildLiveDataForBinarySave(LiveStream s, Utf8StringWriter heap)
         {
             var name = heap.Add(s.Name);
-            var icon = heap.Add(s.IconUrl);
+            var icon = heap.Add(s.StreamIcon);
             var imdb = heap.Add(s.ImdbId);
             var desc = heap.Add(s.Description);
             var bg = heap.Add(s.BackdropUrl);
@@ -2097,11 +2098,11 @@ namespace ModernIPTVPlayer.Services
         private static Models.Metadata.VodRecord BuildVodRecordForBinarySave(VodStream s, Utf8StringWriter heap)
         {
             float ratingValue = 0;
-            if (double.TryParse(s.RatingRaw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+            if (double.TryParse(s.Rating_json, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
                 ratingValue = (float)r;
 
             var name = heap.Add(s.Name);
-            var icon = heap.Add(s.IconUrl);
+            var icon = heap.Add(s.StreamIcon);
             var imdb = heap.Add(s.ImdbId);
             var plot = heap.Add(s.Description);
             var year = heap.Add(s.Year);
@@ -2111,7 +2112,7 @@ namespace ModernIPTVPlayer.Services
             var trail = heap.Add(s.TrailerUrl);
             var bg = heap.Add(s.BackdropUrl);
             var srcTitle = heap.Add(s.SourceTitle);
-            var rat = heap.Add(s.RatingRaw);
+            var rat = heap.Add(s.Rating_json);
             var ext = heap.Add(s.ContainerExtension);
 
             return new Models.Metadata.VodRecord
@@ -2143,7 +2144,7 @@ namespace ModernIPTVPlayer.Services
         private static Models.Metadata.SeriesRecord BuildSeriesRecordForBinarySave(SeriesStream s, Utf8StringWriter heap)
         {
             float ratingValue = 0;
-            if (double.TryParse(s.RatingRaw, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
+            if (double.TryParse(s.Rating_json, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
                 ratingValue = (float)r;
 
             var name = heap.Add(s.Name);
@@ -2157,7 +2158,7 @@ namespace ModernIPTVPlayer.Services
             var trail = heap.Add(s.TrailerUrl);
             var bg = heap.Add(s.BackdropUrl);
             var srcTitle = heap.Add(s.SourceTitle);
-            var rat = heap.Add(s.RatingRaw);
+            var rat = heap.Add(s.Rating_json);
             var ext = heap.Add(s.ContainerExtension);
 
             return new Models.Metadata.SeriesRecord
@@ -2861,7 +2862,7 @@ namespace ModernIPTVPlayer.Services
                                 Director = stream.Director,
                                 Genre = stream.Genre,
                                 Rating = stream.Rating,
-                                ReleaseDate = stream.Year,
+                                Releasedate = stream.Year,
                                 Cover = stream.Cover,
                                 BackdropPath = stream.BackdropPath?.ToArray() ?? Array.Empty<string>(),
                                 YoutubeTrailer = stream.YoutubeTrailer
@@ -2916,8 +2917,7 @@ namespace ModernIPTVPlayer.Services
                 sw.Stop();
                 Services.CacheLogger.Info(Services.CacheLogger.Category.Content, "Network Fetch", $"{sw.ElapsedMilliseconds}ms | {json.Length} bytes");
                 
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
-                var result = JsonSerializer.Deserialize<SeriesInfoResult>(json, options);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.SeriesInfoResult);
 
                 if (result != null)
                 {
@@ -2960,8 +2960,8 @@ namespace ModernIPTVPlayer.Services
                                 Cast = stream.Cast,
                                 Director = stream.Director,
                                 Genre = stream.Genres,
-                                RatingRaw = stream.Rating,
-                                ReleaseDate = stream.Year,
+                                Rating = stream.Rating,
+                                Releasedate = stream.Year,
                                 MovieImage = stream.PosterUrl,
                                 BackdropPath = stream.BackdropUrl?.Split('|', StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>(),
                                 YoutubeTrailer = stream.TrailerUrl,
@@ -3008,8 +3008,7 @@ namespace ModernIPTVPlayer.Services
                 await WriteDebugJsonAsync($"vod_{streamId}_raw.json", json);
                 AppLogger.Warn($"[IPTV_RAW_VOD] StreamId: {streamId} | Raw JSON saved to debug file.");
                 
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
-                var result = JsonSerializer.Deserialize<MovieInfoResult>(json, options);
+                var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.MovieInfoResult);
 
                 if (result != null)
                 {
@@ -3180,8 +3179,8 @@ namespace ModernIPTVPlayer.Services
                 writer.Write(data.Info?.Cast ?? "");
                 writer.Write(data.Info?.Genre ?? "");
                 writer.Write(data.Info?.Director ?? "");
-                writer.Write(data.Info?.Rating ?? "");
-                writer.Write(data.Info?.ReleaseDate ?? "");
+                writer.Write(data.Info?.Rating?.ToString() ?? "");
+                writer.Write(data.Info?.Releasedate ?? "");
                 writer.Write(data.Info?.YoutubeTrailer ?? "");
                 writer.Write(data.Info?.Duration ?? "");
 
@@ -3221,8 +3220,8 @@ namespace ModernIPTVPlayer.Services
                     Cast = reader.ReadString(),
                     Genre = reader.ReadString(),
                     Director = reader.ReadString(),
-                    RatingRaw = reader.ReadString(),
-                    ReleaseDate = reader.ReadString(),
+                    Rating = reader.ReadString(),
+                    Releasedate = reader.ReadString(),
                     YoutubeTrailer = reader.ReadString(),
                     Duration = reader.ReadString()
                 };
@@ -3260,8 +3259,8 @@ namespace ModernIPTVPlayer.Services
                 writer.Write(data.Info?.Cast ?? "");
                 writer.Write(data.Info?.Genre ?? "");
                 writer.Write(data.Info?.Director ?? "");
-                writer.Write(data.Info?.Rating ?? "");
-                writer.Write(data.Info?.ReleaseDate ?? "");
+                writer.Write(data.Info?.Rating?.ToString() ?? "");
+                writer.Write(data.Info?.Releasedate?.ToString() ?? "");
 
                 // Episodes Section (Dictionary Serialization)
                 int seasonCount = data.Episodes?.Count ?? 0;
@@ -3318,7 +3317,7 @@ namespace ModernIPTVPlayer.Services
                     Genre = reader.ReadString(),
                     Director = reader.ReadString(),
                     Rating = reader.ReadString(),
-                    ReleaseDate = reader.ReadString()
+                    Releasedate = reader.ReadString()
                 };
 
                 int seasonCount = reader.ReadInt32();
@@ -3522,222 +3521,161 @@ namespace ModernIPTVPlayer.Services
 
     public class SeriesInfoResult
     {
-        [System.Text.Json.Serialization.JsonPropertyName("episodes")]
         [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<Dictionary<string, List<SeriesEpisodeDef>>>))]
         public Dictionary<string, List<SeriesEpisodeDef>> Episodes { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("info")]
         [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<SeriesInfoDetails>))]
         public SeriesInfoDetails Info { get; set; }
     }
 
     public class SeriesInfoDetails
     {
-        [System.Text.Json.Serialization.JsonPropertyName("tmdb_id")]
         public object TmdbId { get; set; } // Can be int or string
         
-        [System.Text.Json.Serialization.JsonPropertyName("name")]
         public string Name { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("cover")]
         public string Cover { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("plot")]
         public string Plot { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("cast")]
         public string Cast { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("genre")]
         public string Genre { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("director")]
         public string Director { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("rating")]
-        public string Rating { get; set; }
+        public object? Rating { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("releaseDate")]
-        public string ReleaseDate { get; set; }
+        public object? Releasedate { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("backdrop_path")]
         public string[] BackdropPath { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("youtube_trailer")]
         public string YoutubeTrailer { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("air_date")]
         public string AirDate { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("age")]
         public string Age { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("country")]
         public string Country { get; set; }
     }
 
     public class SeriesEpisodeDef
     {
-        [System.Text.Json.Serialization.JsonPropertyName("id")]
         public string Id { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("episode_num")]
         public object EpisodeNum { get; set; } // Can be int or string
         
-        [System.Text.Json.Serialization.JsonPropertyName("season")]
         public object Season { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("container_extension")]
         public string ContainerExtension { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("title")]
         public string Title { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("info")]
         public SeriesEpisodeInfo Info { get; set; }
     }
 
     public class SeriesEpisodeInfo
     {
-        [System.Text.Json.Serialization.JsonPropertyName("movie_image")]
         public string MovieImage { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("plot")]
         public string Plot { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("duration")]
         public string Duration { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("air_date")]
         public string AirDate { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("video")]
         [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<TechnicalVideoInfo>))]
         public TechnicalVideoInfo Video { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("audio")]
         [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<TechnicalAudioInfo>))]
         public TechnicalAudioInfo Audio { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("bitrate")]
         public object Bitrate { get; set; } // Can be int or string
     }
 
     public class TechnicalVideoInfo
     {
-        [System.Text.Json.Serialization.JsonPropertyName("codec_name")]
         public string CodecName { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("width")]
         public int Width { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("height")]
         public int Height { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("display_aspect_ratio")]
-        public object? AspectRatio { get; set; }
+        public object? DisplayAspectRatio { get; set; }
     }
 
     public class TechnicalAudioInfo
     {
-        [System.Text.Json.Serialization.JsonPropertyName("codec_name")]
         public string CodecName { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("channels")]
         public int Channels { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("channel_layout")]
         public string ChannelLayout { get; set; }
     }
 
     public class MovieInfoResult
     {
-        [System.Text.Json.Serialization.JsonPropertyName("info")]
         [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<MovieInfoDetails>))]
         public MovieInfoDetails Info { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("movie_data")]
         [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<MovieDataDetails>))]
         public MovieDataDetails MovieData { get; set; }
     }
 
     public class MovieInfoDetails
     {
-        [System.Text.Json.Serialization.JsonPropertyName("name")]
         public string Name { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("movie_image")]
         public string MovieImage { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("cover_big")]
         public string CoverBig { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("plot")]
         public string Plot { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("cast")]
         public string Cast { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("genre")]
         public string Genre { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("director")]
         public string Director { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("rating")]
-        public object? RatingRaw { get; set; }
+        public object? Rating { get; set; }
 
         [System.Text.Json.Serialization.JsonIgnore]
-        public string Rating => RatingRaw?.ToString() ?? "";
+        public string DisplayRating => Rating?.ToString() ?? "";
         
-        [System.Text.Json.Serialization.JsonPropertyName("releasedate")]
-        public string ReleaseDate { get; set; }
+        public string Releasedate { get; set; }
+ 
+         public string AirDate { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("air_date")]
-        public string AirDate { get; set; }
-
-        [System.Text.Json.Serialization.JsonPropertyName("released")]
         public string Released { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("youtube_trailer")]
         public string YoutubeTrailer { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("backdrop_path")]
         public string[] BackdropPath { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("age")]
         public string Age { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("mpaa_rating")]
         public string MpaaRating { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("country")]
         public string Country { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("duration")]
         public string Duration { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("video")]
         [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<TechnicalVideoInfo>))]
         public TechnicalVideoInfo Video { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("audio")]
         [System.Text.Json.Serialization.JsonConverter(typeof(SafeObjectConverter<TechnicalAudioInfo>))]
         public TechnicalAudioInfo Audio { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("container_extension")]
         public string ContainerExtension { get; set; }
 
-        [System.Text.Json.Serialization.JsonPropertyName("bitrate")]
         public object Bitrate { get; set; }
     }
     
     public class MovieDataDetails
     {
-        [System.Text.Json.Serialization.JsonPropertyName("stream_id")]
         public int StreamId { get; set; }
         
-        [System.Text.Json.Serialization.JsonPropertyName("container_extension")]
         public string ContainerExtension { get; set; }
     }
 
@@ -3753,14 +3691,17 @@ namespace ModernIPTVPlayer.Services
             }
             if (reader.TokenType == JsonTokenType.StartObject)
             {
-                return JsonSerializer.Deserialize<T>(ref reader, options);
+                // [NATIVE AOT] Use GetTypeInfo for metadata-aware deserialization
+                var typeInfo = (System.Text.Json.Serialization.Metadata.JsonTypeInfo<T>)options.GetTypeInfo(typeof(T));
+                return JsonSerializer.Deserialize(ref reader, typeInfo);
             }
             return null;
         }
 
         public override void Write(Utf8JsonWriter writer, T value, JsonSerializerOptions options)
         {
-            JsonSerializer.Serialize(writer, value, options);
+            var typeInfo = (System.Text.Json.Serialization.Metadata.JsonTypeInfo<T>)options.GetTypeInfo(typeof(T));
+            JsonSerializer.Serialize(writer, value, typeInfo);
         }
     }
 

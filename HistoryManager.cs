@@ -5,33 +5,14 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Windows.Storage;
+using ModernIPTVPlayer.Services.Json;
+
+using ModernIPTVPlayer.Models.Common;
+using ModernIPTVPlayer.Services;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer
 {
-    public class HistoryItem
-    {
-        public string Id { get; set; } // Movie ID or SeriesID_EpisodeID
-        public string Title { get; set; }
-        public string StreamUrl { get; set; }
-        public double Position { get; set; } // Seconds
-        public double Duration { get; set; } // Seconds
-        public DateTime Timestamp { get; set; }
-        public bool IsFinished { get; set; } // > 95%
-        
-        public string SeriesName { get; set; }
-        public int SeasonNumber { get; set; }
-        public int EpisodeNumber { get; set; }
-        // To track "Next Up", we might need to know the parent Series ID
-        public string ParentSeriesId { get; set; }
-
-        public string Type { get; set; } // "movie", "series", etc.
-        public string PosterUrl { get; set; }
-        public string BackdropUrl { get; set; }
-
-        public string AudioTrackId { get; set; }
-        public string SubtitleTrackId { get; set; }
-        public string SubtitleTrackUrl { get; set; } // For Addon/External subs
-    }
 
     public class HistoryManager
     {
@@ -41,7 +22,7 @@ namespace ModernIPTVPlayer
         public event EventHandler HistoryChanged;
 
         private Dictionary<string, HistoryItem> _history = new();
-        private const string FILENAME = "watch_history.json";
+        private const string FILENAME = "watch_history.bin.zst";
         private bool _loaded = false;
         private readonly System.Threading.Lock _lock = new();
         private readonly System.Threading.SemaphoreSlim _fileLock = new(1, 1);
@@ -55,18 +36,23 @@ namespace ModernIPTVPlayer
             {
                 var folder = ApplicationData.Current.LocalFolder;
                 var item = await folder.TryGetItemAsync(FILENAME);
-                if (item != null)
+                
+                if (item == null)
                 {
-                    var file = await folder.GetFileAsync(FILENAME);
-                    var json = await FileIO.ReadTextAsync(file);
-                    var list = JsonSerializer.Deserialize<List<HistoryItem>>(json);
-                    
-                    lock (_lock)
+                    _loaded = true;
+                    return;
+                }
+
+                var zstFile = await folder.GetFileAsync(FILENAME);
+                using (var stream = await zstFile.OpenStreamForReadAsync())
+                using (var decompressor = new ZstdSharp.DecompressionStream(stream))
+                {
+                    var list = await JsonSerializer.DeserializeAsync(decompressor, AppJsonContext.Default.ListHistoryItem);
+                    if (list != null)
                     {
-                        _history = new Dictionary<string, HistoryItem>();
-                        foreach (var item_val in list)
+                        lock (_lock)
                         {
-                            if (item_val?.Id != null) _history[item_val.Id] = item_val;
+                            foreach (var h in list) if (h?.Id != null) _history[h.Id] = h;
                         }
                     }
                 }
@@ -74,7 +60,7 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[HistoryManager] Load Error: {ex.Message}");
+                AppLogger.Error($"[HistoryManager] Load Error: {ex.Message}");
             }
         }
 
@@ -85,18 +71,19 @@ namespace ModernIPTVPlayer
                 List<HistoryItem> list;
                 lock (_lock)
                 {
-                    list = _history.Values.OrderByDescending(x => x.Timestamp).Take(200).ToList(); // Keep last 200
+                    list = _history.Values.OrderByDescending(x => x.Timestamp).Take(300).ToList(); 
                 }
 
-                var json = JsonSerializer.Serialize(list);
                 var folder = ApplicationData.Current.LocalFolder;
-                
                 await _fileLock.WaitAsync();
                 try
                 {
                     var file = await folder.CreateFileAsync(FILENAME, CreationCollisionOption.ReplaceExisting);
-                    await FileIO.WriteTextAsync(file, json);
-                    System.Diagnostics.Debug.WriteLine($"[HistoryManager] Saved {list.Count} items to {file.Path}");
+                    using (var stream = await file.OpenStreamForWriteAsync())
+                    using (var compressor = new ZstdSharp.CompressionStream(stream, 3)) // Level 3 for balance
+                    {
+                        await JsonSerializer.SerializeAsync(compressor, list, AppJsonContext.Default.ListHistoryItem);
+                    }
                 }
                 finally
                 {
@@ -105,7 +92,7 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[HistoryManager] Save Error: {ex.Message}");
+                AppLogger.Error($"[HistoryManager] Save Error: {ex.Message}");
             }
         }
 

@@ -102,7 +102,7 @@ namespace ModernIPTVPlayer.Models.Stremio
             }
         }
 
-        public string Rating { get => string.IsNullOrEmpty(Meta?.ImdbRating) || Meta?.ImdbRating == "N/A" || Meta?.ImdbRating == "Unknown" ? "" : Meta.ImdbRating; set { if (Meta != null) { Meta.ImdbRating = value; OnPropertyChanged(); } } }
+        public string Rating { get => string.IsNullOrEmpty(Meta?.Imdbrating) || Meta?.Imdbrating == "N/A" || Meta?.Imdbrating == "Unknown" ? "" : Meta.Imdbrating; set { if (Meta != null) { Meta.Imdbrating = value; OnPropertyChanged(); } } }
         public string StreamUrl { get; set; } = "";
         public string? BackdropUrl { get => Banner; set { if (Meta != null) { Meta.Background = value; OnPropertyChanged(nameof(Banner)); OnPropertyChanged(nameof(BackdropUrl)); OnPropertyChanged(nameof(LandscapeImageUrl)); } } }
         
@@ -185,8 +185,8 @@ namespace ModernIPTVPlayer.Models.Stremio
                 string y = TitleHelper.ExtractYear(Meta.Year);
                 if (!string.IsNullOrEmpty(y)) return y;
 
-                // 2. Check ReleaseInfo field
-                y = TitleHelper.ExtractYear(Meta.ReleaseInfo);
+                // 2. Check Releaseinfo field
+                y = TitleHelper.ExtractYear(Meta.Releaseinfo);
                 if (!string.IsNullOrEmpty(y)) return y;
 
                 // 3. Check Released ISO date
@@ -196,7 +196,7 @@ namespace ModernIPTVPlayer.Models.Stremio
                 // 4. Fallback to Title
                 return TitleHelper.ExtractYear(Meta.Name) ?? "";
             }
-            set { if (Meta != null) Meta.ReleaseInfo = value; } 
+            set { if (Meta != null) Meta.Releaseinfo = value; } 
         }
         public string Banner => Meta?.Background ?? "";
         public string Description { get => Meta?.Description ?? ""; set { if (Meta != null) { Meta.Description = value; OnPropertyChanged(); } } }

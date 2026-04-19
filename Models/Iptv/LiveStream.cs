@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Helpers;
 
-namespace ModernIPTVPlayer
+namespace ModernIPTVPlayer.Models.Iptv
 {
     public enum LiveStreamStatus
     {
@@ -194,7 +194,6 @@ namespace ModernIPTVPlayer
             RatOff = _ratOff, RatLen = _ratLen
         };
 
-        [JsonPropertyName("imdb_id")]
         public string? ImdbId 
         { 
             get => LiveReadString(LiveSlotImdb, _imdbOff, _imdbLen); 
@@ -219,8 +218,8 @@ namespace ModernIPTVPlayer
         [JsonIgnore]
         public string PosterUrl 
         { 
-            get => IconUrl; 
-            set => IconUrl = value; 
+            get => StreamIcon; 
+            set => StreamIcon = value; 
         }
 
         public string? BackdropUrl 
@@ -287,51 +286,43 @@ namespace ModernIPTVPlayer
             }
         }
 
-        [JsonPropertyName("name")]
         public string Name 
         { 
             get => LiveReadString(LiveSlotName, _nameOff, _nameLen); 
             set => LiveWriteString(LiveSlotName, ref _nameOff, ref _nameLen, value, nameof(Name), nameof(Title));
         }
         
-        [JsonPropertyName("stream_id")]
         public int StreamId { get; set; }
         
-        [JsonPropertyName("series_id")] // Alternate for Series
         public int SeriesId { get => StreamId; set => StreamId = value; }
 
-        [JsonPropertyName("stream_icon")]
-        public string? IconUrl 
+        public string? StreamIcon 
         { 
             get => LiveReadString(LiveSlotIcon, _iconOff, _iconLen); 
-            set => LiveWriteString(LiveSlotIcon, ref _iconOff, ref _iconLen, value, nameof(IconUrl), nameof(PosterUrl));
+            set => LiveWriteString(LiveSlotIcon, ref _iconOff, ref _iconLen, value, nameof(StreamIcon), nameof(PosterUrl));
         }
 
-        [JsonPropertyName("cover")] // Alternate for Series
-        public string? Cover { get => IconUrl; set => IconUrl = value; }
+        public string? Cover { get => StreamIcon; set => StreamIcon = value; }
         
-        [JsonPropertyName("container_extension")]
         public string? ContainerExtension 
         { 
             get => LiveReadString(LiveSlotExt, _extOff, _extLen); 
             set => LiveWriteString(LiveSlotExt, ref _extOff, ref _extLen, value, nameof(ContainerExtension));
         }
 
-        [JsonPropertyName("category_id")]
         public string? CategoryId 
         { 
             get => LiveReadString(LiveSlotCat, _catOff, _catLen); 
             set => LiveWriteString(LiveSlotCat, ref _catOff, ref _catLen, value, nameof(CategoryId));
         }
 
-        [JsonPropertyName("rating")]
         public string Rating 
         { 
             get => LiveReadString(LiveSlotRat, _ratOff, _ratLen); 
             set => LiveWriteString(LiveSlotRat, ref _ratOff, ref _ratLen, value, nameof(Rating));
         }
 
-        // Bu alan JSON'dan gelmez, biz oluşturacağız
+        // Bu alan JSON'dan gelmez, biz oluÅŸturacaÄŸÄ±z
         public string StreamUrl { get; set; } = "";
 
         // UI Binding Helpers (Fixing Binding Errors)
@@ -464,12 +455,12 @@ namespace ModernIPTVPlayer
         {
             get
             {
-                if (IsOnline == false) return "Kanal Çevrimdışı (Hata)";
+                if (IsOnline == false) return "Kanal Ã‡evrimdÄ±ÅŸÄ± (Hata)";
                 if (IsOnline == true)
                 {
-                    if (IsUnstable) return $"Düşük Akış / Siyah Ekran Şüphesi ({Bitrate / 1000} kbps)";
+                    if (IsUnstable) return $"DÃ¼ÅŸÃ¼k AkÄ±ÅŸ / Siyah Ekran ÅÃ¼phesi ({Bitrate / 1000} kbps)";
                     string hdrStr = IsHdr ? " [HDR]" : "";
-                    return $"Yayın Aktif (Çözünürlük: {Resolution}, Bitrate: {Bitrate / 1000} kbps{hdrStr})";
+                    return $"YayÄ±n Aktif (Ã‡Ã¶zÃ¼nÃ¼rlÃ¼k: {Resolution}, Bitrate: {Bitrate / 1000} kbps{hdrStr})";
                 }
                 return "Durum Bilinmiyor (Analiz Bekleniyor)";
             }

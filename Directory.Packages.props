@@ -37,5 +37,6 @@
     <PackageVersion Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
     <PackageVersion Include="System.Text.Encodings.Web" Version="10.0.5" />
     <PackageVersion Include="System.Text.Json" Version="10.0.5" />
+    <PackageVersion Include="ZstdSharp.Port" Version="0.8.7" />
   </ItemGroup>
 </Project>

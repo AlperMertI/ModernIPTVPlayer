@@ -1998,8 +1998,8 @@ namespace ModernIPTVPlayer
             }
 
             // [SUPER TITLE LOGIC] - Must run BEFORE TitlePanel.UpdateLayout()
-            if (string.IsNullOrWhiteSpace(unified.SubTitle) && sms != null && !string.IsNullOrWhiteSpace(sms.Meta?.OriginalName) && !string.Equals(sms.Meta.OriginalName, unified.Title, StringComparison.OrdinalIgnoreCase))
-                unified.SubTitle = sms.Meta.OriginalName;
+            if (string.IsNullOrWhiteSpace(unified.SubTitle) && sms != null && !string.IsNullOrWhiteSpace(sms.Meta?.Originalname) && !string.Equals(sms.Meta.Originalname, unified.Title, StringComparison.OrdinalIgnoreCase))
+                unified.SubTitle = sms.Meta.Originalname;
             if (string.IsNullOrWhiteSpace(unified.SubTitle) && !string.IsNullOrWhiteSpace(navSeedTitle) && !string.Equals(navSeedTitle, unified.Title, StringComparison.OrdinalIgnoreCase))
                 unified.SubTitle = navSeedTitle;
 
@@ -6236,7 +6236,7 @@ namespace ModernIPTVPlayer
                                         AddonName = addonDisplayName,
                                         AddonUrl = baseUrl,
                                         Url = s.Url,
-                                        ExternalUrl = s.ExternalUrl,
+                                        Externalurl = s.Externalurl,
                                         Quality = ParseQuality(rawName + " " + rawTitle + " " + rawDesc),
                                         Size = sizeInfo,
                                         IsCached = isCached,
@@ -6401,7 +6401,7 @@ namespace ModernIPTVPlayer
                 ProviderText = source.ProviderText,
                 AddonName = source.AddonName,
                 Url = source.Url,
-                ExternalUrl = source.ExternalUrl,
+                Externalurl = source.Externalurl,
                 Quality = source.Quality,
                 Size = source.Size,
                 IsCached = source.IsCached,
@@ -6849,11 +6849,11 @@ namespace ModernIPTVPlayer
                         Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(playUrl, title, videoId, parentIdStr, null, _selectedEpisode?.SeasonNumber ?? 0, _selectedEpisode?.EpisodeNumber ?? 0, resumeSeconds, _item.PosterUrl, streamType, GetCurrentBackdrop(), GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
                     }
                 }
-                else if (!string.IsNullOrEmpty(vm.ExternalUrl))
+                else if (!string.IsNullOrEmpty(vm.Externalurl))
                 {
-                    _ = Windows.System.Launcher.LaunchUriAsync(new Uri(vm.ExternalUrl));
+                    _ = Windows.System.Launcher.LaunchUriAsync(new Uri(vm.Externalurl));
                 }
-                else if (!string.IsNullOrEmpty(vm.OriginalStream.InfoHash))
+                else if (!string.IsNullOrEmpty(vm.OriginalStream.Infohash))
                 {
                     var tip = new TeachingTip { Title = "Torrent Bilgisi", Subtitle = "Torrent akışları yakında desteklenecek. Lütfen HTTP kaynaklarını kullanın.", IsLightDismissEnabled = true };
                     tip.XamlRoot = this.XamlRoot;
@@ -6862,7 +6862,7 @@ namespace ModernIPTVPlayer
                 else
                 {
                     // No URL available (e.g. informative message)
-                    System.Diagnostics.Debug.WriteLine($"[Stremio] Clicked item with no URL or InfoHash: {vm.Title}");
+                    System.Diagnostics.Debug.WriteLine($"[Stremio] Clicked item with no URL or Infohash: {vm.Title}");
                 }
             }
         }
@@ -9181,7 +9181,7 @@ namespace ModernIPTVPlayer
             UpdateProgress(history);
         }
 
-        public void UpdateProgress(ModernIPTVPlayer.HistoryItem history)
+        public void UpdateProgress(HistoryItem history)
         {
             if (history == null)
             {
@@ -9231,8 +9231,8 @@ namespace ModernIPTVPlayer
         public string Url { get; set; }
         public int? IptvStreamId { get; set; }
         public int? IptvSeriesId { get; set; }
-        public string ExternalUrl { get; set; }
-        public bool IsExternalLink => !string.IsNullOrEmpty(ExternalUrl) && string.IsNullOrEmpty(Url);
+        public string Externalurl { get; set; }
+        public bool IsExternalLink => !string.IsNullOrEmpty(Externalurl) && string.IsNullOrEmpty(Url);
         
         private string _quality;
         public string Quality { get => _quality; set { if (_quality != value) { _quality = value; OnPropertyChanged(nameof(Quality)); OnPropertyChanged(nameof(HasQuality)); } } }

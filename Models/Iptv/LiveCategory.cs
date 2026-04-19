@@ -2,7 +2,7 @@ using ModernIPTVPlayer.Models.Metadata;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
-namespace ModernIPTVPlayer
+namespace ModernIPTVPlayer.Models.Iptv
 {
     [Microsoft.UI.Xaml.Data.Bindable]
     public class LiveCategory
@@ -11,7 +11,6 @@ namespace ModernIPTVPlayer
         private int _nameOff, _nameLen;
         private int _idOff, _idLen;
 
-        [JsonPropertyName("category_name")]
         public string CategoryName 
         { 
             get => _session != null ? _session.GetString(_nameOff, _nameLen) : _categoryName;
@@ -23,7 +22,6 @@ namespace ModernIPTVPlayer
         }
         private string _categoryName = "Genel";
 
-        [JsonPropertyName("category_id")]
         public string CategoryId 
         { 
             get => _session != null ? _session.GetString(_idOff, _idLen) : _categoryId;
@@ -46,7 +44,7 @@ namespace ModernIPTVPlayer
         // Bu alan JSON'dan gelmez
         public IReadOnlyList<LiveStream> Channels { get; set; } = new List<LiveStream>();
 
-        // Varsayılan string gösterimi (UI için)
+        // VarsayÄ±lan string gÃ¶sterimi (UI iÃ§in)
         public override string ToString() => CategoryName;
     }
 }
