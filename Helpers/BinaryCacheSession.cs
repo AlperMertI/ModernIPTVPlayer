@@ -13,8 +13,8 @@ using ModernIPTVPlayer.Services;
 namespace ModernIPTVPlayer.Helpers
 {
     /// <summary>
-    /// PROJECT ZERO: Phase 4 — Manages a Memory-Mapped File "Session" for a specific playlist.
-    /// Handles zero-copy access to records and demand-paged string retrieval.
+    /// Binary Cache Session: High-performance memory-mapped file context.
+    /// Uses CommunityToolkit.HighPerformance for zero-allocation IO and memory pooling.
     /// </summary>
     public unsafe class BinaryCacheSession : IDisposable
     {
@@ -32,12 +32,14 @@ namespace ModernIPTVPlayer.Helpers
         private readonly int _recordCount;
         private readonly int _recordSize;
 
-        private long _heapTail; // Start of growth area
-        private const int GROWTH_CHUNK = 5 * 1024 * 1024; // 5MB
+        private long _heapTail; 
+        private const int GROWTH_CHUNK = 8 * 1024 * 1024; // Standard 8MB chunks
 
-        private readonly ConcurrentDictionary<(int, int), string> _stringCache = new();
         private int _useCount = 0;
         private readonly bool _readOnlySession;
+
+        // Use StringPool for high-speed deduplication and zero-allocation char parsing
+        private static readonly CommunityToolkit.HighPerformance.Buffers.StringPool _sharedStringPool = new();
 
         public int RecordCount => _recordCount;
         public long RecordsOffset => _recordsOffset;
@@ -49,8 +51,11 @@ namespace ModernIPTVPlayer.Helpers
         public static MemoryMappedFile OpenMemoryMappedFile(string filePath, MemoryMappedFileAccess access, long capacity = 0)
         {
             var fileAccess = access == MemoryMappedFileAccess.Read ? FileAccess.Read : FileAccess.ReadWrite;
-            var fs = new FileStream(filePath, FileMode.Open, fileAccess, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.RandomAccess);
+            var share = FileShare.ReadWrite | FileShare.Delete;
+            
+            var fs = new FileStream(filePath, FileMode.Open, fileAccess, share, 4096, FileOptions.RandomAccess);
             if (capacity > 0 && fs.Length < capacity) fs.SetLength(capacity);
+            
             return MemoryMappedFile.CreateFromFile(fs, null, 0, access, HandleInheritability.None, false);
         }
 
@@ -74,7 +79,6 @@ namespace ModernIPTVPlayer.Helpers
             _recordCount = recordCount;
             _recordSize = recordSize;
 
-            // Start heap tail at the current stringsLen end
             _heapTail = stringsOffset + stringsLen;
 
             if (!readOnlySession) SetDirty(true);
@@ -115,96 +119,77 @@ namespace ModernIPTVPlayer.Helpers
             return 0;
         }
 
+        /// <summary>
+        /// Retrieves a string from the heap using a zero-allocation pool.
+        /// </summary>
         public string GetString(int offset, int length)
         {
             if (offset < 0 || length <= 0) return string.Empty;
 
-            // [PHASE 2.4] Security Guard: Prevent massive RAM spike from corrupted/misaligned binary records
-            if (length > 65536) 
-            {
-                AppLogger.Warn($"[BinarySession] Suppressing giant string allocation: off={offset}, len={length}. Binary layout may be misaligned.");
-                return string.Empty;
-            }
-
-            var key = (offset, length);
-            if (_stringCache.TryGetValue(key, out var cached)) return cached;
+            // Security: Constrain massive allocations from corruption
+            if (length > 65536) return string.Empty;
 
             long absOffset = _stringBufferOffset + offset;
-            long stringEnd = (long)offset + length;
-            long absoluteEnd = absOffset + length;
-            if (absOffset < 0 || absoluteEnd < absOffset || absoluteEnd > _currentCapacity || stringEnd > _stringBufferLen) 
-            {
-                AppLogger.Warn($"[BinarySession] Offset out of bounds: off={absOffset}, relOff={offset}, len={length}, stringsLen={_stringBufferLen}, cap={_currentCapacity}");
-                return string.Empty;
-            }
+            if (absOffset + length > _currentCapacity) return string.Empty;
 
-            byte[] rented = ArrayPool<byte>.Shared.Rent(length);
-            try
-            {
-                int read;
-                lock (_accessorLock)
-                {
-                    if (_disposed || _accessor == null) return string.Empty;
-                    read = _accessor.ReadArray(absOffset, rented, 0, length);
-                }
-
-                var s = Encoding.UTF8.GetString(rented, 0, read).TrimEnd('\0');
-                if (_stringCache.Count < 5000) _stringCache.TryAdd(key, s);
-                return s;
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error($"[BinarySession] Safe string read failed: off={absOffset}, len={length}", ex);
-                return string.Empty;
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
+            // V2: StringPool deduplication (allocation-free on hits)
+            ReadOnlySpan<byte> utf8 = new ReadOnlySpan<byte>(_ptr + absOffset, length);
+            return _sharedStringPool.GetOrAdd(utf8, Encoding.UTF8);
         }
 
+        /// <summary>
+        /// Updates an existing string if it fits, or appends a new one. Zero-allocation.
+        /// </summary>
         public (int NewOffset, int NewLength) PokeString(int offset, int length, string value)
         {
-            if (_readOnlySession) throw new InvalidOperationException("BinaryCacheSession is read-only.");
+            if (_readOnlySession) throw new InvalidOperationException("Session is ReadOnly");
             if (value == null) return (offset, length);
             
             int byteCount = Encoding.UTF8.GetByteCount(value);
             
-            // Case A: Fits In-Place (Standard Zero-Waste)
+            // Re-use space if it fits perfectly or within existing boundaries
             if (offset >= 0 && byteCount <= length)
             {
                 long absOffset = _stringBufferOffset + offset;
                 Span<byte> buffer = new Span<byte>(_ptr + absOffset, length);
                 Encoding.UTF8.GetBytes(value, buffer);
                 if (byteCount < length) buffer.Slice(byteCount).Clear();
-                _stringCache.TryRemove((offset, length), out _);
                 return (offset, length);
             }
 
-            // Case B: Enrichment (Larger data) or New entry
             return AppendString(value);
         }
 
+        /// <summary>
+        /// Appends a new string to the heap using pooled buffers to avoid allocations.
+        /// </summary>
         public (int NewOffset, int NewLength) AppendString(string value)
         {
-            if (_readOnlySession) throw new InvalidOperationException("BinaryCacheSession is read-only.");
+            if (_readOnlySession) throw new InvalidOperationException("Session is ReadOnly");
             if (string.IsNullOrEmpty(value)) return (-1, 0);
 
-            byte[] utf8 = Encoding.UTF8.GetBytes(value);
-            int len = utf8.Length;
-
-            EnsureCapacity(len);
-
-            long absOffset = _heapTail;
-            Marshal.Copy(utf8, 0, (IntPtr)(_ptr + absOffset), len);
+            // Max predicted size
+            int maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
             
-            int relativeOffset = (int)(_heapTail - _stringBufferOffset);
-            _heapTail += len;
-            
-            // Update the string area length in header
+            // Use CommunityToolkit's SpanOwner for safe rental/return
+            using var owner = CommunityToolkit.HighPerformance.Buffers.SpanOwner<byte>.Allocate(maxBytes);
+            int written = Encoding.UTF8.GetBytes(value, owner.Span);
+
+            EnsureCapacity(written);
+
+            long absOffsetInHeap = _heapTail;
+            long relativeOffset = _heapTail - _stringBufferOffset;
+
+            // Block copy to MMF
+            fixed (byte* src = owner.Span)
+            {
+                Buffer.MemoryCopy(src, _ptr + absOffsetInHeap, written, written);
+            }
+
+            _heapTail += written;
             UpdateHeaderStringsLen((int)(_heapTail - _stringBufferOffset));
             
-            return (relativeOffset, len);
+            return ((int)relativeOffset, written);
         }
 
         private void EnsureCapacity(int addedBytes)
@@ -230,63 +215,35 @@ namespace ModernIPTVPlayer.Helpers
             _accessor.SafeMemoryMappedViewHandle.AcquirePointer(ref basePtr);
             _ptr = basePtr;
             _currentCapacity = newSize;
-            
-            AppLogger.Info($"[BinarySession] Expanded Capacity to {newSize} bytes.");
         }
 
-        public void PokeRecord<T>(int index, T record) where T : struct
+        public void PokeRecord<T>(int index, T record) where T : unmanaged
         {
             if (_readOnlySession) return;
             if (index < 0 || index >= _recordCount) return;
             
-            long offset = _recordsOffset + (index * _recordSize);
-            Marshal.StructureToPtr(record, (IntPtr)(_ptr + offset), false);
+            long offset = _recordsOffset + (index * (long)_recordSize);
+            *(T*)(_ptr + offset) = record;
         }
 
-        public T* GetRecordPointer<T>(int index) where T : struct
+        public T* GetRecordPointer<T>(int index) where T : unmanaged
         {
             if (index < 0 || index >= _recordCount || _ptr == null || _disposed) return null;
             
             long offset = _recordsOffset + (index * (long)_recordSize);
-            long end = offset + _recordSize;
-            // Safety: Ensure the entire record struct fits within the current file capacity
-            if (offset < 0 || end < offset || end > _currentCapacity)
-            {
-                AppLogger.Error($"[BinarySession] Record pointer out of bounds: index={index}, offset={offset}, size={_recordSize}, cap={_currentCapacity}");
-                return null;
-            }
+            if (offset + _recordSize > _currentCapacity) return null;
 
             return (T*)(_ptr + offset);
         }
 
-        public bool TryReadRecord<T>(int index, out T record) where T : struct
+        public bool TryReadRecord<T>(int index, out T record) where T : unmanaged
         {
             record = default;
-            if (index < 0 || index >= _recordCount) return false;
-
-            long offset = _recordsOffset + (index * (long)_recordSize);
-            long end = offset + _recordSize;
-            if (offset < 0 || end < offset || end > _currentCapacity)
-            {
-                AppLogger.Error($"[BinarySession] Record read out of bounds: index={index}, offset={offset}, size={_recordSize}, cap={_currentCapacity}");
-                return false;
-            }
-
-            try
-            {
-                lock (_accessorLock)
-                {
-                    if (_disposed || _accessor == null) return false;
-                    _accessor.Read(offset, out record);
-                }
-
-                return true;
-            }
-            catch (Exception ex)
-            {
-                AppLogger.Error($"[BinarySession] Safe record read failed: index={index}, offset={offset}, type={typeof(T).Name}", ex);
-                return false;
-            }
+            T* p = GetRecordPointer<T>(index);
+            if (p == null) return false;
+            
+            record = *p;
+            return true;
         }
 
         public void AddRef() => Interlocked.Increment(ref _useCount);
@@ -308,8 +265,6 @@ namespace ModernIPTVPlayer.Helpers
                     _ptr = null;
                     _disposed = true;
                 }
-
-                _stringCache.Clear();
             }
         }
     }

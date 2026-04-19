@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.IO;
+using System.IO.Compression;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Windows.Storage;
@@ -30,7 +31,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         }
 
         private const string ADDONS_KEY = "StremioInstalledAddons";
-        private const string MANIFEST_CACHE_FILE = "stremio_manifests.bin.zst";
+        private const string MANIFEST_CACHE_FILE = "stremio_manifests.bin.zst"; 
         
         private readonly System.Threading.Lock _addonLock = new();
         private List<string> _addonUrls = new();
@@ -125,7 +126,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                 if (item != null)
                 {
                     using var stream = await folder.OpenStreamForReadAsync(MANIFEST_CACHE_FILE);
-                    using var decompressor = new ZstdSharp.DecompressionStream(stream);
+                    using var decompressor = new ZstandardStream(stream, CompressionMode.Decompress);
                     var cache = await JsonSerializer.DeserializeAsync(decompressor, AppJsonContext.Default.DictionaryStringStremioManifest);
                     
                     if (cache != null)
@@ -134,7 +135,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         {
                             _manifestCache = cache;
                         }
-                        AppLogger.Info($"[StremioAddonManager] Loaded {cache.Count} manifests from Zstd binary.");
+                        AppLogger.Info($"[StremioAddonManager] Loaded {cache.Count} manifests from Native Zstandard.");
                     }
                 }
             }
@@ -150,7 +151,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             {
                 var folder = ApplicationData.Current.LocalFolder;
                 using (var stream = await folder.OpenStreamForWriteAsync(MANIFEST_CACHE_FILE, CreationCollisionOption.ReplaceExisting))
-                using (var compressor = new ZstdSharp.CompressionStream(stream, 3))
+                using (var compressor = new ZstandardStream(stream, CompressionLevel.Optimal))
                 {
                     lock (_addonLock)
                     {

@@ -3,6 +3,7 @@ using ModernIPTVPlayer.Models.Stremio;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -42,9 +43,8 @@ namespace ModernIPTVPlayer.Services
                     return;
                 }
 
-                var zstFile = await folder.GetFileAsync(FILENAME);
-                using (var stream = await zstFile.OpenStreamForReadAsync())
-                using (var decompressor = new ZstdSharp.DecompressionStream(stream))
+                using (var stream = await folder.OpenStreamForReadAsync(FILENAME))
+                using (var decompressor = new ZstandardStream(stream, CompressionMode.Decompress))
                 {
                     var list = await JsonSerializer.DeserializeAsync(decompressor, AppJsonContext.Default.ListWatchlistItem);
                     if (list != null)
@@ -78,7 +78,7 @@ namespace ModernIPTVPlayer.Services
                 var folder = ApplicationData.Current.LocalFolder;
                 var file = await folder.CreateFileAsync(FILENAME, CreationCollisionOption.ReplaceExisting);
                 using (var stream = await file.OpenStreamForWriteAsync())
-                using (var compressor = new ZstdSharp.CompressionStream(stream, 3))
+                using (var compressor = new ZstandardStream(stream, CompressionLevel.Optimal))
                 {
                     List<WatchlistItem> copy;
                     lock (_lock) copy = new List<WatchlistItem>(_watchlist);

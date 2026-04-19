@@ -107,15 +107,14 @@ namespace ModernIPTVPlayer.Services
                 using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
                     var header = BinaryCacheLayout.ReadHeader(accessor);
+                    if (!BinaryCacheLayout.IsKnownMagic(header.Magic))
+                    {
+                        AppLogger.Warn($"[InPlaceHydration] Invalid cache header or legacy V1 file detected. Magic={header.Magic:X}. Skipping.");
+                        return;
+                    }
                     version = header.Version;
                     count = header.Count;
                     bufferLen = header.StringsLength;
-                }
-
-                if (version < 2) 
-                {
-                    AppLogger.Warn($"[InPlaceHydration] Skipping legacy Version {version} cache. Needs rebuild.");
-                    return;
                 }
 
                 int recordSize = isSeries ? Marshal.SizeOf<Models.Metadata.SeriesRecord>() : Marshal.SizeOf<Models.Metadata.VodRecord>();
@@ -335,9 +334,8 @@ namespace ModernIPTVPlayer.Services
                 using (var acc = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
                     var header = BinaryCacheLayout.ReadHeader(acc);
-                    if (header.Magic != (isSeries ? BinaryCacheLayout.SeriesMagic : BinaryCacheLayout.VodMagic)) return results;
-                    version = header.Version;
-                    if (version < 2) return results;
+                    if (!BinaryCacheLayout.IsKnownMagic(header.Magic)) return results;
+                    
                     count = header.Count;
                     bufferLen = header.StringsLength;
                 }
@@ -447,10 +445,12 @@ namespace ModernIPTVPlayer.Services
 
                     while (true)
                     {
-                        var openPlaylistIds = _streamListsCache.Keys
-                            .Select(k => k.Split('_')[0])
-                            .Distinct()
-                            .ToList();
+                        var openPlaylistIdsSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var key in _streamListsCache.Keys)
+                        {
+                            openPlaylistIdsSet.Add(key.Split('_')[0]);
+                        }
+                        var openPlaylistIds = openPlaylistIdsSet.ToList();
 
                         if (openPlaylistIds.Count > 0)
                         {
@@ -483,8 +483,14 @@ namespace ModernIPTVPlayer.Services
             if (_memoryCache.Count > 50)
             {
                 var now = DateTime.UtcNow;
-                var keysToRemove = _memoryCache.Where(k => (now - k.Value.LastAccessed).TotalMinutes > 10).Select(k => k.Key).ToList();
-                foreach (var key in keysToRemove) _memoryCache.TryRemove(key, out _);
+                var keysToRemove = new List<string>();
+                foreach (var kvp in _memoryCache)
+                {
+                    if ((now - kvp.Value.LastAccessed).TotalMinutes > 10)
+                        keysToRemove.Add(kvp.Key);
+                }
+                foreach (var key in keysToRemove)
+                    _memoryCache.TryRemove(key, out _);
             }
         }
 
@@ -632,7 +638,7 @@ namespace ModernIPTVPlayer.Services
             
             AppLogger.Info($"[Checkpoint] [ContentCache] Background Sync Cycle FINISHED in {startSw.ElapsedMilliseconds}ms.");
 
-            // [PHASE 2.3] Critical Post-Sync Memory Purge
+            // Post-Sync Memory Purge
             // This releases the massive Byte[] buffers back to the OS after the large IO operations.
             _ = Task.Run(async () =>
             {
@@ -640,10 +646,7 @@ namespace ModernIPTVPlayer.Services
                AppLogger.Info("[ContentCache] Triggering Post-Sync Memory Purge...");
                
                // Clear Pool and Force GC
-               System.Buffers.ArrayPool<byte>.Shared.Return(new byte[0]); // Hint
-               GC.Collect(2, GCCollectionMode.Forced, true, true);
-               GC.WaitForPendingFinalizers();
-               GC.Collect(2, GCCollectionMode.Forced, true, true); // Double pass for finalizers
+               GC.Collect(1, GCCollectionMode.Optimized, blocking: false, compacting: false);
                
                AppLogger.Info($"[ContentCache] Memory Purge DONE. Managed Heap: {GC.GetTotalMemory(true) / 1024 / 1024}MB");
             });
@@ -728,7 +731,7 @@ namespace ModernIPTVPlayer.Services
                     int recordSize = Marshal.SizeOf<LiveStreamData>();
                     long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
 
-                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.LiveMagic, BinaryCacheLayout.LiveVersion, streams.Count, 0, dirty: true);
+                    BinaryCacheLayout.WriteHeader(writer, streams.Count, 0, true, 0);
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
                     using var stringHeap = new MemoryStream();
                     var heap = new Utf8StringWriter(stringHeap, 0);
@@ -783,7 +786,7 @@ namespace ModernIPTVPlayer.Services
                 using (var writer = new BinaryWriter(buffered, Encoding.UTF8))
                 using (var stringHeap = new MemoryStream(Math.Min(jsonBytes.Length, 8 * 1024 * 1024)))
                 {
-                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.LiveMagic, BinaryCacheLayout.LiveVersion, 0, 0, dirty: true);
+                BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                     var heap = new Utf8StringWriter(stringHeap, 0);
@@ -886,7 +889,7 @@ namespace ModernIPTVPlayer.Services
                 using var stringHeap = new MemoryStream(1024 * 1024);
                 var heap = new Utf8StringWriter(stringHeap, 0);
 
-                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, BinaryCacheLayout.VodSeriesVersion, 0, 0, dirty: true);
+                BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
                 writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                 var indexEntries = new List<(uint Fingerprint, int Index)>();
@@ -962,7 +965,7 @@ namespace ModernIPTVPlayer.Services
                 using var stringHeap = new MemoryStream(1024 * 1024);
                 var heap = new Utf8StringWriter(stringHeap, 0);
 
-                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, BinaryCacheLayout.VodSeriesVersion, 0, 0, dirty: true);
+                BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
                 writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                 int count = 0;
@@ -1027,7 +1030,7 @@ namespace ModernIPTVPlayer.Services
                 using var stringHeap = new MemoryStream(Math.Min(jsonBytes.Length, 16 * 1024 * 1024));
                 var heap = new Utf8StringWriter(stringHeap, 0);
 
-                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, BinaryCacheLayout.VodSeriesVersion, 0, 0, dirty: true);
+                BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
                 writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                 var indexEntries = new List<(uint Fingerprint, int Index)>();
@@ -1089,7 +1092,7 @@ namespace ModernIPTVPlayer.Services
                 using var stringHeap = new MemoryStream(Math.Min(jsonBytes.Length, 16 * 1024 * 1024));
                 var heap = new Utf8StringWriter(stringHeap, 0);
 
-                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, BinaryCacheLayout.VodSeriesVersion, 0, 0, dirty: true);
+                BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
                 writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                 int count = WriteSeriesRecordsFromJson(jsonBytes, writer, heap, out long datasetFingerprint);
@@ -1147,11 +1150,10 @@ namespace ModernIPTVPlayer.Services
                 using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
                     var header = BinaryCacheLayout.ReadHeader(accessor);
-                    if (header.Magic != BinaryCacheLayout.LiveMagic) return null;
-                    version = header.Version;
-                    if (version < 2) return null;
+                    if (!BinaryCacheLayout.IsKnownMagic(header.Magic)) return null;
                     count = header.Count;
                     bufferLen = header.StringsLength;
+                    version = header.Version;
                 }
 
                 if (version >= 3)
@@ -2086,10 +2088,15 @@ namespace ModernIPTVPlayer.Services
             public (int Off, int Len) Add(string? s)
             {
                 if (string.IsNullOrEmpty(s)) return (-1, 0);
-                byte[] utf8 = Encoding.UTF8.GetBytes(s);
+
                 int off = (int)_stream.Position - _currentOffset;
-                _stream.Write(utf8, 0, utf8.Length);
-                return (off, utf8.Length);
+                int max = Encoding.UTF8.GetMaxByteCount(s.Length);
+                
+                using var owner = CommunityToolkit.HighPerformance.Buffers.SpanOwner<byte>.Allocate(max);
+                int n = Encoding.UTF8.GetBytes(s, owner.Span);
+                _stream.Write(owner.Span[..n]);
+                
+                return (off, n);
             }
 
             public int TotalBytesWritten => (int)_stream.Position - _currentOffset;
@@ -2262,7 +2269,7 @@ namespace ModernIPTVPlayer.Services
                 using var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting);
                 using var writer = new BinaryWriter(fileStream, Encoding.UTF8);
 
-                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, BinaryCacheLayout.VodSeriesVersion, streams.Count, 0, dirty: true);
+                BinaryCacheLayout.WriteHeader(writer, streams.Count, 0, true, 0);
 
                 // 2. Sequential Streaming Write
                 // Calculate Fixed Offsets: Header + Records + Index
@@ -2356,7 +2363,7 @@ namespace ModernIPTVPlayer.Services
                 using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
                     var header = BinaryCacheLayout.ReadHeader(accessor);
-                    if (header.Magic != BinaryCacheLayout.VodMagic) return null;
+                    if (!BinaryCacheLayout.IsKnownMagic(header.Magic)) return null;
                     version = header.Version;
                     
                     // Force rebuild if version is legacy
@@ -2420,7 +2427,7 @@ namespace ModernIPTVPlayer.Services
                 using (var fileStream = await folder.OpenStreamForWriteAsync(tempName, CreationCollisionOption.ReplaceExisting))
                 using (var writer = new BinaryWriter(fileStream, Encoding.UTF8))
                 {
-                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, BinaryCacheLayout.VodSeriesVersion, streams.Count, 0, dirty: true);
+                    BinaryCacheLayout.WriteHeader(writer, streams.Count, 0, true, 0);
 
                     // Sequential Streaming Write
                     int recordSize = Marshal.SizeOf<Models.Metadata.SeriesRecord>();
@@ -2548,7 +2555,7 @@ namespace ModernIPTVPlayer.Services
                 using var writer = new BinaryWriter(fileStream, Encoding.UTF8);
 
                 // 1. Header (32 bytes)
-                BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.CategoryMagic, 2, categories.Count, 0, dirty: true);
+                BinaryCacheLayout.WriteHeader(writer, categories.Count, 0, true, 0);
                 
                 // 2. Construct category strings first; records are fixed-size and streamed directly.
                 using var stringsMs = new MemoryStream();
@@ -2631,7 +2638,7 @@ namespace ModernIPTVPlayer.Services
                 using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
                     var header = BinaryCacheLayout.ReadHeader(accessor);
-                    if (header.Magic != BinaryCacheLayout.CategoryMagic) return null;
+                    if (!BinaryCacheLayout.IsKnownMagic(header.Magic)) return null;
                     version = header.Version;
                     if (version < 2) return null;
 
@@ -3363,12 +3370,13 @@ namespace ModernIPTVPlayer.Services
         {
             AppLogger.Info("[ContentCacheService] System Shutdown initiated.");
             
-            var openPlaylistIds = _streamListsCache.Keys
-                .Select(k => k.Split('_')[0])
-                .Distinct()
-                .ToList();
+            var activePlaylists = new HashSet<string>();
+            foreach (var key in _streamListsCache.Keys)
+            {
+                activePlaylists.Add(key.Split('_')[0]);
+            }
 
-            AppLogger.Info($"[ContentCacheService] Found {openPlaylistIds.Count} open playlists to flush: {string.Join(", ", openPlaylistIds)}");
+            AppLogger.Info($"[ContentCacheService] Found {activePlaylists.Count} open playlists to flush: {string.Join(", ", activePlaylists)}");
 
             // [OPTIMIZATION] Skip blocking Vacuum on shutdown. 
             // In-Place Hydration already handles real-time persistence.
@@ -3436,7 +3444,8 @@ namespace ModernIPTVPlayer.Services
             if (string.IsNullOrEmpty(playlistId)) return;
             string safeId = GetSafePlaylistId(playlistId);
             string prefix = $"{safeId}_";
-            foreach (var key in _streamListsCache.Keys.ToList())
+            var keysToRemove = new List<string>(_streamListsCache.Keys);
+            foreach (var key in keysToRemove)
             {
                 if (key.StartsWith(prefix, StringComparison.Ordinal) && _streamListsCache.TryRemove(key, out var s))
                     (s as IDisposable)?.Dispose();

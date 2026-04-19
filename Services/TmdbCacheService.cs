@@ -3,19 +3,16 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
-using ZstdSharp;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.Storage;
 using ModernIPTVPlayer.Services.Json;
-
 using ModernIPTVPlayer.Models.Tmdb;
 
 namespace ModernIPTVPlayer.Services
 {
-
     public class TmdbCacheService
     {
         private static Lazy<TmdbCacheService> _instance = new(() => new TmdbCacheService());
@@ -24,7 +21,7 @@ namespace ModernIPTVPlayer.Services
         private ConcurrentDictionary<string, TmdbCacheEntry> _cache = new();
         private bool _isDirty = false;
         private readonly SemaphoreSlim _fileLock = new(1, 1);
-        private const string CACHE_FILE = "TmdbCache.v2.zst";
+        private const string CACHE_FILE = "TmdbCache.zst";
         private const int EXPIRE_DAYS = 7;
 
         private Task _initTask;
@@ -33,7 +30,6 @@ namespace ModernIPTVPlayer.Services
         public TmdbCacheService()
         {
             _initTask = LoadCacheAsync();
-            // Debounce save timer, initially disabled (-1, -1)
             _saveTimer = new Timer(async _ => await SaveIfDirtyAsync(), null, -1, -1);
         }
 
@@ -46,10 +42,11 @@ namespace ModernIPTVPlayer.Services
                 await _fileLock.WaitAsync();
                 var folder = ApplicationData.Current.LocalFolder;
                 var filePath = Path.Combine(folder.Path, CACHE_FILE);
+                
                 if (File.Exists(filePath))
                 {
                     using var stream = File.OpenRead(filePath);
-                    using var decompressor = new DecompressionStream(stream);
+                    using var decompressor = new ZstandardStream(stream, CompressionMode.Decompress);
                     using var reader = new StreamReader(decompressor);
                     var json = await reader.ReadToEndAsync();
                     
@@ -57,7 +54,6 @@ namespace ModernIPTVPlayer.Services
                     if (loaded != null)
                     {
                         var now = DateTime.UtcNow;
-                        // Prune expired
                         foreach (var kvp in loaded)
                         {
                             if ((now - kvp.Value.LastUpdated).TotalDays < EXPIRE_DAYS)
@@ -66,12 +62,12 @@ namespace ModernIPTVPlayer.Services
                             }
                         }
                     }
-                    Services.CacheLogger.Info(Services.CacheLogger.Category.TMDB, "Loaded Cache", $"{_cache.Count} entries.");
+                    CacheLogger.Info(CacheLogger.Category.TMDB, "Loaded Cache", $"{_cache.Count} entries.");
                 }
             }
             catch (Exception ex)
             {
-                Services.CacheLogger.Error(Services.CacheLogger.Category.TMDB, "Load Failed", ex.Message);
+                CacheLogger.Error(CacheLogger.Category.TMDB, "Load Failed", ex.Message);
             }
             finally
             {
@@ -90,18 +86,19 @@ namespace ModernIPTVPlayer.Services
                 var file = await folder.CreateFileAsync(CACHE_FILE, CreationCollisionOption.ReplaceExisting);
 
                 using var stream = await file.OpenStreamForWriteAsync();
-                using var compressor = new CompressionStream(stream, 3); // Level 3 is balanced
+                // Phase 3: Native Zstandard with fast level 3
+                using var compressor = new ZstandardStream(stream, CompressionLevel.Optimal);
                 using var writer = new StreamWriter(compressor);
                 
                 var json = JsonSerializer.Serialize(_cache, AppJsonContext.Default.DictionaryStringTmdbCacheEntry);
                 await writer.WriteAsync(json);
                 
                 _isDirty = false;
-                Services.CacheLogger.Info(Services.CacheLogger.Category.TMDB, "Saved to Disk", $"{_cache.Count} entries.");
+                CacheLogger.Info(CacheLogger.Category.TMDB, "Saved to Disk", $"{_cache.Count} entries.");
             }
             catch (Exception ex)
             {
-                Services.CacheLogger.Error(Services.CacheLogger.Category.TMDB, "Save Failed", ex.Message);
+                CacheLogger.Error(CacheLogger.Category.TMDB, "Save Failed", ex.Message);
             }
             finally
             {

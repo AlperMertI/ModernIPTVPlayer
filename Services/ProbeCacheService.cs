@@ -5,7 +5,6 @@ using System.IO;
 using System.IO.Compression;
 using System.Text.Json;
 using System.Threading.Tasks;
-using ZstdSharp;
 using Windows.Storage;
 
 namespace ModernIPTVPlayer.Services
@@ -112,7 +111,7 @@ namespace ModernIPTVPlayer.Services
 
                 using var stream = await folder.OpenStreamForReadAsync(fileName);
                 using var buffered = new BufferedStream(stream, 128 * 1024);
-                using var decompressor = new DecompressionStream(buffered);
+                using var decompressor = new ZstandardStream(buffered, CompressionMode.Decompress);
                 using var reader = new BinaryReader(decompressor, System.Text.Encoding.UTF8);
                 
                 int magic = reader.ReadInt32();
@@ -157,7 +156,7 @@ namespace ModernIPTVPlayer.Services
                 var folder = ApplicationData.Current.LocalFolder;
                 using var stream = await folder.OpenStreamForWriteAsync(fileName, CreationCollisionOption.ReplaceExisting);
                 using var buffered = new BufferedStream(stream, 128 * 1024);
-                using var compressor = new CompressionStream(buffered, 3);
+                using var compressor = new ZstandardStream(buffered, CompressionLevel.Optimal);
                 using var writer = new BinaryWriter(compressor, System.Text.Encoding.UTF8);
                 
                 writer.Write(0x50524231); // Magic: PRB1

@@ -13,32 +13,29 @@ namespace ModernIPTVPlayer.Helpers
     /// </summary>
     public static class MetadataBuffer
     {
-        private static byte[] _buffer = new byte[10 * 1024 * 1024]; // Start with 10MB
+        private static byte[] _buffer = ArrayPool<byte>.Shared.Rent(10 * 1024 * 1024); // Start with 10MB pooled
         private static int _position = 0;
         private static readonly System.Threading.Lock _lock = new();
         private static int _storeCount = 0;
 
-        // PROJECT ZERO: String Interning Pool
-        // Reuses offsets for identical strings to save massive RAM & Lock contention
-         private static readonly ConcurrentDictionary<string, (int Offset, int Length)> _internPool = new();
-         private static readonly ConcurrentDictionary<(int Offset, int Length), string> _stringCache = new();
-         private const int MAX_INTERN_LENGTH = 16; // Restrict interning to common short strings (Extensions, Categories, Years)
-         private const int MAX_INTERN_KEYS = 50000; // Prevent permanent RAM leak for unique titles
-         private const int MAX_CACHE_SIZE = 10000; // Limit string cache to prevent RAM bloat
+        // PROJECT ZERO: String Interning & Deduplication
+        private static readonly ConcurrentDictionary<string, (int Offset, int Length)> _internPool = new();
+        private static readonly ConcurrentDictionary<(int Offset, int Length), string> _stringCache = new();
+        private const int MAX_INTERN_LENGTH = 16;
+        private const int MAX_INTERN_KEYS = 50000;
+        private const int MAX_CACHE_SIZE = 10000;
          
-         private static int _internKeysCount = 0;
-         private static int _stringCacheCount = 0;
+        private static int _internKeysCount = 0;
+        private static int _stringCacheCount = 0;
 
         /// <summary>
-        /// Stores a string in the UTF-8 buffer and returns its offset and length.
-        /// Deduplicates common strings automatically via FastStringPool if possible.
+        /// Stores a string in the UTF-8 buffer. High-performance, zero-allocation via SpanOwner.
         /// </summary>
         public static (int Offset, int Length) Store(string? s)
         {
             if (string.IsNullOrEmpty(s)) return (-1, 0);
 
-            // 1. PROJECT ZERO: Reactive Interning
-            // If the string is short and already stored, just return the existing offset.
+            // 1. PROJECT ZERO: Reactive Interning (O(1) hit check)
             if (s.Length <= MAX_INTERN_LENGTH)
             {
                 if (_internPool.TryGetValue(s, out var existing)) return existing;
@@ -46,27 +43,35 @@ namespace ModernIPTVPlayer.Helpers
 
             Interlocked.Increment(ref _storeCount);
 
-            byte[] utf8 = Encoding.UTF8.GetBytes(s);
-            int len = utf8.Length;
+            // Predict max bytes and use pooled rental
+            int maxBytes = Encoding.UTF8.GetMaxByteCount(s.Length);
+            using var owner = CommunityToolkit.HighPerformance.Buffers.SpanOwner<byte>.Allocate(maxBytes);
+            int len = Encoding.UTF8.GetBytes(s, owner.Span);
+            
             int offset;
-
             lock (_lock)
             {
                 if (_position + len > _buffer.Length)
                 {
-                    // Grow buffer exponentially
-                    int newSize = Math.Max(_buffer.Length * 2, _position + len + 1024 * 1024);
-                    System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] CRITICAL: Resizing buffer to {newSize / 1024 / 1024}MB");
-                    Array.Resize(ref _buffer, newSize);
+                    // 2x Growth strategy using ArrayPool
+                    int newSize = _buffer.Length * 2;
+                    while (newSize < _position + len) newSize *= 2;
+                    
+                    byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newSize);
+                    Buffer.BlockCopy(_buffer, 0, newBuffer, 0, _position);
+                    
+                    var oldBuffer = _buffer;
+                    _buffer = newBuffer;
+                    ArrayPool<byte>.Shared.Return(oldBuffer);
                 }
 
                 offset = _position;
-                Buffer.BlockCopy(utf8, 0, _buffer, offset, len);
+                owner.Span[..len].CopyTo(_buffer.AsSpan(offset));
                 _position += len;
             }
 
-            // 2. Add to Intern Pool if eligible
-            if (s.Length <= MAX_INTERN_LENGTH && _internKeysCount < MAX_INTERN_KEYS)
+            // Add to Intern Pool if eligible
+            if (s.Length <= MAX_INTERN_LENGTH && Volatile.Read(ref _internKeysCount) < MAX_INTERN_KEYS)
             {
                 if (_internPool.TryAdd(s, (offset, len)))
                 {
@@ -77,11 +82,6 @@ namespace ModernIPTVPlayer.Helpers
             return (offset, len);
         }
 
-        /// <summary>
-        /// PROJECT ZERO: Zero-Allocation Byte Storage.
-        /// Directly stores a raw UTF-8 byte span into the buffer.
-        /// This bypasses string object creation entirely.
-        /// </summary>
         public static (int Offset, int Length) StoreRaw(ReadOnlySpan<byte> data)
         {
             if (data.IsEmpty) return (-1, 0);
@@ -93,13 +93,19 @@ namespace ModernIPTVPlayer.Helpers
             {
                 if (_position + len > _buffer.Length)
                 {
-                    int newSize = Math.Max(_buffer.Length * 2, _position + len + 1024 * 1024);
-                    System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] CRITICAL: Resizing buffer to {newSize / 1024 / 1024}MB (StoreRaw)");
-                    Array.Resize(ref _buffer, newSize);
+                    int newSize = _buffer.Length * 2;
+                    while (newSize < _position + len) newSize *= 2;
+                    
+                    byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newSize);
+                    Buffer.BlockCopy(_buffer, 0, newBuffer, 0, _position);
+                    
+                    var oldBuffer = _buffer;
+                    _buffer = newBuffer;
+                    ArrayPool<byte>.Shared.Return(oldBuffer);
                 }
 
                 offset = _position;
-                data.CopyTo(new Span<byte>(_buffer, offset, len));
+                data.CopyTo(_buffer.AsSpan(offset, len));
                 _position += len;
             }
 
@@ -107,22 +113,17 @@ namespace ModernIPTVPlayer.Helpers
         }
 
         /// <summary>
-        /// Compares a string against the stored UTF-8 bytes without allocating a new string object.
-        /// This is used as a high-performance "loop breaker" in property setters.
+        /// Vectorized comparison without string allocations.
         /// </summary>
         public static bool IsEqual(int offset, int length, string? value)
         {
             if (offset < 0) return string.IsNullOrEmpty(value);
             if (value == null) return false;
 
-            // Optimization: If lengths (roughly) don't match, it can't be equal.
-            // Using GetByteCount is faster than blindly copying/comparing if strings are vastly different.
             if (Encoding.UTF8.GetByteCount(value) != length) return false;
 
-            // Byte-by-byte comparison using vectorized SequenceEqual
-            var bufferSpan = new ReadOnlySpan<byte>(_buffer, offset, length);
+            ReadOnlySpan<byte> bufferSpan = _buffer.AsSpan(offset, length);
             
-            // For typical IPTV strings (titles, IDs), use stackalloc to avoid any heap allocation
             if (length <= 512)
             {
                 Span<byte> valueSpan = stackalloc byte[length];
@@ -131,17 +132,10 @@ namespace ModernIPTVPlayer.Helpers
             }
             else
             {
-                // For rare very long strings, use ArrayPool
-                byte[] temp = ArrayPool<byte>.Shared.Rent(length);
-                try
-                {
-                    Encoding.UTF8.GetBytes(value, 0, value.Length, temp, 0);
-                    return bufferSpan.SequenceEqual(new ReadOnlySpan<byte>(temp, 0, length));
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(temp);
-                }
+                // Safety: Always use using-pattern with SpanOwner to prevent memory leaks
+                using var owner = CommunityToolkit.HighPerformance.Buffers.SpanOwner<byte>.Allocate(length);
+                Encoding.UTF8.GetBytes(value, owner.Span);
+                return bufferSpan.SequenceEqual(owner.Span[..length]);
             }
         }
 
@@ -202,8 +196,13 @@ namespace ModernIPTVPlayer.Helpers
                 if (_position + length > _buffer.Length)
                 {
                     int newSize = Math.Max(_buffer.Length + length + 1024 * 1024, _buffer.Length * 2);
-                    System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] Appending: Resizing buffer to {newSize / 1024 / 1024}MB");
-                    Array.Resize(ref _buffer, newSize);
+                    System.Diagnostics.Debug.WriteLine($"[MetadataBuffer] Appending: Resizing pooled buffer to {newSize / 1024 / 1024}MB");
+                    byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newSize);
+                    Buffer.BlockCopy(_buffer, 0, newBuffer, 0, _position);
+                    
+                    var oldBuffer = _buffer;
+                    _buffer = newBuffer;
+                    ArrayPool<byte>.Shared.Return(oldBuffer);
                 }
 
                 Buffer.BlockCopy(data, 0, _buffer, baseOffset, length);
