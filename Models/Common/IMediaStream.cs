@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Models
 {
@@ -52,6 +53,38 @@ namespace ModernIPTVPlayer.Models
         /// Synchronizes the stream properties with the provided unified metadata.
         /// </summary>
         void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified);
+    }
+
+    /// <summary>
+    /// [PHASE 4.5] High-performance interface for virtualized stream collections.
+    /// Allows the StreamMatchIndexer to perform zero-allocation MMF scans.
+    /// </summary>
+    public interface IVirtualStreamList
+    {
+        int Count { get; }
+        long Fingerprint { get; }
+        
+        string? GetId(int index);
+        int GetStreamId(int index);
+
+        /// <summary>
+        /// Retrieves the title into a provided buffer without creating a managed string object.
+        /// </summary>
+        ReadOnlySpan<char> GetTitleSpan(int index, Span<char> buffer);
+
+        /// <summary>
+        /// Retrieves the category ID into a provided buffer without creating a managed string object.
+        /// </summary>
+        ReadOnlySpan<char> GetCategorySpan(int index, Span<char> buffer);
+
+        /// <summary>
+        /// Performs a high-speed parallel scan of the entire dataset to build an index map
+        /// without hydrating managed objects. Thread-safe using list locking.
+        /// </summary>
+        void ParallelScanInto(System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Generic.List<int>> indexMap);
+        
+        void AddRef();
+        BinaryCacheSession GetSession();
     }
 
     public class MediaNavigationArgs

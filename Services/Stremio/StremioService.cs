@@ -227,27 +227,29 @@ namespace ModernIPTVPlayer.Services.Stremio
                     {
                         bool isSeries = type == "series";
                         string searchId = isSeries ? id.Split(':')[0] : id;
-                        var matches = IptvMatchService.Instance.FindAllMatchesById(searchId, isSeries);
+                        // [Senior] Effortless ID-based match against smart indices
+                        var match = IptvMatchService.Instance.MatchToIptvById(searchId, isSeries ? "series" : "movie");
                         
-                        if (!matches.Any())
+                        if (match == null)
                         {
                             var metas = GetGlobalMetaCache(searchId);
                             var meta = metas.FirstOrDefault();
                             if (meta != null && !string.IsNullOrEmpty(meta.Title))
                             {
-                                matches = IptvMatchService.Instance.FindAllMatches(meta.Title, null, null, null, meta.Year, null, isSeries, false, false);
+                                // [Senior] High-performance fuzzy match against smart indices
+                                match = IptvMatchService.Instance.MatchToIptv(meta.Title, meta.Year, isSeries ? "series" : "movie");
                             }
                         }
 
-                        if (matches.Any())
+                        if (match != null)
                         {
-                            return matches.Select(m => new StremioStream
+                            return new List<StremioStream> { new StremioStream
                             {
-                                Name = isSeries ? "IPTV" : "IPTV (VOD)",
-                                Title = m.Title,
-                                Url = m.StreamUrl,
+                                Name = (type == "series") ? "IPTV" : "IPTV (VOD)",
+                                Title = match.Title,
+                                Url = match.StreamUrl,
                                 AddonUrl = "iptv://internal"
-                            }).ToList();
+                            }};
                         }
                     }
                     catch (Exception ex)
@@ -350,9 +352,9 @@ namespace ModernIPTVPlayer.Services.Stremio
                 
                 if (scope == "iptv" || query.Length < 3)
                 {
-                    // FAST SEARCH: Substring contains, no normalization, direct from library
-                    // [OPTIMIZATION] For very short queries, we ALWAYS use Fast Search to avoid fuzzy overhead
-                    var matches = IptvMatchService.Instance.SearchFast(query, type, cancellationToken);
+                    // FAST SEARCH: Using the new prefix-indexed Search method
+                    // [Senior] High-performance index lookup
+                    var matches = IptvMatchService.Instance.Search(query, type == "movie" ? "movie" : "series");
                     foreach (var m in matches)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
@@ -366,10 +368,10 @@ namespace ModernIPTVPlayer.Services.Stremio
                 }
                 else
                 {
-                    // STANDARD SEARCH: Fuzzy/Normalized for "All" scope
-                    var movieMatches = (type == "all" || type == "movie") && !string.IsNullOrEmpty(query) ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, null, query, false, false, false, cancellationToken) : new List<IMediaStream>();
+                    // STANDARD SEARCH: Modernized fuzzy search using smart indices
+                    var movieMatches = (type == "all" || type == "movie") && !string.IsNullOrEmpty(query) ? IptvMatchService.Instance.Search(query) : new List<IMediaStream>();
                     cancellationToken.ThrowIfCancellationRequested();
-                    var seriesMatches = (type == "all" || type == "series") && !string.IsNullOrEmpty(query) ? IptvMatchService.Instance.FindAllMatches(null, null, null, null, null, query, true, false, false, cancellationToken) : new List<IMediaStream>();
+                    var seriesMatches = (type == "all" || type == "series") && !string.IsNullOrEmpty(query) ? IptvMatchService.Instance.Search(query) : new List<IMediaStream>();
                     
                     foreach (var m in movieMatches.Concat(seriesMatches))
                     {
@@ -841,8 +843,8 @@ namespace ModernIPTVPlayer.Services.Stremio
                 foreach (var item in targets)
                 {
                     item.IsIptvChecked = true;
-                    // Use stopOnHighConfidence: true for "Available" check
-                    var iptvMatch = IptvMatchService.Instance.MatchStremioItem(item, query, stopOnHighConfidence: true);
+                    // [Senior] Optimized lazy check against smart indices
+                    var iptvMatch = IptvMatchService.Instance.MatchToIptv(item.Title, item.Year, item.Type ?? "movie");
                     if (iptvMatch != null)
                     {
                         string itemYear = GetYearDigits(item.Year);

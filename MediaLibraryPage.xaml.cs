@@ -17,6 +17,7 @@ using System.Numerics;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
 using ModernIPTVPlayer.Pages;
+using System.Collections.Concurrent;
 
 namespace ModernIPTVPlayer
 {
@@ -692,34 +693,30 @@ namespace ModernIPTVPlayer
 
         private void RebuildCategoryIndexMap()
         {
-            var map = new System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentBag<int>>(StringComparer.Ordinal);
+            var map = new ConcurrentDictionary<string, List<int>>(StringComparer.Ordinal);
             
             // ARCHITECTURAL FIX: Use Zero-Lock Parallel Scan (Index-only) to avoid object hydration
-            if (_allIptvItems is Helpers.VirtualVodList vvl)
+            if (_allIptvItems is IVirtualStreamList virtualList)
             {
-                vvl.ParallelScanInto(map);
+                virtualList.ParallelScanInto(map);
                 _itemsByNormalizedCategoryId = map.ToDictionary(
                     k => k.Key, 
-                    v => (IReadOnlyList<IMediaStream>)new Helpers.VirtualStreamSubList(vvl, v.Value)
-                );
-            }
-            else if (_allIptvItems is Helpers.VirtualSeriesList vsl)
-            {
-                vsl.ParallelScanInto(map);
-                _itemsByNormalizedCategoryId = map.ToDictionary(
-                    k => k.Key, 
-                    v => (IReadOnlyList<IMediaStream>)new Helpers.VirtualStreamSubList(vsl, v.Value)
+                    v => (IReadOnlyList<IMediaStream>)new Helpers.VirtualStreamSubList((IReadOnlyList<IMediaStream>)virtualList, v.Value)
                 );
             }
             else
             {
                 // Fallback for non-virtual lists
-                var fallbackMap = new System.Collections.Concurrent.ConcurrentDictionary<string, System.Collections.Concurrent.ConcurrentBag<IMediaStream>>(StringComparer.Ordinal);
-                Parallel.ForEach(_allIptvItems, (stream) => 
+                var fallbackMap = new ConcurrentDictionary<string, List<IMediaStream>>(StringComparer.Ordinal);
+                Parallel.ForEach(Partitioner.Create(0, _allIptvItems.Count), range =>
                 {
-                    string norm = NormalizeCategoryId(GetStreamCategoryId(stream));
-                    var bag = fallbackMap.GetOrAdd(norm, _ => new System.Collections.Concurrent.ConcurrentBag<IMediaStream>());
-                    bag.Add(stream);
+                    for (int i = range.Item1; i < range.Item2; i++)
+                    {
+                        var stream = _allIptvItems[i];
+                        string norm = NormalizeCategoryId(GetStreamCategoryId(stream));
+                        var list = fallbackMap.GetOrAdd(norm, _ => new List<IMediaStream>());
+                        lock (list) { list.Add(stream); }
+                    }
                 });
                 _itemsByNormalizedCategoryId = fallbackMap.ToDictionary(k => k.Key, v => v.Value.ToList() as IReadOnlyList<IMediaStream>);
             }

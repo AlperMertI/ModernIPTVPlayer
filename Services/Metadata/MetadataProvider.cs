@@ -739,7 +739,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // B. Fallback to IptvMatchService (User/Internal persistent mappings)
                 else if (char.IsDigit(metadata.ImdbId[0]))
                 {
-                    var match = IptvMatchService.Instance.FindAllMatchesById(metadata.ImdbId, true).FirstOrDefault();
+                    var match = IptvMatchService.Instance.MatchToIptvById(metadata.ImdbId, "movie");
                     if (match != null && !string.IsNullOrEmpty(match.IMDbId) && IsImdbId(match.IMDbId))
                     {
                         trace.Log("ID", $"Early Resolution (Service): IPTV {metadata.ImdbId} -> IMDb {match.IMDbId}");
@@ -821,7 +821,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     string? year = (sourceStream as Models.IMediaStream)?.Year;
                     if (string.IsNullOrEmpty(year)) year = metadata.Year;
 
-                    string cleanSearchTitle = TitleHelper.GetSearchTitle(metadata.Title);
+                    string cleanSearchTitle = TitleHelper.NormalizeForSearch(metadata.Title);
                     if (string.IsNullOrWhiteSpace(cleanSearchTitle)) cleanSearchTitle = metadata.Title;
 
                     var discoveredId = await ResolveIdByTitleDiscoveryAsync(cleanSearchTitle, type, year, trace);
@@ -1713,51 +1713,37 @@ namespace ModernIPTVPlayer.Services.Metadata
                     string playlistId = App.CurrentLogin?.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
                     trace?.Log("IPTV", $"Enriching IPTV Movie: {metadata.Title} | CacheId: {playlistId}");
                     
-                    var allVod = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod");
-                    if (allVod != null)
+                    // [Senior] Effortless matchmaking against internal IPTV indices
+                    var match = IptvMatchService.Instance.MatchToIptvById(metadata.ImdbId, "movie") as VodStream;
+                    
+                    if (match == null && !string.IsNullOrEmpty(metadata.Title) && metadata.Title != "Unknown" && metadata.Title != "Loading...")
                     {
-                        // Use Centralized IptvMatchService
-                        var match = IptvMatchService.Instance.FindMatchById(metadata.ImdbId, false) as VodStream;
-                        if (match == null && !string.IsNullOrEmpty(metadata.Title) && metadata.Title != "Unknown" && metadata.Title != "Loading...")
+                        match = IptvMatchService.Instance.MatchToIptv(metadata.Title, metadata.Year, "movie") as VodStream;
+                    }
+
+                    if (match != null)
+                    {
+                        trace?.Log("IPTV", $"Match Success: {match.Name}");
+                        
+                        // [Senior] Register confirmed match in high-perf registry
+                        if (string.IsNullOrEmpty(match.ImdbId) || match.ImdbId != metadata.ImdbId)
                         {
-                            match = IptvMatchService.Instance.FindMatch(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, null, metadata.Year, null, false) as VodStream;
+                            IptvMatchService.Instance.RegisterManualMatch(match, metadata.ImdbId);
                         }
 
-                        if (match != null)
-                        {
-                            trace?.Log("IPTV", $"Match Success: {match.Name}");
-                        }
-                        else
-                        {
-                            trace?.Log("IPTV", $"Match Failed for: {metadata.Title}");
-                        }
-
-                        if (match != null) 
-                        {
-                            // [NEW] Learn and Persist this match if it was found via Title
-                            if (string.IsNullOrEmpty(match.ImdbId) || match.ImdbId != metadata.ImdbId)
-                            {
-                                IptvMatchService.Instance.RegisterMatch(match, metadata.ImdbId);
-                            }
-
-                            System.Diagnostics.Debug.WriteLine($"[IPTV_MATCH] Match Details: Title='{match.Name}', ProviderImdb='{match.IMDbId}', InternalId={match.StreamId}");
-                            streamId = match.StreamId;
-                            metadata.IsAvailableOnIptv = true;
-                            
-                            // Seed basic info from the match early
-                            if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = match.Name;
-                            if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.StreamIcon;
-                            if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.Year;
-                            if (metadata.Rating == 0 && double.TryParse(match.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r)) metadata.Rating = r;
-                        }
-                        else
-                        {
-                            trace?.Log("IPTV", $"Match Failed for: {metadata.Title}");
-                        }
+                        System.Diagnostics.Debug.WriteLine($"[IPTV_MATCH] Match Details: Title='{match.Name}', ProviderImdb='{match.IMDbId}', InternalId={match.StreamId}");
+                        streamId = match.StreamId;
+                        metadata.IsAvailableOnIptv = true;
+                        
+                        // Seed basic info from the match early
+                        if (string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...") metadata.Title = match.Name;
+                        if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.StreamIcon;
+                        if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.Year;
+                        if (metadata.Rating == 0 && double.TryParse(match.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r)) metadata.Rating = r;
                     }
                     else
                     {
-                        trace?.Log("IPTV", $"VOD Cache is empty or not found for CacheId: {playlistId}");
+                        trace?.Log("IPTV", $"Match Failed for: {metadata.Title}");
                     }
                 }
                 else if (vod is VodStream vs)
@@ -1817,9 +1803,6 @@ namespace ModernIPTVPlayer.Services.Metadata
                         if (string.IsNullOrEmpty(metadata.PosterUrl))
                             metadata.PosterUrl = result.Info.MovieImage ?? result.Info.CoverBig;
 
-                        // MovieImage from IPTV is nearly always a poster, not a logo.
-                        // We rely on TMDB to provide a real logo.
-
                         // 3. Classification
                         if (string.IsNullOrEmpty(metadata.AgeRating))
                             metadata.AgeRating = !string.IsNullOrEmpty(result.Info.MpaaRating) ? result.Info.MpaaRating : result.Info.Age;
@@ -1833,7 +1816,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                             AddTrailerCandidate(metadata, result.Info.YoutubeTrailer, preferPrimary: true);
                         }
 
-                        // 5. Technical Info (Used to skip probing)
+                        // 5. Technical Info
                         if (string.IsNullOrEmpty(metadata.Runtime))
                             metadata.Runtime = result.Info.Duration;
 
@@ -1916,82 +1899,71 @@ namespace ModernIPTVPlayer.Services.Metadata
                 {
                     string playlistId = App.CurrentLogin?.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
                     trace?.Log("IPTV", $"Enriching IPTV Series: {metadata.Title} | CacheId: {playlistId}");
-                    var allSeries = await ContentCacheService.Instance.LoadCacheAsync<SeriesStream>(playlistId, "series");
-                    if (allSeries != null)
+                        
+                    // [Senior] Modernized Series Matchmaking against internal indices
+                    var match = IptvMatchService.Instance.MatchToIptvById(metadata.ImdbId, "series") as SeriesStream;
+                    
+                    if (match == null && !string.IsNullOrEmpty(metadata.Title) && metadata.Title != "Unknown" && metadata.Title != "Loading...")
                     {
-                        // Use Centralized IptvMatchService
-                        var match = IptvMatchService.Instance.FindAllMatchesById(metadata.ImdbId, true).FirstOrDefault() as SeriesStream;
-                        if (match == null && !string.IsNullOrEmpty(metadata.Title) && metadata.Title != "Unknown" && metadata.Title != "Loading...")
-                        {
-                            match = IptvMatchService.Instance.FindAllMatches(metadata.Title, metadata.OriginalTitle, metadata.SubTitle, null, metadata.Year, null, true).FirstOrDefault() as SeriesStream;
-                        }
+                        match = IptvMatchService.Instance.MatchToIptv(metadata.Title, metadata.Year, "series") as SeriesStream;
+                    }
 
-                        if (match == null && !string.IsNullOrEmpty(metadata.ImdbId))
+                    if (match == null && !string.IsNullOrEmpty(metadata.ImdbId))
+                    {
+                        string? mappedId = IdMappingService.Instance.GetTmdbForImdb(metadata.ImdbId);
+                        if (!string.IsNullOrEmpty(mappedId))
                         {
-                            string? mappedId = IdMappingService.Instance.GetTmdbForImdb(metadata.ImdbId);
-                            if (!string.IsNullOrEmpty(mappedId))
+                            trace?.Log("IPTV", $"ID conversion (Service): {metadata.ImdbId} -> {mappedId}");
+                            match = IptvMatchService.Instance.MatchToIptvById(mappedId, "series") as SeriesStream;
+                        }
+                        
+                        if (match == null)
+                        {
+                            AppLogger.Info($"[Enrich-Iptv] No direct IMDb match for '{metadata.Title}'. Trying TMDB network conversion...");
+                            var tmdbSearch = await TmdbHelper.GetTvByExternalIdAsync(metadata.ImdbId);
+                            if (tmdbSearch != null)
                             {
-                                trace?.Log("IPTV", $"ID conversion (Service): {metadata.ImdbId} -> {mappedId}");
-                                match = IptvMatchService.Instance.FindAllMatchesById(mappedId, true).FirstOrDefault() as SeriesStream;
-                            }
-                            
-                            if (match == null)
-                            {
-                                AppLogger.Info($"[Enrich-Iptv] No direct IMDb match for '{metadata.Title}'. Trying TMDB network conversion...");
-                                var tmdbSearch = await TmdbHelper.GetTvByExternalIdAsync(metadata.ImdbId);
-                                if (tmdbSearch != null)
-                                {
-                                    string tmdbIdStr = tmdbSearch.Id.ToString();
-                                    IdMappingService.Instance.RegisterMapping(metadata.ImdbId, tmdbIdStr);
-                                    AppLogger.Info($"[Enrich-Iptv] Converted {metadata.ImdbId} -> TMDB ID {tmdbIdStr}. Searching IPTV again...");
-                                    match = IptvMatchService.Instance.FindAllMatchesById(tmdbIdStr, true).FirstOrDefault() as SeriesStream;
-                                }
+                                string tmdbIdStr = tmdbSearch.Id.ToString();
+                                IdMappingService.Instance.RegisterMapping(metadata.ImdbId, tmdbIdStr);
+                                AppLogger.Info($"[Enrich-Iptv] Converted {metadata.ImdbId} -> TMDB ID {tmdbIdStr}. Searching IPTV again...");
+                                match = IptvMatchService.Instance.MatchToIptvById(tmdbIdStr, "series") as SeriesStream;
                             }
                         }
+                    }
 
-                        if (match != null)
+                    if (match != null)
+                    {
+                        // [Senior] Persist manual match linkage
+                        if (string.IsNullOrEmpty(match.ImdbId) || match.ImdbId != metadata.ImdbId)
                         {
-                            // [NEW] Learn and Persist this match if it was found via Title or ID conversion
-                            if (string.IsNullOrEmpty(match.ImdbId) || match.ImdbId != metadata.ImdbId)
-                            {
-                                IptvMatchService.Instance.RegisterMatch(match, metadata.ImdbId);
-                            }
-
-                            AppLogger.Info($"[Enrich-Iptv] Match SUCCESS: '{match.Name}' (ID: {match.SeriesId}, IMDb: {match.IMDbId})");
-                            seriesId = match.SeriesId;
-                            metadata.IsAvailableOnIptv = true;
-
-                            // Seed basic info from match
-                            // [REFINEMENT] If current title looks like an episode name (e.g. from an IPTV provider) 
-                            // and the IPTV match name looks more like a series title, promote it.
-                            bool titleIsPlaceholder = string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...";
-                            bool titleLooksLikeEpisode = !titleIsPlaceholder && IsGenericEpisodeTitle(metadata.Title, match.Name);
-                            
-                            // If title is placeholder OR it's a very different name than the match (and match name matches subtitle)
-                            bool shouldPromoteMatchName = titleIsPlaceholder || titleLooksLikeEpisode;
-                            if (!shouldPromoteMatchName && !string.IsNullOrEmpty(metadata.SubTitle) && 
-                                metadata.SubTitle.Contains(match.Name, StringComparison.OrdinalIgnoreCase) &&
-                                !metadata.Title.Contains(match.Name, StringComparison.OrdinalIgnoreCase))
-                            {
-                                // Case: Title="Yaz Geldi...", SubTitle="Watchmen", MatchName="Watchmen"
-                                // The title is clearly wrong and SubTitle holds the real name.
-                                shouldPromoteMatchName = true;
-                                trace?.Log("IPTV", $"Title Promotion: '{metadata.Title}' -> '{match.Name}' (Verified via SubTitle)");
-                            }
-
-                            if (shouldPromoteMatchName) metadata.Title = match.Name;
-                            if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.Cover;
-                            if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.Year;
-                            if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = match.Plot;
+                            IptvMatchService.Instance.RegisterManualMatch(match, metadata.ImdbId);
                         }
-                        else
+
+                        AppLogger.Info($"[Enrich-Iptv] Match SUCCESS: '{match.Name}' (ID: {match.SeriesId}, IMDb: {match.IMDbId})");
+                        seriesId = match.SeriesId;
+                        metadata.IsAvailableOnIptv = true;
+
+                        // Seed basic info from match
+                        bool titleIsPlaceholder = string.IsNullOrEmpty(metadata.Title) || metadata.Title == "Loading...";
+                        bool titleLooksLikeEpisode = !titleIsPlaceholder && IsGenericEpisodeTitle(metadata.Title, match.Name);
+                        
+                        bool shouldPromoteMatchName = titleIsPlaceholder || titleLooksLikeEpisode;
+                        if (!shouldPromoteMatchName && !string.IsNullOrEmpty(metadata.SubTitle) && 
+                            metadata.SubTitle.Contains(match.Name, StringComparison.OrdinalIgnoreCase) &&
+                            !metadata.Title.Contains(match.Name, StringComparison.OrdinalIgnoreCase))
                         {
-                            AppLogger.Warn($"[Enrich-Iptv] Match FAILED for: '{metadata.Title}' (IMDb: {metadata.ImdbId})");
+                            shouldPromoteMatchName = true;
+                            trace?.Log("IPTV", $"Title Promotion: '{metadata.Title}' -> '{match.Name}' (Verified via SubTitle)");
                         }
+
+                        if (shouldPromoteMatchName) metadata.Title = match.Name;
+                        if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = match.Cover;
+                        if (string.IsNullOrEmpty(metadata.Year)) metadata.Year = match.Year;
+                        if (string.IsNullOrEmpty(metadata.Overview)) metadata.Overview = match.Plot;
                     }
                     else
                     {
-                        AppLogger.Warn($"[Enrich-Iptv] Series Cache is empty for: {playlistId}");
+                        AppLogger.Warn($"[Enrich-Iptv] Match FAILED for: '{metadata.Title}' (IMDb: {metadata.ImdbId})");
                     }
                 }
                 else
@@ -2025,8 +1997,6 @@ namespace ModernIPTVPlayer.Services.Metadata
                         if (string.IsNullOrEmpty(metadata.BackdropUrl)) metadata.BackdropUrl = info.Info.Cover;
                         if (string.IsNullOrEmpty(metadata.PosterUrl)) metadata.PosterUrl = info.Info.Cover;
 
-                        // info.Info.Cover is a poster, not a logo. Rely on TMDB for real logos.
-
                         // Map Rating & Year
                         string ratingStr = info.Info.Rating?.ToString();
                         if (string.IsNullOrEmpty(ratingStr)) ratingStr = series.Rating;
@@ -2053,7 +2023,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         if (info.Info.Director != null && (metadata.Directors == null || metadata.Directors.Count == 0))
                         {
                             metadata.Directors = info.Info.Director.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                                                            .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
+                                                              .Select(s => new Models.Metadata.UnifiedCast { Name = s.Trim(), Character = "Yönetmen" }).ToList();
                         }
 
                         if (string.IsNullOrEmpty(metadata.DataSource) || !metadata.DataSource.Contains("IPTV"))
@@ -2080,7 +2050,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 {
                                     int.TryParse(ep.EpisodeNum?.ToString(), out int epNum);
                                     string extension = ep.ContainerExtension;
-                                    if (string.IsNullOrEmpty(extension)) extension = "mkv"; // Default
+                                    if (string.IsNullOrEmpty(extension)) extension = "mkv"; 
                                     if (!extension.StartsWith(".")) extension = "." + extension;
 
                                     string streamUrl = $"{App.CurrentLogin.Host}/series/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{ep.Id}{extension}";
@@ -2089,9 +2059,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                                     {
                                         Id = ep.Id,
                                         Title = ep.Title,
-                                        IptvSourceTitle = ep.Title, // [NEW] Keep literal IPTV name for source panel
-                                        IptvSeriesId = seriesId, // [NEW] Store series ID for deduplication
-                                        Overview = ep.Info?.Plot, // Episode specific plot (rare but possible)
+                                        IptvSourceTitle = ep.Title, 
+                                        IptvSeriesId = seriesId, 
+                                        Overview = ep.Info?.Plot, 
                                         ThumbnailUrl = ep.Info?.MovieImage,
                                         SeasonNumber = seasonNum,
                                         EpisodeNumber = epNum,
@@ -2129,10 +2099,9 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                                          if (existingEp != null)
                                          {
-                                             // Update existing episode
                                              existingEp.StreamUrl = streamUrl;
-                                             existingEp.IptvSourceTitle = ep.Title; // [NEW] Keep literal IPTV name for source panel
-                                             existingEp.IptvSeriesId = seriesId; // [NEW] Store series ID for deduplication
+                                             existingEp.IptvSourceTitle = ep.Title; 
+                                             existingEp.IptvSeriesId = seriesId; 
                                              if (string.IsNullOrEmpty(existingEp.Id)) existingEp.Id = ep.Id;
                                              if (string.IsNullOrEmpty(existingEp.Overview)) existingEp.Overview = ep.Info?.Plot;
                                              if (string.IsNullOrEmpty(existingEp.RuntimeFormatted)) existingEp.RuntimeFormatted = ep.Info?.Duration;
@@ -2140,13 +2109,12 @@ namespace ModernIPTVPlayer.Services.Metadata
                                          }
                                          else
                                          {
-                                             // Add as new episode if it doesn't exist (e.g. IPTV has more episodes than Stremio)
                                              existingSeason.Episodes.Add(new UnifiedEpisode
                                              {
                                                  Id = ep.Id,
                                                  Title = ep.Title,
-                                                 IptvSourceTitle = ep.Title, // [NEW] Keep literal IPTV name for source panel
-                                                 IptvSeriesId = seriesId, // [NEW] Store series ID for deduplication
+                                                 IptvSourceTitle = ep.Title, 
+                                                 IptvSeriesId = seriesId, 
                                                  Overview = ep.Info?.Plot,
                                                  ThumbnailUrl = ep.Info?.MovieImage,
                                                  SeasonNumber = seasonNum,

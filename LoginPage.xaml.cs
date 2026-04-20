@@ -126,8 +126,19 @@ namespace ModernIPTVPlayer
 
             if (await Services.DialogService.ShowAsync(deleteDialog) == ContentDialogResult.Primary)
             {
+                string idToDelete = playlist.Id.ToString();
                 _playlists.Remove(playlist);
                 SaveAllPlaylists();
+
+                // Task 6: Trigger surgical cleanup of background files
+                _ = ContentCacheService.Instance.CleanOrphanedCachesAsync(idToDelete);
+
+                // If the deleted playlist was the active one, log out to prevent UI/Background inconsistencies
+                if (App.CurrentLogin?.PlaylistId == idToDelete)
+                {
+                    AppLogger.Info($"[App] Active playlist {idToDelete} deleted. Logging out.");
+                    App.CurrentLogin = null;
+                }
             }
         }
 

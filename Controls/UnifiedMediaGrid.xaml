@@ -36,7 +36,7 @@
     <Grid>
         <!-- Main Media Grid -->
         <GridView x:Name="MediaGridView" x:FieldModifier="public"
-                  SelectionMode="Single" 
+                  SelectionMode="None" 
                   IsItemClickEnabled="True" 
                   ItemClick="MediaGridView_ItemClick"
                   ContainerContentChanging="MediaGridView_ContainerContentChanging"

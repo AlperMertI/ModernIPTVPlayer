@@ -42,8 +42,7 @@ namespace ModernIPTVPlayer.Models.Iptv
     public class LiveStream : INotifyPropertyChanged, IMediaStream
     {
         private BinaryCacheSession? _session;
-        private object? _metaLock;
-        private object MetaLock => _metaLock ??= new object();
+        // [PHASE 4.5] Removed per-object _metaLock. Using global LockPool for minimal RAM footprint.
         public int MetadataPriority { get; set; } = 0;
         public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
         public int RecordIndex { get; private set; } = -1;
@@ -83,13 +82,15 @@ namespace ModernIPTVPlayer.Models.Iptv
         private const int LiveSlotCat = 11;
         private const int LiveSlotRat = 12;
         private const int LiveSlotCount = 13;
-        private readonly int[] _roBufOff = new int[LiveSlotCount];
-        private readonly int[] _roBufLen = new int[LiveSlotCount];
+        
+        // [PHASE 4.5] Lazy-allocated metadata buffers.
+        private int[]? _roBufOff;
+        private int[]? _roBufLen;
         private int _roMask;
 
         private string LiveReadString(int slot, int diskOff, int diskLen)
         {
-            if ((_roMask & (1 << slot)) != 0)
+            if ((_roMask & (1 << slot)) != 0 && _roBufOff != null && _roBufLen != null)
             {
                 return MetadataBuffer.GetString(_roBufOff[slot], _roBufLen[slot]);
             }
@@ -106,6 +107,10 @@ namespace ModernIPTVPlayer.Models.Iptv
         {
             if (_session != null && _session.IsReadOnly)
             {
+                // [PHASE 4.5] Lazy-allocate metadata buffers for write-only scenarios.
+                _roBufOff ??= new int[LiveSlotCount];
+                _roBufLen ??= new int[LiveSlotCount];
+
                 if (string.IsNullOrEmpty(value))
                 {
                     _roMask &= ~(1 << slot);
@@ -322,8 +327,32 @@ namespace ModernIPTVPlayer.Models.Iptv
             set => LiveWriteString(LiveSlotRat, ref _ratOff, ref _ratLen, value, nameof(Rating));
         }
 
-        // Bu alan JSON'dan gelmez, biz oluÅŸturacaÄŸÄ±z
-        public string StreamUrl { get; set; } = "";
+        public record XtreamContext(string BaseUrl, string Username, string Password);
+        private XtreamContext? _xtreamContext;
+
+        /// <summary>
+        /// PROJECT ZERO: Sets a shared context to avoid duplicate allocations across 50k+ streams.
+        /// </summary>
+        public void SetXtreamContext(XtreamContext? context) => _xtreamContext = context;
+
+        public void SetXtreamContext(string baseUrl, string username, string password) => _xtreamContext = new XtreamContext(baseUrl, username, password);
+
+        // PROJECT ZERO: Lazy URL Reconstruction to prevent 50k+ string allocations.
+        private string? _streamUrlOverride;
+        public string StreamUrl 
+        { 
+            get
+            {
+                if (!string.IsNullOrEmpty(_streamUrlOverride)) return _streamUrlOverride;
+                if (_xtreamContext != null)
+                {
+                    string ext = string.IsNullOrEmpty(ContainerExtension) ? "ts" : ContainerExtension;
+                    return $"{_xtreamContext.BaseUrl}/live/{_xtreamContext.Username}/{_xtreamContext.Password}/{StreamId}.{ext}";
+                }
+                return "";
+            }
+            set => _streamUrlOverride = value;
+        }
 
         // UI Binding Helpers (Fixing Binding Errors)
         public double ProgressValue => 0; 
@@ -336,35 +365,39 @@ namespace ModernIPTVPlayer.Models.Iptv
         public bool IsAvailableOnIptv { get; set; } = true;
         
         // ==========================================
-        // PROBING METADATA (Dynamic)
+        // PROBING METADATA (Lazy Hydration)
         // ==========================================
         
-        private string _resolution = "";
+        private Services.ProbeData? _probeCache;
+        private Services.ProbeData? GetProbe()
+        {
+            if (_probeCache != null) return _probeCache;
+            _probeCache = Services.ProbeCacheService.Instance.Get(StreamId);
+            return _probeCache;
+        }
+
         public string Resolution
         {
-            get => _resolution;
-            set { _resolution = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); OnPropertyChanged(nameof(ShowTechnicalBadges)); OnPropertyChanged(nameof(StatusToolTip)); }
+            get => GetProbe()?.Resolution ?? "";
+            set { OnPropertyChanged(); }
         }
 
-        private string _fps = "";
         public string Fps
         {
-            get => _fps;
-            set { _fps = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); }
+            get => GetProbe()?.Fps ?? "";
+            set { OnPropertyChanged(); }
         }
 
-        private string _codec = "";
         public string Codec
         {
-            get => _codec;
-            set { _codec = value; OnPropertyChanged(); OnPropertyChanged(nameof(HasMetadata)); }
+            get => GetProbe()?.Codec ?? "";
+            set { OnPropertyChanged(); }
         }
 
-        private bool _isHdr = false;
         public bool IsHdr
         {
-            get => _isHdr;
-            set { _isHdr = value; OnPropertyChanged(); OnPropertyChanged(nameof(ShowHdrBadge)); OnPropertyChanged(nameof(StatusToolTip)); }
+            get => GetProbe()?.IsHdr ?? false;
+            set { OnPropertyChanged(); }
         }
 
         public bool ShowHdrBadge => IsHdr && ShowTechnicalBadges;
@@ -379,7 +412,7 @@ namespace ModernIPTVPlayer.Models.Iptv
         private bool? _isOnline;
         public bool? IsOnline
         {
-            get => _isOnline;
+            get => _isOnline ?? GetProbe() != null;
             set
             {
                 _isOnline = value;
@@ -392,20 +425,10 @@ namespace ModernIPTVPlayer.Models.Iptv
             }
         }
 
-        private long _bitrate;
-        public long Bitrate
-        {
-            get => _bitrate;
-            set
-            {
-                _bitrate = value;
-                OnPropertyChanged(nameof(Bitrate));
-                OnPropertyChanged(nameof(FormattedBitrate));
-                OnPropertyChanged(nameof(HasBitrate));
-                OnPropertyChanged(nameof(Status));
-                OnPropertyChanged(nameof(IsUnstable));
-                OnPropertyChanged(nameof(StatusToolTip));
-            }
+        public long Bitrate 
+        { 
+            get => GetProbe()?.Bitrate ?? 0; 
+            set { OnPropertyChanged(); }
         }
 
         public bool HasBitrate => !string.IsNullOrEmpty(FormattedBitrate);
@@ -470,7 +493,8 @@ namespace ModernIPTVPlayer.Models.Iptv
         {
             if (unified == null) return;
             
-            lock (MetaLock)
+            // [PHASE 4.5] Using Striped Locking for thread-safe hydration without object bloat.
+            lock (LockPool.GetLock(StreamId))
             {
                 bool isDowngrade = unified.PriorityScore < this.MetadataPriority;
                 Models.Metadata.MetadataSync.Sync(this, unified, isDowngrade);

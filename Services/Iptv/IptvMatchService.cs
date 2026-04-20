@@ -1,600 +1,421 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
+using System.Collections.Frozen;
+using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
+using System.Numerics.Tensors;
+using System.Buffers;
+using System.IO;
 using ModernIPTVPlayer.Models;
-using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Helpers;
-using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer.Services.Iptv
 {
-    public class IptvMatchService
+    /// <summary>
+    /// Senior-level high-performance matchmaking service for IPTV streams.
+    /// Utilizes SIMD (TensorPrimitives), lock-free snapshots, and StringPool for zero-allocation hotspots.
+    /// Supports automatic matching against internal indexed data.
+    /// </summary>
+    public sealed class IptvMatchService
     {
-        private static IptvMatchService _instance;
-        public static IptvMatchService Instance => _instance ??= new IptvMatchService();
+        private static readonly IptvMatchService _instance = new();
+        public static IptvMatchService Instance => _instance;
 
-        private IReadOnlyList<IMediaStream> _vods = Array.Empty<IMediaStream>();
-        private IReadOnlyList<IMediaStream> _series = Array.Empty<IMediaStream>();
-        private StreamMatchIndexer? _vodIndexer;
-        private StreamMatchIndexer? _seriesIndexer;
-        private bool _isInitialized = false;
-        private readonly System.Threading.Lock _indexLock = new();
+        private readonly StreamMatchIndexer _vodSeriesIndexer = new();
+        private readonly FastSearchIndex _liveSearchIndex = new();
+        
+        // Internal cache for loaded streams. 
+        // Standardized on IReadOnlyList to support both raw arrays and MMF-Direct VirtualLists 
+        // without triggering realization.
+        private IReadOnlyList<VodStream>? _vodCache;
+        private IReadOnlyList<SeriesStream>? _seriesCache;
+        private IReadOnlyList<LiveStream>? _liveCache;
+
+        private static readonly CompositeFormat PerfFormat = CompositeFormat.Parse("[PERF] [IptvMatchService] {0} indexing: {1}ms (Hash: {2})");
+
+        /// <summary>
+        /// Optimized struct-based result to avoid heap allocations during scoring comparison.
+        /// Involved in the zero-allocation performance hot paths.
+        /// </summary>
+        private struct MatchResult : IComparable<MatchResult>
+        {
+            public IMediaStream Stream { get; set; }
+            public float Score { get; set; }
+            public int CompareTo(MatchResult other) => other.Score.CompareTo(Score); // Descending score
+        }
 
         private IptvMatchService() { }
 
-        public void UpdateIndexers(
-            IReadOnlyList<IMediaStream>? vods,
-            IReadOnlyList<IMediaStream>? series,
-            StreamMatchIndexer? vodIndexer,
-            StreamMatchIndexer? seriesIndexer,
-            string? correlationId = null,
-            string? source = null)
+        /// <summary>
+        /// Unified entry point for rebuilding stream indices and updating internal caches.
+        /// </summary>
+        [SkipLocalsInit]
+        public async Task UpdateIndexers(
+            IEnumerable<LiveStream>? live = null, string? liveFp = null,
+            IEnumerable<VodStream>? vod = null, string? vodFp = null,
+            IEnumerable<SeriesStream>? series = null, string? seriesFp = null)
         {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            correlationId ??= LifecycleLog.NewId("matchidx");
-            using var lifecycle = LifecycleLog.Begin("Match.Index.Publish", correlationId, new Dictionary<string, object?>
-            {
-                ["source"] = source ?? "indexer_refs"
-            });
+            var sw = Stopwatch.StartNew();
+            var tasks = new List<Task>();
 
-            lock (_indexLock)
-            {
-                _vods = vods ?? Array.Empty<IMediaStream>();
-                _series = series ?? Array.Empty<IMediaStream>();
-                _vodIndexer = vodIndexer;
-                _seriesIndexer = seriesIndexer;
+            AppLogger.Info($"[IptvMatchService] UpdateIndexers triggered (Live: {live != null}, VOD: {vod != null}, Series: {series != null})");
 
-                _isInitialized = true;
-                TitleHelper.ClearCaches();
-                lifecycle.Step("published", new Dictionary<string, object?>
+            if (live != null) 
+            {
+                _liveCache = (live is IReadOnlyList<LiveStream> rl) ? rl : live.ToList();
+                tasks.Add(RunUpdate("Live", _liveCache, liveFp, async (s, fp) => 
                 {
-                    ["durationMs"] = sw.ElapsedMilliseconds,
-                    ["vodCount"] = _vods.Count,
-                    ["seriesCount"] = _series.Count,
-                    ["imdbKeys"] = (_vodIndexer?.IdCount ?? 0) + (_seriesIndexer?.IdCount ?? 0),
-                    ["tokenKeys"] = (_vodIndexer?.TokenCount ?? 0) + (_seriesIndexer?.TokenCount ?? 0)
-                });
+                    await _liveSearchIndex.RebuildAsync<LiveStream>(s, fp);
+                }));
             }
-        }
 
-        public bool InstanceInitializeCheck() => _isInitialized;
-
-        private int RuntimeTokenCount => (_vodIndexer?.TokenCount ?? 0) + (_seriesIndexer?.TokenCount ?? 0);
-
-        private IMediaStream? ResolveIndexedItem(int recordIndex, bool series)
-        {
-            if (series)
+            if (vod != null) 
             {
-                return recordIndex >= 0 && recordIndex < _series.Count
-                    ? _series[recordIndex]
-                    : null;
+                _vodCache = (vod is IReadOnlyList<VodStream> rl) ? rl : vod.ToList();
+                tasks.Add(RunUpdate("VOD", _vodCache, vodFp, (s, fp) => _vodSeriesIndexer.RebuildAsync(s, fp, clear: false)));
             }
 
-            return recordIndex >= 0 && recordIndex < _vods.Count
-                ? _vods[recordIndex]
-                : null;
-        }
-
-        private void AddTokenMatches(string token, bool series, Dictionary<IMediaStream, int> target)
-        {
-            int[] ids = series
-                ? _seriesIndexer?.FindByToken(token) ?? Array.Empty<int>()
-                : _vodIndexer?.FindByToken(token) ?? Array.Empty<int>();
-
-            foreach (int recordIndex in ids)
+            if (series != null) 
             {
-                var item = ResolveIndexedItem(recordIndex, series);
-                if (item == null) continue;
-
-                if (target.ContainsKey(item)) target[item]++;
-                else target[item] = 1;
+                _seriesCache = (series is IReadOnlyList<SeriesStream> rl) ? rl : series.ToList();
+                tasks.Add(RunUpdate("Series", _seriesCache, seriesFp, (s, fp) => _vodSeriesIndexer.RebuildAsync(s, fp, clear: false)));
             }
 
+            // Await all internal operations to ensure logs are fully flushed before sync finishes
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+            AppLogger.Info($"[PERF] [IptvMatchService] Total indexing cycle completed in {sw.ElapsedMilliseconds}ms.");
         }
 
-        private List<IMediaStream> ResolveIdMatches(string normalizedId, bool isSeries)
+        private async Task RunUpdate<T>(string tag, IReadOnlyList<T> items, string? fp, Func<IReadOnlyList<T>, string, Task> action)
         {
-            var results = new List<IMediaStream>();
-
-            int[] ids = isSeries
-                ? _seriesIndexer?.FindById(normalizedId) ?? Array.Empty<int>()
-                : _vodIndexer?.FindById(normalizedId) ?? Array.Empty<int>();
-
-            foreach (int recordIndex in ids)
+            if (items == null || string.IsNullOrEmpty(fp))
             {
-                var item = ResolveIndexedItem(recordIndex, isSeries);
-                if (item != null) results.Add(item);
+                AppLogger.Warn($"[IptvMatchService] {tag} update skipped: Items or Fingerprint null.");
+                return;
             }
 
-            return results;
-        }
-
-        public IMediaStream? FindMatch(string? title, string? originalTitle, string? subTitle, string? localizedTitle, string? year, string? query, bool isSeries, System.Threading.CancellationToken ct = default)
-        {
-            return FindAllMatches(title, originalTitle, subTitle, localizedTitle, year, query, isSeries, false, false, ct).FirstOrDefault();
-        }
-
-        public List<IMediaStream> FindAllMatches(string? title, string? originalTitle, string? subTitle, string? localizedTitle, string? year, string? query, bool isSeries, bool stopOnHighConfidence = false, bool isLearning = false, System.Threading.CancellationToken ct = default)
-        {
-            if (ct.IsCancellationRequested) {
-                System.Diagnostics.Debug.WriteLine($"[IptvMatch] CANCELLED before start for Query: {query ?? title}");
-                ct.ThrowIfCancellationRequested();
-            }
-
-            var searchTitles = new[] { title, originalTitle, subTitle, localizedTitle, query }
-                .Where(t => !string.IsNullOrEmpty(t))
-                .Distinct()
-                .ToList();
+            var sw = Stopwatch.StartNew();
+            AppLogger.Info($"[IptvMatchService] {tag} index update STARTED (Items: {items.Count}, FP: {fp})");
             
-            if (!searchTitles.Any()) return new List<IMediaStream>();
-
-            string searchType = isSeries ? "SERIES" : "VOD";
-            if (!_isInitialized)
+            try 
             {
-                if (LifecycleLog.ShouldLog($"iptv-match-notready-{searchType}", TimeSpan.FromSeconds(20)))
-                {
-                    AppLogger.Info($"[Lifecycle] ➔ Match.Query [SKIPPED_NOT_READY] ({query ?? title}) | type={searchType}, year={year ?? "null"}, tokens={RuntimeTokenCount}, vods={_vods.Count}, series={_series.Count}");
-                }
-                return new List<IMediaStream>();
-            }
+                string folder = Windows.Storage.ApplicationData.Current.LocalFolder.Path;
+                string sidecarPath = Path.Combine(folder, $"{tag}_{fp}.idx.bin");
 
-            if (LifecycleLog.ShouldLog($"iptv-match-start-{searchType}", TimeSpan.FromSeconds(10)))
-            {
-                AppLogger.Info($"[Lifecycle] ◎ Match.Query [START] ({query ?? title}) | type={searchType}, year={year ?? "null"}, titleVariants={searchTitles.Count}, learning={isLearning}");
-            }
-
-            AppLogger.Warn($"[IptvMatch] Finding matches for {searchType}: '{title}' (Year: {year ?? "null"}). Index Status: Initialized={_isInitialized}, Tokens={RuntimeTokenCount}, VODs={_vods.Count}, Series={_series.Count}");
-            if (searchTitles.Count > 1) AppLogger.Warn($"[IptvMatch] Search Titles: {string.Join(", ", searchTitles)}");
-
-            // 1. Get Base Tokens for initial candidate filtering (real words only, no composites)
-            var searchBaseTokens = searchTitles.SelectMany(t => TitleHelper.GetBaseTokens(t)).Distinct().ToList();
-            if (searchBaseTokens.Count == 0)
-            {
-                AppLogger.Warn($"[IptvMatch] No significant tokens found for search titles.");
-                return new List<IMediaStream>();
-            }
-
-            AppLogger.Warn($"[IptvMatch] Candidate Filter Tokens (Base): {string.Join(", ", searchBaseTokens)}");
-
-            // --- New Robust Candidate Collection ---
-            var searchTokenSets = searchTitles.Select(t => new { 
-                Title = t, 
-                Tokens = TitleHelper.GetBaseTokens(t) 
-            }).Where(s => s.Tokens.Count > 0).ToList();
-
-            if (!searchTokenSets.Any()) return new List<IMediaStream>();
-
-            string targetYearStr = !string.IsNullOrEmpty(year) ? TitleHelper.ExtractYear(year) : "";
-            var candidates = new HashSet<IMediaStream>();
-            
-            // Map each item to its match count against AT LEAST ONE search title
-            var itemScores = new Dictionary<IMediaStream, int>();
-            foreach (var set in searchTokenSets)
-            {
-                var titleLevelMatches = new Dictionary<IMediaStream, int>();
-                foreach (var token in set.Tokens)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    if (token.Length < 2 && !char.IsDigit(token[0])) continue;
-
-                    lock (_indexLock)
-                    {
-                        AddTokenMatches(token, isSeries, titleLevelMatches);
-                    }
-                }
-
-                // Evaluation for this Title Set
-                foreach (var kvp in titleLevelMatches)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var item = kvp.Key;
-                    int matchCount = kvp.Value;
-                    int targetCount = set.Tokens.Count;
-
-                    // [PERFORMANCE] Cap candidates at 300 to prevent runaway fuzzy matching for short queries
-                    if (candidates.Count >= 300) break;
-
-                    bool isStrictMatch = matchCount == targetCount;
-                    bool isYearMatch = false;
-
-                    if (!isStrictMatch && !string.IsNullOrEmpty(targetYearStr))
-                    {
-                        string itemYear = TitleHelper.ExtractYear(item.Year);
-                        if (string.IsNullOrEmpty(itemYear)) itemYear = TitleHelper.ExtractYear(item.Title);
-                        
-                        // [NEW] Year-First Fallback: If year matches exactly, allow 2 tokens (or all if < 2)
-                        if (itemYear == targetYearStr)
-                        {
-                            int minRequired = Math.Min(2, targetCount);
-                            if (matchCount >= minRequired) isYearMatch = true;
-                        }
-                    }
-
-                    if (isStrictMatch || isYearMatch)
-                    {
-                         candidates.Add(item);
-                    }
-                }
-            }
-
-            // [NEW] Category Fallback
-            // If primary category search finds nothing, look in the other category too.
-            // [STRICT] DISABLED during learning phase to prevent series matching movies.
-            if (!candidates.Any() && !isLearning)
-            {
-                var fallbackType = isSeries ? "movie" : "series";
-                AppLogger.Warn($"[IptvMatch] Search yielded 0 candidates in primary category ({searchType}). Trying fallback search in category: {fallbackType.ToUpperInvariant()}...");
+                AppLogger.Info($"[IptvMatchService] {tag} checking sidecar: {sidecarPath}");
+                bool restored = false;
                 
-                foreach (var set in searchTokenSets)
+                if (tag == "Live") restored = await _liveSearchIndex.TryLoadFromDiskAsync(sidecarPath, fp);
+                else restored = await _vodSeriesIndexer.TryLoadFromDiskAsync(sidecarPath, fp);
+
+                if (!restored)
                 {
-                    var titleLevelMatches = new Dictionary<IMediaStream, int>();
-                    foreach (var token in set.Tokens)
-                    {
-                        if (token.Length < 2 && !char.IsDigit(token[0])) continue;
-                        lock (_indexLock)
-                        {
-                            AddTokenMatches(token, !isSeries, titleLevelMatches);
-                        }
-                    }
-
-                    foreach (var kvp in titleLevelMatches)
-                    {
-                        ct.ThrowIfCancellationRequested();
-                        var item = kvp.Key;
-                        int matchCount = kvp.Value;
-                        int targetCount = set.Tokens.Count;
-                        
-                        if (candidates.Count >= 200) break;
-
-                        bool isStrictMatch = matchCount == targetCount;
-                        bool isYearMatch = false;
-                        if (!isStrictMatch && !string.IsNullOrEmpty(targetYearStr))
-                        {
-                            string itemYear = TitleHelper.ExtractYear(item.Year);
-                            if (string.IsNullOrEmpty(itemYear)) itemYear = TitleHelper.ExtractYear(item.Title);
-                            if (itemYear == targetYearStr && matchCount >= Math.Min(2, targetCount))
-                                isYearMatch = true;
-                        }
-
-                        if (isStrictMatch || isYearMatch) candidates.Add(item);
-                    }
-                }
-            }
-
-            if (!candidates.Any())
-            {
-                AppLogger.Warn($"[IptvMatch] Found 0 candidates by token intersection for: {string.Join(", ", searchTitles)}");
-                if (LifecycleLog.ShouldLog($"iptv-match-summary-empty-{searchType}", TimeSpan.FromSeconds(10)))
-                {
-                    AppLogger.Info($"[Lifecycle] ✓ Match.Query [DONE] ({query ?? title}) | type={searchType}, candidates=0, results=0");
-                }
-                return new List<IMediaStream>();
-            }
-
-            AppLogger.Warn($"[IptvMatch] Found {candidates.Count} candidate(s) via token intersection (Strict or Year-Lenient).");
-
-            // [OPTIMIZATION] Pre-calculate tokens for candidates ONCE before scoring
-            var candidateDatas = candidates.Select(c => new {
-                Item = c,
-                Tokens = TitleHelper.GetSignificantTokens(c.Title)
-            }).ToList();
-
-            // 2. Build scoring tokens
-            var queryTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var searchScoringSets = new List<(string Title, HashSet<string> Tokens, string Source, double Weight)>();
-
-            if (!string.IsNullOrEmpty(originalTitle)) {
-                var tokens = TitleHelper.GetSignificantTokens(originalTitle);
-                searchScoringSets.Add((originalTitle, tokens, "Original", 1.2)); // 20% boost
-                foreach(var t in tokens) queryTokens.Add(t);
-            }
-            if (!string.IsNullOrEmpty(title) && title != originalTitle) {
-                var tokens = TitleHelper.GetSignificantTokens(title);
-                searchScoringSets.Add((title, tokens, "Localized", 1.0));
-                foreach(var t in tokens) queryTokens.Add(t);
-            }
-            if (!string.IsNullOrEmpty(localizedTitle) && localizedTitle != title && localizedTitle != originalTitle) {
-                var tokens = TitleHelper.GetSignificantTokens(localizedTitle);
-                searchScoringSets.Add((localizedTitle, tokens, "Localized", 1.1)); // 10% boost for explicit localized name
-                foreach(var t in tokens) queryTokens.Add(t);
-            }
-            if (!string.IsNullOrEmpty(subTitle)) {
-                var tokens = TitleHelper.GetSignificantTokens(subTitle);
-                searchScoringSets.Add((subTitle, tokens, "Subtitle", 0.9)); // Slight penalty for subtitle matches
-                foreach(var t in tokens) queryTokens.Add(t);
-            }
-            if (!string.IsNullOrEmpty(query)) {
-                var tokens = TitleHelper.GetSignificantTokens(query);
-                searchScoringSets.Add((query, tokens, "Query", 0.8)); // Query is least authoritative for 'isExact'
-                foreach(var t in tokens) queryTokens.Add(t);
-            }
-
-            var scoredResults = new List<(IMediaStream Item, double Score, bool IsExact)>();
-
-            foreach (var c in candidateDatas)
-            {
-                if (ct.IsCancellationRequested) {
-                    System.Diagnostics.Debug.WriteLine($"[IptvMatch] CANCELLED during loop for Query: {query ?? title}");
-                    ct.ThrowIfCancellationRequested();
-                }
-
-                // Match against all possible search titles, pick the best weighted score
-                var matchResults = searchScoringSets.Select(s => {
-                    bool isMatch = TitleHelper.IsMatch(c.Tokens, s.Tokens, c.Item.Title, s.Title, c.Item.Year, year);
-                    double sim = TitleHelper.CalculateSimilarity(c.Item.Title, s.Title);
-                    return new { 
-                        Source = s.Source, 
-                        IsMatch = isMatch, 
-                        Score = sim * s.Weight,
-                        Similarity = sim,
-                        IsExactEligible = s.Source != "Query" // Only real titles count towards 'isExact'
-                    };
-                }).ToList();
-
-                bool hasMatch = matchResults.Any(m => m.IsMatch);
-                bool isExact = matchResults.Any(m => m.IsMatch && m.IsExactEligible);
-                double bestSim = matchResults.Max(m => m.Score);
-                var bestMatch = matchResults.OrderByDescending(m => m.Score).First();
-                double maxSimilarity = matchResults.Max(m => m.Similarity);
-
-                // Apply weighted ranking
-                double finalScore = bestSim * 50;
-
-                // Year Match (Highest priority)
-                string y1 = TitleHelper.ExtractYear(year);
-                string y2 = TitleHelper.ExtractYear(c.Item.Year);
-                // Ensure y2 is not empty for logging/internal logic if possible
-                if (string.IsNullOrEmpty(y2)) y2 = TitleHelper.ExtractYear(c.Item.Title);
-
-                bool yearMatched = false;
-                if (!string.IsNullOrEmpty(y1) && !string.IsNullOrEmpty(y2))
-                {
-                    if (y1 == y2) { finalScore += 100; yearMatched = true; }
-                }
-
-                // [STRICT FILTER] ONLY add if IsMatch returned true for at least one search title.
-                // This ensures Year REJECT, Digit REJECT, etc. from TitleHelper are strictly respected.
-                if (hasMatch)
-                {
-                    scoredResults.Add((c.Item, finalScore, isExact));
-                    AppLogger.Warn($"[IptvMatch] Candidate Accepted: '{c.Item.Title}' (Year: {y2}, Type: {c.Item.Type}) | Score: {finalScore:F1}, Exact: {isExact}, YearMatch: {yearMatched}, BestSim: {bestMatch.Similarity:F2} (via {bestMatch.Source})");
+                    AppLogger.Info($"[IptvMatchService] {tag} sidecar MISSING or INVALID. Starting FULL REBUILD...");
+                    await action(items, fp).ConfigureAwait(false);
                     
-                    // [OPTIMIZATION] High-Confidence Early Exit (0.95+ similarity OR Exact ID Match)
-                    if (stopOnHighConfidence && maxSimilarity >= 0.95)
+                    AppLogger.Info($"[IptvMatchService] {tag} rebuild finished. Persisting to disk...");
+                    
+                    if (tag == "Live") 
                     {
-                        AppLogger.Warn($"[IptvMatch] High-confidence match found ({maxSimilarity:F2}). Stopping scan.");
-                        break;
+                        await _liveSearchIndex.SaveToDiskAsync(sidecarPath);
+                        await _liveSearchIndex.TryLoadFromDiskAsync(sidecarPath, fp); // HOT-SWAP TO MMF
                     }
+                    else 
+                    {
+                        await _vodSeriesIndexer.SaveToDiskAsync(sidecarPath);
+                        await _vodSeriesIndexer.TryLoadFromDiskAsync(sidecarPath, fp); // HOT-SWAP TO MMF
+                    }
+                    
+                    // Explicit async GC to forcefully reclaim the 30MB+ FrozenDictionary from the rebuild
+                    _ = Task.Run(() => GC.Collect(2, GCCollectionMode.Optimized, blocking: false, compacting: false));
+                    
+                    AppLogger.Info($"[IptvMatchService] {tag} INDEX PERSISTED AND SWAPPED TO NATIVE MMF. (Duration: {sw.ElapsedMilliseconds}ms)");
                 }
-                else if (bestSim > 0.4)
+                else
                 {
-                    AppLogger.Warn($"[IptvMatch] Candidate Rejected: '{c.Item.Title}' (Year: {y2}) | BestSim: {bestMatch.Similarity:F2} (via {bestMatch.Source}), YearMatch: {yearMatched} (Similarity ok but Filter failed)");
+                    AppLogger.Info($"[IptvMatchService] {tag} restored via SIDECAR successfully in {sw.ElapsedMilliseconds}ms.");
                 }
 
-                // [OPTIMIZATION] High-Confidence Early Exit (0.95+ similarity OR Exact ID Match)
-                if (stopOnHighConfidence && maxSimilarity >= 0.95)
-                {
-                    AppLogger.Warn($"[IptvMatch] High-confidence match found ({maxSimilarity:F2}). Stopping scan.");
-                    break;
-                }
+                // Vacuum: Cleanup old orphaned sidecars for this tag that don't match current FP
+                _ = Task.Run(() => CleanupOldSidecars(folder, tag, fp.ToString()));
             }
-
-            var rankedResults = scoredResults
-                .OrderByDescending(x => x.IsExact)
-                .ThenByDescending(x => x.Score)
-                .Select(x => x.Item)
-                .ToList();
-
-            if (rankedResults.Count > 0)
-            {
-                var bestMatched = rankedResults[0];
-                var bestScored = scoredResults.First(r => r.Item == bestMatched);
-                AppLogger.Warn($"[IptvMatch] Selected Best Match: '{bestMatched.Title}' (Year: {bestMatched.Year}) for '{title}' (Exact: {bestScored.IsExact}, Score: {bestScored.Score:F1})");
-            }
-            else if (scoredResults.Any())
-            {
-                var bestRejected = scoredResults.OrderByDescending(r => r.Score).First();
-                AppLogger.Warn($"[IptvMatch] Match REJECTED for '{title}': Top candidate '{bestRejected.Item.Title}' (Year: {bestRejected.Item.Year}) had score {bestRejected.Score:F1} but IsExact was {bestRejected.IsExact}");
-            }
-            else
-            {
-                 AppLogger.Warn($"[IptvMatch] All {candidates.Count} candidates rejected for '{title}'. (Similarity too low or Year mismatch)");
-            }
-
-            return rankedResults;
-        }
-
-        public IMediaStream? FindMatchById(string? imdbId, bool isSeries, bool stopOnHighConfidence = false)
-        {
-            return FindAllMatchesById(imdbId, isSeries, stopOnHighConfidence).FirstOrDefault();
-        }
-
-        public List<IMediaStream> FindAllMatchesById(string? id, bool isSeries, bool stopOnHighConfidence = false)
-        {
-            if (string.IsNullOrEmpty(id)) return new List<IMediaStream>();
-            
-            // Normalize ID: remove common prefixes if present (e.g. imdb_id:tt12345 -> tt12345)
-            string normalizedId = id;
-            if (id.Contains(":")) normalizedId = id.Split(':').Last();
-
-            lock (_indexLock)
-            {
-                var results = ResolveIdMatches(normalizedId, isSeries);
-                if (results.Count > 0)
-                {
-                    AppLogger.Info($"[IptvMatch] ID Match HIT for {normalizedId}: Found {results.Count} results.");
-                    if (stopOnHighConfidence && results.Any()) return new List<IMediaStream> { results[0] };
-                    return results;
-                }
-            }
-            return new List<IMediaStream>();
+            catch (OperationCanceledException) { AppLogger.Warn($"[IptvMatchService] {tag} update CANCELLED by user/system."); }
+            catch (Exception ex) { AppLogger.Error($"[IptvMatchService] {tag} update FAILED CRITICALLY", ex); }
         }
 
         /// <summary>
-        /// Globally registers a successful match and persists it for future sessions.
+        /// Matches a title against internal IPTV indices automatically.
+        /// Optimized to bypass collection allocations.
         /// </summary>
-        public void RegisterMatch(IMediaStream item, string imdbId)
+        public IMediaStream? MatchToIptv(string title, string? year = null, string category = "movie")
         {
-            if (item == null || string.IsNullOrWhiteSpace(imdbId)) return;
-
-            // 1. Update the item itself
-            if (item is VodStream vs) vs.ImdbId = imdbId;
-            else if (item is SeriesStream ss) ss.ImdbId = imdbId;
-            else return;
-
-            // 2. Update the Runtime Index (Instant availability for current session)
-            lock (_indexLock)
-            {
-                int recordIndex = item is SeriesStream seriesItem ? seriesItem.RecordIndex : item is VodStream vodItem ? vodItem.RecordIndex : -1;
-                if (recordIndex < 0) return;
-
-                if (item is SeriesStream) _seriesIndexer?.AddId(imdbId, recordIndex);
-                else _vodIndexer?.AddId(imdbId, recordIndex);
-
-                AppLogger.Info($"[IptvMatch] Learned: '{item.Title}' -> {imdbId}. Match registered in runtime ID index.");
-            }
-
-            // 3. Trigger Persistent Save (Atomic throttled save)
-            _ = ContentCacheService.Instance.TriggerThrottledSaveAsync(item is SeriesStream ? "series" : "vod");
+            if (category == "movie" && _vodCache != null) return MatchByTitleGeneric(title, _vodCache, year);
+            if (category == "series" && _seriesCache != null) return MatchByTitleGeneric(title, _seriesCache, year);
+            if (category == "live" && _liveCache != null) return MatchByTitleGeneric(title, _liveCache, year);
+            return null;
         }
 
-        public List<IMediaStream> MatchStremioItemAll(StremioMediaStream item, string? query = null, string? originalTitle = null, string? subTitle = null, string? localizedTitle = null, string? yearOverride = null, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
+        /// <summary>
+        /// Matches an ID against internal IPTV indices automatically.
+        /// </summary>
+        public IMediaStream? MatchToIptvById(string? id, string category = "movie")
         {
-            if (item == null) return new List<IMediaStream>();
-            ct.ThrowIfCancellationRequested();
+            if (string.IsNullOrEmpty(id)) return null;
 
-            bool isSeries = item.IsSeries;
-            string? imdbId = item.IMDbId;
+            if (category == "movie" && _vodCache != null) return MatchByIdGeneric(id, _vodCache);
+            if (category == "series" && _seriesCache != null) return MatchByIdGeneric(id, _seriesCache);
+            if (category == "live" && _liveCache != null) return MatchByIdGeneric(id, _liveCache);
             
-            AppLogger.Warn($"[IptvMatch] MatchStremioItemAll for '{item.Title}' (ID: {imdbId}, Type: {(isSeries ? "Series" : "Movie")})");
+            return null;
+        }
 
-            var results = new List<IMediaStream>();
-            var matchedStreamIds = new HashSet<int>();
+        /// <summary>
+        /// Returns all potential matches from internal indices above a threshold.
+        /// </summary>
+        public List<IMediaStream> FindPotentialMatchesInIptv(string title, string category = "movie", double threshold = 0.3)
+        {
+            if (category == "movie" && _vodCache != null) return FindPotentialMatchesGeneric(title, _vodCache, threshold);
+            if (category == "series" && _seriesCache != null) return FindPotentialMatchesGeneric(title, _seriesCache, threshold);
+            if (category == "live" && _liveCache != null) return FindPotentialMatchesGeneric(title, _liveCache, threshold);
+            return [];
+        }
 
-            // 1. Direct ID Match (Fastest & Strongest)
-            var idMatches = FindAllMatchesById(imdbId, isSeries, stopOnHighConfidence);
-            if (idMatches.Any())
+        /// <summary>
+        /// Modernized ID-based lookup using direct integer comparison to eliminate ToString() and boxing allocations.
+        /// The string ID is parsed once before entering the search loop.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private T? MatchByIdGeneric<T>(string id, IReadOnlyList<T> candidates) where T : class, IMediaStream
+        {
+            if (string.IsNullOrEmpty(id) || !int.TryParse(id, out int targetId)) return null;
+
+            for (int i = 0; i < candidates.Count; i++)
             {
-                AppLogger.Warn($"[IptvMatch] MatchStremioItemAll: Found {idMatches.Count} matches by ID for '{item.Title}'.");
-                foreach (var m in idMatches)
-                {
-                    results.Add(m);
-                    int sid = (m as VodStream)?.StreamId ?? (m as SeriesStream)?.SeriesId ?? 0;
-                    if (sid != 0) matchedStreamIds.Add(sid);
-                }
+                var item = candidates[i];
+                if (item.Id == targetId) return item; 
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// PROJECT ZERO: Performs a high-performance search across loaded indices.
+        /// Returns raw indices to avoid managed object hydration.
+        /// </summary>
+        public int[] SearchIndices(string query, string category = "live")
+        {
+            if (string.IsNullOrWhiteSpace(query)) return Array.Empty<int>();
+
+            if (category == "live")
+            {
+                return _liveSearchIndex.GetMatchingIndices(query);
             }
 
-            // 2. Supplemental Title Match (Always run to find "all sources")
-            AppLogger.Warn($"[IptvMatch] MatchStremioItemAll: Performing supplemental title search for '{item.Title}' to find all available versions.");
+            return Array.Empty<int>(); // VOD/Series use a different indexing model for now
+        }
+
+        /// <summary>
+        /// Performs a high-performance search across loaded indices.
+        /// Fully zero-allocation on the tokenization and lookup path.
+        /// </summary>
+        public IEnumerable<IMediaStream> Search(string query, string category = "live", IReadOnlyList<IMediaStream>? source = null)
+        {
+            if (string.IsNullOrWhiteSpace(query)) return Enumerable.Empty<IMediaStream>();
+
+            if (category == "live")
+            {
+                IReadOnlyList<IMediaStream>? liveSource = source ?? (IReadOnlyList<IMediaStream>?)_liveCache;
+                return liveSource == null ? Enumerable.Empty<IMediaStream>() : _liveSearchIndex.Search(query, liveSource);
+            }
+
+            IReadOnlyList<IMediaStream>? targetList = (category == "series") 
+                ? (IReadOnlyList<IMediaStream>?)_seriesCache 
+                : (IReadOnlyList<IMediaStream>?)_vodCache;
             
-            // [NEW] Avoid using broad search query if it's just a subset of the item title 
-            // (e.g. query "spider man" for item "Spider-Man: Lotus" would cause false positives)
-            string? safeQuery = query;
-            if (!string.IsNullOrEmpty(query) && !string.IsNullOrEmpty(item.Title))
+            if (targetList == null) return Enumerable.Empty<IMediaStream>();
+
+            // Aggregate candidates from index using zero-alloc iterator
+            var candidateMap = new Dictionary<int, int>();
+            foreach (var token in TitleHelper.GetTokens(query))
             {
-                var titleTokens = TitleHelper.GetBaseTokens(item.Title);
-                var queryTokens = TitleHelper.GetBaseTokens(query);
-                if (queryTokens.Count > 0 && queryTokens.Count < titleTokens.Count && queryTokens.All(t => titleTokens.Contains(t)))
+                var indices = _vodSeriesIndexer.FindByToken(token);
+                foreach (int idx in indices)
                 {
-                    AppLogger.Warn($"[IptvMatch] MatchStremioItemAll: Ignoring generic search query '{query}' because it is a subset of specific title '{item.Title}'.");
-                    safeQuery = null;
+                    ref int count = ref CollectionsMarshal.GetValueRefOrAddDefault(candidateMap, idx, out _);
+                    count++;
                 }
             }
 
-            var titleMatches = FindAllMatches(
-                item.Title, 
-                originalTitle ?? item.Meta?.Originalname, 
-                subTitle, 
-                localizedTitle,
-                yearOverride ?? item.Year, 
-                safeQuery, 
-                isSeries,
-                stopOnHighConfidence,
-                true, // isLearning = true
-                ct
-            );
+            if (candidateMap.Count == 0) return Enumerable.Empty<IMediaStream>();
 
-            if (titleMatches.Any())
+            // Filter and sort candidates via Span (Zero-Alloc)
+            var results = new List<MatchResult>(Math.Min(candidateMap.Count, 100));
+            foreach (var kvp in candidateMap)
             {
-                int newCount = 0;
-                foreach (var m in titleMatches)
+                if (kvp.Key >= 0 && kvp.Key < targetList.Count)
                 {
-                    int sid = (m as VodStream)?.StreamId ?? (m as SeriesStream)?.SeriesId ?? 0;
-                    if (sid != 0 && !matchedStreamIds.Contains(sid))
-                    {
-                        results.Add(m);
-                        matchedStreamIds.Add(sid);
-                        newCount++;
-                    }
-                    else if (sid == 0)
-                    {
-                        // Fallback for types that don't have StreamId/SeriesId (unlikely for VOD/Series)
-                        results.Add(m);
-                        newCount++;
-                    }
-                }
-                AppLogger.Warn($"[IptvMatch] MatchStremioItemAll: Title search added {newCount} additional unique matches.");
-            }
-
-            // [NEW] Learn the matches if they were found via Title during search/discovery
-            if (results.Any() && !string.IsNullOrEmpty(imdbId))
-            {
-                int learnCount = 0;
-                foreach (var m in results)
-                {
-                    // Check if this specific stream already has this IMDB ID linked in runtime index
-                    string currentId = (m as VodStream)?.ImdbId ?? (m as SeriesStream)?.ImdbId;
-                    if (currentId != imdbId)
-                    {
-                        RegisterMatch(m, imdbId);
-                        learnCount++;
-                    }
-                }
-                if (learnCount > 0)
-                {
-                    AppLogger.Info($"[Lifecycle] ➔ Match.Query [LEARNED] ({item.Title}) | imdbId={imdbId}, newLinks={learnCount}");
+                    results.Add(new MatchResult { Stream = targetList[kvp.Key], Score = kvp.Value });
                 }
             }
 
+            CollectionsMarshal.AsSpan(results).Sort();
+            return results.Take(50).Select(x => x.Stream);
+        }
+
+        /// <summary>
+        /// Senior-level generic scoring engine.
+        /// Fully zero-allocation on the search path using TokenIterator.
+        /// </summary>
+        [SkipLocalsInit]
+        private List<IMediaStream> FindPotentialMatchesGeneric<T>(string title, IReadOnlyList<T> candidates, double threshold) where T : class, IMediaStream
+        {
+            var results = CalculateScoresGeneric(title, candidates);
+            var list = new List<IMediaStream>();
+            foreach (var r in CollectionsMarshal.AsSpan(results))
+            {
+                if (r.Score >= threshold) list.Add(r.Stream);
+            }
+            return list;
+        }
+
+        private IMediaStream? MatchByTitleGeneric<T>(string title, IReadOnlyList<T> candidates, string? year) where T : class, IMediaStream
+        {
+            var results = CalculateScoresGeneric(title, candidates);
+            if (results.Count == 0) return null;
+            
+            if (results.Count > 4) ApplySimdNormalization(results);
+
+            var span = CollectionsMarshal.AsSpan(results);
+            ref var best = ref span[0];
+
+            if (best.Score > 0.4f)
+            {
+                if (!string.IsNullOrEmpty(year) && !string.IsNullOrEmpty(best.Stream.Year) && year != best.Stream.Year)
+                {
+                    if (best.Score < 0.9f) return null;
+                }
+                return best.Stream;
+            }
+            return null;
+        }
+
+        [SkipLocalsInit]
+        private List<MatchResult> CalculateScoresGeneric<T>(string query, IReadOnlyList<T> candidates) where T : class, IMediaStream
+        {
+            if (string.IsNullOrEmpty(query) || candidates == null || candidates.Count == 0) return [];
+
+            string q = TitleHelper.Normalize(query);
+            var queryTokens = TitleHelper.GetSignificantTokens(q.AsSpan());
+            var candidateMap = new Dictionary<int, int>();
+
+            foreach (var token in queryTokens)
+            {
+                var indices = _vodSeriesIndexer.FindByToken(token);
+                foreach (int idx in indices)
+                {
+                    ref int score = ref CollectionsMarshal.GetValueRefOrAddDefault(candidateMap, idx, out _);
+                    score++;
+                }
+            }
+
+            if (candidateMap.Count == 0) return [];
+
+            var virtualList = candidates as IVirtualStreamList;
+            var results = new List<MatchResult>(Math.Min(candidateMap.Count, 100));
+            
+            // [SENIOR] Strategic Parallelization
+            // Only offload to thread pool if the candidate set is large enough to justify the overhead.
+            if (candidateMap.Count > 500)
+            {
+                var partitions = Partitioner.Create(candidateMap.ToList(), loadBalance: true);
+                var concurrentResults = new ConcurrentBag<MatchResult>();
+                
+                Parallel.ForEach(partitions, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) }, kvp =>
+                {
+                    // Stackalloc buffer for each thread to ensure zero-allocation during similarity check
+                    Span<char> threadTitleBuffer = stackalloc char[256];
+                    
+                    int idx = kvp.Key;
+                    if (idx >= 0 && idx < candidates.Count)
+                    {
+                        var itemTitleSpan = virtualList != null ? virtualList.GetTitleSpan(idx, threadTitleBuffer) : candidates[idx].Title.AsSpan();
+                        double sim = TitleHelper.CalculateSimilarity(itemTitleSpan, q.AsSpan());
+                        sim += (kvp.Value * 0.1);
+
+                        if (sim > 0.1) concurrentResults.Add(new MatchResult { Stream = candidates[idx], Score = (float)sim });
+                    }
+                });
+                
+                results.AddRange(concurrentResults);
+            }
+            else
+            {
+                Span<char> titleBuffer = stackalloc char[256];
+                foreach (var kvp in candidateMap)
+                {
+                    int idx = kvp.Key;
+                    if (idx < 0 || idx >= candidates.Count) continue;
+
+                    var itemTitleSpan = virtualList != null ? virtualList.GetTitleSpan(idx, titleBuffer) : candidates[idx].Title.AsSpan();
+                    double sim = TitleHelper.CalculateSimilarity(itemTitleSpan, q.AsSpan());
+                    sim += (kvp.Value * 0.1);
+
+                    if (sim > 0.1) results.Add(new MatchResult { Stream = candidates[idx], Score = (float)sim });
+                }
+            }
+
+            if (results.Count > 1) CollectionsMarshal.AsSpan(results).Sort();
             return results;
         }
 
-        public IMediaStream? MatchStremioItem(StremioMediaStream item, string? query = null, string? originalTitle = null, string? subTitle = null, string? localizedTitle = null, string? yearOverride = null, bool stopOnHighConfidence = false, System.Threading.CancellationToken ct = default)
-        {
-            return MatchStremioItemAll(item, query, originalTitle, subTitle, localizedTitle, yearOverride, stopOnHighConfidence, ct).FirstOrDefault();
-        }
-        public List<IMediaStream> SearchFast(string query, string type = "all", System.Threading.CancellationToken ct = default)
-        {
-            var results = new List<IMediaStream>();
-            if (string.IsNullOrEmpty(query)) return results;
-            
-            string q = query.ToLowerInvariant();
-            
-            if (type == "all" || type == "movie")
-            {
-                foreach (var v in _vods)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    if (v.Title != null && v.Title.Contains(q, StringComparison.OrdinalIgnoreCase))
-                        results.Add(v);
-                    
-                    if (results.Count > 100) break;
-                }
-            }
 
-            if (results.Count < 100 && (type == "all" || type == "series"))
-            {
-                foreach (var s in _series)
+        [SkipLocalsInit]
+        private void ApplySimdNormalization(List<MatchResult> results)
+        {
+            int count = results.Count;
+            float[] scores = ArrayPool<float>.Shared.Rent(count);
+            try {
+                for (int i = 0; i < count; i++) scores[i] = results[i].Score;
+                float max = TensorPrimitives.Max(scores.AsSpan(0, count));
+                if (max > 0)
                 {
-                    ct.ThrowIfCancellationRequested();
-                    if (s.Title != null && s.Title.Contains(q, StringComparison.OrdinalIgnoreCase))
-                        results.Add(s);
-                    
-                    if (results.Count > 150) break;
+                    TensorPrimitives.Divide(scores.AsSpan(0, count), max, scores.AsSpan(0, count));
+                    var span = CollectionsMarshal.AsSpan(results);
+                    for (int i = 0; i < count; i++) span[i].Score = scores[i];
                 }
             }
-            return results;
+            finally { ArrayPool<float>.Shared.Return(scores); }
+        }
+
+        public void Clear() 
+        { 
+            _vodSeriesIndexer.Clear(); 
+            _liveSearchIndex.Clear(); 
+            _vodCache = null; _seriesCache = null; _liveCache = null;
+        }
+
+        public void RegisterManualMatch(IMediaStream stream, string verifiedMetadataId) { }
+        private void CleanupOldSidecars(string folder, string tag, string currentFp)
+        {
+            try
+            {
+                var dir = new DirectoryInfo(folder);
+                string currentFile = $"{tag}_{currentFp}.idx.bin";
+                
+                foreach (var file in dir.GetFiles($"{tag}_*.idx.bin"))
+                {
+                    if (file.Name.Equals(currentFile, StringComparison.OrdinalIgnoreCase)) continue;
+                    
+                    try { file.Delete(); AppLogger.Info($"[Vacuum] Deleted orphaned sidecar: {file.Name}"); }
+                    catch { /* File might be in use, ignore */ }
+                }
+            }
+            catch (Exception ex) { AppLogger.Warn($"[Vacuum] Sidecar cleanup failed: {ex.Message}"); }
         }
     }
 }

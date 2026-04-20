@@ -120,6 +120,20 @@ namespace ModernIPTVPlayer.Helpers
         }
 
         /// <summary>
+        /// Retrieves a raw UTF8 span directly from the MMF buffer. Zero-allocation.
+        /// </summary>
+        public ReadOnlySpan<byte> GetUtf8Span(int offset, int length)
+        {
+            if (offset < 0 || length <= 0) return ReadOnlySpan<byte>.Empty;
+            if (length > 65536) return ReadOnlySpan<byte>.Empty;
+
+            long absOffset = _stringBufferOffset + offset;
+            if (absOffset + length > _currentCapacity) return ReadOnlySpan<byte>.Empty;
+
+            return new ReadOnlySpan<byte>(_ptr + absOffset, length);
+        }
+
+        /// <summary>
         /// Retrieves a string from the heap using a zero-allocation pool.
         /// </summary>
         public string GetString(int offset, int length)

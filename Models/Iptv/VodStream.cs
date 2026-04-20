@@ -15,7 +15,7 @@ namespace ModernIPTVPlayer.Models.Iptv
     public class VodStream : INotifyPropertyChanged, IMediaStream
     {
         private Helpers.BinaryCacheSession? _session;
-        private readonly System.Threading.Lock _metaLock = new();
+        // [PHASE 4.5] Removed per-object _metaLock. Using global LockPool for minimal RAM footprint.
         public int MetadataPriority { get; set; } = 0;
         [JsonIgnore]
         public bool IsLoading { get; set; } = false;
@@ -52,23 +52,41 @@ namespace ModernIPTVPlayer.Models.Iptv
         public const int VodSlotExt = 11;
         public const int VodSlotYear = 12;
         private const int VodSlotCount = 13;
-        private readonly int[] _roBufOff = new int[VodSlotCount];
-        private readonly int[] _roBufLen = new int[VodSlotCount];
+        
+        // [PHASE 4.5] Lazy-allocated metadata buffers. 
+        // For 165k items, these stay NULL unless the item is actually patched in memory.
+        private int[]? _roBufOff;
+        private int[]? _roBufLen;
         private int _roMask;
 
+        /// <summary>
+        /// Reads a string from either the MMF disk session or the in-memory metadata buffer (ROI).
+        /// Optimized to bypass array checks if the memory mask is zero.
+        /// </summary>
         private string VodReadString(int slot, int diskOff, int diskLen)
         {
-            if ((_roMask & (1 << slot)) != 0)
+            // If the buffer mask bit is set, we MUST have a buffer and read from it.
+            if ((_roMask & (1 << slot)) != 0 && _roBufOff != null && _roBufLen != null)
                 return MetadataBuffer.GetString(_roBufOff[slot], _roBufLen[slot]);
+            
             if (_session != null)
                 return _session.GetString(diskOff, diskLen);
+                
             return MetadataBuffer.GetString(diskOff, diskLen);
         }
 
+        /// <summary>
+        /// Writes a string to the in-memory metadata buffer (ROI) or the MMF poke-session.
+        /// Lazily initializes buffer arrays if needed.
+        /// </summary>
         private void VodWriteString(int slot, ref int diskOff, ref int diskLen, string? value, string? changed1 = null, string? changed2 = null)
         {
             if (_session != null && _session.IsReadOnly)
             {
+                // Ensure arrays are initialized before writing to them
+                _roBufOff ??= new int[VodSlotCount];
+                _roBufLen ??= new int[VodSlotCount];
+
                 if (string.IsNullOrEmpty(value))
                 {
                     _roMask &= ~(1 << slot);
@@ -304,7 +322,7 @@ namespace ModernIPTVPlayer.Models.Iptv
             get 
             {
                 string? stored = null;
-                if ((_roMask & (1 << VodSlotYear)) != 0)
+                if ((_roMask & (1 << VodSlotYear)) != 0 && _roBufOff != null && _roBufLen != null)
                     stored = MetadataBuffer.GetString(_roBufOff[VodSlotYear], _roBufLen[VodSlotYear]);
                 else if (_session != null)
                     stored = _session.GetString(_yearOff, _yearLen);
@@ -320,6 +338,9 @@ namespace ModernIPTVPlayer.Models.Iptv
             { 
                 if (_session != null && _session.IsReadOnly)
                 {
+                    _roBufOff ??= new int[VodSlotCount];
+                    _roBufLen ??= new int[VodSlotCount];
+
                     if (string.IsNullOrEmpty(value))
                     {
                         _roMask &= ~(1 << VodSlotYear);
@@ -429,7 +450,8 @@ namespace ModernIPTVPlayer.Models.Iptv
         {
             if (unified == null) return;
             
-            lock (_metaLock)
+            // [PHASE 4.5] Using Striped Locking for thread-safe hydration without object bloat.
+            lock (LockPool.GetLock(StreamId))
             {
                 bool isDowngrade = unified.PriorityScore < this.MetadataPriority;
                 Models.Metadata.MetadataSync.Sync(this, unified, isDowngrade);

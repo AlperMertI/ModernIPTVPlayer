@@ -156,7 +156,7 @@ namespace ModernIPTVPlayer
 
         public static bool IsAutoProbeEnabled
         {
-            get => (Settings.Values[IsAutoProbeEnabledKey] as bool?) ?? true;
+            get => (Settings.Values[IsAutoProbeEnabledKey] as bool?) ?? false;
             set => Settings.Values[IsAutoProbeEnabledKey] = value;
         }
 

@@ -6014,8 +6014,8 @@ namespace ModernIPTVPlayer
                 // [DEBUG] IPTV Match Logic
                 AppLogger.Warn($"[IPTV_UI_MATCH] START: ItemTitle={_item?.Title}, UnifiedTitle={_unifiedMetadata?.Title}, Year={_unifiedMetadata?.Year}, IMDb={(_item as StremioMediaStream)?.IMDbId}");
 
-                var iptvMatches = (_item is StremioMediaStream stremioItem) 
-                    ? IptvMatchService.Instance.MatchStremioItemAll(stremioItem, null, _unifiedMetadata?.OriginalTitle, _unifiedMetadata?.SubTitle, _unifiedMetadata?.Title, _unifiedMetadata?.Year) 
+                var iptvMatches = (_item is StremioMediaStream stremioStream) 
+                    ? IptvMatchService.Instance.FindPotentialMatchesInIptv(_unifiedMetadata?.Title ?? stremioStream.Title, stremioStream.Meta?.Type ?? "movie") 
                     : new List<IMediaStream>();
 
                 AppLogger.Warn($"[IPTV_UI_MATCH] MatchStremioItemAll count: {iptvMatches?.Count ?? 0}");

@@ -52,16 +52,20 @@ namespace ModernIPTVPlayer.Models.Iptv
         public const int SerSlotRat = 13;
         public const int SerSlotExt = 14;
         private const int SerSlotCount = 15;
-        private readonly int[] _roBufOff = new int[SerSlotCount];
-        private readonly int[] _roBufLen = new int[SerSlotCount];
+        
+        // [PHASE 4.5] Lazy-allocated metadata buffers.
+        private int[]? _roBufOff;
+        private int[]? _roBufLen;
         private int _roMask;
 
         private string SerReadString(int slot, int diskOff, int diskLen)
         {
-            if ((_roMask & (1 << slot)) != 0)
+            if ((_roMask & (1 << slot)) != 0 && _roBufOff != null && _roBufLen != null)
                 return MetadataBuffer.GetString(_roBufOff[slot], _roBufLen[slot]);
+            
             if (_session != null)
                 return _session.GetString(diskOff, diskLen);
+            
             return MetadataBuffer.GetString(diskOff, diskLen);
         }
 
@@ -69,6 +73,9 @@ namespace ModernIPTVPlayer.Models.Iptv
         {
             if (_session != null && _session.IsReadOnly)
             {
+                _roBufOff ??= new int[SerSlotCount];
+                _roBufLen ??= new int[SerSlotCount];
+
                 if (string.IsNullOrEmpty(value))
                 {
                     _roMask &= ~(1 << slot);
@@ -163,7 +170,7 @@ namespace ModernIPTVPlayer.Models.Iptv
             set { if (value == true) _bitFlags |= 8; else _bitFlags &= 247; OnPropertyChanged(); } 
         }
 
-        private readonly System.Threading.Lock _metaLock = new();
+        // [PHASE 4.5] Removed per-object _metaLock. Using global LockPool for minimal RAM footprint.
         public int MetadataPriority { get; set; } = 0;
         
         // IMediaStream Implementation
@@ -269,7 +276,7 @@ namespace ModernIPTVPlayer.Models.Iptv
             get 
             {
                 string? stored = null;
-                if ((_roMask & (1 << SerSlotYear)) != 0)
+                if ((_roMask & (1 << SerSlotYear)) != 0 && _roBufOff != null && _roBufLen != null)
                     stored = MetadataBuffer.GetString(_roBufOff[SerSlotYear], _roBufLen[SerSlotYear]);
                 else if (_session != null)
                     stored = _session.GetString(_yearOff, _yearLen);
@@ -285,6 +292,9 @@ namespace ModernIPTVPlayer.Models.Iptv
             { 
                 if (_session != null && _session.IsReadOnly)
                 {
+                    _roBufOff ??= new int[SerSlotCount];
+                    _roBufLen ??= new int[SerSlotCount];
+
                     if (string.IsNullOrEmpty(value))
                     {
                         _roMask &= ~(1 << SerSlotYear);
@@ -425,7 +435,8 @@ namespace ModernIPTVPlayer.Models.Iptv
         {
             if (unified == null) return;
             
-            lock (_metaLock)
+            // [PHASE 4.5] Using Striped Locking for thread-safe hydration without object bloat.
+            lock (LockPool.GetLock(SeriesId))
             {
                 bool isDowngrade = unified.PriorityScore < this.MetadataPriority;
                 Models.Metadata.MetadataSync.Sync(this, unified, isDowngrade);

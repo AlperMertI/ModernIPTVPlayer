@@ -17,9 +17,9 @@
     <PackageVersion Include="CommunityToolkit.WinUI.Extensions" Version="8.2.251219" />
     <PackageVersion Include="Microsoft.CSharp" Version="4.7.0" />
     <PackageVersion Include="Microsoft.DotNet.PlatformAbstractions" Version="3.1.6" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyModel" Version="9.0.9" />
-    <PackageVersion Include="Microsoft.Web.WebView2" Version="1.0.3179.45" />
-    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="1.7.20250829.1" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyModel" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="1.7.260316102" />
     <PackageVersion Include="Microsoft.WindowsAppSDK.AI" Version="1.8.53" />
     <PackageVersion Include="Microsoft.WindowsAppSDK.Base" Version="1.8.251216001" />
     <PackageVersion Include="Microsoft.WindowsAppSDK.DWrite" Version="1.8.25122902" />
@@ -30,13 +30,14 @@
     <PackageVersion Include="Microsoft.WindowsAppSDK.Widgets" Version="1.8.251231004" />
     <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="1.8.260224000" />
     <PackageVersion Include="Silk.NET.Maths" Version="2.23.0" />
-    <PackageVersion Include="System.IO.Pipelines" Version="10.0.5" />
+    <PackageVersion Include="System.IO.Pipelines" Version="10.0.6" />
     <PackageVersion Include="System.Memory" Version="4.6.3" />
-    <PackageVersion Include="System.Numerics.Tensors" Version="10.0.5" />
+    <PackageVersion Include="System.Numerics.Tensors" Version="10.0.6" />
     <PackageVersion Include="System.Numerics.Vectors" Version="4.6.1" />
     <PackageVersion Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
-    <PackageVersion Include="System.Text.Encodings.Web" Version="10.0.5" />
-    <PackageVersion Include="System.Text.Json" Version="10.0.5" />
+    <PackageVersion Include="System.Text.Encodings.Web" Version="10.0.6" />
+    <PackageVersion Include="System.Text.Json" Version="10.0.6" />
+    <PackageVersion Include="XBindLeakFix" Version="1.0.0" />
     <PackageVersion Include="ZstdSharp.Port" Version="0.8.7" />
   </ItemGroup>
 </Project>

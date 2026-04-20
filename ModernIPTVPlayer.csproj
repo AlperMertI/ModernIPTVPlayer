@@ -70,6 +70,7 @@
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
     <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="XBindLeakFix" />
     <PackageReference Include="ZstdSharp.Port" />
   </ItemGroup>
 

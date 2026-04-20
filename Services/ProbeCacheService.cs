@@ -34,6 +34,59 @@ namespace ModernIPTVPlayer.Services
         
         public event EventHandler CacheCleared;
 
+        // PROJECT ZERO: UI Filter Bitmask Constants (Synchronized with LiveTVPage)
+        public const ushort CF_RES_4K = 1 << 0;
+        public const ushort CF_RES_1080 = 1 << 1;
+        public const ushort CF_RES_720 = 1 << 2;
+        public const ushort CF_RES_SD = 1 << 3;
+        public const ushort CF_ONLINE = 1 << 4;
+        public const ushort CF_UNSTABLE = 1 << 5;
+        public const ushort CF_HEVC = 1 << 6;
+        public const ushort CF_AVC = 1 << 7;
+        public const ushort CF_HDR = 1 << 8;
+        public const ushort CF_HAS_BITRATE = 1 << 9;
+        public const ushort CF_HIGH_FPS = 1 << 10;
+
+        /// <summary>
+        /// PROJECT ZERO: Computes UI filter flags directly from cached probe data.
+        /// Bypasses managed object hydration for 50k+ items.
+        /// </summary>
+        public ushort GetFlags(int streamId)
+        {
+            if (!_cache.TryGetValue(streamId, out var data)) return 0;
+
+            ushort flags = CF_ONLINE; // Assume online if we have probe data
+            
+            // Resolution
+            if (data.Resolution != null)
+            {
+                var res = data.Resolution;
+                if (res.Contains("4K") || res.Contains("2160") || res.Contains("3840")) flags |= CF_RES_4K;
+                else if (res.Contains("1080") || res.Contains("FHD")) flags |= CF_RES_1080;
+                else if (res.Contains("720")) flags |= CF_RES_720;
+                else if (res.Contains("576") || res.Contains("480") || res.Contains("SD")) flags |= CF_RES_SD;
+            }
+
+            // Tech & Codec
+            if (data.Codec != null)
+            {
+                var codec = data.Codec;
+                if (codec.Contains("HEVC") || codec.Contains("H265")) flags |= CF_HEVC;
+                else if (codec.Contains("AVC") || codec.Contains("H264")) flags |= CF_AVC;
+            }
+
+            if (data.IsHdr) flags |= CF_HDR;
+            if (data.Bitrate > 0) flags |= CF_HAS_BITRATE;
+
+            // FPS (High FPS = 50+)
+            if (data.Fps != null && data.Fps.Contains("50") || data.Fps.Contains("60"))
+            {
+                flags |= CF_HIGH_FPS;
+            }
+
+            return flags;
+        }
+
         // Initialization
         private TaskCompletionSource<bool> _initTcs = new TaskCompletionSource<bool>();
         private bool _isLoaded = false;
