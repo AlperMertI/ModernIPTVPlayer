@@ -318,7 +318,7 @@ namespace ModernIPTVPlayer.Controls
                 _heroImageBrush = compositor.CreateSurfaceBrush();
                 _heroImageBrush.Stretch = Microsoft.UI.Composition.CompositionStretch.UniformToFill;
                 _heroImageBrush.HorizontalAlignmentRatio = 0.5f;
-                _heroImageBrush.VerticalAlignmentRatio = 0.0f; // Top-aligned
+                _heroImageBrush.VerticalAlignmentRatio = 0.5f; // Middle-aligned
 
                 // 2. Alpha gradient mask (Normalized 0,0 to 0,1)
                 _heroAlphaMask = compositor.CreateLinearGradientBrush();
@@ -720,9 +720,13 @@ namespace ModernIPTVPlayer.Controls
 
         private void UpdateNavigationVisibility()
         {
-            var vis = (_heroItems.Count > 1 && !TrailerView.IsPlaying) ? Visibility.Visible : Visibility.Collapsed;
-            HeroPrevButton.Visibility = vis;
-            HeroNextButton.Visibility = vis;
+            // [FIX] Always show navigation arrows if there are items, except when trailer is ACTIVELY playing.
+            // Using direct opacity/visibility check to ensure they don't 'disappear' during metadata transitions.
+            var isVisible = _heroItems.Count > 1 && _phase != HeroPhase.TrailerPlaying;
+            var visibility = isVisible ? Visibility.Visible : Visibility.Collapsed;
+            
+            if (HeroPrevButton.Visibility != visibility) HeroPrevButton.Visibility = visibility;
+            if (HeroNextButton.Visibility != visibility) HeroNextButton.Visibility = visibility;
         }
 
 

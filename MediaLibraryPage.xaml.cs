@@ -151,7 +151,6 @@ namespace ModernIPTVPlayer
             // IPTV Grid Events
             MediaGrid.ItemClicked += (s, e) => NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
             MediaGrid.PlayAction += (s, e) => NavigationService.NavigateToDetailsDirect(Frame, e);
-            MediaGrid.DetailsAction += (s, e) => NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
             MediaGrid.ColorExtracted += (s, colors) => 
             {
                 _heroColorsCache[_mediaType] = colors;
@@ -174,7 +173,6 @@ namespace ModernIPTVPlayer
             };
             StremioControl.ViewChanged += (s, e) => 
             {
-                BackdropControl.SetVerticalShift(StremioControl.MainScrollViewer.VerticalOffset);
                 if (_stremioExpandedCardOverlay?.IsCardVisible == true) _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync();
             };
             StremioControl.RowScrollStarted += (s, e) => 
@@ -188,7 +186,8 @@ namespace ModernIPTVPlayer
 
             StremioControl.HeaderClicked += (s, vm) => 
             {
-                if (string.IsNullOrEmpty(vm.SourceUrl)) return;
+                System.Diagnostics.Debug.WriteLine($"[MediaLibrary] Catalog Header Clicked: {vm?.CatalogName}, Source: {vm?.SourceUrl}");
+                if (string.IsNullOrEmpty(vm?.SourceUrl)) return;
                 var args = new SearchArgs 
                 { 
                     GenreArgs = new ModernIPTVPlayer.Models.Stremio.GenreSelectionArgs 

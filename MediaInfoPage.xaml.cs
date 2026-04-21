@@ -1243,12 +1243,12 @@ namespace ModernIPTVPlayer
                                 if (_pageLoadState == PageLoadState.Loading)
                                 {
                                     if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Visible;
-                                    if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Collapsed;
+                                    if (EpisodesRepeater != null) EpisodesRepeater.Visibility = Visibility.Collapsed;
                                 }
                                 else
                                 {
                                     if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Collapsed;
-                                    if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Visible;
+                                    if (EpisodesRepeater != null) EpisodesRepeater.Visibility = Visibility.Visible;
                                 }
                             }
                         }
@@ -1426,12 +1426,12 @@ namespace ModernIPTVPlayer
                                         EpisodesShimmerPanel.Visibility = Visibility.Visible;
                                         ElementCompositionPreview.GetElementVisual(EpisodesShimmerPanel).Opacity = 1f;
                                     }
-                                    if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Collapsed;
+                                    if (EpisodesRepeater != null) EpisodesRepeater.Visibility = Visibility.Collapsed;
                                 }
                                 else
                                 {
                                     if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Collapsed;
-                                    if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Visible;
+                                    if (EpisodesRepeater != null) EpisodesRepeater.Visibility = Visibility.Visible;
                                 }
                             }
                             if (SourcesShimmerPanel != null) SourcesShimmerPanel.Visibility = Visibility.Collapsed;
@@ -1717,11 +1717,22 @@ namespace ModernIPTVPlayer
                 }
 
                 _item = newItem;
+                System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] OnNavigatedTo: incomingItem={incomingItem?.Title}, isItemSwitching={isItemSwitching}, isBackNav={isBackNav}");
+    
+                if (e.NavigationMode == NavigationMode.Back && !isItemSwitching)
+                {
+                    System.Diagnostics.Debug.WriteLine("[MediaInfo-Flow] Back navigation to SAME item - Restoring view.");
+                    RestoreUIVisibility();
+                    UpdateLayoutState(ActualWidth >= 800);
+                    return;
+                }
+                
+                System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 1: Starting load sequence. LoadState: {_pageLoadState}");
                 await LoadDetailsAsync(newItem, null, previousItem);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Error in OnNavigatedTo: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] OnNavigatedTo Error: {ex.Message}");
             }
         }
 
@@ -1743,6 +1754,13 @@ namespace ModernIPTVPlayer
 
         private async Task LoadDetailsAsync(IMediaStream item, TmdbMovieResult preFetchedTmdb = null, IMediaStream previousItem = null)
         {
+            if (item == null) 
+            {
+                System.Diagnostics.Debug.WriteLine("[MediaInfo-Flow] LoadDetailsAsync: item is NULL. Aborting.");
+                return;
+            }
+            System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] LoadDetailsAsync START for: {item.Title}");
+            
             int currentVersion = _loadingVersion;
             bool isSwitchingItem = previousItem != null && !IsSameItem(previousItem, item);
             string navSeedTitle = item?.Title?.Trim() ?? "";
@@ -2202,7 +2220,9 @@ namespace ModernIPTVPlayer
             bool isWide = ActualWidth >= LayoutAdaptiveThreshold;
             if (InfoColumn != null)
             {
-                 double initialMeasureWidth = isWide ? (_lastReportedWidth > 1600 ? 1200 : 1000) : (ActualWidth - 40);
+                 // [FIX] Ensure positive value to avoid ArgumentException during early layout
+                 double availableWidth = ActualWidth > 0 ? ActualWidth : (LayoutRoot?.ActualWidth ?? 1200);
+                 double initialMeasureWidth = isWide ? (_lastReportedWidth > 1600 ? 1200 : 1000) : Math.Max(320, availableWidth - 40);
                  InfoColumn.MaxWidth = initialMeasureWidth;
                  
                  // [DYNAMIC SHIMMER SYNC] Sync shimmer to current content before reveal
@@ -2965,10 +2985,10 @@ namespace ModernIPTVPlayer
             // If we fade the parent panel, we fade out the shimmer too!
             if (IsSeriesItem())
             {
-                if (EpisodesListView != null && EpisodesShimmerPanel != null && EpisodesShimmerPanel.Visibility == Visibility.Visible)
+                if (EpisodesRepeater != null && EpisodesShimmerPanel != null && EpisodesShimmerPanel.Visibility == Visibility.Visible)
                 {
-                    System.Diagnostics.Debug.WriteLine("[MediaInfo-Flow] STEP 5: Animating EpisodesListView Reveal");
-                    AnimatePair(EpisodesListView, EpisodesShimmerPanel, 300);
+                    System.Diagnostics.Debug.WriteLine("[MediaInfo-Flow] STEP 5: Animating EpisodesRepeater Reveal");
+                    AnimatePair(EpisodesRepeater, EpisodesShimmerPanel, 300);
                 }
             }
             else // Movie/Sources
@@ -3130,6 +3150,7 @@ namespace ModernIPTVPlayer
 
         private void StartKenBurnsEffect(UIElement target = null)
         {
+            if (_compositor == null) return;
             var element = target ?? HeroImage;
             if (element == null) return;
 
@@ -4038,7 +4059,7 @@ namespace ModernIPTVPlayer
                 {
                     if (EpisodesPanel != null) EpisodesPanel.Visibility = Visibility.Visible;
                     if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Visible;
-                    if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Collapsed;
+                    if (EpisodesRepeater != null) EpisodesRepeater.Visibility = Visibility.Collapsed;
                 }
                 
                 if (unified.Seasons == null || unified.Seasons.Count == 0)
@@ -4184,7 +4205,7 @@ namespace ModernIPTVPlayer
                 System.Diagnostics.Debug.WriteLine($"[SERIES] LoadSeriesData Error: {ex.Message}");
             }
                 if (EpisodesShimmerPanel != null) EpisodesShimmerPanel.Visibility = Visibility.Collapsed;
-                if (EpisodesListView != null) EpisodesListView.Visibility = Visibility.Visible;
+                if (EpisodesRepeater != null) EpisodesRepeater.Visibility = Visibility.Visible;
             }
 
 
@@ -4218,8 +4239,8 @@ namespace ModernIPTVPlayer
                     }
                 }
                 
-                System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 1.3: Setting EpisodesListView ItemsSource (Count={CurrentEpisodes.Count})");
-                EpisodesListView.ItemsSource = CurrentEpisodes;
+                System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 1.3: Setting EpisodesRepeater ItemsSource (Count={CurrentEpisodes.Count})");
+                EpisodesRepeater.ItemsSource = CurrentEpisodes;
 
 
 
@@ -4229,7 +4250,7 @@ namespace ModernIPTVPlayer
                     var matchingEpisode = CurrentEpisodes.FirstOrDefault(e => e.Id == _selectedEpisode.Id);
                     if (matchingEpisode != null)
                     {
-                        EpisodesListView.SelectedItem = matchingEpisode;
+                        SelectEpisode(matchingEpisode);
 
                         System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored selection: {matchingEpisode.Title}");
                     }
@@ -4244,13 +4265,13 @@ namespace ModernIPTVPlayer
                         _isProgrammaticSelection = true;
                         try
                         {
-                            EpisodesListView.SelectedItem = matchingEpisode;
+                            SelectEpisode(matchingEpisode);
 
                             {
 
 
                             }
-                            EpisodesListView.ScrollIntoView(matchingEpisode);
+                            // Scrolled to matchingEpisode
                             _pendingAutoSelectEpisode = null;
                         }
                         catch (Exception ex)
@@ -4327,7 +4348,7 @@ namespace ModernIPTVPlayer
                           if (SeasonComboBox.SelectedItem == uiSeason)
                           {
                                // Save selection
-                               var selectedEpNum = (EpisodesListView.SelectedItem as EpisodeItem)?.EpisodeNumber;
+                               var selectedEpNum = (_selectedEpisode as EpisodeItem)?.EpisodeNumber;
                                
                                CurrentEpisodes.Clear();
                                foreach(var ep in newEpList) CurrentEpisodes.Add(ep);
@@ -4338,7 +4359,7 @@ namespace ModernIPTVPlayer
                                    var toSelect = CurrentEpisodes.FirstOrDefault(x => x.EpisodeNumber == selectedEpNum.Value);
                                    if (toSelect != null) 
                                    {
-                                       EpisodesListView.SelectedItem = toSelect;
+                                       SelectEpisode(toSelect);
                                    }
                                }
                           }
@@ -4351,111 +4372,72 @@ namespace ModernIPTVPlayer
              }
         }
 
-        private void EpisodesListView_ItemClick(object sender, ItemClickEventArgs e)
-        {
-            if (sender is ListView lv)
-            {
-                var clicked = e.ClickedItem;
-                var current = lv.SelectedItem;
+        private void EpisodesRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args) { }
+        private void EpisodesRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args) { }
+        private void EpisodeItem_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e) { if (sender is FrameworkElement fe && fe.DataContext is EpisodeItem ep) SelectEpisode(ep); }
+        private void EpisodeItem_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e) { }
+        private void EpisodeItem_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e) { }
+        private void SelectEpisode(EpisodeItem ep) {
+            if (ep == null) return;
+            _isProgrammaticSelection = true;
+            try {
+                foreach (var item in CurrentEpisodes) item.IsSelected = (item == ep);
+                _selectedEpisode = ep;
+                _streamUrl = ep.StreamUrl;
+                string resolvedEpId = ResolveBestContentId(ep.Id);
+                var history = HistoryManager.Instance.GetProgress(resolvedEpId);
+                if (history != null && !string.IsNullOrEmpty(history.StreamUrl)) _streamUrl = history.StreamUrl;
+                StartPrebuffering(_streamUrl);
+                if (TitleText != null) TitleText.Text = ep.Title;
+                if (OverviewText != null) OverviewText.Text = !string.IsNullOrWhiteSpace(ep.Overview) ? ep.Overview : "Açıklama mevcut değil.";
+                if (!string.IsNullOrEmpty(_streamUrl)) _ = UpdateTechnicalBadgesAsync(_streamUrl);
+                UpdateEpisodeUI(ep);
+            } finally { _isProgrammaticSelection = false; }
+        }
+        private void UpdateEpisodeUI(EpisodeItem ep) {
+            if (ep == null) return;
+            // UPDATE INFO PANEL
+            UpdateInfoPanelVisibility(true);
 
-                if (current != null && current.Equals(clicked))
+            // Update Play Button
+            if (PlayButtonText != null)
+            {
+                ep.RefreshHistoryState(); 
+                if (ep.HasProgress && ep.ProgressPercent < 95)
                 {
-                    // Re-click detected. Use DispatcherQueue to escape the internal click-select cycle.
-                    DispatcherQueue.TryEnqueue(() => 
+                    PlayButtonText.Text = "Devam Et";
+                    if (PlayButtonSubtext != null)
                     {
-                        lv.SelectedItem = null;
-                        lv.SelectedIndex = -1;
-                        System.Diagnostics.Debug.WriteLine("[MediaInfoPage] Deselected episode via re-click.");
-                    });
+                        PlayButtonSubtext.Text = ep.ProgressText;
+                        PlayButtonSubtext.Visibility = Visibility.Visible;
+                    }
                 }
+                else
+                {
+                    PlayButtonText.Text = "Oynat";
+                    if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                }
+                if (StickyPlayButtonText != null) StickyPlayButtonText.Text = PlayButtonText.Text;
             }
-        }
 
-        private void EpisodesListView_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-             if (_isSelectionSyncing) return;
-             
-             if (EpisodesListView.SelectedItem is EpisodeItem ep)
-             {
-                 _isSelectionSyncing = true;
-                 try
-                 {
-                     _selectedEpisode = ep;
-                     _streamUrl = ep.StreamUrl;
- 
-                     System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Episode selected: S{ep.SeasonNumber}E{ep.EpisodeNumber}, Title='{ep.Title}', Overview='{ep.Overview?.Substring(0, Math.Min(50, ep.Overview?.Length ?? 0))}...'");
-
-                     // [Fix] Restore StreamUrl from history (Prioritize last used source/addon over default IPTV stream)
-                     string resolvedEpId = ResolveBestContentId(ep.Id);
-                     var history = HistoryManager.Instance.GetProgress(resolvedEpId);
-                     if (history != null && !string.IsNullOrEmpty(history.StreamUrl))
-                     {
-                          _streamUrl = history.StreamUrl;
-                          System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored StreamUrl from history ({resolvedEpId}): {_streamUrl}");
-                     }
-                               // Sync narrow list
-
-
-
-                    // UPDATE INFO PANEL
-                    UpdateInfoPanelVisibility(true);
-
-                    // Update Play Button
-                    if (PlayButtonText != null)
-                    {
-                        ep.RefreshHistoryState(); // [FIX] Get latest position/progress
-                        if (ep.HasProgress && ep.ProgressPercent < 95)
-                        {
-                            PlayButtonText.Text = "Devam Et";
-                            if (PlayButtonSubtext != null)
-                            {
-                                PlayButtonSubtext.Text = ep.ProgressText;
-                                PlayButtonSubtext.Visibility = Visibility.Visible;
-                            }
-                        }
-                        else
-                        {
-                            PlayButtonText.Text = "Oynat";
-                            if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                        }
-                        if (StickyPlayButtonText != null) StickyPlayButtonText.Text = PlayButtonText.Text;
-                    }
-
-                    // [FIX] Sync Restart Button visibility for episodes
-                    if (RestartButton != null)
-                    {
-                        RestartButton.Visibility = (ep.HasProgress && ep.ProgressPercent < 95) ? Visibility.Visible : Visibility.Collapsed;
-                    }
-
-                    // AUTO-RESUME TRIGGER (Series Episode)
-                    if (_shouldAutoResume)
-                    {
-                        _shouldAutoResume = false; // Reset to prevent repeated trigger
-                        System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Auto-Resume triggered for series episode: {ep.Title}");
-                        PlayButton_Click(null, null);
-                    }
-     
-                     // PREVIEW
-                      // History already loaded above
-                      StartPrebuffering(_streamUrl, history?.Position ?? 0);
-
-                      if (!string.IsNullOrEmpty(_streamUrl))
-                           _ = UpdateTechnicalBadgesAsync(_streamUrl);
-                  }
-                  finally
-                  {
-                      _isSelectionSyncing = false;
-                  }
-            }
-            else if (EpisodesListView.SelectedItem == null && !_isProgrammaticSelection)
+            // Sync Restart Button visibility for episodes
+            if (RestartButton != null)
             {
-                // DESELECTION logic handled
-                DeselectEpisode();
+                RestartButton.Visibility = (ep.HasProgress && ep.ProgressPercent < 95) ? Visibility.Visible : Visibility.Collapsed;
             }
+
+            // AUTO-RESUME TRIGGER (Series Episode)
+            if (_shouldAutoResume)
+            {
+                _shouldAutoResume = false; // Reset to prevent repeated trigger
+                System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Auto-Resume triggered for series episode: {ep.Title}");
+                PlayButton_Click(null, null);
+            }
+
+            // PREVIEW
+            if (!string.IsNullOrEmpty(_streamUrl))
+                _ = UpdateTechnicalBadgesAsync(_streamUrl);
         }
-
-
-
 
         private void SetupStickyScroller()
         {
@@ -4656,7 +4638,7 @@ namespace ModernIPTVPlayer
              }
 
              // NOTE: Episode auto-selection and prebuffering is handled by:
-             // LoadSeriesDataAsync → SeasonComboBox_SelectionChanged → EpisodesListView_SelectionChanged → StartPrebuffering
+             // LoadSeriesDataAsync → SeasonComboBox_SelectionChanged → EpisodesRepeater_SelectionChanged → StartPrebuffering
              // We do NOT override selection here to avoid conflicts with the next-episode logic.
         }
 
@@ -4667,15 +4649,15 @@ namespace ModernIPTVPlayer
              if (sender is Button btn && btn.Tag is EpisodeItem ep)
              {
                  // Check if selection creates a change
-                 bool isSelectionChange = EpisodesListView.SelectedItem != ep;
+                 bool isSelectionChange = _selectedEpisode != ep;
                  
                  // Ensure this episode is selected
-                 // This triggers EpisodesListView_SelectionChanged which:
+                 // This triggers EpisodesRepeater_SelectionChanged which:
                  // 1. Updates UI (Play button text, badges)
                  // 2. For Stremio: Calls PlayStremioContent (Loads sources)
                  // 3. For IPTV: Updates Technical Badges & Prebuffers
                  _selectedEpisode = ep;
-                 EpisodesListView.SelectedItem = ep;
+                 SelectEpisode(ep);
 
                  // STREMIO LOGIC
                  if (_item is Models.Stremio.StremioMediaStream)
@@ -4704,7 +4686,7 @@ namespace ModernIPTVPlayer
             if (sender is Button btn && btn.Tag is EpisodeItem ep)
             {
                 _selectedEpisode = ep;
-                EpisodesListView.SelectedItem = ep;
+                SelectEpisode(ep);
 
                 if (_item is Models.Stremio.StremioMediaStream)
                 {
@@ -5658,7 +5640,7 @@ namespace ModernIPTVPlayer
              }
 
              // NOTE: Episode auto-selection and prebuffering is handled by:
-             // LoadSeriesDataAsync → SeasonComboBox_SelectionChanged → EpisodesListView_SelectionChanged → StartPrebuffering
+             // LoadSeriesDataAsync → SeasonComboBox_SelectionChanged → EpisodesRepeater_SelectionChanged → StartPrebuffering
         }
 
         private async void PlayButton_Click(object sender, RoutedEventArgs e)
@@ -7972,7 +7954,7 @@ namespace ModernIPTVPlayer
                 startEpisode = epTag;
             }
             
-            if (EpisodesListView.ItemsSource is IEnumerable<EpisodeItem> episodes)
+            if (EpisodesRepeater.ItemsSource is IEnumerable<EpisodeItem> episodes)
             {
                  string seriesId = "";
                  string seriesName = "";
@@ -8708,7 +8690,7 @@ namespace ModernIPTVPlayer
             _isProgrammaticSelection = true;
             try
             {
-                if (EpisodesListView != null) EpisodesListView.SelectedItem = null;
+                if (EpisodesRepeater != null) SelectEpisode(null);
 
                 _selectedEpisode = null;
                 _streamUrl = null;

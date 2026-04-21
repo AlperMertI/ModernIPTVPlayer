@@ -361,14 +361,17 @@ namespace ModernIPTVPlayer.Controls
                 }
                 
                 // Pre-load the player page (will be ready for any video)
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Navigating to player.html via {_virtualHost}");
                 TrailerWebView.CoreWebView2.Navigate($"https://{_virtualHost}/player.html");
                 
                 _webViewInitialized = true;
-                System.Diagnostics.Debug.WriteLine("[ExpandedCard] WebView2 pre-initialized successfully");
+                _webViewInitTcs?.TrySetResult(true);
+                System.Diagnostics.Debug.WriteLine("[ExpandedCard] WebView2 pre-initialized (Core READY)");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Pre-init error: {ex.Message}");
+                _webViewInitTcs?.TrySetException(ex);
             }
             finally
             {
@@ -935,13 +938,16 @@ namespace ModernIPTVPlayer.Controls
             // 3. Authority Seeding (0ms)
             UpdateUiFromUnified(seed);
 
+            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Authorities seeded. UI updated.");
             // 4. Session-Locked Reset (Shielded if smart swapping)
             ResetState(isMorphing, forceSkeleton: !isEligibleForSmartSwap, sessionNonce: loadNonce);
 
             // Minimal delay for layout settlement, then start enrichment tasks
             await Task.Delay(10);
+            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Post-delay checkpoint. loadNonce matching: {loadNonce == _loadNonce}");
             if (loadNonce != _loadNonce) return; 
-
+            
+            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Starting Metadata request via MetadataProvider...");
             // Initial Badges (Static parse before probe/metadata)
             UpdateTechnicalBadges(stream);
 
@@ -994,9 +1000,10 @@ namespace ModernIPTVPlayer.Controls
                 });
                 var timeoutTask = Task.Delay(15000);
                 var completedTask = await Task.WhenAny(metadataTask, timeoutTask);
-
+                System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Wait complete. metadataTask status: {metadataTask.Status} | Timing out: {completedTask == timeoutTask}");
                 if (completedTask == timeoutTask)
                 {
+                    System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] TIMEOUT HIT for metadata.");
                     DescText.Text = "Metadata loading timed out.";
                     MainSkeleton.Visibility = Visibility.Collapsed;
                     RealContentPanel.Opacity = 1;
@@ -1008,7 +1015,12 @@ namespace ModernIPTVPlayer.Controls
                 }
 
                 var unified = await metadataTask;
-                if (loadNonce != _loadNonce) return;
+                System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Metadata task returned. unified: {unified?.Title}");
+                if (loadNonce != _loadNonce) 
+                {
+                    System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] STALE NONCE after await metadataTask. Aborting.");
+                    return;
+                }
 
                 if (unified != null)
                 {
@@ -1167,7 +1179,20 @@ namespace ModernIPTVPlayer.Controls
                 BadgeSkeleton.Visibility = Visibility.Collapsed;
                 RealContentPanel.Opacity = 1;
             }
-            // Finally logic moved to inside success/fail blocks to avoid premature hiding
+            finally
+            {
+                if (loadNonce == _loadNonce)
+                {
+                    LoadingRing.IsActive = false;
+                    LoadingRing.Visibility = Visibility.Collapsed;
+                    // Ensure content is visible if we crashed but had partial data
+                    if (MainSkeleton.Visibility == Visibility.Visible)
+                    {
+                         MainSkeleton.Visibility = Visibility.Collapsed;
+                         RealContentPanel.Opacity = 1;
+                    }
+                }
+            }
         }
         
         private async Task ProbeStreamInternal(IMediaStream stream, long loadNonce)
@@ -1471,18 +1496,8 @@ namespace ModernIPTVPlayer.Controls
                     await PreInitializeWebViewAsync();
                 }
 
-                // [FIX] Wait for first-time ready signal to avoid race condition on first load
-                if (_webViewInitTcs != null && !_webViewInitTcs.Task.IsCompleted)
-                {
-                    System.Diagnostics.Debug.WriteLine("[ExpandedCard] Waiting for first-time player initialization...");
-                    var readyTask = _webViewInitTcs.Task;
-                    var timeoutTask = Task.Delay(5000); // 5s timeout for first load
-                    if (await Task.WhenAny(readyTask, timeoutTask) == timeoutTask)
-                    {
-                        System.Diagnostics.Debug.WriteLine("[ExpandedCard] First-time initialization timed out.");
-                    }
-                }
-
+                // [REFACTORED] Remove blocking wait for JS 'PLAYER_READY' signal to avoid hangs.
+                // WebView2 handles script execution queuing normally, or we catch the error if totally unready.
                 if (token.IsCancellationRequested) return;
 
                 // Check if it is a full URL or ID
@@ -1686,10 +1701,11 @@ namespace ModernIPTVPlayer.Controls
                 return;
             }
             
-            bool isDedupe = _lastMetadata?.MetadataId == unified.MetadataId;
-            System.Diagnostics.Debug.WriteLine($"[EXP-UI] Update Start: {unified.Title} | metadataId: {unified.MetadataId} | isDedupe: {isDedupe} | CurrentRevealed: {_isRevealed}");
+            System.Diagnostics.Debug.WriteLine($"[EXP-UI] Updating UI for: {unified.Title} | ID: {unified.MetadataId} | Source: {unified.DataSource}");
             
+            bool isDedupe = _lastMetadata?.MetadataId == unified.MetadataId;
             _lastMetadata = unified;
+            System.Diagnostics.Debug.WriteLine($"[EXP-DATA-FLOW] Processing data: Genres='{unified.Genres}', OverviewLength={unified.Overview?.Length ?? 0}, Year='{unified.Year}'");
 
             // 1. Identity
             string logoUrl = unified.LogoUrl ?? "";

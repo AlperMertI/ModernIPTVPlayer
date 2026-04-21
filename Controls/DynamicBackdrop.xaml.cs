@@ -233,16 +233,7 @@ namespace ModernIPTVPlayer.Controls
 
         public void SetVerticalShift(double offset)
         {
-            // Re-enable vertical shift for a more dynamic "parallax" feel
-            // We shift the entire backdrop container slightly opposite to scroll
-            if (_backdropTransform == null)
-            {
-                _backdropTransform = new CompositeTransform();
-                BackdropContainer.RenderTransform = _backdropTransform;
-            }
-            
-            // Subtle parallax: shift backdrop up as user scrolls down (-20% ratio)
-            _backdropTransform.TranslateY = -offset * 0.18;
+            // [PINNED] Shift logic removed to keep backdrop stuck to screen bottom as per ROOT design.
         }
     }
 }

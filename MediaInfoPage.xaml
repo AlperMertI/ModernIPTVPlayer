@@ -810,27 +810,37 @@
                                      </ComboBox>
                                  </Grid>
                 
-                                 <ListView x:Name="EpisodesListView" Grid.Row="1" SelectionMode="Single" 
-                                           IsItemClickEnabled="True" ItemClick="EpisodesListView_ItemClick"
-                                           ScrollViewer.VerticalScrollBarVisibility="Auto"
-                                           ScrollViewer.VerticalScrollMode="Enabled"
-                                           SelectionChanged="EpisodesListView_SelectionChanged" Padding="8,0,8,20">
-                                     <ListView.ItemContainerStyle>
-                                         <StaticResource ResourceKey="PremiumEpisodeItemStyle"/>
-                                     </ListView.ItemContainerStyle>
-                                     <ListView.ItemTemplate>
-                                         <DataTemplate x:DataType="local:EpisodeItem">
-                                             <Grid Background="Transparent" Padding="0" CornerRadius="12">
-                                                 <Grid.ContextFlyout>
+                                  <ScrollViewer Grid.Row="1" x:Name="EpisodesScrollViewer" 
+                                                VerticalScrollBarVisibility="Auto" VerticalScrollMode="Enabled"
+                                                Padding="8,0,8,20">
+                                      <ItemsRepeater x:Name="EpisodesRepeater" 
+                                                    ItemsSource="{x:Bind CurrentEpisodes}"
+                                                    ElementPrepared="EpisodesRepeater_ElementPrepared"
+                                                    ElementClearing="EpisodesRepeater_ElementClearing">
+                                          <ItemsRepeater.Layout>
+                                              <StackLayout Spacing="8"/>
+                                          </ItemsRepeater.Layout>
+                                          <ItemsRepeater.ItemTemplate>
+                                              <DataTemplate x:DataType="local:EpisodeItem">
+                                                  <Grid Background="Transparent" Padding="0" CornerRadius="12"
+                                                        Tapped="EpisodeItem_Tapped"
+                                                        PointerEntered="EpisodeItem_PointerEntered"
+                                                        PointerExited="EpisodeItem_PointerExited">
+                                                      <Grid.ContextFlyout>
                                                      <MenuFlyout>
                                                          <MenuFlyoutItem Text="İzlendi Olarak İşaretle" Click="MarkWatched_Click" Tag="{x:Bind}"/>
                                                          <MenuFlyoutItem Text="İzlenmedi Olarak İşaretle" Click="MarkUnwatched_Click" Tag="{x:Bind}"/>
                                                          <MenuFlyoutSeparator/>
                                                          <MenuFlyoutItem Text="Buradan Sonrasını İzlendi İşaretle" Click="MarkRemainingWatched_Click" Tag="{x:Bind}"/>
                                                      </MenuFlyout>
-                                                 </Grid.ContextFlyout>
-                                                 
-                                                  <Grid.ColumnDefinitions>
+                                                     </Grid.ContextFlyout>
+                                                      
+                                                      <!-- Selection Visual -->
+                                                      <Border x:Name="SelectionBorder" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" CornerRadius="12" 
+                                                              Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
+
+                                                      <Grid Padding="8" Background="#0AFFFFFF" CornerRadius="12">
+                                                          <Grid.ColumnDefinitions>
                                                       <ColumnDefinition Width="150"/>
                                                       <ColumnDefinition Width="*"/>
                                                       <ColumnDefinition Width="Auto"/>
@@ -917,11 +927,13 @@
                                                               Padding="0" BorderThickness="0" Background="#99000000" Click="EpisodeArrowButton_Click" Tag="{x:Bind}"
                                                               ToolTipService.ToolTip="Kaynakları Gör">
                                                           <FontIcon Glyph="&#xE76C;" Foreground="{StaticResource GoldGradient}" FontSize="18"/>
-                                                      </Button>
-                                              </Grid>
-                                          </DataTemplate>
-                                     </ListView.ItemTemplate>
-                                  </ListView>
+                                                       </Button>
+                                                   </Grid>
+                                               </Grid>
+                                           </DataTemplate>
+                                       </ItemsRepeater.ItemTemplate>
+                                   </ItemsRepeater>
+                               </ScrollViewer>
                                   
                                   <!-- Episodes Loading Shimmer -->
                                   <Grid x:Name="EpisodesShimmerPanel" Grid.Row="1" Visibility="Collapsed" Padding="16,0,16,20">
@@ -1353,3 +1365,4 @@
         </Canvas>
     </Grid>
 </Page>
+

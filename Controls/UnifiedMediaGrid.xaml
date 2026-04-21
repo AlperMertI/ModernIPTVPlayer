@@ -37,8 +37,7 @@
         <!-- Main Media Grid -->
         <GridView x:Name="MediaGridView" x:FieldModifier="public"
                   SelectionMode="None" 
-                  IsItemClickEnabled="True" 
-                  ItemClick="MediaGridView_ItemClick"
+                  IsItemClickEnabled="False" 
                   ContainerContentChanging="MediaGridView_ContainerContentChanging"
                   Padding="24,0,24,0"
                   Background="Transparent"
@@ -64,6 +63,7 @@
                         
                         <!-- Phase 1: Full Heavy Card -->
                         <local:PosterCard x:Phase="1"
+                            DataContext="{x:Bind}"
                             ImageUrl="{x:Bind Data.PosterUrl}" 
                             Title="{x:Bind Data.Title}" 
                             ProgressValue="{x:Bind Data.ProgressValue}"
@@ -76,6 +76,7 @@
                             Width="212" 
                             Height="312"
                             ColorsExtracted="PosterCard_ColorsExtracted"
+                            Clicked="PosterCard_Clicked"
                             HoverStarted="Card_HoverStarted"
                             HoverEnded="Card_HoverEnded"/>
                     </Grid>

@@ -54,7 +54,7 @@
     </UserControl.Resources>
 
 
-    <Grid Padding="0,16,0,32" x:Name="RootContainer" IsTabStop="False" Background="Transparent">
+    <Grid Padding="0" x:Name="RootContainer" IsTabStop="False" Background="Transparent">
         <Border Background="#111" 
                 Height="400" 
                 x:Name="ContainerBorder" 

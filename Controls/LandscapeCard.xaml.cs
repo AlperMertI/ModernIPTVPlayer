@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Input;
 using System;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
+using ModernIPTVPlayer.Models;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -12,8 +13,9 @@ namespace ModernIPTVPlayer.Controls
         public bool IsHovered { get; private set; }
         public Image ImageElement => PosterImage;
 
-        public event EventHandler HoverStarted;
-        public event EventHandler HoverEnded;
+        public event EventHandler? HoverStarted;
+        public event EventHandler? HoverEnded;
+        public event EventHandler<IMediaStream>? Clicked;
 
         public static readonly DependencyProperty ImageUrlProperty =
             DependencyProperty.Register("ImageUrl", typeof(string), typeof(LandscapeCard), new PropertyMetadata(null, OnImageUrlChanged));
@@ -234,6 +236,24 @@ namespace ModernIPTVPlayer.Controls
 
                 TiltProjection.RotationY = -xDiff / 50.0; // Subtle tilt for wide cards
                 TiltProjection.RotationX = yDiff / 50.0;
+            }
+        }
+
+        private void OnTapped(object sender, TappedRoutedEventArgs e)
+        {
+            e.Handled = true;
+            System.Diagnostics.Debug.WriteLine($"[LandscapeCard] Tapped! DataContext: {DataContext?.GetType().Name}");
+            
+            IMediaStream? stream = DataContext as IMediaStream;
+            if (stream == null && DataContext is UnifiedMediaItemContext contextWrap)
+            {
+                stream = contextWrap.Data;
+            }
+
+            if (stream != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"[LandscapeCard] Firing Clicked event for: {stream.Title}");
+                Clicked?.Invoke(this, stream);
             }
         }
     }

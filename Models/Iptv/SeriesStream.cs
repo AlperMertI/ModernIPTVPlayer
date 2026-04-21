@@ -164,6 +164,14 @@ namespace ModernIPTVPlayer.Models.Iptv
         private long _bitrate;
         public long Bitrate { get => _bitrate; set { _bitrate = value; OnPropertyChanged(); } }
 
+        private bool _isActive = false;
+        [JsonIgnore]
+        public bool IsActive
+        {
+            get => _isActive;
+            set { _isActive = value; OnPropertyChanged(); }
+        }
+
         public bool? IsOnline 
         { 
             get => (_bitFlags & 8) != 0; 

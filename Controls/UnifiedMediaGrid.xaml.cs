@@ -238,25 +238,14 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void MediaGridView_ItemClick(object sender, ItemClickEventArgs e)
-        {
-            IMediaStream? stream = null;
-            if (e.ClickedItem is UnifiedMediaItemContext context)
-            {
-                stream = context.Data;
-            }
-            else if (e.ClickedItem is IMediaStream directStream)
-            {
-                stream = directStream;
-            }
 
-            if (stream != null)
+
+        private void PosterCard_Clicked(object sender, IMediaStream stream)
+        {
+            System.Diagnostics.Debug.WriteLine($"[UnifiedMediaGrid] PosterCard_Clicked fired. Stream: {stream?.Title}");
+            if (stream != null && sender is PosterCard pc)
             {
-                var container = MediaGridView.ContainerFromItem(e.ClickedItem) as GridViewItem;
-                UIElement source = (container?.ContentTemplateRoot as PosterCard)?.ImageElement;
-                
-                System.Diagnostics.Debug.WriteLine($"[UnifiedMediaGrid] Item Clicked. SourceElement Found: {source != null}");
-                ItemClicked?.Invoke(this, new MediaNavigationArgs(stream, null, false, source));
+                ItemClicked?.Invoke(this, new MediaNavigationArgs(stream, null, false, pc.ImageElement));
             }
         }
 

@@ -90,8 +90,9 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler RowScrollEnded;
 
         // Exposed properties for Controller linkage
-        public ScrollViewer MainScrollViewer => VisualTreeHelper.GetChild(DiscoveryRows, 0) as ScrollViewer;
+        public ScrollViewer MainScrollViewer => MainScroll;
         public HeroSectionControl HeroSection => HeroControl;
+        public ItemsRepeater DiscoveryRows => DiscoveryRepeater;
 
         private ObservableCollection<CatalogRowViewModel> _discoveryRows = new();
         private int _rowCount = 0;
@@ -163,7 +164,7 @@ namespace ModernIPTVPlayer.Controls
                 BackdropColorChanged?.Invoke(this, c);
             };
 
-            DiscoveryRows.ItemsSource = _discoveryRows;
+            DiscoveryRepeater.ItemsSource = _discoveryRows;
 
             StremioAddonManager.Instance.AddonsChanged += OnStremioAddonsChanged;
 
@@ -275,13 +276,12 @@ namespace ModernIPTVPlayer.Controls
             });
         }
 
-        private void DiscoveryRows_Loaded(object sender, RoutedEventArgs e)
+        private void MainScroll_Loaded(object sender, RoutedEventArgs e)
         {
-            var sv = MainScrollViewer;
-            if (sv != null)
+            if (MainScroll != null)
             {
-                sv.ViewChanged -= ScrollViewer_ViewChanged;
-                sv.ViewChanged += ScrollViewer_ViewChanged;
+                MainScroll.ViewChanged -= ScrollViewer_ViewChanged;
+                MainScroll.ViewChanged += ScrollViewer_ViewChanged;
             }
         }
 
@@ -294,10 +294,9 @@ namespace ModernIPTVPlayer.Controls
             StremioAddonManager.Instance.AddonsChanged -= OnStremioAddonsChanged;
             HistoryManager.Instance.HistoryChanged -= OnHistoryChanged;
 
-            var sv = MainScrollViewer;
-            if (sv != null)
+            if (MainScroll != null)
             {
-                sv.ViewChanged -= ScrollViewer_ViewChanged;
+                MainScroll.ViewChanged -= ScrollViewer_ViewChanged;
             }
         }
 
@@ -748,11 +747,20 @@ namespace ModernIPTVPlayer.Controls
                         }
                     }
 
-                    // 2. Add missing as skeletons
                     foreach (var slot in slotMap)
                     {
                         if (!_discoveryRows.Any(r => r.RowId == slot.RowId))
                         {
+                            // [STYLE PATTERN] Standard (Vertical) -> Landscape (Horizontal) -> Spotlight (Banner)
+                            int patternIdx = slot.SortIndex % 3;
+                            string rowStyle = patternIdx switch
+                            {
+                                0 => "Standard",
+                                1 => "Landscape",
+                                2 => "Spotlight",
+                                _ => "Standard"
+                            };
+                            
                             var skeleton = new CatalogRowViewModel {
                                 RowId = slot.RowId,
                                 CatalogName = slot.Catalog.Name,
@@ -761,7 +769,8 @@ namespace ModernIPTVPlayer.Controls
                                 Items = new ObservableCollection<StremioMediaStream>(),
                                 SourceUrl = slot.BaseUrl,
                                 CatalogType = slot.Catalog.Type,
-                                CatalogId = slot.Catalog.Id
+                                CatalogId = slot.Catalog.Id,
+                                RowStyle = rowStyle
                             };
                             _discoveryRows.Add(skeleton);
                         }
@@ -798,6 +807,7 @@ namespace ModernIPTVPlayer.Controls
                     HeroControl.SetLoading(false);
                     return;
                 }
+
                 HeroPerfLog($"Step 3: Slot Mapping DONE ({overallSw.ElapsedMilliseconds}ms). Total slots: {slotMap.Count}");
                 
                 HeroPerfLog($"Step 3.5: Phase 0 Disk Load START ({overallSw.ElapsedMilliseconds}ms)");
@@ -820,6 +830,34 @@ namespace ModernIPTVPlayer.Controls
                     _isDiscoveryRunning = false;
                     DispatcherQueue.TryEnqueue(() => UpdateDiscoveryCache(contentType, myVersion));
                 }
+            }
+        }
+
+        private void DiscoveryRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
+        {
+            if (args.Element is CatalogRow row)
+            {
+                row.ItemClicked -= CatalogRow_ItemClicked;
+                row.ItemClicked += CatalogRow_ItemClicked;
+                row.HeaderClicked -= CatalogRow_HeaderClicked;
+                row.HeaderClicked += CatalogRow_HeaderClicked;
+                row.HoverStarted -= CatalogRow_HoverStarted;
+                row.HoverStarted += CatalogRow_HoverStarted;
+                row.HoverEnded -= CatalogRow_HoverEnded;
+                row.HoverEnded += CatalogRow_HoverEnded;
+                row.ScrollStarted -= CatalogRow_ScrollStarted;
+                row.ScrollStarted += CatalogRow_ScrollStarted;
+                row.ScrollEnded -= CatalogRow_ScrollEnded;
+                row.ScrollEnded += CatalogRow_ScrollEnded;
+                row.LoadMoreAction -= CatalogRow_LoadMoreAction;
+                row.LoadMoreAction += CatalogRow_LoadMoreAction;
+            }
+            else if (args.Element is SpotlightInjectRow spotlight)
+            {
+                spotlight.ItemClicked -= SpotlightInjectRow_ItemClicked;
+                spotlight.ItemClicked += SpotlightInjectRow_ItemClicked;
+                spotlight.HeaderClicked -= CatalogRow_HeaderClicked;
+                spotlight.HeaderClicked += CatalogRow_HeaderClicked;
             }
         }
 
@@ -1054,18 +1092,20 @@ namespace ModernIPTVPlayer.Controls
             TrailerExpandRequested?.Invoke(this, e);
         }
 
-        private void PosterCard_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        private void Card_Clicked(object sender, IMediaStream stream)
         {
-            if (sender is PosterCard card && card.DataContext is IMediaStream stream)
+            if (stream != null)
             {
                 Microsoft.UI.Xaml.ElementSoundPlayer.Play(Microsoft.UI.Xaml.ElementSoundKind.Invoke);
-                // For PosterCard, we handle PreloadedLogo as null here (it will be handled via preloadedImage in the receiver if it's a poster)
-                ItemClicked?.Invoke(this, (stream, card.ImageElement, null));
-            }
-            else if (sender is LandscapeCard lCard && lCard.DataContext is IMediaStream lStream)
-            {
-                Microsoft.UI.Xaml.ElementSoundPlayer.Play(Microsoft.UI.Xaml.ElementSoundKind.Invoke);
-                ItemClicked?.Invoke(this, (lStream, lCard.ImageElement, null));
+                
+                if (sender is PosterCard card)
+                {
+                    ItemClicked?.Invoke(this, (stream, card.ImageElement, null));
+                }
+                else if (sender is LandscapeCard lCard)
+                {
+                    ItemClicked?.Invoke(this, (stream, lCard.ImageElement, null));
+                }
             }
         }
 
@@ -1085,7 +1125,12 @@ namespace ModernIPTVPlayer.Controls
             if (DiscoveryRows.ItemsSource is not ObservableCollection<CatalogRowViewModel> rows) return;
             if (_lastRowIndex >= rows.Count) return;
             var targetRowVM = rows[_lastRowIndex];
-            DiscoveryRows.ScrollIntoView(targetRowVM);
+            int index = rows.IndexOf(targetRowVM);
+            if (index >= 0)
+            {
+                var element = DiscoveryRepeater.GetOrCreateElement(index);
+                if (element is FrameworkElement fe) fe.StartBringIntoView();
+            }
         }
 
         public UIElement? GetPosterElement(IMediaStream item)
@@ -1098,9 +1143,9 @@ namespace ModernIPTVPlayer.Controls
             
             try 
             {
-                foreach (var rowItem in DiscoveryRows.Items)
+                for (int i = 0; i < _discoveryRows.Count; i++)
                 {
-                    var rowContainer = DiscoveryRows.ContainerFromItem(rowItem) as DependencyObject;
+                    var rowContainer = DiscoveryRepeater.TryGetElement(i);
                     if (rowContainer == null) continue; 
                     CatalogRow catalogRow = null;
                     if (VisualTreeHelper.GetChildrenCount(rowContainer) > 0)
@@ -1115,14 +1160,11 @@ namespace ModernIPTVPlayer.Controls
 
                         if (actualItem != null)
                         {
-                            if (catalogRow.ListView != null)
+                            var element = catalogRow.RepeaterControl.TryGetElement(list.ToList().IndexOf(actualItem));
+                            if (element != null)
                             {
-                                var container = catalogRow.ListView.ContainerFromItem(actualItem) as ListViewItem;
-                                if (container != null)
-                                {
-                                    var card = FindPosterCardInContainer(container);
-                                    if (card != null) return card;
-                                }
+                                var card = FindPosterCardInContainer(element);
+                                if (card != null) return card;
                             }
                             return null;
                         }
@@ -1138,12 +1180,11 @@ namespace ModernIPTVPlayer.Controls
              if (_lastRowIndex < 0 || _lastItemIndex < 0) return null;
              try
              {
-                 var container = DiscoveryRows.ContainerFromIndex(_lastRowIndex) as DependencyObject;
+                 var container = DiscoveryRepeater.TryGetElement(_lastRowIndex);
                  if (container == null) return null;
                  var catalogRow = VisualTreeHelper.GetChildrenCount(container) > 0 ? VisualTreeHelper.GetChild(container, 0) as CatalogRow : null;
-                 if (catalogRow == null || catalogRow.ListView == null) return null;
-                 var itemContainer = catalogRow.ListView.ContainerFromIndex(_lastItemIndex) as ListViewItem;
-                 if (itemContainer != null) return FindPosterCardInContainer(itemContainer);
+                 var itemElement = catalogRow.RepeaterControl.TryGetElement(_lastItemIndex);
+                 if (itemElement != null) return FindPosterCardInContainer(itemElement);
              }
              catch { }
              return null;
@@ -1179,11 +1220,16 @@ namespace ModernIPTVPlayer.Controls
                 }
             }
             if (targetRow == null) return;
-            DiscoveryRows.ScrollIntoView(targetRow);
+            int targetIndex = _discoveryRows.IndexOf(targetRow);
+            if (targetIndex >= 0)
+            {
+                var element = DiscoveryRepeater.GetOrCreateElement(targetIndex);
+                if (element is FrameworkElement fe) fe.StartBringIntoView();
+            }
             CatalogRow catalogRow = null;
             for (int i = 0; i < 10; i++)
             {
-                var container = DiscoveryRows.ContainerFromItem(targetRow) as DependencyObject;
+                var container = DiscoveryRepeater.GetOrCreateElement(_discoveryRows.IndexOf(targetRow)) as DependencyObject;
                 if (container != null && VisualTreeHelper.GetChildrenCount(container) > 0)
                 {
                     catalogRow = VisualTreeHelper.GetChild(container, 0) as CatalogRow;
@@ -1191,17 +1237,17 @@ namespace ModernIPTVPlayer.Controls
                 }
                 await Task.Delay(50);
             }
-            if (catalogRow != null && catalogRow.ListView != null && catalogRow.ItemsSource is IEnumerable<IMediaStream> list)
+            if (catalogRow != null && catalogRow.RepeaterControl != null && catalogRow.ItemsSource is IEnumerable<IMediaStream> list)
             {
                 var actualItem = list.FirstOrDefault(x => (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == item.IMDbId) || x.Id == item.Id);
                 if (actualItem != null)
                 {
-                    catalogRow.ListView.ScrollIntoView(actualItem);
-                    for(int j=0; j<20; j++)
-                    {
-                        if (catalogRow.ListView.ContainerFromItem(actualItem) != null) break;
-                        await Task.Delay(50);
-                    }
+                    int index = list.ToList().IndexOf(actualItem);
+                    // ItemsRepeater does not have a direct ScrollIntoView for its items that is reliable across virtualization
+                    // but we can use the ScrollViewer to get close or use the Layout to measure.
+                    // For now, we rely on the row being in view from the previous DiscoveryRows.ScrollIntoView.
+                    // To scroll horizontally within the row:
+                    // catalogRow.ScrollToItem(index); // We should add this to CatalogRow
                 }
             }
         }
@@ -1321,7 +1367,14 @@ namespace ModernIPTVPlayer.Controls
                     cwItems.Add(stream);
                 }
 
-                if (cwItems.Count == 0) return;
+                if (cwItems.Count == 0)
+                {
+                    DispatcherQueue.TryEnqueue(() => {
+                        var existing = _discoveryRows.FirstOrDefault(r => r.RowId == "CW");
+                        if (existing != null) _discoveryRows.Remove(existing);
+                    });
+                    return;
+                }
 
                 DispatcherQueue.TryEnqueue(() =>
                 {
@@ -1402,10 +1455,17 @@ namespace ModernIPTVPlayer.Controls
                         DispatcherQueue.TryEnqueue(() => {
                             if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion) return;
                             var row = _discoveryRows.FirstOrDefault(r => r.RowId == rid);
-                            if (row != null && (row.Items == null || row.Items.Count == 0))
+                            if (row != null)
                             {
-                                row.Items = new ObservableCollection<StremioMediaStream>(items);
-                                row.IsLoading = false;
+                                if (items == null || items.Count == 0)
+                                {
+                                    _discoveryRows.Remove(row);
+                                }
+                                else
+                                {
+                                    row.Items = new ObservableCollection<StremioMediaStream>(items);
+                                    row.IsLoading = false;
+                                }
                             }
                         });
                     }
@@ -1433,10 +1493,25 @@ namespace ModernIPTVPlayer.Controls
                             var row = _discoveryRows.FirstOrDefault(r => r.RowId == rid);
                             if (row != null)
                             {
-                                row.Items = collection;
-                                row.IsLoading = false;
+                                if (collection == null || collection.Count == 0)
+                                {
+                                    _discoveryRows.Remove(row);
+                                }
+                                else
+                                {
+                                    row.Items = collection;
+                                    row.IsLoading = false;
+                                }
                             }
                         });
+                    }
+                    else
+                    {
+                         // No items list at all
+                         DispatcherQueue.TryEnqueue(() => {
+                             var row = _discoveryRows.FirstOrDefault(r => r.RowId == rid);
+                             if (row != null) _discoveryRows.Remove(row);
+                         });
                     }
                 }
             }

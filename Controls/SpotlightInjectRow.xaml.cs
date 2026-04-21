@@ -234,11 +234,68 @@ namespace ModernIPTVPlayer.Controls
                 _lastSubscribedItem.PropertyChanged -= Item_PropertyChanged;
                 _lastSubscribedItem = null;
             }
+
+            if (_lastItemsCollection != null)
+            {
+                _lastItemsCollection.CollectionChanged -= Items_CollectionChanged;
+                _lastItemsCollection = null;
+            }
+
+            if (_lastVm != null)
+            {
+                _lastVm.PropertyChanged -= Vm_PropertyChanged;
+                _lastVm = null;
+            }
+
+            _debounceTimer?.Stop();
+            _debounceTimer = null;
+
             CleanupWebView();
         }
 
         private string _pendingTrailerId = null;
         private bool _isInViewport = false;
+
+        private ObservableCollection<StremioMediaStream>? _lastItemsCollection = null;
+        private CatalogRowViewModel? _lastVm = null;
+        private DispatcherTimer? _debounceTimer;
+
+        private void Vm_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == "Items" && sender is CatalogRowViewModel vm)
+            {
+                DispatcherQueue.TryEnqueue(() => 
+                {
+                    SwitchItemsCollection(vm.Items);
+                    RefreshStateFromViewModel(vm);
+                });
+            }
+        }
+
+        private void SwitchItemsCollection(ObservableCollection<StremioMediaStream>? newCollection)
+        {
+            if (_lastItemsCollection != null)
+            {
+                _lastItemsCollection.CollectionChanged -= Items_CollectionChanged;
+            }
+            _lastItemsCollection = newCollection;
+            if (_lastItemsCollection != null)
+            {
+                _lastItemsCollection.CollectionChanged += Items_CollectionChanged;
+            }
+        }
+
+        private void Items_CollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        {
+            DispatcherQueue.TryEnqueue(() => 
+            {
+                if (DataContext is CatalogRowViewModel vm && vm.Items != null && vm.Items.Count > 0)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Spotlight] CollectionChanged detected. Items: {vm.Items.Count}");
+                    RefreshStateFromViewModel(vm);
+                }
+            });
+        }
 
         private async void SpotlightInjectRow_EffectiveViewportChanged(FrameworkElement sender, EffectiveViewportChangedEventArgs args)
         {
@@ -274,52 +331,30 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private async void SpotlightInjectRow_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
+        private void SpotlightInjectRow_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
         {
             try
             {
-                // [FIX] Always clean up the previous webview state entirely during virtualization handover!
                 CleanupWebView();
                 _pendingTrailerId = null;
 
-                if (args.NewValue is CatalogRowViewModel vm && vm.Items != null && vm.Items.Count > 0)
+                if (_lastVm != null)
                 {
-                    // Take up to 5 items for the carousel
-                    _items = vm.Items.Take(5).ToList();
-                    _currentIndex = 0;
+                    _lastVm.PropertyChanged -= Vm_PropertyChanged;
+                    _lastVm = null;
+                }
 
-                    // [PRE-LOAD LOGOS] Initial touch for cache
-                    foreach (var item in _items)
-                    {
-                        if (!string.IsNullOrEmpty(item.LogoUrl))
-                        {
-                            _ = ImageHelper.GetCachedLogo(item.LogoUrl);
-                        }
-                    }
-                    
-                    if (_items.Count > 0)
-                    {
-                        UpdateUI();
-                        AnimateInfoIn(true);
-                        UpdateNavigationVisibility();
-                        
-                        _pendingTrailerId = _items[_currentIndex].TrailerUrl; 
+                if (args.NewValue is CatalogRowViewModel vm)
+                {
+                    _lastVm = vm;
+                    _lastVm.PropertyChanged += Vm_PropertyChanged;
 
-                        // [FIX] If the row is already in the viewport (recycled while visible),
-                        // EffectiveViewportChanged won't fire again. We must trigger the trailer manually.
-                        if (_isInViewport)
-                        {
-                            // Use Dispatcher to avoid layout conflicts during rapid handover
-                            DispatcherQueue.TryEnqueue(() => 
-                            {
-                                if (_isInViewport) _ = TryLoadTrailerAsync();
-                            });
-                        }
-                    }
+                    SwitchItemsCollection(vm.Items);
+                    RefreshStateFromViewModel(vm);
                 }
                 else
                 {
-                    CleanupWebView();
+                    SwitchItemsCollection(null);
                     _items.Clear();
                     UpdateNavigationVisibility();
                 }
@@ -327,6 +362,42 @@ namespace ModernIPTVPlayer.Controls
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[Spotlight] DataContextChanged error: {ex.Message}");
+            }
+        }
+
+        private void RefreshStateFromViewModel(CatalogRowViewModel vm)
+        {
+            if (vm.Items != null && vm.Items.Count > 0)
+            {
+                // Preserve current index if possible or reset if items changed completely
+                _items = vm.Items.Take(5).ToList();
+                _currentIndex = 0;
+
+                // [PRE-LOAD LOGOS] Initial touch for cache
+                foreach (var item in _items)
+                {
+                    if (!string.IsNullOrEmpty(item.LogoUrl))
+                    {
+                        _ = ImageHelper.GetCachedLogo(item.LogoUrl);
+                    }
+                }
+                
+                if (_items.Count > 0)
+                {
+                    UpdateUI();
+                    AnimateInfoIn(true);
+                    UpdateNavigationVisibility();
+                    
+                    _pendingTrailerId = _items[_currentIndex].TrailerUrl; 
+
+                    if (_isInViewport)
+                    {
+                        DispatcherQueue.TryEnqueue(() => 
+                        {
+                            if (_isInViewport) _ = TryLoadTrailerAsync();
+                        });
+                    }
+                }
             }
         }
 
@@ -381,7 +452,7 @@ namespace ModernIPTVPlayer.Controls
                 WatchlistButton.Content = new FontIcon { Glyph = "\xE710", FontSize = 16 };
             }
 
-            System.Diagnostics.Debug.WriteLine($"[Spotlight] UI Updated for: {item.Title} (ID: {item.IMDbId}) | Logo: {!string.IsNullOrEmpty(item.LogoUrl)} | Desc: {(!string.IsNullOrEmpty(DescriptionBlock.Text) ? "Yes" : "No")}");
+            System.Diagnostics.Debug.WriteLine($"[Spotlight] UI Updated for: {item.Title} (ID: {item.IMDbId}) | Logo: {!string.IsNullOrEmpty(item.LogoUrl)} | Desc: {(!string.IsNullOrEmpty(DescriptionBlock.Text) ? "Yes" : "No")} | ImageCandidates: {_currentImageCandidates.Count}");
 
             // Smart Pre-load: Decode next/prev logos
             DispatcherQueue.TryEnqueue(() => 
@@ -494,17 +565,24 @@ namespace ModernIPTVPlayer.Controls
                     // Refresh fields if they might have been enriched
                     if (e.PropertyName == nameof(item.Title) || e.PropertyName == nameof(item.Description) || 
                         e.PropertyName == nameof(item.Rating) || e.PropertyName == nameof(item.Year) || 
-                        e.PropertyName == nameof(item.Genres) || e.PropertyName == nameof(item.LogoUrl))
+                        e.PropertyName == nameof(item.Genres) || e.PropertyName == nameof(item.LogoUrl) ||
+                        e.PropertyName == nameof(item.Banner) || e.PropertyName == nameof(item.BackdropUrl))
                     {
-                        System.Diagnostics.Debug.WriteLine($"[Spotlight] Enrichment update received for {item.Title} ({e.PropertyName})");
-                        UpdateUI();
-                    }
-
-                    if (e.PropertyName == nameof(item.Banner) || e.PropertyName == nameof(item.BackdropUrl))
-                    {
-                        BuildImageCandidates(item);
-                        _currentImageCandidateIndex = 0;
-                        TrySetCurrentImageCandidate();
+                        // Debounce UI update to batch multiple property changes
+                        if (_debounceTimer == null)
+                        {
+                            _debounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(50) };
+                            _debounceTimer.Tick += (s, args) =>
+                            {
+                                _debounceTimer.Stop();
+                                if (_items.Count > 0 && _currentIndex < _items.Count)
+                                {
+                                    UpdateUI();
+                                }
+                            };
+                        }
+                        _debounceTimer.Stop();
+                        _debounceTimer.Start();
                     }
                 });
             }
@@ -947,45 +1025,58 @@ namespace ModernIPTVPlayer.Controls
 
         private void CoreWebView2_WebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
         {
-            try
-            {
-                string msg = args.TryGetWebMessageAsString();
-                if (msg == "READY")
-                {
-                    _isTrailerPlaying = true;
-                    
-                    if (VideoContainer != null) 
-                    {
-                        VideoContainer.Visibility = Visibility.Visible;
-                        UpdateMuteButtonIcon();
-
-                        // Smooth Fade-In Reveal
-                        var sb = new Storyboard();
-                        var anim = new DoubleAnimation 
-                        { 
-                            To = 0.8, 
-                            Duration = TimeSpan.FromMilliseconds(1500), 
-                            EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } 
-                        }; 
-                        Storyboard.SetTarget(anim, VideoContainer);
-                        Storyboard.SetTargetProperty(anim, "Opacity");
-                        sb.Children.Add(anim);
-                        sb.Begin();
-                    }
-                    
-                    if (ExpandButton != null) ExpandButton.Visibility = Visibility.Visible;
-                    if (MuteButton != null) MuteButton.Visibility = Visibility.Visible;
-                }
-                else if (msg == "ERROR")
-                {
-                    System.Diagnostics.Debug.WriteLine("[Spotlight] Trailer error reported by WebView. Cleaning up and falling back to backdrop.");
-                    CleanupWebView();
-                }
-            }
+            // [CRASH FIX] This callback fires on a native COM/WebView2 thread, NOT the UI thread.
+            // Any XAML access (Visibility, Storyboard, etc.) from here causes STATUS_FATAL_USER_CALLBACK_EXCEPTION (0xC000027B).
+            // All UI work MUST be marshalled to the UI thread via DispatcherQueue.
+            string msg;
+            try { msg = args.TryGetWebMessageAsString(); }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Spotlight] WebMessageReceived error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[Spotlight] WebMessageReceived parse error: {ex.Message}");
+                return;
             }
+
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    if (msg == "READY")
+                    {
+                        _isTrailerPlaying = true;
+                        
+                        if (VideoContainer != null) 
+                        {
+                            VideoContainer.Visibility = Visibility.Visible;
+                            UpdateMuteButtonIcon();
+
+                            // Smooth Fade-In Reveal
+                            var sb = new Storyboard();
+                            var anim = new DoubleAnimation 
+                            { 
+                                To = 0.8, 
+                                Duration = TimeSpan.FromMilliseconds(1500), 
+                                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } 
+                            }; 
+                            Storyboard.SetTarget(anim, VideoContainer);
+                            Storyboard.SetTargetProperty(anim, "Opacity");
+                            sb.Children.Add(anim);
+                            sb.Begin();
+                        }
+                        
+                        if (ExpandButton != null) ExpandButton.Visibility = Visibility.Visible;
+                        if (MuteButton != null) MuteButton.Visibility = Visibility.Visible;
+                    }
+                    else if (msg == "ERROR")
+                    {
+                        System.Diagnostics.Debug.WriteLine("[Spotlight] Trailer error reported by WebView. Cleaning up and falling back to backdrop.");
+                        CleanupWebView();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Spotlight] WebMessageReceived UI update error: {ex.Message}");
+                }
+            });
         }
 
         private void CleanupWebView()

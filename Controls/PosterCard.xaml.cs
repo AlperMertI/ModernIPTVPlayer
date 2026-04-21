@@ -8,6 +8,7 @@ using System;
 using System.Threading.Tasks;
 using Windows.UI;
 using ModernIPTVPlayer.Models.Stremio;
+using ModernIPTVPlayer.Models;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -19,6 +20,7 @@ namespace ModernIPTVPlayer.Controls
         public (Color Primary, Color Secondary)? HeroColors { get; private set; }
 
         public event EventHandler<(Color Primary, Color Secondary)> ColorsExtracted;
+        public event EventHandler<IMediaStream>? Clicked;
         public event EventHandler HoverStarted;
         public event EventHandler HoverEnded;
 
@@ -301,6 +303,24 @@ namespace ModernIPTVPlayer.Controls
         {
             ConnectedAnimationService.GetForCurrentView()
                 .PrepareToAnimate("ForwardConnectedAnimation", PosterImage);
+        }
+
+        private void OnTapped(object sender, TappedRoutedEventArgs e)
+        {
+            e.Handled = true;
+            System.Diagnostics.Debug.WriteLine($"[PosterCard] Tapped! DataContext: {DataContext?.GetType().Name}");
+            
+            IMediaStream? stream = DataContext as IMediaStream;
+            if (stream == null && DataContext is UnifiedMediaItemContext contextWrap)
+            {
+                stream = contextWrap.Data;
+            }
+
+            if (stream != null)
+            {
+                System.Diagnostics.Debug.WriteLine($"[PosterCard] Firing Clicked event for: {stream.Title}");
+                Clicked?.Invoke(this, stream);
+            }
         }
     }
 }

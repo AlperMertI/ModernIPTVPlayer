@@ -13,6 +13,7 @@ namespace ModernIPTVPlayer.Services
         /// </summary>
         public static void NavigateToDetails(Frame frame, MediaNavigationArgs args, UIElement sourceElement = null, Microsoft.UI.Xaml.Media.ImageSource preloadedImage = null, Microsoft.UI.Xaml.Media.ImageSource preloadedLogo = null)
         {
+            System.Diagnostics.Debug.WriteLine($"[NavigationService] NavigateToDetails called for: {args?.Stream?.Title}");
             if (frame == null || args == null) return;
             if (preloadedImage != null) args.PreloadedImage = preloadedImage;
             if (preloadedLogo != null) args.PreloadedLogo = preloadedLogo;
@@ -50,8 +51,22 @@ namespace ModernIPTVPlayer.Services
             NavigateWithSlideAnimation(frame, args);
         }
 
+        private static string _lastNavTargetId = string.Empty;
+
         private static void NavigateWithSlideAnimation(Frame frame, MediaNavigationArgs args)
         {
+            if (args?.Stream == null) return;
+            
+            // [ROOT FIX] Native check: If we are already navigating to this exact item, ignore duplication.
+            string targetId = args.Stream.Id.ToString();
+            if (_lastNavTargetId == targetId && frame.Content is MediaInfoPage)
+            {
+                System.Diagnostics.Debug.WriteLine($"[NavigationService] Native Guard: Swallowed redundant navigation to {args.Stream.Title}");
+                return;
+            }
+            
+            _lastNavTargetId = targetId;
+
             var transitionInfo = new SlideNavigationTransitionInfo
             {
                 Effect = SlideNavigationTransitionEffect.FromRight

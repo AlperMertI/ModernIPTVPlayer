@@ -60,6 +60,10 @@ namespace ModernIPTVPlayer
         // Clock & Recents
         private DispatcherTimer _clockTimer;
         private System.Collections.ObjectModel.ObservableCollection<LiveStream> _recentChannels = new();
+        private System.Collections.ObjectModel.ObservableCollection<LiveStream> _visibleChannels = new();
+        public System.Collections.ObjectModel.ObservableCollection<LiveStream> VisibleChannels => _visibleChannels;
+
+        private LiveStream? _activeChannel;
 
         // Auto-Probe Queue
         private readonly ConcurrentQueue<LiveStream> _probingQueue = new();
@@ -107,12 +111,13 @@ namespace ModernIPTVPlayer
             return null;
         }
 
-        private void ChannelGridView_Loaded(object sender, RoutedEventArgs e)
+        private void ChannelRepeater_Loaded(object sender, RoutedEventArgs e)
         {
-            _channelScrollViewer = FindChildOfType<ScrollViewer>(ChannelGridView);
+            _channelScrollViewer = FindChildOfType<ScrollViewer>(ChannelRepeater);
             if (_channelScrollViewer != null)
             {
                 _channelScrollViewer.ViewChanged += ChannelScrollViewer_ViewChanged;
+                _canAutoProbe = true;
             }
             // Initial probe for items visible on first load
             QueueVisibleItems();
@@ -130,7 +135,7 @@ namespace ModernIPTVPlayer
         private void QueueVisibleItems()
         {
             if (!_canAutoProbe || _channelScrollViewer == null) return;
-            if (ChannelGridView.ItemsSource is not List<LiveStream> list || list.Count == 0) return;
+            if (_visibleChannels.Count == 0) return; var list = _visibleChannels;
 
             double offset = _channelScrollViewer.VerticalOffset;
             double viewportHeight = _channelScrollViewer.ViewportHeight;
@@ -138,7 +143,7 @@ namespace ModernIPTVPlayer
             // Get dimensions
             double itemHeight = 80; // Template Height (68) + margins
             double itemWidth = _itemsWrapGrid?.ItemWidth ?? 300;
-            double gridWidth = Math.Max(1, ChannelGridView.ActualWidth - 48); // minus padding
+            double gridWidth = Math.Max(1, ChannelRepeater.ActualWidth - 48); // minus padding
 
             int itemsPerRow = Math.Max(1, (int)(gridWidth / itemWidth));
 
@@ -211,7 +216,7 @@ namespace ModernIPTVPlayer
                     _allCategories = Array.Empty<LiveCategory>();
                     _allChannels = Array.Empty<LiveStream>();
                     CategoryListView.ItemsSource = null;
-                    ChannelGridView.ItemsSource = null;
+                    VisibleChannels.Clear();
                 }
                 _loginInfo = loginParams;
             }
@@ -285,16 +290,16 @@ namespace ModernIPTVPlayer
                 SkeletonGrid.Visibility = Visibility.Visible;
             }
             // Hide the real grid until data is ready
-            if (ChannelGridView != null)
-                ChannelGridView.Visibility = Visibility.Collapsed;
+            if (ChannelRepeater != null)
+                ChannelRepeater.Visibility = Visibility.Collapsed;
         }
 
         private void HideLoadingSkeleton()
         {
             if (SkeletonGrid != null)
                 SkeletonGrid.Visibility = Visibility.Collapsed;
-            if (ChannelGridView != null)
-                ChannelGridView.Visibility = Visibility.Visible;
+            if (ChannelRepeater != null)
+                ChannelRepeater.Visibility = Visibility.Visible;
             SidebarLoadingRing.IsActive = false;
             MainLoadingRing.IsActive = false;
         }
@@ -526,7 +531,63 @@ namespace ModernIPTVPlayer
             var result = new List<LiveCategory>(categoryList.Count + 1) { allCat };
             result.AddRange(categoryList);
             return result;
-        }        
+        }
+
+        // ==========================================
+        // REPEATER INTERACTION & LOGIC
+        // ==========================================
+
+        private void ChannelRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args) { }
+        private void ChannelRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args) { }
+
+        private void ChannelItem_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
+        {
+            if (sender is FrameworkElement fe && fe.DataContext is LiveStream stream)
+            {
+                PlayChannel(stream);
+            }
+        }
+
+        private void ChannelItem_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is FrameworkElement fe && fe.Tag is LiveStream stream)
+            {
+                PlayChannel(stream);
+            }
+        }
+
+        private void ChannelItem_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (sender is FrameworkElement fe)
+            {
+                // Simple hover effect if needed via VisualStateManager or direct property
+            }
+        }
+
+        private void ChannelItem_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e) { }
+
+        private void PlayChannel(LiveStream stream)
+        {
+            if (stream == null) return;
+            
+            // UI Selection State
+            if (_activeChannel != null) _activeChannel.IsActive = false;
+            _activeChannel = stream;
+            _activeChannel.IsActive = true;
+
+            // Navigate or play
+            var loginInfo = _loginInfo ?? App.CurrentLogin;
+            if (loginInfo != null)
+            {
+                Dictionary<string, object> parameters = new()
+                {
+                    { "Stream", stream },
+                    { "LoginInfo", loginInfo },
+                    { "CategoryChannels", _visibleChannels.ToList() }
+                };
+                Frame.Navigate(typeof(PlayerPage), parameters, new DrillInNavigationTransitionInfo());
+            }
+        }
         
         private List<LiveCategory> ParseM3u(string content)
         {
@@ -865,7 +926,7 @@ namespace ModernIPTVPlayer
         // ==========================================
         // Phase C: Optimized Single-Pass Filter Pipeline
         // ==========================================
-        private void UpdateChannelList()
+        private async void UpdateChannelList()
         {
             // Update HeroSection visibility based on search
             if (HeroSection != null)
@@ -892,7 +953,8 @@ namespace ModernIPTVPlayer
 
             HeaderCount.Text = $"({filteredList.Count})";
 
-            ChannelGridView.ItemsSource = filteredList;
+            // ATOMIC PATCH (The Performance Way)
+            await UICollectionPatcher.PatchAsync(_visibleChannels, filteredList, this.DispatcherQueue, s => s.Id);
 
             // Auto-Probe is now always enabled (Viewport based)
             _canAutoProbe = AppSettings.IsAutoProbeEnabled;
@@ -1187,54 +1249,16 @@ namespace ModernIPTVPlayer
             // Optional: Keyboard support
         }
 
-        private void ChannelGridView_ItemClick(object sender, ItemClickEventArgs e)
-        {
-            if (e.ClickedItem is LiveStream stream)
-            {
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(stream.StreamUrl, stream.Name, LogoUrl: stream.StreamIcon, Type: "live"));
-            }
-        }
 
         private void ItemsWrapGrid_Loaded(object sender, RoutedEventArgs e)
         {
             _itemsWrapGrid = sender as ItemsWrapGrid;
-            RecalculateItemSize();
-        }
-
-        private void ChannelGridView_SizeChanged(object sender, SizeChangedEventArgs e)
-        {
-            RecalculateItemSize();
-        }
-
-        private void RecalculateItemSize()
-        {
-            if (_itemsWrapGrid == null || ChannelGridView == null) return;
-
-            // Total available width
-            double gridWidth = ChannelGridView.ActualWidth;
-            if (gridWidth <= 0) return;
-
-            // Subtract Padding (Left+Right = 24+24 = 48) + Scrollbar buffer (approx 16)
-            double availableWidth = gridWidth - 48 - 4; 
-
-            // Desired Minimum Width per Tile
-            double minItemWidth = 320.0;
-
-            // Calculate Columns
-            int columns = (int)Math.Floor(availableWidth / minItemWidth);
-            if (columns < 1) columns = 1;
-
-            // Precise Width per Item
-            double newItemWidth = availableWidth / columns;
-
-            // Apply
-            _itemsWrapGrid.ItemWidth = newItemWidth;
             
-            // ItemHeight is fixed at 80 in XAML.
-            
-            // Re-queue visible items after resize
-            QueueVisibleItems();
         }
+
+        
+
+        
 
         private void LoadRecentChannels()
         {
@@ -1285,16 +1309,12 @@ namespace ModernIPTVPlayer
         // AUTO-PROBE WORKER
         // ==========================================
         
-        private void ChannelGridView_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
-        {
-            // Now handled by ScrollViewer.ViewChanged + QueueVisibleItems
-            // This event is no longer used for probing but kept for potential future use
-        }
+        
     
 
         private void ScanCategory_Click(object sender, RoutedEventArgs e)
         {
-            if (ChannelGridView.ItemsSource is IEnumerable<LiveStream> currentList)
+            if (_visibleChannels is IEnumerable<LiveStream> currentList)
             {
                 // Clear existing metadata and physical cache for these specific URLs to force a fresh scan
                 foreach (var stream in currentList)
@@ -1385,7 +1405,7 @@ namespace ModernIPTVPlayer
                     // If metadata arrived while queued, skip.
                     if (item.HasMetadata || item.IsProbing) continue;
 
-                    var currentList = ChannelGridView.ItemsSource as List<LiveStream>;
+                    var currentList = _visibleChannels;
                     if (currentList == null || !currentList.Contains(item)) continue;
 
                     try
@@ -1581,3 +1601,5 @@ namespace ModernIPTVPlayer
         }
     }
 }
+
+

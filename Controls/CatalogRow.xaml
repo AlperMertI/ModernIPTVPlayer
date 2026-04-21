@@ -12,11 +12,16 @@
 
     <UserControl.Resources>
         <converters:BoolToVisibleConverter x:Key="BoolToVisibleConverter"/>
+        <converters:BoolToCollapsedConverter x:Key="BoolToCollapsedConverter"/>
     </UserControl.Resources>
 
-    <StackPanel x:Name="RootPanel" Spacing="16" Margin="48,0,0,0" Opacity="0"
+    <Grid x:Name="RootPanel" Margin="0" Opacity="0"
                 PointerEntered="RootPanel_PointerEntered" 
                 PointerExited="RootPanel_PointerExited">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
         <VisualStateManager.VisualStateGroups>
             <VisualStateGroup x:Name="HoverStates">
                 <VisualState x:Name="Normal"/>
@@ -70,13 +75,13 @@
             </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
 
-        <StackPanel.RenderTransform>
+        <Grid.RenderTransform>
             <TranslateTransform x:Name="EntranceTranslation" Y="40"/>
-        </StackPanel.RenderTransform>
+        </Grid.RenderTransform>
         
-        <HyperlinkButton x:Name="HeaderLink" 
+        <HyperlinkButton x:Name="HeaderLink" Grid.Row="0"
                          Click="HeaderLink_Click" 
-                         Padding="0" Margin="0" 
+                         Padding="0" Margin="48,0,0,0" 
                          Background="Transparent" BorderThickness="0"
                          IsEnabled="{x:Bind IsHeaderInteractive, Mode=OneWay}">
             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -90,7 +95,7 @@
         </HyperlinkButton>
         
 
-        <Grid x:Name="ListContainer">
+        <Grid x:Name="ListContainer" Grid.Row="1" Margin="0,12,0,0">
             <!-- Shimmer State -->
             <StackPanel x:Name="ShimmerPanel" Orientation="Horizontal" Visibility="Collapsed" Margin="-10,0,0,0">
                  <local:ShimmerCard x:Name="S1" Width="172" Height="252" Margin="0,0,4,0"/>
@@ -100,95 +105,69 @@
                  <local:ShimmerCard x:Name="S5" Width="172" Height="252" Margin="0,0,4,0"/>
             </StackPanel>
 
-            <ListView x:Name="ItemsListView" 
-                      ItemsSource="{x:Bind ItemsSource, Mode=OneWay}"
-                      ScrollViewer.HorizontalScrollMode="Disabled" 
-                      ScrollViewer.HorizontalScrollBarVisibility="Hidden"
-                      ScrollViewer.IsHorizontalRailEnabled="False"
-                      ScrollViewer.VerticalScrollMode="Disabled"
-                      ScrollViewer.VerticalScrollBarVisibility="Hidden"
-                      ScrollViewer.IsVerticalRailEnabled="True"
-                      ManipulationMode="TranslateX,System"
-                      ManipulationStarted="ItemsListView_ManipulationStarted"
-                      ManipulationDelta="ItemsListView_ManipulationDelta"
-                      ManipulationCompleted="ItemsListView_ManipulationCompleted"
-                      Loaded="ItemsListView_Loaded"
-                      SelectionMode="None"
-                      IsItemClickEnabled="False"
-                      ElementSoundMode="Off">
-
-                <ListView.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <ItemsStackPanel Orientation="Horizontal"/>
-                    </ItemsPanelTemplate>
-                </ListView.ItemsPanel>
-                <ListView.ItemContainerStyle>
-                    <Style TargetType="ListViewItem">
-                        <Setter Property="Padding" Value="0"/>
-                        <Setter Property="Margin" Value="0,0,4,0"/>
-                        <Setter Property="MinWidth" Value="0"/>
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="ListViewItem">
-                                    <Grid x:Name="Root" Background="Transparent">
-                                         <ContentPresenter />
-                                    </Grid>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-                </ListView.ItemContainerStyle>
-                <ListView.ItemTemplate>
-                    <DataTemplate x:DataType="models:StremioMediaStream">
-                        <!-- Use ContentPresenter to render the passed in template, allowing flexibility -->
-                        <ContentPresenter Content="{x:Bind Mode=OneWay}" ContentTemplate="{Binding ItemTemplate, ElementName=RootControl}" />
-                    </DataTemplate>
-                </ListView.ItemTemplate>
-                
-                <ListView.Footer>
-                    <StackPanel Orientation="Horizontal" Visibility="{x:Bind IsLoadingMore, Mode=OneWay}" Padding="0,0,16,0" Opacity="0.5">
-                        <local:ShimmerCard Width="280" Height="160" Margin="0,0,16,0"/>
-                        <local:ShimmerCard Width="280" Height="160" Margin="0,0,16,0"/>
-                    </StackPanel>
-                </ListView.Footer>
-            </ListView>
+            <ScrollViewer x:Name="ItemsScrollViewer" 
+                          HorizontalScrollMode="Disabled"
+                          HorizontalScrollBarVisibility="Hidden"
+                          VerticalScrollMode="Disabled"
+                          VerticalScrollBarVisibility="Disabled"
+                          IsVerticalRailEnabled="False"
+                          IsHorizontalRailEnabled="False"
+                          IsVerticalScrollChainingEnabled="True"
+                          IsHorizontalScrollChainingEnabled="False"
+                          AllowFocusOnInteraction="False"
+                          IsTabStop="False"
+                          Visibility="{x:Bind IsLoading, Mode=OneWay, Converter={StaticResource BoolToCollapsedConverter}}"
+                          Loaded="ItemsScrollViewer_Loaded">
+                <ItemsRepeater x:Name="Repeater" 
+                               ItemsSource="{x:Bind ItemsSource, Mode=OneWay}"
+                               ItemTemplate="{x:Bind ItemTemplate, Mode=OneWay}"
+                               ElementPrepared="Repeater_ElementPrepared"
+                               ElementClearing="Repeater_ElementClearing"
+                               ManipulationMode="TranslateX, System"
+                               ManipulationDelta="Repeater_ManipulationDelta"
+                               Margin="48,0,48,0">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Orientation="Horizontal" Spacing="12"/>
+                    </ItemsRepeater.Layout>
+                </ItemsRepeater>
+            </ScrollViewer>
 
             <!-- Navigation Arrows -->
             <Button x:Name="ScrollRightButton" 
                     Click="ScrollRight_Click"
                     HorizontalAlignment="Right" 
                     VerticalAlignment="Center" 
-                    Margin="0,0,12,0"
+                    Margin="0,0,24,0"
                     Style="{StaticResource VortexButtonStyle}" 
-                    Width="48" Height="48" 
+                    Width="56" Height="56" 
                     Padding="0"
                     HorizontalContentAlignment="Center"
                     VerticalContentAlignment="Center"
-                    Canvas.ZIndex="100"
+                    Canvas.ZIndex="1000"
                     IsHitTestVisible="True"
-                    Background="#01FFFFFF"
+                    Background="#11FFFFFF"
                     PointerEntered="Button_PointerEntered"
                     Visibility="Collapsed">
-                <FontIcon Glyph="&#xE761;" FontSize="18"/>
+                <FontIcon Glyph="&#xE761;" FontSize="20" FontWeight="Bold"/>
             </Button>
             
             <Button x:Name="ScrollLeftButton" 
                     Click="ScrollLeft_Click"
                     HorizontalAlignment="Left" 
                     VerticalAlignment="Center" 
-                    Margin="-24,0,0,0"
+                    Margin="24,0,0,0"
                     Style="{StaticResource VortexButtonStyle}" 
-                    Width="48" Height="48" 
+                    Width="56" Height="56" 
                     Padding="0"
                     HorizontalContentAlignment="Center"
                     VerticalContentAlignment="Center"
-                    Canvas.ZIndex="100"
+                    Canvas.ZIndex="1000"
                     IsHitTestVisible="True"
-                    Background="#01FFFFFF"
+                    Background="#11FFFFFF"
                     PointerEntered="Button_PointerEntered"
                     Visibility="Collapsed">
-                <FontIcon Glyph="&#xE760;" FontSize="18"/>
+                <FontIcon Glyph="&#xE760;" FontSize="20" FontWeight="Bold"/>
             </Button>
         </Grid>
-    </StackPanel>
+    </Grid>
 </UserControl>

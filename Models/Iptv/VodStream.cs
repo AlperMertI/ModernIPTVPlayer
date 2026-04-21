@@ -416,6 +416,14 @@ namespace ModernIPTVPlayer.Models.Iptv
             get => _isProbing;
             set { _isProbing = value; OnPropertyChanged(); }
         }
+
+        private bool _isActive = false;
+        [JsonIgnore]
+        public bool IsActive
+        {
+            get => _isActive;
+            set { _isActive = value; OnPropertyChanged(); }
+        }
         
         private bool? _isOnline;
         public bool? IsOnline

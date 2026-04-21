@@ -36,7 +36,7 @@
         </VisualStateManager.VisualStateGroups>
 
         <!-- Dynamic Backdrop -->
-        <controls:DynamicBackdrop x:Name="BackdropControl" Grid.ColumnSpan="2"/>
+        <controls:DynamicBackdrop x:Name="BackdropControl" Grid.ColumnSpan="2" VerticalAlignment="Stretch" HorizontalAlignment="Stretch"/>
 
         <!-- Vignette -->
         <Rectangle Fill="#15000000" IsHitTestVisible="False" Grid.ColumnSpan="2"/>
@@ -176,10 +176,17 @@
 
                     <!-- HEADER (Refactored for true mathematical centering) -->
                     <Grid x:Name="PageHeader" Grid.Row="0" Padding="24,24,36,12" Canvas.ZIndex="10">
-                        <!-- Sidebar Toggle (Left Aligned) -->
-                        <Button x:Name="SidebarToggle" Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48" HorizontalAlignment="Left" VerticalAlignment="Center">
-                            <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
-                        </Button>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center" Spacing="4">
+                            <Button x:Name="SidebarToggle" Click="ToggleSidebar_Click" Background="Transparent" BorderThickness="0" Width="48" Height="48">
+                                <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
+                            </Button>
+                            
+                            <Button x:Name="GenreFilterButton" Click="GenreFilterButton_Click" 
+                                    Background="Transparent" BorderThickness="0" 
+                                    Width="48" Height="48" CornerRadius="24">
+                                <FontIcon Glyph="&#xE700;" FontSize="20" Foreground="White"/>
+                            </Button>
+                        </StackPanel>
                         
                         <!-- Center: Source Switcher (Absolute Center Alignment) -->
                         <Grid x:Name="HeaderSwitcherContainer" HorizontalAlignment="Center" VerticalAlignment="Center">

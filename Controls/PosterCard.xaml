@@ -46,14 +46,14 @@
                 </DoubleAnimation>
             </Storyboard>
             <Storyboard x:Name="FadeInStoryboard">
-                <DoubleAnimation Storyboard.TargetName="PosterImage" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.35">
+                <DoubleAnimation Storyboard.TargetName="PosterImage" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.65">
                     <DoubleAnimation.EasingFunction>
-                        <CircleEase EasingMode="EaseOut"/>
+                        <ExponentialEase EasingMode="EaseOut" Exponent="5"/>
                     </DoubleAnimation.EasingFunction>
                 </DoubleAnimation>
-                <DoubleAnimation Storyboard.TargetName="PosterShimmer" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.3">
+                <DoubleAnimation Storyboard.TargetName="PosterShimmer" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.5">
                     <DoubleAnimation.EasingFunction>
-                        <CircleEase EasingMode="EaseIn"/>
+                        <ExponentialEase EasingMode="EaseIn" Exponent="5"/>
                     </DoubleAnimation.EasingFunction>
                 </DoubleAnimation>
             </Storyboard>
@@ -66,10 +66,11 @@
 
 
         <!-- Main Content -->
-        <Border x:Name="MainBorder" CornerRadius="12" Background="#FF1a1a1a" RenderTransformOrigin="0.5,0.5"
+        <Border x:Name="MainBorder" CornerRadius="12" Background="#0C0E14" RenderTransformOrigin="0.5,0.5"
                 PointerEntered="OnPointerEntered"
                 PointerExited="OnPointerExited"
-                PointerMoved="OnPointerMoved">
+                PointerMoved="OnPointerMoved"
+                Tapped="OnTapped">
             <Border.RenderTransform>
                 <ScaleTransform x:Name="ScaleTrans" ScaleX="1.0" ScaleY="1.0"/>
             </Border.RenderTransform>

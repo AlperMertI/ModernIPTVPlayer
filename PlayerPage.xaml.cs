@@ -2131,7 +2131,7 @@ namespace ModernIPTVPlayer
             StartLogoLoading();
 
             // 0. Lightweight URL resolve (iptv:// protocol → real URL, from cache only)
-            _streamUrl = ResolveStreamUrl(_streamUrl);
+            _streamUrl = await ResolveStreamUrlAsync(_streamUrl);
             LogPlayerTrace($"[PlayerPage] Resolved stream URL: {_streamUrl}");
             LogStartupTiming("Resolve complete");
 
@@ -6327,49 +6327,9 @@ namespace ModernIPTVPlayer
         // STREAM URL RESOLUTION & VALIDATION (Optimized — non-blocking)
         // ============================================================
 
-        /// <summary>
-        /// Synchronous, cache-only URL resolver for internal protocols like iptv://.
-        /// This replaces the blocking HEAD request that previously added ~575ms to startup.
-        /// </summary>
-        private string ResolveStreamUrl(string url)
+        private async Task<string> ResolveStreamUrlAsync(string url)
         {
-            // Basic cleanup: some servers dislike explicit :80
-            url = url.Replace(":80/", "/");
-
-            // Resolve internal iptv:// protocol from cache
-            if (url.StartsWith("iptv://", StringComparison.OrdinalIgnoreCase))
-            {
-                string streamIdStr = url.Substring(7);
-                if (int.TryParse(streamIdStr, out int streamId) && App.CurrentLogin != null)
-                {
-                    var playlistId = App.CurrentLogin.PlaylistUrl ?? "default";
-
-                    // Try VOD first
-                    var vods = ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod_streams").Result;
-                    var match = vods?.FirstOrDefault(v => v.StreamId == streamId);
-                    if (match != null)
-                    {
-                        string ext = match.ContainerExtension ?? "mkv";
-                        if (!ext.StartsWith(".")) ext = "." + ext;
-                        url = $"{App.CurrentLogin.Host}/movie/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{match.StreamId}{ext}";
-                        LogPlayerTrace($"[PlayerPage] Resolved iptv://{streamId} to {url}");
-                        return url;
-                    }
-
-                    // Try Live streams
-                    var lives = ContentCacheService.Instance.LoadCacheAsync<LiveStream>(playlistId, "live_streams").Result;
-                    var liveMatch = lives?.FirstOrDefault(l => l.StreamId == streamId);
-                    if (liveMatch != null)
-                    {
-                        string ext = string.IsNullOrEmpty(liveMatch.ContainerExtension) ? "ts" : liveMatch.ContainerExtension;
-                        url = $"{App.CurrentLogin.Host}/live/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{liveMatch.StreamId}.{ext}";
-                        LogPlayerTrace($"[PlayerPage] Resolved iptv://{streamId} to live URL: {url}");
-                        return url;
-                    }
-                }
-            }
-
-            return url;
+            return await UrlResolver.ResolveUrlAsync(url);
         }
 
         /// <summary>

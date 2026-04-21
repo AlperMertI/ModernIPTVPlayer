@@ -148,7 +148,7 @@ namespace ModernIPTVPlayer
                 var pixels = pixelData.DetachPixelData();
 
                 var (c1, _, c2, _) = FindTopTwoColorsWithRatios(pixels, (int)targetSize, (int)targetSize);
-                bool dominantOnLeft = _random.Next(2) == 0;
+                bool dominantOnLeft = Random.Shared.Next(2) == 0;
                 var result = dominantOnLeft ? (c1, c2) : (c2, c1);
                 _colorCache.TryAdd(cacheKey, result);
                 return result;
@@ -168,7 +168,7 @@ namespace ModernIPTVPlayer
                 var (color1, _, color2, _) = FindTopTwoColorsWithRatios(pixels, width, height);
                 
                 // Randomly decide which side gets the dominant color
-                bool dominantOnLeft = _random.Next(2) == 0;
+                bool dominantOnLeft = Random.Shared.Next(2) == 0;
                 var result = dominantOnLeft ? (color1, color2) : (color2, color1);
 
                 if (!string.IsNullOrEmpty(cacheKey))
@@ -221,7 +221,7 @@ namespace ModernIPTVPlayer
                     var (color1, ratio1, color2, ratio2) = FindTopTwoColorsWithRatios(pixels, width, height);
 
                     // Randomly decide which side gets the dominant color
-                    bool dominantOnLeft = _random.Next(2) == 0;
+                    bool dominantOnLeft = Random.Shared.Next(2) == 0;
 
                     if (dominantOnLeft)
                         return (color1, color2);

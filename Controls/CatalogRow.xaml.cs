@@ -77,7 +77,8 @@ namespace ModernIPTVPlayer.Controls
         {
             if (d is CatalogRow row)
             {
-                row.ItemsListView.ItemTemplate = e.NewValue as DataTemplate;
+                if (row.Repeater != null)
+                    row.Repeater.ItemTemplate = e.NewValue as DataTemplate;
             }
         }
 
@@ -100,12 +101,12 @@ namespace ModernIPTVPlayer.Controls
 
         private void UpdateLoadingState()
         {
-            if (ShimmerPanel == null || ItemsListView == null || RowTitle == null) return;
+            if (ShimmerPanel == null || ItemsScrollViewer == null || RowTitle == null) return;
 
             if (IsLoading)
             {
                 ShimmerPanel.Visibility = Visibility.Visible;
-                ItemsListView.Visibility = Visibility.Collapsed;
+                ItemsScrollViewer.Visibility = Visibility.Collapsed;
                 RowTitle.Opacity = 0.5;
                 
                 // Update Shimmer Layout based on RowStyle
@@ -114,12 +115,12 @@ namespace ModernIPTVPlayer.Controls
             else
             {
                 ShimmerPanel.Visibility = Visibility.Collapsed;
-                ItemsListView.Visibility = Visibility.Visible;
+                ItemsScrollViewer.Visibility = Visibility.Visible;
                 RowTitle.Opacity = 1.0;
             }
         }
 
-        public ListView ListView => ItemsListView;
+        public ItemsRepeater RepeaterControl => Repeater;
 
 
 
@@ -207,33 +208,28 @@ namespace ModernIPTVPlayer.Controls
 
         private void ScrollLeft_Click(object sender, RoutedEventArgs e)
         {
-            EnsureScrollViewer();
-            if (_scrollViewer != null)
+            if (ItemsScrollViewer != null)
             {
-                double target = Math.Max(0, _scrollViewer.HorizontalOffset - 500);
-                _scrollViewer.ChangeView(target, null, null);
+                double target = Math.Max(0, ItemsScrollViewer.HorizontalOffset - 500);
+                ItemsScrollViewer.ChangeView(target, null, null);
             }
         }
 
         private void ScrollRight_Click(object sender, RoutedEventArgs e)
         {
-            EnsureScrollViewer();
-            if (_scrollViewer != null)
+            if (ItemsScrollViewer != null)
             {
-                double target = Math.Min(_scrollViewer.ScrollableWidth, _scrollViewer.HorizontalOffset + 500);
-                _scrollViewer.ChangeView(target, null, null);
+                double target = Math.Min(ItemsScrollViewer.ScrollableWidth, ItemsScrollViewer.HorizontalOffset + 500);
+                ItemsScrollViewer.ChangeView(target, null, null);
             }
         }
 
         private void EnsureScrollViewer()
         {
-            if (_scrollViewer == null)
+            if (_scrollViewer == null && ItemsScrollViewer != null)
             {
-                _scrollViewer = FindScrollViewer(ItemsListView);
-                if (_scrollViewer != null)
-                {
-                    _scrollViewer.ViewChanged += ScrollViewer_ViewChanged;
-                }
+                _scrollViewer = ItemsScrollViewer;
+                _scrollViewer.ViewChanged += ScrollViewer_ViewChanged;
             }
         }
 
@@ -295,43 +291,57 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private ScrollViewer FindScrollViewer(DependencyObject parent)
+        private void ItemsScrollViewer_Loaded(object sender, RoutedEventArgs e)
         {
-            int count = VisualTreeHelper.GetChildrenCount(parent);
-            for (int i = 0; i < count; i++)
+            EnsureScrollViewer();
+        }
+
+        private void Repeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
+        {
+            // Connect events to the created element if it's a known card type
+            if (args.Element is PosterCard poster)
             {
-                var child = VisualTreeHelper.GetChild(parent, i);
-                if (child is ScrollViewer sv) return sv;
-                var result = FindScrollViewer(child);
-                if (result != null) return result;
+                poster.Tapped -= PosterCard_Tapped;
+                poster.Tapped += PosterCard_Tapped;
+                poster.HoverStarted -= PosterCard_HoverStarted;
+                poster.HoverStarted += PosterCard_HoverStarted;
+                poster.HoverEnded -= PosterCard_HoverEnded;
+                poster.HoverEnded += PosterCard_HoverEnded;
             }
-            return null;
-        }
-
-        private void ItemsListView_Loaded(object sender, RoutedEventArgs e)
-        {
-            // ListView visual tree is now definitely generated
-            EnsureScrollViewer();
-        }
-
-        private void ItemsListView_ManipulationStarted(object sender, ManipulationStartedRoutedEventArgs e)
-        {
-            // Handled by ScrollViewer_ViewChanged
-        }
-
-        private void ItemsListView_ManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
-        {
-            EnsureScrollViewer();
-            if (_scrollViewer != null)
+            else if (args.Element is LandscapeCard landscape)
             {
-                // Smooth drag for mouse and touch (Using ChangeView for offset)
-                _scrollViewer.ChangeView(_scrollViewer.HorizontalOffset - e.Delta.Translation.X, null, null, true);
+                landscape.Tapped -= PosterCard_Tapped;
+                landscape.Tapped += PosterCard_Tapped;
+                landscape.HoverStarted -= LandscapeCard_HoverStarted;
+                landscape.HoverStarted += LandscapeCard_HoverStarted;
+                landscape.HoverEnded -= LandscapeCard_HoverEnded;
+                landscape.HoverEnded += LandscapeCard_HoverEnded;
             }
         }
 
-        private void ItemsListView_ManipulationCompleted(object sender, ManipulationCompletedRoutedEventArgs e)
+        private void Repeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
         {
-            ScrollEnded?.Invoke(this, EventArgs.Empty);
+            // Cleanup to prevent leaks
+            if (args.Element is PosterCard poster)
+            {
+                poster.Tapped -= PosterCard_Tapped;
+                poster.HoverStarted -= PosterCard_HoverStarted;
+                poster.HoverEnded -= PosterCard_HoverEnded;
+            }
+            else if (args.Element is LandscapeCard landscape)
+            {
+                landscape.Tapped -= PosterCard_Tapped;
+                landscape.HoverStarted -= LandscapeCard_HoverStarted;
+                landscape.HoverEnded -= LandscapeCard_HoverEnded;
+            }
+        }
+
+        private void Repeater_ManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
+        {
+            if (ItemsScrollViewer != null)
+            {
+                ItemsScrollViewer.ChangeView(ItemsScrollViewer.HorizontalOffset - e.Delta.Translation.X, null, null, true);
+            }
         }
 
         private void RootPanel_PointerEntered(object sender, PointerRoutedEventArgs e)

@@ -39,6 +39,7 @@ namespace ModernIPTVPlayer.Controls
         private DateTimeOffset _suppressPointerExitUntil;
         private bool _isPointerOverCard;
         private bool _isClosing;
+        private IMediaStream? _currentStream;
 
         public event EventHandler<IMediaStream>? PlayRequested;
         public event EventHandler<(IMediaStream Stream, TmdbMovieResult Tmdb)>? DetailsRequested;
@@ -343,7 +344,7 @@ namespace ModernIPTVPlayer.Controls
             try
             {
                 if (_expandedCard.XamlRoot == null || sourceCard.XamlRoot == null) return;
-
+                
                 _closeCts?.Cancel();
                 _closeCts = new CancellationTokenSource();
                 _activeSourceCard = sourceCard;
@@ -434,9 +435,21 @@ namespace ModernIPTVPlayer.Controls
                     visual.StartAnimation("Opacity", fadeAnim);
                 }
 
-                if (sourceCard.DataContext is IMediaStream stream)
+                IMediaStream? stream = sourceCard.DataContext as IMediaStream;
+                if (stream == null && sourceCard.DataContext is UnifiedMediaItemContext contextWrap)
                 {
+                    stream = contextWrap.Data;
+                }
+
+                if (stream != null)
+                {
+                    _currentStream = stream;
+                    System.Diagnostics.Debug.WriteLine($"[EXP-CONTROLLER] Loading Expanded Card for: {stream.Title}");
                     await _expandedCard.LoadDataAsync(stream, isMorphing: isMorph);
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[EXP-CONTROLLER] Failed to resolve stream from DataContext: {sourceCard.DataContext?.GetType().Name}");
                 }
             }
             catch (OperationCanceledException) { /* Expected on hover changes */ }
@@ -455,6 +468,7 @@ namespace ModernIPTVPlayer.Controls
             
             // Set state to prevent closing
             _activeSourceCard = null; 
+            _currentStream = item;
             _isInCinemaMode = true;
             
             _overlayCanvas.Visibility = Visibility.Visible;
@@ -784,6 +798,8 @@ namespace ModernIPTVPlayer.Controls
 
         private IMediaStream? ResolveCurrentStream()
         {
+            if (_currentStream != null) return _currentStream;
+
             if (_activeSourceCard?.DataContext is IMediaStream activeStream)
             {
                 return activeStream;
@@ -807,6 +823,7 @@ namespace ModernIPTVPlayer.Controls
             _overlayCanvas.IsHitTestVisible = false;
             _activeSourceCard = null;
             _pendingHoverCard = null;
+            _currentStream = null;
             _isPointerOverCard = false;
 
             try 
