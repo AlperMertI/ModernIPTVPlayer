@@ -22,6 +22,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class PersonExpandedCard : UserControl
     {
         private Compositor _compositor;

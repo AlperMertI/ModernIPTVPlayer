@@ -6,37 +6,33 @@
   <ItemGroup>
     <!-- Top-Level Packages -->
     <PackageVersion Include="CommunityToolkit.HighPerformance" Version="8.4.2" />
-    <PackageVersion Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.251219" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="1.8.260317003" />
-    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.1721" />
+    <PackageVersion Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.3.260402-preview2" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.0.0-preview2" />
+    <PackageVersion Include="Microsoft.Windows.CsWinRT" Version="2.3.0-prerelease.251115.2" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.1761-preview" />
     <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Direct3D11" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.DXGI" Version="2.23.0" />
-    <!-- Transitive & Pinned Packages (Total 24+) -->
+    <!-- Transitive & Pinned Packages -->
     <PackageVersion Include="CommunityToolkit.Common" Version="8.4.2" />
-    <PackageVersion Include="CommunityToolkit.WinUI.Extensions" Version="8.2.251219" />
+    <PackageVersion Include="CommunityToolkit.WinUI.Extensions" Version="8.3.260402-preview2" />
     <PackageVersion Include="Microsoft.CSharp" Version="4.7.0" />
-    <PackageVersion Include="Microsoft.DotNet.PlatformAbstractions" Version="3.1.6" />
+    <PackageVersion Include="Microsoft.DotNet.PlatformAbstractions" Version="5.0.0-preview.5.20278.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyModel" Version="10.0.6" />
-    <PackageVersion Include="Microsoft.Web.WebView2" Version="1.0.3912.50" />
+    <PackageVersion Include="Microsoft.Web.WebView2" Version="1.0.3965-prerelease" />
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="1.7.260316102" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.AI" Version="1.8.53" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.Base" Version="1.8.251216001" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.DWrite" Version="1.8.25122902" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.Foundation" Version="1.8.260222000" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="1.8.260125001" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.ML" Version="1.8.2141" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.Runtime" Version="1.8.260317003" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.Widgets" Version="1.8.251231004" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK.WinUI" Version="1.8.260224000" />
     <PackageVersion Include="Silk.NET.Maths" Version="2.23.0" />
     <PackageVersion Include="System.IO.Pipelines" Version="10.0.6" />
     <PackageVersion Include="System.Memory" Version="4.6.3" />
-    <PackageVersion Include="System.Numerics.Tensors" Version="10.0.6" />
+    <PackageVersion Include="System.Numerics.Tensors" Version="11.0.0-preview.3.26207.106" />
     <PackageVersion Include="System.Numerics.Vectors" Version="4.6.1" />
     <PackageVersion Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
     <PackageVersion Include="System.Text.Encodings.Web" Version="10.0.6" />
     <PackageVersion Include="System.Text.Json" Version="10.0.6" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0-preview.2.25163.2" />
+    <PackageVersion Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageVersion Include="CommunityToolkit.WinUI.UI.Controls" Version="7.1.2" />
+    <PackageVersion Include="CommunityToolkit.WinUI.UI.Animations" Version="7.1.2" />
     <PackageVersion Include="XBindLeakFix" Version="1.0.0" />
     <PackageVersion Include="ZstdSharp.Port" Version="0.8.7" />
   </ItemGroup>

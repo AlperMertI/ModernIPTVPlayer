@@ -6,6 +6,7 @@ using Microsoft.UI;
 
 namespace ModernIPTVPlayer.Converters
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class BoolToVisibleConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)
@@ -16,6 +17,7 @@ namespace ModernIPTVPlayer.Converters
         public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotImplementedException();
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class BoolToCollapsedConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)
@@ -26,6 +28,7 @@ namespace ModernIPTVPlayer.Converters
         public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotImplementedException();
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class BoolToColorConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)
@@ -36,6 +39,7 @@ namespace ModernIPTVPlayer.Converters
         public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotImplementedException();
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class BoolToColorInvertConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)
@@ -48,6 +52,7 @@ namespace ModernIPTVPlayer.Converters
         public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotImplementedException();
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class InverseBooleanConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)
@@ -57,6 +62,7 @@ namespace ModernIPTVPlayer.Converters
         public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotImplementedException();
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StringToVisibleConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)

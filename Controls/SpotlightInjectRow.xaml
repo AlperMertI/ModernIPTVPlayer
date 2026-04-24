@@ -69,7 +69,7 @@
                 <Image x:Name="FallbackImage" Stretch="UniformToFill" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" />
 
                 <!-- WebView for Video (Solid background prevents backdrop bleed at clipped edges) -->
-                <Grid x:Name="VideoContainer" Background="Black" Opacity="0" IsHitTestVisible="False" />
+                <Grid x:Name="VideoContainer" Background="Black" Opacity="0" IsHitTestVisible="False" Canvas.ZIndex="1" />
 
                 <!-- Navigation Arrows -->
                 <Button x:Name="PrevButton" Click="PrevButton_Click" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="12,0,0,0" Style="{StaticResource SpotlightArrowButtonStyle}" Canvas.ZIndex="10">
@@ -80,12 +80,12 @@
                 </Button>
 
                 <!-- Spotlight Info Overlay -->
-                <StackPanel x:Name="InfoPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="72,0,0,48" MaxWidth="600">
+                <StackPanel x:Name="InfoPanel" VerticalAlignment="Bottom" HorizontalAlignment="Left" Margin="72,0,0,48" MaxWidth="600" Canvas.ZIndex="5">
                     <StackPanel.RenderTransform>
                         <CompositeTransform x:Name="InfoTransform" />
                     </StackPanel.RenderTransform>
                     <!-- Spotlight Badge -->
-                    <HyperlinkButton Click="HeaderLink_Click" Padding="0" Margin="0,0,0,12" Background="Transparent" BorderThickness="0" IsTabStop="False" FocusVisualPrimaryThickness="0" FocusVisualSecondaryThickness="0">
+                    <HyperlinkButton Click="HeaderLink_Click" Padding="0" Margin="0,0,0,12" Background="Transparent" BorderThickness="0" IsTabStop="False" FocusVisualPrimaryThickness="0" FocusVisualSecondaryThickness="0" Canvas.ZIndex="5">
                         <Border Background="{ThemeResource SystemAccentColor}" CornerRadius="4" Padding="8,4" HorizontalAlignment="Left">
                             <TextBlock Text="SPOTLIGHT" Foreground="White" FontSize="12" FontWeight="Bold" CharacterSpacing="100"/>
                         </Border>
@@ -94,7 +94,7 @@
                         </ToolTipService.ToolTip>
                     </HyperlinkButton>
                     
-                    <Image x:Name="LogoImage" Height="60" MaxWidth="400" HorizontalAlignment="Left" Visibility="Collapsed" Stretch="Uniform" Margin="0,0,0,12"/>
+                    <Image x:Name="LogoImage" Height="60" MaxWidth="400" HorizontalAlignment="Left" Visibility="Collapsed" Stretch="Uniform" Margin="0,0,0,12" ImageOpened="LogoImage_ImageOpened" ImageFailed="LogoImage_ImageFailed"/>
                     <TextBlock x:Name="TitleBlock" 
                                 Text="" 
                                 Foreground="White" 
@@ -105,6 +105,8 @@
                                 
                     <StackPanel Orientation="Horizontal" Spacing="12" Margin="0,0,0,16">
                         <TextBlock x:Name="YearBlock" Text="" Foreground="#B3FFFFFF" FontSize="14"/>
+                        <TextBlock Text="•" Foreground="#4DFFFFFF" FontSize="14"/>
+                        <TextBlock x:Name="GenresBlock" Text="" Foreground="#B3FFFFFF" FontSize="14" FontWeight="SemiBold"/>
                         <TextBlock Text="•" Foreground="#4DFFFFFF" FontSize="14"/>
                         <TextBlock x:Name="RatingBlock" Text="" Foreground="{ThemeResource SystemAccentColor}" FontSize="14" FontWeight="SemiBold"/>
                     </StackPanel>
@@ -133,7 +135,7 @@
                 </StackPanel>
 
                 <!-- Trailer Controls -->
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,24,24" Spacing="8">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,24,24" Spacing="8" Canvas.ZIndex="5">
                     <Button x:Name="MuteButton"
                             Click="MuteButton_Click"
                             Width="44" Height="44"

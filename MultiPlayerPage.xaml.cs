@@ -12,6 +12,7 @@ using ModernIPTVPlayer.Services.Streaming;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class MultiPlayerPage : Page
     {
         private List<DraggablePlayerControl> _activePlayers = new();

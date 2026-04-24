@@ -4,6 +4,7 @@ using System.Linq;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class DownloadStatusButton : UserControl
     {
         public DownloadStatusButton()

@@ -7,6 +7,7 @@ using System.Runtime.InteropServices.WindowsRuntime;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StringToImageSourceConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)

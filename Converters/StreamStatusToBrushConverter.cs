@@ -5,6 +5,7 @@ using System;
 
 namespace ModernIPTVPlayer.Converters
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class StreamStatusToBrushConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)

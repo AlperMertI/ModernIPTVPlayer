@@ -1,29 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net11.0-windows10.0.22000.0</TargetFramework>
+    <TargetFramework>net11.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>ModernIPTVPlayer</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <Platforms>x86;x64;ARM64</Platforms>
-    <Platform Condition="'$(Platform)' == '' or '$(Platform)' == 'AnyCPU'">x64</Platform>
-    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
-    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$(Platform)' == 'x86'">win-x86</RuntimeIdentifier>
-    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$(Platform)' == 'x64'">win-x64</RuntimeIdentifier>
-    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' and '$(Platform)' == 'ARM64'">win-arm64</RuntimeIdentifier>
-    <PublishProfile Condition="Exists('Properties\PublishProfiles\win-$(Platform).pubxml')">win-$(Platform).pubxml</PublishProfile>
+    <Platforms>x64</Platforms>
+    <Platform Condition="'$(Platform)' == ''">x64</Platform>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <PublishProfile Condition="Exists('Properties\PublishProfiles\win-x64.pubxml')">win-x64.pubxml</PublishProfile>
     <UseWinUI>true</UseWinUI>
-    <WinUISDKReferences>false</WinUISDKReferences>
+    <WinUISDKReferences>true</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Libs\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Libs\**\*.cs;Libs\**\obj\**;Libs\**\bin\**</DefaultItemExcludes>
 
-    <!-- NativeAOT Compatibility & Performance -->
+    <!-- WinRT & Interop Stability -->
     <IsAotCompatible>true</IsAotCompatible>
-    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
-    <IsTrimmable>true</IsTrimmable>
+    <CsWinRTAotOptimizerEnabled>true</CsWinRTAotOptimizerEnabled>
+    <CsWinRTDirectCall>true</CsWinRTDirectCall>
+    <CsWinRTIncludes>ModernIPTVPlayer;MpvWinUI;MpvWinUI.Common;Mpv.UI;Microsoft.UI.Xaml.Hosting</CsWinRTIncludes>
+    <TrimmerRootDescriptor>TrimmerRootDescriptor.xml</TrimmerRootDescriptor>
   </PropertyGroup>
+  <ItemGroup>
+    <TrimmerRootDescriptor Include="TrimmerRootDescriptor.xml" />
+  </ItemGroup>
   <ItemGroup>
     <None Remove="LiveTVPage.xaml" />
     <None Remove="LoginPage.xaml" />
@@ -68,8 +71,13 @@
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.HighPerformance" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" />
+    <PackageReference Include="CommunityToolkit.WinUI.Extensions" />
+    <PackageReference Include="Microsoft.DotNet.PlatformAbstractions" />
+    <PackageReference Include="Microsoft.Web.WebView2" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
     <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.CsWinRT" />
+    <PackageReference Include="System.Numerics.Tensors" />
     <PackageReference Include="XBindLeakFix" />
     <PackageReference Include="ZstdSharp.Port" />
   </ItemGroup>
@@ -166,7 +174,7 @@
   <!-- Publish Properties -->
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
-    <PublishReadyToRun Condition="'$(Configuration)' == 'Release'">False</PublishReadyToRun>
+    <PublishReadyToRun Condition="'$(Configuration)' == 'Release'">True</PublishReadyToRun>
     <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
     <PublishTrimmed Condition="'$(Configuration)' == 'Release'">True</PublishTrimmed>
     <PublishAot Condition="'$(Configuration)' == 'Debug'">False</PublishAot>
@@ -174,7 +182,7 @@
     <SelfContained Condition="'$(Configuration)' == 'Debug'">False</SelfContained>
     <SelfContained Condition="'$(Configuration)' == 'Release'">True</SelfContained>
     <InvariantGlobalization>False</InvariantGlobalization>
-    <SupportedOSPlatformVersion>10.0.22000.0</SupportedOSPlatformVersion>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <PackageCertificateKeyFile>ModernIPTVPlayer_TemporaryKey.pfx</PackageCertificateKeyFile>
     <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
     <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
@@ -186,20 +194,22 @@
     <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
   </PropertyGroup>
 
+
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <!-- Max Performance NativeAOT (Release Only) -->
     <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
     <TieredPGO>true</TieredPGO>
     <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
     
-    <!-- WinUI 3 AOT Workarounds -->
-    <EmbedXbfInPri>false</EmbedXbfInPri>
-    <DisableEmbeddedXbf>true</DisableEmbeddedXbf>
-    
     <!-- Binary Size & Debugging -->
-    <DebugSymbols>false</DebugSymbols>
-    <DebugType>none</DebugType>
-    <DebuggerSupport>false</DebuggerSupport>
-    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+    <StackTraceSupport>true</StackTraceSupport>
+    <DebuggerSupport>true</DebuggerSupport>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>pdbonly</DebugType>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Native AOT protection for MPV Interop -->
+    <TrimmerRootAssembly Include="Mpv.UI" />
+    <TrimmerRootAssembly Include="Richasy.Mpv.Core" />
+  </ItemGroup>
 </Project>

@@ -51,7 +51,26 @@ namespace ModernIPTVPlayer.Services.Json
     [JsonSerializable(typeof(List<TmdbMovieResult>))]
     [JsonSerializable(typeof(List<string>))]
     [JsonSerializable(typeof(StremioManifest))]
+    [JsonSerializable(typeof(StremioMeta))]
+    [JsonSerializable(typeof(List<StremioMeta>))]
     [JsonSerializable(typeof(StremioMetaResponse))]
+    [JsonSerializable(typeof(StremioVideo))]
+    [JsonSerializable(typeof(List<StremioVideo>))]
+    [JsonSerializable(typeof(StremioAppExtras))]
+    [JsonSerializable(typeof(StremioMetaTrailer))]
+    [JsonSerializable(typeof(List<StremioMetaTrailer>))]
+    [JsonSerializable(typeof(StremioLink))]
+    [JsonSerializable(typeof(List<StremioLink>))]
+    [JsonSerializable(typeof(StremioTrailerStream))]
+    [JsonSerializable(typeof(List<StremioTrailerStream>))]
+    [JsonSerializable(typeof(StremioCreditCast))]
+    [JsonSerializable(typeof(List<StremioCreditCast>))]
+    [JsonSerializable(typeof(StremioCreditCrew))]
+    [JsonSerializable(typeof(List<StremioCreditCrew>))]
+    [JsonSerializable(typeof(StremioAppCast))]
+    [JsonSerializable(typeof(List<StremioAppCast>))]
+    [JsonSerializable(typeof(StremioAppBackdrop))]
+    [JsonSerializable(typeof(List<StremioAppBackdrop>))]
     [JsonSerializable(typeof(StremioStreamResponse))]
     [JsonSerializable(typeof(StremioSubtitleResponse))]
     [JsonSerializable(typeof(VodInfoResponse))]
@@ -80,5 +99,14 @@ namespace ModernIPTVPlayer.Services.Json
     [JsonSerializable(typeof(List<string>))]
     [JsonSerializable(typeof(System.Collections.ObjectModel.ObservableCollection<StremioMediaStream>))]
     [JsonSerializable(typeof(Dictionary<string, string>))]
-    internal partial class AppJsonContext : JsonSerializerContext { }
+    internal partial class AppJsonContext : JsonSerializerContext 
+    {
+        static AppJsonContext()
+        {
+            // [STABILITY] Ensure the options are linked to the context resolver
+            // This prevents NotSupportedException when using AppJsonContext.Default.Options
+            // in generic methods or standard JsonSerializer.Deserialize calls.
+            s_defaultOptions.TypeInfoResolver = Default;
+        }
+    }
 }

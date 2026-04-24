@@ -9,6 +9,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class StremioTray : UserControl
     {
         public event EventHandler<StremioStream> SourceSelected;

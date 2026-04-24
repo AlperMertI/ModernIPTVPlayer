@@ -20,6 +20,7 @@ namespace ModernIPTVPlayer
         private static readonly ConcurrentDictionary<string, BitmapImage> _logoCache = new();
         private static readonly ConcurrentDictionary<string, BitmapImage> _posterCache = new();
         private static readonly ConcurrentDictionary<string, Task<(Color Primary, Color Secondary)>> _pendingExtractions = new();
+        private static readonly ConcurrentDictionary<string, bool> _knownPlaceholders = new();
         private static readonly System.Threading.SemaphoreSlim _extractionSemaphore = new System.Threading.SemaphoreSlim(4, 4);
         private static readonly Random _random = new Random();
 
@@ -53,6 +54,23 @@ namespace ModernIPTVPlayer
 
                 bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache; // We'll manage hit-testing for big items ourselves
                 bitmap.UriSource = new Uri(url);
+
+                // [SENIOR] Hook into the bitmap's own lifecycle to detect placeholders globally.
+                // This ensures that once a 1x1 image is detected for a URL, every control in the app knows.
+                bitmap.ImageOpened += (s, e) =>
+                {
+                    if (s is BitmapImage bi && bi.PixelWidth > 0)
+                    {
+                        if (bi.PixelWidth < 10 && bi.PixelHeight < 10)
+                        {
+                            _knownPlaceholders[url] = true;
+                        }
+                    }
+                };
+                bitmap.ImageFailed += (s, e) =>
+                {
+                    _knownPlaceholders[url] = true;
+                };
 
                 if (isThumbnail)
                 {
@@ -468,6 +486,7 @@ namespace ModernIPTVPlayer
         public static bool IsPlaceholder(string url)
         {
             if (string.IsNullOrWhiteSpace(url)) return true;
+            if (_knownPlaceholders.ContainsKey(url)) return true;
 
             // Known generic placeholders
             if (url.Contains("stremio.torbox.app/background/default", StringComparison.OrdinalIgnoreCase)) return true;

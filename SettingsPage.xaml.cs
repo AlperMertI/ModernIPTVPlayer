@@ -5,6 +5,7 @@ using System.Linq;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class SettingsPage : Page
     {
         // Simple ViewModel wrapper for x:Bind

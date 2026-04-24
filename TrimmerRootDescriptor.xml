@@ -1,0 +1,14 @@
+<linker>
+  <assembly fullname="ModernIPTVPlayer" preserve="all" />
+  <assembly fullname="Mpv.UI" preserve="all" />
+  <assembly fullname="Mpv.Core" preserve="all" />
+  <assembly fullname="Microsoft.WinUI" preserve="all" />
+  <assembly fullname="Microsoft.InteractiveExperiences.Projection" preserve="all" />
+  <type fullname="Windows.Foundation.Uri" preserve="all" />
+  <type fullname="Microsoft.UI.Xaml.ResourceDictionary" preserve="all" />
+  
+  <type fullname="ModernIPTVPlayer.Models.*" preserve="all" />
+  <type fullname="ModernIPTVPlayer.Models.Stremio.*" preserve="all" />
+  <type fullname="ModernIPTVPlayer.Helpers.*" preserve="all" />
+  <type fullname="ModernIPTVPlayer.Controls.*" preserve="all" />
+</linker>

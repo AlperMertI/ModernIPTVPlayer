@@ -29,18 +29,18 @@
         <DataTemplate x:Key="LandscapeCardTemplate" x:DataType="stremioModels:StremioMediaStream">
             <local:LandscapeCard DataContext="{x:Bind}"
                                   ImageUrl="{x:Bind LandscapeImageUrl, Mode=OneWay}" 
-                                 Title="{x:Bind Title, Mode=OneWay}"
-                                 Subtext="{x:Bind DisplaySubtext, Mode=OneWay}"
-                                 Year="{x:Bind Year, Mode=OneWay}"
-                                 RatingText="{x:Bind Rating, Mode=OneWay}"
-                                 ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
-                                 ShowMeta="{x:Bind IsNotContinueWatching, Mode=OneWay}"
-                                 ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
-                                 Width="296" Height="176" 
-                                 HoverStarted="LandscapeCard_HoverStarted" 
-                                 HoverEnded="LandscapeCard_HoverEnded"
-                                 Clicked="Card_Clicked"
-                                 ElementSoundMode="Off"/>
+                                  Title="{x:Bind Title, Mode=OneWay}"
+                                  Subtext="{x:Bind DisplaySubtext, Mode=OneWay}"
+                                  Year="{x:Bind Year, Mode=OneWay}"
+                                  RatingText="{x:Bind Rating, Mode=OneWay}"
+                                  ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
+                                  ShowMeta="{x:Bind IsNotContinueWatching, Mode=OneWay}"
+                                  ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
+                                  Width="296" Height="176" 
+                                  HoverStarted="LandscapeCard_HoverStarted" 
+                                  HoverEnded="LandscapeCard_HoverEnded"
+                                  Clicked="Card_Clicked"
+                                  ElementSoundMode="Off"/>
         </DataTemplate>
         <local:RowStyleToTemplateConverter x:Key="RowStyleToTemplateConverter" 
                                            StandardTemplate="{StaticResource StandardCardTemplate}" 
@@ -48,8 +48,7 @@
                                            
         <!-- Row Level Templates -->
         <DataTemplate x:Key="StandardCatalogRowTemplate" x:DataType="models:CatalogRowViewModel">
-            <local:CatalogRow DataContext="{x:Bind}"
-                              CatalogName="{x:Bind CatalogName, Mode=OneWay}" 
+            <local:CatalogRow CatalogName="{x:Bind CatalogName, Mode=OneWay}" 
                               ItemsSource="{x:Bind Items, Mode=OneWay}"
                               IsLoading="{x:Bind IsLoading, Mode=OneWay}"
                               RowStyle="{x:Bind RowStyle, Mode=OneWay}"
@@ -65,8 +64,7 @@
         </DataTemplate>
 
         <DataTemplate x:Key="SpotlightCatalogRowTemplate" x:DataType="models:CatalogRowViewModel">
-            <local:SpotlightInjectRow DataContext="{x:Bind}" 
-                                      ItemClicked="SpotlightInjectRow_ItemClicked"
+            <local:SpotlightInjectRow ItemClicked="SpotlightInjectRow_ItemClicked"
                                       HeaderClicked="CatalogRow_HeaderClicked" />
         </DataTemplate>
 
@@ -90,6 +88,7 @@
                 <ItemsRepeater x:Name="DiscoveryRepeater" 
                                ItemsSource="{x:Bind _discoveryRows}"
                                ItemTemplate="{StaticResource DiscoveryRowTemplateSelector}"
+                               VerticalCacheLength="3.5"
                                ElementPrepared="DiscoveryRepeater_ElementPrepared">
                     <ItemsRepeater.Layout>
                         <StackLayout Orientation="Vertical" Spacing="48"/>

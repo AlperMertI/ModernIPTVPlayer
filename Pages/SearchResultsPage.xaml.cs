@@ -28,6 +28,7 @@ namespace ModernIPTVPlayer.Pages
         public string ParentContext { get; set; } // e.g. "Stremio", "Diziler"
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class SearchResultsPage : Page
     {
         private SearchArgs _args;

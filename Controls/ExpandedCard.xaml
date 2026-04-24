@@ -54,7 +54,7 @@
                 </Rectangle>
             </Grid>
             
-            <WebView2 x:Name="TrailerWebView" Visibility="Collapsed" DefaultBackgroundColor="Black" IsHitTestVisible="False"/>
+            <Grid x:Name="TrailerContainer" Visibility="Collapsed" Background="Black" IsHitTestVisible="False"/>
             
             <Button x:Name="MuteButton" 
                     Click="MuteButton_Click"

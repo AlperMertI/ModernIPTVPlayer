@@ -13,6 +13,7 @@ using ModernIPTVPlayer.Pages;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class SpotlightSearchControl : UserControl
     {
         public event EventHandler<IMediaStream> ItemClicked;

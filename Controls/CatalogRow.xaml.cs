@@ -3,12 +3,16 @@ using Microsoft.UI.Xaml.Controls;
 using System;
 using System.Collections.Generic;
 using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Helpers;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Input;
 
+using Microsoft.UI.Xaml.Hosting;
+using Microsoft.UI.Composition;
+
 namespace ModernIPTVPlayer.Controls
 {
-
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class CatalogRow : UserControl
     {
         public static readonly DependencyProperty CatalogNameProperty =
@@ -56,7 +60,17 @@ namespace ModernIPTVPlayer.Controls
         }
 
         public static readonly DependencyProperty ItemsSourceProperty =
-            DependencyProperty.Register("ItemsSource", typeof(object), typeof(CatalogRow), new PropertyMetadata(null));
+            DependencyProperty.Register("ItemsSource", typeof(object), typeof(CatalogRow), new PropertyMetadata(null, OnItemsSourceChanged));
+
+        private static void OnItemsSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is CatalogRow row)
+            {
+                // [VIRTUALIZATION FIX] Force the layout to re-measure when new data arrives
+                // This prevents items from staying invisible until a scroll forces a layout pass.
+                row.Repeater?.InvalidateMeasure();
+            }
+        }
 
         public object ItemsSource
         {
@@ -101,22 +115,19 @@ namespace ModernIPTVPlayer.Controls
 
         private void UpdateLoadingState()
         {
-            if (ShimmerPanel == null || ItemsScrollViewer == null || RowTitle == null) return;
+            if (ShimmerPanel == null || ItemsScrollViewer == null) return;
 
-            if (IsLoading)
+            // 1. Lifecycle State (Loading vs Content)
+            string loadingState = IsLoading ? "Loading" : "ContentReady";
+            VisualStateManager.GoToState(this, loadingState, true);
+
+            // 2. Structural State (Standard vs Landscape)
+            VisualStateManager.GoToState(this, RowStyle ?? "Standard", true);
+
+            // [VIRTUALIZATION FIX] Force layout pass to ensure items appear immediately
+            if (!IsLoading)
             {
-                ShimmerPanel.Visibility = Visibility.Visible;
-                ItemsScrollViewer.Visibility = Visibility.Collapsed;
-                RowTitle.Opacity = 0.5;
-                
-                // Update Shimmer Layout based on RowStyle
-                VisualStateManager.GoToState(this, RowStyle ?? "Standard", true);
-            }
-            else
-            {
-                ShimmerPanel.Visibility = Visibility.Collapsed;
-                ItemsScrollViewer.Visibility = Visibility.Visible;
-                RowTitle.Opacity = 1.0;
+                Repeater?.InvalidateMeasure();
             }
         }
 
@@ -134,7 +145,13 @@ namespace ModernIPTVPlayer.Controls
 
         public CatalogRow()
         {
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("CatalogRow.xaml.cs:ctor", "enter", null, "H-RENDER"); } catch { }
+            // #endregion
             this.InitializeComponent();
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("CatalogRow.xaml.cs:ctor", "InitializeComponent done", null, "H-RENDER"); } catch { }
+            // #endregion
             this.Loaded += CatalogRow_Loaded;
             this.Unloaded += CatalogRow_Unloaded;
         }
@@ -143,6 +160,9 @@ namespace ModernIPTVPlayer.Controls
         {
             EnsureScrollViewer();
             
+            // [SYNC] Ensure initial loading state is correctly reflected (Essential for Pre-loaded Phase 0 rows)
+            UpdateLoadingState();
+
             // Simple entrance animation
             var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
             var opacityAnim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation { To = 1, Duration = TimeSpan.FromMilliseconds(600) };
@@ -321,7 +341,11 @@ namespace ModernIPTVPlayer.Controls
 
         private void Repeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
         {
-            // Cleanup to prevent leaks
+            // [VIRTUALIZATION STABILITY]
+            // We NO LONGER clear the ImageElement.Source here.
+            // ItemsRepeater recycles these controls; by leaving the Source intact,
+            // we allow the UI to show the previous image instantly if the same item
+            // scrolls back into view, and avoid white flickers during the reuse phase.
             if (args.Element is PosterCard poster)
             {
                 poster.Tapped -= PosterCard_Tapped;

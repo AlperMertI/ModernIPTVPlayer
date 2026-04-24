@@ -71,7 +71,10 @@ namespace ModernIPTVPlayer.Models.Metadata
                 target.Cast = MergeLists(target.Cast, source.Cast != null ? string.Join(", ", source.Cast.Select(c => c.Name)) : null, false);
                 target.Director = MergeLists(target.Director, source.Directors != null ? string.Join(", ", source.Directors.Select(d => d.Name)) : null, false);
                 
-                if (!string.IsNullOrEmpty(source.TrailerUrl)) target.TrailerUrl = source.TrailerUrl;
+                if (!string.IsNullOrEmpty(source.TrailerUrl)) 
+                {
+                    target.TrailerUrl = source.TrailerUrl;
+                }
                 if (!string.IsNullOrEmpty(source.SourceTitle)) target.SourceTitle = source.SourceTitle;
             }
 
@@ -107,8 +110,7 @@ namespace ModernIPTVPlayer.Models.Metadata
                 {
                      if (!backfillOnly || string.IsNullOrEmpty(stremioFinal.Genres))
                      {
-                          stremioFinal.Meta.Genres = source.Genres.Split(", ").ToList();
-                          stremioFinal.OnPropertyChanged("Genres");
+                          stremioFinal.Genres = source.Genres;
                      }
                 }
             }

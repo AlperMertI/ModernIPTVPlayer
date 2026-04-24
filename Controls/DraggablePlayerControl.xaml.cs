@@ -10,6 +10,7 @@ using ModernIPTVPlayer.Services.Streaming;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class DraggablePlayerControl : UserControl
     {
         public MpvPlayer Player { get; private set; }

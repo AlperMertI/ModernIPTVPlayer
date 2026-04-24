@@ -157,10 +157,11 @@ namespace ModernIPTVPlayer.Services.Stremio
         // ==========================================
         // 3. META (Details)
         // ==========================================
-        public async Task<StremioMeta> GetMetaAsync(string baseUrl, string type, string id)
+        public async Task<StremioMeta> GetMetaAsync(string baseUrl, string type, string id, string? correlationId = null)
         {
             string url = $"{baseUrl.TrimEnd('/')}/meta/{type}/{id}.json";
-            System.Diagnostics.Debug.WriteLine($"[StremioService] Fetching metadata URL: {url}");
+            string idPrefix = correlationId != null ? $"[{correlationId}] " : "";
+            System.Diagnostics.Debug.WriteLine($"{idPrefix}[StremioService] Fetching metadata URL: {url}");
             try
             {
                 using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -599,93 +600,129 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         private static readonly TimeSpan CatalogHardTtl = TimeSpan.FromHours(4);
 
-        private async Task<StremioCatalogRoot> GetCatalogAsync(string url, System.Threading.CancellationToken cancellationToken = default, bool bypassConditional = false)
+        public async Task<StremioCatalogRoot> GetCatalogAsync(string url, System.Threading.CancellationToken cancellationToken = default, bool bypassConditional = false, string? preloadedEtag = null)
         {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-
             // Extract Base URL (Source Addon)
             string addonBaseUrl = url;
             int catalogIdx = url.IndexOf("/catalog/", StringComparison.OrdinalIgnoreCase);
             if (catalogIdx > 0) addonBaseUrl = url.Substring(0, catalogIdx);
 
-            var (cachedEtag, cachedItems, cachedTime) = await CatalogCacheManager.LoadCatalogBinaryAsync(url);
-            if (!bypassConditional && cachedTime != DateTime.MinValue && (DateTime.UtcNow - cachedTime) > CatalogHardTtl)
+            string? etag = preloadedEtag;
+            IReadOnlyList<StremioMediaStream>? cachedItems = null;
+
+            // 1. Only read disk if ETag wasn't provided by the caller (Phase 0 -> Phase 1 handover)
+            if (etag == null && !bypassConditional)
             {
-                Log($"[CatalogTTL] Hard TTL exceeded ({(DateTime.UtcNow - cachedTime).TotalHours:F1}h), revalidate: {url}");
-                cachedEtag = null;
+                var (diskEtag, diskItems, cachedTime) = await CatalogCacheManager.LoadCatalogBinaryAsync(url);
+                etag = diskEtag;
+                cachedItems = diskItems;
+
+                if (cachedTime != DateTime.MinValue && (DateTime.UtcNow - cachedTime) > CatalogHardTtl)
+                {
+                    Log($"[CatalogTTL] Hard TTL exceeded ({(DateTime.UtcNow - cachedTime).TotalHours:F1}h), revalidate: {url}");
+                    etag = null;
+                }
             }
 
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             
-            // 2. Add Conditional Header if we have an ETag
-            if (!bypassConditional && !string.IsNullOrEmpty(cachedEtag))
+            // 2. Add Conditional Header
+            if (!bypassConditional && !string.IsNullOrEmpty(etag))
             {
-                if (cachedEtag.StartsWith("W/"))
-                    request.Headers.TryAddWithoutValidation("If-None-Match", cachedEtag);
+                if (etag.StartsWith("W/"))
+                    request.Headers.TryAddWithoutValidation("If-None-Match", etag);
                 else
-                    request.Headers.IfNoneMatch.Add(new System.Net.Http.Headers.EntityTagHeaderValue(cachedEtag));
+                    request.Headers.IfNoneMatch.Add(new System.Net.Http.Headers.EntityTagHeaderValue(etag));
             }
 
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             var response = await _client.SendAsync(request, cancellationToken);
             sw.Stop();
-            
-            // 3. Handle 304 Not Modified
-            if (response.StatusCode == System.Net.HttpStatusCode.NotModified && cachedItems != null)
-            {
-                Log($"[NET-304] Catalog up-to-date in {sw.ElapsedMilliseconds}ms: {url}");
 
-                bool needsUpgrade = false;
-                foreach (var item in cachedItems)
-                {
-                    if (string.IsNullOrEmpty(item.SourceAddon))
-                    {
-                        item.SourceAddon = addonBaseUrl;
-                        needsUpgrade = true;
-                    }
-                }
-
-                if (needsUpgrade)
-                {
-                    Log($"[CatalogCache] UPGRADING: Adding missing SourceAddon ({addonBaseUrl}) to existing cache in background.");
-                    _ = Task.Run(() => CatalogCacheManager.SaveCatalogBinaryAsync(url, cachedEtag, cachedItems));
-                }
-
-                return new StremioCatalogRoot { Metas = cachedItems.Select(i => i.Meta).ToList() };
-            }
-
+            string etagStatus = !string.IsNullOrEmpty(etag) ? $"[ETag: {etag.Substring(0, Math.Min(8, etag.Length))}...]" : "[No ETag]";
+                        // 3. Handle 304 Not Modified
             if (response.StatusCode == System.Net.HttpStatusCode.NotModified)
             {
+                // If items are missing (common during ETag-only handoff), read them from disk now.
+                if (cachedItems == null)
+                {
+                    var (_, diskItems, _) = await CatalogCacheManager.LoadCatalogBinaryAsync(url);
+                    cachedItems = diskItems;
+                }
+
+                if (cachedItems != null)
+                {
+                    Log($"[NET-304] {etagStatus} Catalog up-to-date (Lazy Loaded) in {sw.ElapsedMilliseconds}ms: {url}");
+
+                    bool needsUpgrade = false;
+                    foreach (var item in cachedItems)
+                    {
+                        if (string.IsNullOrEmpty(item.SourceAddon))
+                        {
+                            item.SourceAddon = addonBaseUrl;
+                            needsUpgrade = true;
+                        }
+                    }
+
+                    if (needsUpgrade)
+                    {
+                        Log($"[CatalogCache] UPGRADING: Adding missing SourceAddon ({addonBaseUrl}) to existing cache in background.");
+                        _ = Task.Run(() => CatalogCacheManager.SaveCatalogBinaryAsync(url, etag, cachedItems.ToList()));
+                    }
+
+                    return new StremioCatalogRoot { Metas = cachedItems.Select(i => i.Meta).ToList() };
+                }
+                
                 if (!bypassConditional)
                 {
-                    Log($"[NET-304] Warning: Server sent 304 but local binary missing. Retrying without If-None-Match: {url}");
+                    Log($"[NET-304] {etagStatus} Warning: Server sent 304 but local binary missing after lazy load. Retrying without If-None-Match: {url}");
                     return await GetCatalogAsync(url, cancellationToken, bypassConditional: true);
                 }
                 AppLogger.Warn($"[NET-304] Catalog not modified but no local cache after unconditional retry: {url}");
                 return new StremioCatalogRoot { Metas = new List<StremioMeta>() };
             }
 
-            response.EnsureSuccessStatusCode();
-            Log($"[NET-200] Catalog FULL LOAD in {sw.ElapsedMilliseconds}ms: {url}");
+            if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                Log($"[NET-404] Catalog NOT FOUND (404): {url}");
+                return new StremioCatalogRoot { Metas = new List<StremioMeta>() };
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Log($"[NET-ERR] Catalog fetch FAILED with {response.StatusCode}: {url}");
+                return new StremioCatalogRoot { Metas = new List<StremioMeta>() };
+            }
+
+            Log($"[NET-200] {etagStatus} Catalog FULL LOAD in {sw.ElapsedMilliseconds}ms: {url}");
 
             // 4. Handle 200 OK
             string json = await response.Content.ReadAsStringAsync(cancellationToken);
             
-            var root = JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioCatalogRoot);
-
-            // 5. Update Cache asynchronously in background
-            if (root?.Metas != null)
+            try 
             {
-                string? newEtag = response.Headers.ETag?.ToString() ?? (response.Headers.TryGetValues("ETag", out var etags) ? etags.FirstOrDefault() : null);
-                
-                var itemsToCache = root.Metas.Select(m => {
-                    var s = new StremioMediaStream(m);
-                    s.SourceAddon = addonBaseUrl;
-                    return s;
-                }).ToList();
-                _ = Task.Run(() => CatalogCacheManager.SaveCatalogBinaryAsync(url, newEtag, itemsToCache));
-            }
+                var root = JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioCatalogRoot);
 
-            return root;
+                // 5. Update Cache asynchronously in background
+                if (root?.Metas != null)
+                {
+                    string? newEtag = response.Headers.ETag?.ToString() ?? (response.Headers.TryGetValues("ETag", out var etags) ? etags.FirstOrDefault() : null);
+                    
+                    var itemsToCache = root.Metas.Select(m => {
+                        var s = new StremioMediaStream(m);
+                        s.SourceAddon = addonBaseUrl;
+                        return s;
+                    }).ToList();
+                    _ = Task.Run(() => CatalogCacheManager.SaveCatalogBinaryAsync(url, newEtag, itemsToCache));
+                }
+
+                return root;
+            }
+            catch (JsonException jex)
+            {
+                Log($"[JSON-ERR] Catalog DESERIALIZATION FAILED for {url}: {jex.Message}");
+                return new StremioCatalogRoot { Metas = new List<StremioMeta>() };
+            }
         }
 
 
@@ -852,7 +889,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         if (string.IsNullOrEmpty(itemYear) || string.IsNullOrEmpty(matchYear) || itemYear == matchYear)
                         {
                             item.IsAvailableOnIptv = true;
-                            if (string.IsNullOrEmpty(item.IMDbId) && !string.IsNullOrEmpty(iptvMatch.IMDbId)) item.IMDbIdRaw = iptvMatch.IMDbId;
+                            if (string.IsNullOrEmpty(item.IMDbId) && !string.IsNullOrEmpty(iptvMatch.IMDbId)) item.Meta.Id = iptvMatch.IMDbId;
                             AppLogger.Info($"[StremioService] Lazy Match Success: '{item.Title}' -> IPTV Match found.");
                         }
                     }
@@ -864,7 +901,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         {
             existing.SourceAddon ??= incoming.SourceAddon;
             if (incoming.IsAvailableOnIptv) existing.IsAvailableOnIptv = true;
-            if (string.IsNullOrEmpty(existing.IMDbId) && !string.IsNullOrEmpty(incoming.IMDbId)) existing.IMDbIdRaw = incoming.IMDbId;
+            if (string.IsNullOrEmpty(existing.IMDbId) && !string.IsNullOrEmpty(incoming.IMDbId)) existing.Meta.Id = incoming.IMDbId;
             if (string.IsNullOrEmpty(existing.PosterUrl) && !string.IsNullOrEmpty(incoming.PosterUrl)) existing.PosterUrl = incoming.PosterUrl;
             if (string.IsNullOrEmpty(existing.Description) && !string.IsNullOrEmpty(incoming.Meta?.Description)) existing.Meta.Description = incoming.Meta.Description;
         }

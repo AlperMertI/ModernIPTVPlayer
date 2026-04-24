@@ -28,6 +28,7 @@ namespace ModernIPTVPlayer.Controls
         public List<string> Options { get; set; }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class GenreSelectionOverlay : UserControl
     {
         public event EventHandler<GenreSelectionArgs> SelectionMade;

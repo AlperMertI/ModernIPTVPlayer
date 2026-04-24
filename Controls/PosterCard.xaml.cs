@@ -6,9 +6,11 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using System;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using Windows.UI;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -156,46 +158,123 @@ namespace ModernIPTVPlayer.Controls
             FadeInStoryboard?.Stop();
         }
         
-        private DispatcherTimer? _hoverTimer;
+        private Microsoft.UI.Dispatching.DispatcherQueueTimer? _hoverTimer;
         private System.Threading.CancellationTokenSource? _renderCts;
+        private string? _lastUrl;
+        private double _lastWidth;
 
         public PosterCard()
         {
             this.InitializeComponent();
-            this.DataContextChanged += (s, e) => UpdateIPTVBadgeVisibility();
+            this.DataContextChanged += (s, e) => 
+            {
+                UpdateIPTVBadgeVisibility();
+                // Mandatory update when recycled with new data
+                UpdateImage();
+            };
+            
+            // Native fix for virtualization and window-resize pop-in
+            this.EffectiveViewportChanged += (s, e) => UpdateImage();
+
+            // [SENIOR FIX: First-Item Initialization Guard]
+            // If the item starts in the viewport but layout hasn't finished, 
+            // the width might be 0. We must force a reload once the width is known.
+            this.SizeChanged += (s, e) => 
+            {
+                if (_lastWidth <= 160 && e.NewSize.Width > 0 && Math.Abs(e.NewSize.Width - _lastWidth) > 5)
+                {
+                    UpdateImage();
+                }
+            };
         }
+    
 
 
         private void UpdateImage()
         {
+            var queue = this.DispatcherQueue;
+            if (queue == null) return;
+
+            if (!queue.HasThreadAccess)
+            {
+                queue.TryEnqueue(UpdateImage);
+                return;
+            }
+
+            // [PRECISION] Calculate target width. If layout is not ready (0), 
+            // use a safe fallback for the first pass.
+            double actualWidth = this.ActualWidth;
+            bool isLayoutReady = actualWidth > 0;
+            if (!isLayoutReady) actualWidth = 160;
+
+            double targetWidth = Math.Round(actualWidth / 10.0) * 10.0;
+            string itemTitle = Title ?? "Unknown";
+
             if (string.IsNullOrEmpty(ImageUrl))
             {
+                _lastUrl = null;
+                _lastWidth = 0;
                 PosterImage.Source = null;
                 PosterImage.Opacity = 0;
                 PosterShimmer.Visibility = Visibility.Collapsed;
-                // No valid URL -> Only show centered placeholder
+                return;
+            }
+
+            // [VIRTUALIZATION GUARD] If the current source is already correct and not null, 
+            // skip the entire expensive re-initialization to avoid flickers.
+            if (PosterImage.Source != null && ImageUrl == _lastUrl && targetWidth == _lastWidth)
+            {
+                if (PosterImage.Opacity < 1 && PosterShimmer.Visibility == Visibility.Collapsed)
+                {
+                    PosterImage.Opacity = 1;
+                }
+                return;
+            }
+
+            var bitmap = SharedImageManager.GetOptimizedImage(
+                ImageUrl, 
+                targetWidth: targetWidth, 
+                xamlRoot: this.XamlRoot);
+
+            if (bitmap == null) return;
+
+            // [SENIOR OPTIMIZATION: Flicker-Free Resolve]
+            bool isResolutionUpgrade = (_lastUrl == ImageUrl && PosterImage.Source != null);
+
+            // [NATIVE FIX: Surface Integrity Check]
+            // If the bitmap has been in RAM for a long time, its UriSource might be intact 
+            // but its underlying rendering surface might have been evicted.
+            bool isDormant = (bitmap.PixelWidth == 0 && bitmap.UriSource != null && !isResolutionUpgrade);
+
+            if ((bitmap.PixelWidth > 0 || bitmap.PixelHeight > 0) && !isDormant)
+            {
+                // [SENIOR OPTIMIZATION: Zero-Blink Hit]
+                _lastUrl = ImageUrl;
+                _lastWidth = targetWidth;
+
+                if (PosterImage.Source != bitmap) PosterImage.Source = bitmap;
+                PosterImage.Opacity = 1;
+                PosterShimmer.Visibility = Visibility.Collapsed;
+                FadeInStoryboard?.Stop();
             }
             else
             {
-                PrepareForLoading();
-                var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                bitmapImage.DecodePixelWidth = 200; // Slightly larger than 160 for quality
+                // [SENIOR OPTIMIZATION: Flicker-Free / Surface Refresh]
+                _lastUrl = ImageUrl;
+                _lastWidth = targetWidth;
 
-                try
+                if (!isResolutionUpgrade)
                 {
-                    bitmapImage.UriSource = new Uri(ImageUrl);
-                }
-                catch (Exception ex)
-                {
-                    ModernIPTVPlayer.Services.AppLogger.Error($"[PosterCard] Invalid ImageUrl: '{ImageUrl}'", ex);
-                    bitmapImage.UriSource = null;
+                    PrepareForLoading();
                 }
                 
-                PosterImage.Source = bitmapImage;
+                // If the surface is dormant/evicted, re-setting UriSource forces a native refresh
+                if (isDormant) bitmap.UriSource = new Uri(ImageUrl);
                 
-                // Note: Animation will be triggered in Image_ImageOpened
-                UpdateIPTVBadgeVisibility();
+                PosterImage.Source = bitmap;
             }
+            
+            UpdateIPTVBadgeVisibility();
         }
 
         private static void OnIPTVStateChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -211,7 +290,8 @@ namespace ModernIPTVPlayer.Controls
             if (IptvBadge == null) return;
             
             bool isIptvSource = false;
-            if (DataContext is StremioMediaStream stream)
+            object ctx = DataContext;
+            if (ctx is StremioMediaStream stream)
             {
                 isIptvSource = stream.IsAvailableOnIptv || stream.IsIptv;
             }
@@ -226,9 +306,8 @@ namespace ModernIPTVPlayer.Controls
             UpdateIPTVBadgeVisibility();
         }
 
-    private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
+        private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
         {
-            // If the image fails to load, just show blank (TitleOverlay hidden by default)
             PosterShimmer.Visibility = Visibility.Collapsed;
             PosterImage.Opacity = 0;
         }
@@ -242,6 +321,11 @@ namespace ModernIPTVPlayer.Controls
         {
             _renderCts?.Cancel();
             _renderCts = null;
+            
+            // [STABILITY] We no longer clear PosterImage.Source here.
+            // ItemsRepeater recycles these controls; clearing the source forces a 
+            // re-download/re-decode on every scroll, causing "flicker".
+            
             ResetHoverState();
         }
 
@@ -308,10 +392,9 @@ namespace ModernIPTVPlayer.Controls
         private void OnTapped(object sender, TappedRoutedEventArgs e)
         {
             e.Handled = true;
-            System.Diagnostics.Debug.WriteLine($"[PosterCard] Tapped! DataContext: {DataContext?.GetType().Name}");
-            
-            IMediaStream? stream = DataContext as IMediaStream;
-            if (stream == null && DataContext is UnifiedMediaItemContext contextWrap)
+            object ctx = DataContext;
+            IMediaStream? stream = ctx as IMediaStream;
+            if (stream == null && ctx is UnifiedMediaItemContext contextWrap)
             {
                 stream = contextWrap.Data;
             }

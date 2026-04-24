@@ -4,6 +4,7 @@ using System;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class BooleanToVisibilityConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)

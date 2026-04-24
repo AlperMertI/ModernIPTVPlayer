@@ -1,5 +1,6 @@
-﻿namespace ModernIPTVPlayer.Models.Stremio
+namespace ModernIPTVPlayer.Models.Stremio
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class GenreSelectionArgs
     {
         public string AddonId { get; set; }

@@ -23,53 +23,36 @@
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <VisualStateManager.VisualStateGroups>
-            <VisualStateGroup x:Name="HoverStates">
-                <VisualState x:Name="Normal"/>
-                <VisualState x:Name="PointerOver">
+            <VisualStateGroup x:Name="LoadingStates">
+                <VisualState x:Name="Loading">
                     <VisualState.Setters>
-                        <Setter Target="ScrollRightButton.Visibility" Value="Visible"/>
-                        <Setter Target="ScrollLeftButton.Visibility" Value="Visible"/>
+                        <Setter Target="ShimmerPanel.Visibility" Value="Visible"/>
+                        <Setter Target="ItemsScrollViewer.Visibility" Value="Collapsed"/>
+                        <Setter Target="RootPanel.Opacity" Value="0.6"/>
                     </VisualState.Setters>
                 </VisualState>
-            </VisualStateGroup>
-            
-            <VisualStateGroup x:Name="RowStyleStates">
-                <VisualState x:Name="Standard">
+                <VisualState x:Name="ContentReady">
                     <VisualState.Setters>
-                        <Setter Target="S1.Width" Value="152"/>
-                        <Setter Target="S1.Height" Value="232"/>
-                        <Setter Target="S1.Margin" Value="10,10,14,10"/>
-                        <Setter Target="S2.Width" Value="152"/>
-                        <Setter Target="S2.Height" Value="232"/>
-                        <Setter Target="S2.Margin" Value="10,10,14,10"/>
-                        <Setter Target="S3.Width" Value="152"/>
-                        <Setter Target="S3.Height" Value="232"/>
-                        <Setter Target="S3.Margin" Value="10,10,14,10"/>
-                        <Setter Target="S4.Width" Value="152"/>
-                        <Setter Target="S4.Height" Value="232"/>
-                        <Setter Target="S4.Margin" Value="10,10,14,10"/>
-                        <Setter Target="S5.Width" Value="152"/>
-                        <Setter Target="S5.Height" Value="232"/>
-                        <Setter Target="S5.Margin" Value="10,10,14,10"/>
+                        <Setter Target="ShimmerPanel.Visibility" Value="Collapsed"/>
+                        <Setter Target="ItemsScrollViewer.Visibility" Value="Visible"/>
+                        <Setter Target="RootPanel.Opacity" Value="1"/>
                     </VisualState.Setters>
+                    <Storyboard>
+                        <DoubleAnimation Storyboard.TargetName="EntranceTranslation" 
+                                         Storyboard.TargetProperty="Y" 
+                                         To="0" Duration="0:0:0.6">
+                            <DoubleAnimation.EasingFunction>
+                                <CubicEase EasingMode="EaseOut"/>
+                            </DoubleAnimation.EasingFunction>
+                        </DoubleAnimation>
+                        <DoubleAnimation Storyboard.TargetName="RootPanel" 
+                                         Storyboard.TargetProperty="Opacity" 
+                                         To="1" Duration="0:0:0.4"/>
+                    </Storyboard>
                 </VisualState>
-                <VisualState x:Name="Landscape">
+                <VisualState x:Name="Empty">
                     <VisualState.Setters>
-                        <Setter Target="S1.Width" Value="272"/>
-                        <Setter Target="S1.Height" Value="152"/>
-                        <Setter Target="S1.Margin" Value="12,12,16,12"/>
-                        <Setter Target="S2.Width" Value="272"/>
-                        <Setter Target="S2.Height" Value="152"/>
-                        <Setter Target="S2.Margin" Value="12,12,16,12"/>
-                        <Setter Target="S3.Width" Value="272"/>
-                        <Setter Target="S3.Height" Value="152"/>
-                        <Setter Target="S3.Margin" Value="12,12,16,12"/>
-                        <Setter Target="S4.Width" Value="272"/>
-                        <Setter Target="S4.Height" Value="152"/>
-                        <Setter Target="S4.Margin" Value="12,12,16,12"/>
-                        <Setter Target="S5.Width" Value="272"/>
-                        <Setter Target="S5.Height" Value="152"/>
-                        <Setter Target="S5.Margin" Value="12,12,16,12"/>
+                        <Setter Target="RootPanel.Visibility" Value="Collapsed"/>
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
@@ -116,11 +99,12 @@
                           IsHorizontalScrollChainingEnabled="False"
                           AllowFocusOnInteraction="False"
                           IsTabStop="False"
-                          Visibility="{x:Bind IsLoading, Mode=OneWay, Converter={StaticResource BoolToCollapsedConverter}}"
+                          Visibility="Collapsed"
                           Loaded="ItemsScrollViewer_Loaded">
                 <ItemsRepeater x:Name="Repeater" 
                                ItemsSource="{x:Bind ItemsSource, Mode=OneWay}"
                                ItemTemplate="{x:Bind ItemTemplate, Mode=OneWay}"
+                               HorizontalCacheLength="2.0"
                                ElementPrepared="Repeater_ElementPrepared"
                                ElementClearing="Repeater_ElementClearing"
                                ManipulationMode="TranslateX, System"

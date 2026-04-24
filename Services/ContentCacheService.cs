@@ -527,21 +527,21 @@ namespace ModernIPTVPlayer.Services
                     if (delay <= TimeSpan.Zero)
                     {
                         // Interval passed! Trigger sync.
-                        System.Diagnostics.Debug.WriteLine($"[Sync] Threshold reached. Triggering CacheExpired event. (Interval: {AppSettings.CacheIntervalMinutes}m)");
+                        AppLogger.Info($"[Sync.Scheduler] Cycle triggered: Cache interval ({AppSettings.CacheIntervalMinutes}m) reached. Target: Live Content Revalidation.");
                         CacheExpired?.Invoke(this, EventArgs.Empty);
                         
                         // After trigger, wait for the FULL next interval
                         delay = interval;
                     }
 
-                    System.Diagnostics.Debug.WriteLine($"[Sync] Next sync scheduled in {delay.TotalMinutes:F1} minutes.");
+                    AppLogger.Info($"[Sync.Scheduler] Sleeping: Next maintenance cycle scheduled for {DateTime.Now.Add(delay):HH:mm:ss} (in {delay.TotalMinutes:F1} min).");
                     await Task.Delay(delay, ct);
                 }
             }
             catch (TaskCanceledException) { /* Setting changed, rescheduling... */ }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Sync] Error in sync loop: {ex.Message}");
+                AppLogger.Warn($"[Sync.Scheduler] ERROR in background loop: {ex.Message}");
                 await Task.Delay(TimeSpan.FromMinutes(15), ct); // Fallback retry
             }
         }
@@ -578,33 +578,35 @@ namespace ModernIPTVPlayer.Services
             bool hasVod = _streamListsCache.ContainsKey($"{GetSafePlaylistId(playlistId)}_vod");
             bool hasSeries = _streamListsCache.ContainsKey($"{GetSafePlaylistId(playlistId)}_series");
 
-            bool needsVod = force || (DateTime.Now - lastVod) > interval || (!hasVod && lastVod != DateTime.MinValue);
-            bool needsSeries = force || (DateTime.Now - lastSeries) > interval || (!hasSeries && lastSeries != DateTime.MinValue);
+            bool needsVod = force || (DateTime.Now - lastVod) > interval;
+            bool needsSeries = force || (DateTime.Now - lastSeries) > interval;
+
             lifecycle.Step("sync_check", new Dictionary<string, object?>
             {
                 ["needsVod"] = needsVod,
                 ["needsSeries"] = needsSeries,
-                ["intervalMin"] = interval.TotalMinutes
+                ["intervalMin"] = interval.TotalMinutes,
+                ["hasVodInRam"] = hasVod,
+                ["hasSeriesInRam"] = hasSeries
             });
             
-            AppLogger.Info($"[ContentCache] Background Sync Cycle STARTED...");
+            AppLogger.Info($"[Sync.Lifecycle] Background cycle starting for playlist: {login.PlaylistName} (Force={force})");
             var startSw = System.Diagnostics.Stopwatch.StartNew();
-            AppLogger.Info($"[ContentCache] Sync Check: playlist={playlistId}, force={force}, lastVod={lastVod}, lastSeries={lastSeries}, interval={interval.TotalMinutes}m, needsVod={needsVod}, needsSeries={needsSeries}");
+            AppLogger.Info($"[Sync.Check] Results: needsVod={needsVod} (Last: {lastVod}), needsSeries={needsSeries} (Last: {lastSeries}), Interval={interval.TotalMinutes}m");
 
-            // Early Index Warmup
-            // If local cache exists, wake up the indexers IMMEDIATELY so search works while syncing.
-            if (hasVod || hasSeries)
+            // [PROACTIVE WARMING]
+            if ((!needsVod && !hasVod && lastVod != DateTime.MinValue) || (!needsSeries && !hasSeries && lastSeries != DateTime.MinValue))
             {
-                AppLogger.Info("[ContentCache] Proactive Warming: Triggering early indexing of existing local cache...");
+                AppLogger.Info("[Sync.Warming] RAM is empty but disk cache is fresh. Triggering proactive disk-to-memory load...");
                 _ = Task.Run(async () => {
-                    if (hasVod) await LoadCacheAsync<VodStream>(playlistId, "vod");
-                    if (hasSeries) await LoadCacheAsync<SeriesStream>(playlistId, "series");
+                    if (!hasVod && lastVod != DateTime.MinValue) await LoadCacheAsync<VodStream>(playlistId, "vod");
+                    if (!hasSeries && lastSeries != DateTime.MinValue) await LoadCacheAsync<SeriesStream>(playlistId, "series");
                 });
             }
 
             if (needsVod || needsSeries)
             {
-                AppLogger.Info($"[ContentCache] Background Sync: Fetching data for {login.PlaylistName} (VOD: {needsVod}, Series: {needsSeries})");
+                AppLogger.Info($"[Sync.Network] INITIATING network fetch (VOD: {needsVod}, Series: {needsSeries})");
                 
                 var tasks = new List<Task>();
 
@@ -691,7 +693,7 @@ namespace ModernIPTVPlayer.Services
             };
             await Task.WhenAll(indexingTasks).ConfigureAwait(false);
             
-            AppLogger.Info($"[Checkpoint] [ContentCache] Background Sync Cycle FINISHED in {startSw.ElapsedMilliseconds}ms.");
+            AppLogger.Info($"[Sync.Lifecycle] Background cycle FINISHED in {startSw.ElapsedMilliseconds}ms.");
 
             // Post-Sync Memory Purge
             // This releases the massive Byte[] buffers back to the OS after the large IO operations.
@@ -1934,9 +1936,9 @@ namespace ModernIPTVPlayer.Services
                 else if (property.SequenceEqual("category_id"u8)) { string? cat = ReadJsonStringValue(ref reader); if (int.TryParse(cat, out int cid)) record.CategoryId = cid; }
                 else if (property.SequenceEqual("imdb_id"u8) || property.SequenceEqual("tmdb"u8) || property.SequenceEqual("tmdb_id"u8)) imdb = AddJsonString(ref reader, heap, out record.ImdbIdOff, out record.ImdbIdLen);
                 else if (property.SequenceEqual("plot"u8) || property.SequenceEqual("description"u8)) AddJsonString(ref reader, heap, out record.PlotOff, out record.PlotLen);
-                else if (property.SequenceEqual("genre"u8) || property.SequenceEqual("genres"u8)) AddJsonString(ref reader, heap, out record.GenresOff, out record.GenresLen);
-                else if (property.SequenceEqual("cast"u8)) AddJsonString(ref reader, heap, out record.CastOff, out record.CastLen);
-                else if (property.SequenceEqual("director"u8)) AddJsonString(ref reader, heap, out record.DirectorOff, out record.DirectorLen);
+                else if (property.SequenceEqual("genre"u8) || property.SequenceEqual("genres"u8)) AddJsonStringOrArray(ref reader, heap, out record.GenresOff, out record.GenresLen, ", ");
+                else if (property.SequenceEqual("cast"u8)) AddJsonStringOrArray(ref reader, heap, out record.CastOff, out record.CastLen, ", ");
+                else if (property.SequenceEqual("director"u8)) AddJsonStringOrArray(ref reader, heap, out record.DirectorOff, out record.DirectorLen, ", ");
                 else if (property.SequenceEqual("youtube_trailer"u8) || property.SequenceEqual("trailer"u8)) AddJsonString(ref reader, heap, out record.TrailerOff, out record.TrailerLen);
                 else if (property.SequenceEqual("backdrop_path"u8) || property.SequenceEqual("backdrop"u8)) AddJsonStringOrArray(ref reader, heap, out record.BackdropOff, out record.BackdropLen);
                 else if (property.SequenceEqual("rating"u8) || property.SequenceEqual("rating_5based"u8)) { AddJsonString(ref reader, heap, out record.RatingOff, out record.RatingLen); rating = ReadJsonStringValue(ref reader); }
@@ -1986,9 +1988,9 @@ namespace ModernIPTVPlayer.Services
                 else if (property.SequenceEqual("category_id"u8)) record.CategoryId = ReadJsonInt32(ref reader);
                 else if (property.SequenceEqual("imdb_id"u8) || property.SequenceEqual("tmdb"u8) || property.SequenceEqual("tmdb_id"u8)) { AddJsonString(ref reader, heap, out record.ImdbIdOff, out record.ImdbIdLen); imdb = ReadJsonStringValue(ref reader); }
                 else if (property.SequenceEqual("plot"u8) || property.SequenceEqual("description"u8)) AddJsonString(ref reader, heap, out record.PlotOff, out record.PlotLen);
-                else if (property.SequenceEqual("genre"u8) || property.SequenceEqual("genres"u8)) AddJsonString(ref reader, heap, out record.GenresOff, out record.GenresLen);
-                else if (property.SequenceEqual("cast"u8)) AddJsonString(ref reader, heap, out record.CastOff, out record.CastLen);
-                else if (property.SequenceEqual("director"u8)) AddJsonString(ref reader, heap, out record.DirectorOff, out record.DirectorLen);
+                else if (property.SequenceEqual("genre"u8) || property.SequenceEqual("genres"u8)) AddJsonStringOrArray(ref reader, heap, out record.GenresOff, out record.GenresLen, ", ");
+                else if (property.SequenceEqual("cast"u8)) AddJsonStringOrArray(ref reader, heap, out record.CastOff, out record.CastLen, ", ");
+                else if (property.SequenceEqual("director"u8)) AddJsonStringOrArray(ref reader, heap, out record.DirectorOff, out record.DirectorLen, ", ");
                 else if (property.SequenceEqual("youtube_trailer"u8) || property.SequenceEqual("trailer"u8)) AddJsonString(ref reader, heap, out record.TrailerOff, out record.TrailerLen);
                 else if (property.SequenceEqual("backdrop_path"u8) || property.SequenceEqual("backdrop"u8)) AddJsonStringOrArray(ref reader, heap, out record.BackdropOff, out record.BackdropLen);
                 else if (property.SequenceEqual("rating"u8) || property.SequenceEqual("rating_5based"u8)) { AddJsonString(ref reader, heap, out record.RatingOff, out record.RatingLen); rating = ReadJsonStringValue(ref reader); }
@@ -2164,7 +2166,7 @@ namespace ModernIPTVPlayer.Services
             return val;
         }
 
-        private static void AddJsonStringOrArray(ref Utf8JsonReader reader, Utf8StringWriter heap, out int offset, out int length)
+        private static void AddJsonStringOrArray(ref Utf8JsonReader reader, Utf8StringWriter heap, out int offset, out int length, string separator = "|")
         {
             if (reader.TokenType != JsonTokenType.StartArray)
             {
@@ -2173,12 +2175,13 @@ namespace ModernIPTVPlayer.Services
             }
 
             using var writer = new ArrayPoolBufferWriter<byte>(1024);
+            byte[] sepBytes = Encoding.UTF8.GetBytes(separator);
             bool first = true;
             while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
             {
                 if (reader.TokenType == JsonTokenType.String)
                 {
-                    if (!first) writer.Write("|"u8);
+                    if (!first) writer.Write(sepBytes);
                     writer.Write(reader.HasValueSequence ? reader.ValueSequence.ToArray() : reader.ValueSpan);
                     first = false;
                 }
@@ -2756,7 +2759,7 @@ namespace ModernIPTVPlayer.Services
             finally { _diskSemaphore.Release(); }
         }
 
-        private async Task SaveVodStreamsBinaryInternalAsync(string playlistId, List<VodStream> streams)
+        private async Task SaveVodStreamsBinaryInternalAsync(string playlistId, IReadOnlyList<VodStream> streams)
         {
             string safeId = GetSafePlaylistId(playlistId);
             string fileName = $"cache_{safeId}_vod.bin";
@@ -2900,7 +2903,7 @@ namespace ModernIPTVPlayer.Services
             finally { _diskSemaphore.Release(); }
         }
 
-        private async Task SaveSeriesStreamsBinaryInternalAsync(string playlistId, List<SeriesStream> streams)
+        private async Task SaveSeriesStreamsBinaryInternalAsync(string playlistId, IReadOnlyList<SeriesStream> streams)
         {
             string safeId = GetSafePlaylistId(playlistId);
             string fileName = $"cache_{safeId}_series.bin";
@@ -3919,18 +3922,15 @@ namespace ModernIPTVPlayer.Services
                 {
                     if (category == "vod" && data is IReadOnlyList<VodStream> vods)
                     {
-                        var list = vods as List<VodStream> ?? vods.ToList();
-                        await SaveVodStreamsBinaryInternalAsync(playlistId, list);
+                        await SaveVodStreamsBinaryInternalAsync(playlistId, vods);
                     }
                     else if (category == "series" && data is IReadOnlyList<SeriesStream> seriesRo)
                     {
-                        var list = seriesRo as List<SeriesStream> ?? seriesRo.ToList();
-                        await SaveSeriesStreamsBinaryInternalAsync(playlistId, list);
+                        await SaveSeriesStreamsBinaryInternalAsync(playlistId, seriesRo);
                     }
                     else if (category == "live_streams" && data is IReadOnlyList<LiveStream> liveRo)
                     {
-                        var list = liveRo as List<LiveStream> ?? liveRo.ToList();
-                        await SaveLiveStreamsBinaryInternalAsync(playlistId, list);
+                        await SaveLiveStreamsBinaryInternalAsync(playlistId, liveRo);
                     }
                 }
                 finally

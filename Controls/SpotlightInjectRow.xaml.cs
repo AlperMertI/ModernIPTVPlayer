@@ -10,22 +10,27 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
 using System.Numerics;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class SpotlightInjectRow : UserControl
     {
-        private WebView2 _webView;
+        // PROJECT ZERO: Shared WebView2 handled via TrailerPoolService.
+        private WebView2? _webView; 
         // Shared WebView2 environment is now managed by WebView2Service
         private readonly string _instanceId = Guid.NewGuid().ToString("N");
         private List<StremioMediaStream> _items = new List<StremioMediaStream>();
         private int _currentIndex = 0;
         private bool _isTrailerPlaying = false;
+        private readonly System.Threading.SemaphoreSlim _playLock = new System.Threading.SemaphoreSlim(1, 1);
         private readonly List<string> _currentImageCandidates = new List<string>();
         private int _currentImageCandidateIndex = 0;
         private CompositionClip? _videoClip;
@@ -109,16 +114,99 @@ namespace ModernIPTVPlayer.Controls
 
         public SpotlightInjectRow()
         {
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("SpotlightInjectRow.xaml.cs:ctor", "enter", null, "H-RENDER"); } catch { }
+            // #endregion
             this.InitializeComponent();
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("SpotlightInjectRow.xaml.cs:ctor", "InitializeComponent done", null, "H-RENDER"); } catch { }
+            // #endregion
+            this.Loaded += UserControl_Loaded;
+            this.Unloaded += UserControl_Unloaded;
+
+            // [SENIOR REACTIVE FIX] Listen for global metadata updates. 
+            // When the background enrichment worker finds a trailer for our current item, 
+            // we catch the signal and trigger playback immediately.
+            StremioMediaStream.OnMetadataUpdated += HandleGlobalMetadataUpdated;
+
             this.DataContextChanged += SpotlightInjectRow_DataContextChanged;
             this.EffectiveViewportChanged += SpotlightInjectRow_EffectiveViewportChanged;
-            this.Unloaded += SpotlightInjectRow_Unloaded;
+            this.SizeChanged += (s, e) => { UpdateClips(); SynchronizeViewport(); };
             FallbackImage.ImageFailed += FallbackImage_ImageFailed;
             
-            // Apply initial clips on load and track size changes for both containers
-            this.Loaded += (s, e) => UpdateClips();
+            // [STREMIO_DEBUG] Subscriptions moved to Loaded/Unloaded
             if (VideoContainer != null) VideoContainer.SizeChanged += (s, e) => UpdateClips();
             if (ContainerBorder != null) ContainerBorder.SizeChanged += (s, e) => UpdateClips();
+        }
+
+        private void HandleGlobalMetadataUpdated(string id)
+        {
+            // [SENIOR GUARD] Only react if this row is currently visible AND the updated ID matches our current spotlight item.
+            if (!_isInViewport || _items == null || _currentIndex >= _items.Count) return;
+
+            var currentItem = _items[_currentIndex];
+            if (currentItem.IMDbId == id || currentItem.Meta?.Id == id)
+            {
+                // Must be on UI thread for UI updates and WebView acquisition
+                DispatcherQueue.TryEnqueue(async () => 
+                {
+                    // Refresh UI fields (Description, Genres, etc.) that might have been updated
+                    UpdateUI();
+
+                    // Trigger trailer load now that we have fresh metadata
+                    System.Diagnostics.Debug.WriteLine($"[Spotlight] Metadata updated for {currentItem.Title}. Triggering trailer load.");
+                    await TryLoadTrailerAsync();
+                });
+            }
+        }
+
+        private void Instance_TrailerMessageReceived(object? sender, string e)
+        {
+            // [STREMIO_DEBUG: OWNERSHIP GUARD]
+            // Critically important: Only the row that actually has the WebView inside its VideoContainer 
+            // should react to READY messages. This prevents "zombie" reveals.
+            if (TrailerPoolService.Instance.CurrentContainer != VideoContainer)
+            {
+                return; 
+            }
+
+            if (e.StartsWith("READY"))
+            {
+                OnTrailerMessageReceived(e);
+            }
+        }
+
+        private void LogoImage_ImageOpened(object sender, RoutedEventArgs e)
+        {
+            if (LogoImage.Source is BitmapImage bi)
+            {
+                if (bi.PixelWidth > 0 && bi.PixelWidth < 10 && bi.PixelHeight < 10)
+                {
+                    if (_currentIndex >= 0 && _currentIndex < _items.Count)
+                    {
+                        var item = _items[_currentIndex];
+                        item.LogoLoadFailed = true;
+                    }
+                    LogoImage.Visibility = Visibility.Collapsed;
+                    TitleBlock.Visibility = Visibility.Visible;
+                    return;
+                }
+            }
+
+            // [SUCCESS] We have a real logo. Hide the title fallback.
+            TitleBlock.Visibility = Visibility.Collapsed;
+            LogoImage.Visibility = Visibility.Visible;
+        }
+
+        private void LogoImage_ImageFailed(object sender, ExceptionRoutedEventArgs e)
+        {
+            if (_currentIndex >= 0 && _currentIndex < _items.Count)
+            {
+                var item = _items[_currentIndex];
+                item.LogoLoadFailed = true;
+                LogoImage.Visibility = Visibility.Collapsed;
+                TitleBlock.Visibility = Visibility.Visible;
+            }
         }
 
         private void UserControl_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -153,6 +241,7 @@ namespace ModernIPTVPlayer.Controls
                                 geometry.CornerRadius = new Vector2(20, 20);
                                 _borderClip = compositor.CreateGeometricClip(geometry);
                                 borderVisual.Clip = _borderClip;
+                                System.Diagnostics.Debug.WriteLine("[SPOTLIGHT_VIEW_DEBUG] Border clip created.");
                             }
                             catch (Exception ex)
                             {
@@ -172,6 +261,7 @@ namespace ModernIPTVPlayer.Controls
                                 // Apply to both ContentGrid (for image) and VideoContainer (for video)
                                 contentVisual.Clip = _videoClip;
                                 videoVisual.Clip = _videoClip;
+                                System.Diagnostics.Debug.WriteLine("[SPOTLIGHT_VIEW_DEBUG] Video clip created and applied.");
                             }
                             catch (Exception ex)
                             {
@@ -185,6 +275,13 @@ namespace ModernIPTVPlayer.Controls
                         {
                             try
                             {
+                                // [FIX] If layout hasn't finished, don't clip everything away
+                                if (ContainerBorder.ActualWidth <= 0 || ContainerBorder.ActualHeight <= 0)
+                                {
+                                    ContainerGrid.Clip = null;
+                                    return;
+                                }
+
                                 borderGeometry.Size = new Vector2((float)ContainerBorder.ActualWidth, (float)ContainerBorder.ActualHeight);
                                 borderGeometry.Offset = Vector2.Zero;
                             }
@@ -217,6 +314,12 @@ namespace ModernIPTVPlayer.Controls
                             }
                             catch (Exception) { }
                         }
+                        
+                        // [PRECISION LOG] Trace actual clipping sizes
+                        if (_videoClip is CompositionGeometricClip vgc && vgc.Geometry is CompositionRoundedRectangleGeometry vrg)
+                        {
+                             // System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_VIEW_DEBUG] Current Clip Size: {vrg.Size.X}x{vrg.Size.Y}");
+                        }
                     }
                 }
             }
@@ -237,7 +340,10 @@ namespace ModernIPTVPlayer.Controls
 
             if (_lastItemsCollection != null)
             {
-                _lastItemsCollection.CollectionChanged -= Items_CollectionChanged;
+                if (_lastItemsCollection is System.Collections.Specialized.INotifyCollectionChanged notify)
+                {
+                    notify.CollectionChanged -= Items_CollectionChanged;
+                }
                 _lastItemsCollection = null;
             }
 
@@ -250,13 +356,15 @@ namespace ModernIPTVPlayer.Controls
             _debounceTimer?.Stop();
             _debounceTimer = null;
 
+            TrailerPoolService.Instance.TrailerMessageReceived -= Instance_TrailerMessageReceived;
             CleanupWebView();
+            _isInViewport = false;
         }
 
         private string _pendingTrailerId = null;
         private bool _isInViewport = false;
 
-        private ObservableCollection<StremioMediaStream>? _lastItemsCollection = null;
+        private System.Collections.IList? _lastItemsCollection = null;
         private CatalogRowViewModel? _lastVm = null;
         private DispatcherTimer? _debounceTimer;
 
@@ -272,16 +380,16 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void SwitchItemsCollection(ObservableCollection<StremioMediaStream>? newCollection)
+        private void SwitchItemsCollection(System.Collections.IList? newCollection)
         {
-            if (_lastItemsCollection != null)
+            if (_lastItemsCollection is System.Collections.Specialized.INotifyCollectionChanged oldNotify)
             {
-                _lastItemsCollection.CollectionChanged -= Items_CollectionChanged;
+                oldNotify.CollectionChanged -= Items_CollectionChanged;
             }
             _lastItemsCollection = newCollection;
-            if (_lastItemsCollection != null)
+            if (_lastItemsCollection is System.Collections.Specialized.INotifyCollectionChanged newNotify)
             {
-                _lastItemsCollection.CollectionChanged += Items_CollectionChanged;
+                newNotify.CollectionChanged += Items_CollectionChanged;
             }
         }
 
@@ -304,20 +412,74 @@ namespace ModernIPTVPlayer.Controls
             
             try
             {
-                var viewport = args.EffectiveViewport;
-                var componentHeight = sender.ActualHeight;
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    SynchronizeViewport();
+                });
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Spotlight] ViewportChanged error: {ex.Message}");
+            }
+        }
 
-                // If more than 50% is visible
-                bool isHighlyVisible = viewport.Height > (componentHeight * 0.5);
+        /// <summary>
+        /// [STREMIO_DEBUG: NATIVE ARCHITECTURE]
+        /// Manually synchronizes the viewport state with WinUI's actual rendering state.
+        /// This is the proper way to handle initial visibility in virtualized repeaters.
+        /// </summary>
+        private DispatcherTimer? _syncDebounceTimer;
 
-                if (isHighlyVisible && !_isInViewport)
+        public void SynchronizeViewport()
+        {
+            if (this.XamlRoot == null) return;
+
+            if (_syncDebounceTimer == null)
+            {
+                _syncDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+                _syncDebounceTimer.Tick += (s, e) =>
+                {
+                    _syncDebounceTimer.Stop();
+                    ExecuteSync();
+                };
+            }
+            _syncDebounceTimer.Stop();
+            _syncDebounceTimer.Start();
+        }
+
+        private void ExecuteSync()
+        {
+            if (this.XamlRoot == null) return;
+            
+            try
+            {
+                var transform = this.TransformToVisual(this.XamlRoot.Content);
+                var bounds = transform.TransformBounds(new Windows.Foundation.Rect(0, 0, ActualWidth, ActualHeight));
+                var hostHeight = this.XamlRoot.Size.Height;
+
+                // [FIX] Robust height calculation for initial layout pass
+                double targetHeight = ActualHeight > 0 ? ActualHeight : 400;
+
+                double visibleHeight = Math.Min(bounds.Y + bounds.Height, hostHeight) - Math.Max(bounds.Y, 0);
+                bool isHighlyVisible = visibleHeight > (targetHeight * 0.5);
+                
+                bool isActualOwner = TrailerPoolService.Instance.CurrentContainer == VideoContainer;
+                
+                // [LOG SILENCE] Only log if we are visible OR if the state is changing.
+                // This prevents off-screen virtualized rows from flooding the logs.
+                if (isHighlyVisible || isHighlyVisible != _isInViewport)
+                {
+                    string movieTitle = _items.Count > _currentIndex ? _items[_currentIndex].Title : "Unknown";
+                    System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_TRACE] {movieTitle} | Y={bounds.Y:F0} | Visible={isHighlyVisible} | Owner={isActualOwner} | InVP={_isInViewport}");
+                }
+
+                // [SENIOR: SELF-HEALING STATE]
+                // We should trigger a load if we are visible AND 
+                // (we weren't before OR we don't currently own the webview OR nothing is playing yet)
+                if (isHighlyVisible && (!_isInViewport || !isActualOwner || !_isTrailerPlaying))
                 {
                     _isInViewport = true;
-                    if (!string.IsNullOrEmpty(_pendingTrailerId) && _webView == null)
-                    {
-                        string ytId = ExtractYouTubeId(_pendingTrailerId);
-                        if (!string.IsNullOrEmpty(ytId)) InitializeWebView(ytId);
-                    }
+                    _ = TryLoadTrailerAsync();
                 }
                 else if (!isHighlyVisible && _isInViewport)
                 {
@@ -327,15 +489,16 @@ namespace ModernIPTVPlayer.Controls
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Spotlight] ViewportChanged error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_ENGINE] Sync Error: {ex.Message}");
             }
         }
 
         private void SpotlightInjectRow_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
         {
+            CleanupWebView();
+            _isInViewport = false; // Reset to force fresh sync
             try
             {
-                CleanupWebView();
                 _pendingTrailerId = null;
 
                 if (_lastVm != null)
@@ -369,8 +532,24 @@ namespace ModernIPTVPlayer.Controls
         {
             if (vm.Items != null && vm.Items.Count > 0)
             {
-                // Preserve current index if possible or reset if items changed completely
-                _items = vm.Items.Take(5).ToList();
+                var newItems = vm.Items.Cast<StremioMediaStream>().Take(5).ToList();
+                
+                // [PERF] Skip if items are identical (prevents double-update during Discovery hydration)
+                if (_items != null && _items.Count == newItems.Count)
+                {
+                    bool identical = true;
+                    for (int i = 0; i < _items.Count; i++)
+                    {
+                        if ((_items[i].IMDbId ?? _items[i].Id.ToString()) != (newItems[i].IMDbId ?? newItems[i].Id.ToString()))
+                        {
+                            identical = false;
+                            break;
+                        }
+                    }
+                    if (identical) return;
+                }
+
+                _items = newItems;
                 _currentIndex = 0;
 
                 // [PRE-LOAD LOGOS] Initial touch for cache
@@ -387,16 +566,7 @@ namespace ModernIPTVPlayer.Controls
                     UpdateUI();
                     AnimateInfoIn(true);
                     UpdateNavigationVisibility();
-                    
-                    _pendingTrailerId = _items[_currentIndex].TrailerUrl; 
-
-                    if (_isInViewport)
-                    {
-                        DispatcherQueue.TryEnqueue(() => 
-                        {
-                            if (_isInViewport) _ = TryLoadTrailerAsync();
-                        });
-                    }
+                    SynchronizeViewport();
                 }
             }
         }
@@ -419,22 +589,92 @@ namespace ModernIPTVPlayer.Controls
             
             SubscribeToItemChanges(item);
 
-            if (!string.IsNullOrEmpty(item.LogoUrl))
+            TitleBlock.Text = item.Title ?? "";
+            
+            System.Diagnostics.Debug.WriteLine($"[Spotlight] UpdateUI: {item.Title} | Logo: {item.LogoUrl} | Failed: {item.LogoLoadFailed}");
+
+            if (!string.IsNullOrEmpty(item.LogoUrl) && !item.LogoLoadFailed)
             {
-                LogoImage.Source = ImageHelper.GetCachedLogo(item.LogoUrl);
-                LogoImage.Visibility = Visibility.Visible;
-                TitleBlock.Visibility = Visibility.Collapsed;
+                var logoSource = ImageHelper.GetCachedLogo(item.LogoUrl);
+                if (logoSource != null)
+                {
+                    // [DETECT LOADED PLACEHOLDER] If image is already in cache, check dimensions immediately
+                    System.Diagnostics.Debug.WriteLine($"[Spotlight] logoSource Dimensions: {logoSource.PixelWidth}x{logoSource.PixelHeight}");
+                    if (logoSource.PixelWidth > 0 && logoSource.PixelWidth < 5 && logoSource.PixelHeight < 5)
+                    {
+                        item.LogoLoadFailed = true;
+                        LogoImage.Visibility = Visibility.Collapsed;
+                        TitleBlock.Visibility = Visibility.Visible;
+                        System.Diagnostics.Debug.WriteLine($"[Spotlight] Logo source was detected as PLACEHOLDER (size {logoSource.PixelWidth}x{logoSource.PixelHeight}). Falling back to Title.");
+                    }
+                    else
+                    {
+                        // [PERF] Only set source if it's actually different to avoid loading loops
+                        if (LogoImage.Source != logoSource)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[Spotlight] Setting Logo Source (New): {item.LogoUrl}");
+                            LogoImage.Source = logoSource;
+                        }
+                        
+                        // [DETECT LOADED PLACEHOLDER] If image is already in cache, check dimensions immediately
+                        if (ImageHelper.IsPlaceholder(item.LogoUrl) || (logoSource.PixelWidth > 0 && logoSource.PixelWidth < 10 && logoSource.PixelHeight < 10))
+                        {
+                            item.LogoLoadFailed = true;
+                            LogoImage.Visibility = Visibility.Collapsed;
+                            TitleBlock.Visibility = Visibility.Visible;
+                        }
+                        else
+                        {
+                            // [PERF] Only set source if it's actually different to avoid loading loops
+                            if (LogoImage.Source != logoSource)
+                            {
+                                LogoImage.Source = logoSource;
+                            }
+                            
+                            // [OPTIMISTIC] Hide title by default if we have a potentially good logo.
+                            // The ImageOpened/ImageFailed handlers will switch back to Title if this logo is a dummy.
+                            LogoImage.Visibility = Visibility.Visible;
+                            TitleBlock.Visibility = Visibility.Collapsed; 
+                        }
+                    }
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"[Spotlight] Logo source was NULL. Falling back to Title.");
+                    LogoImage.Visibility = Visibility.Collapsed;
+                    TitleBlock.Visibility = Visibility.Visible;
+                    System.Diagnostics.Debug.WriteLine($"[Spotlight] UI State: Logo=COLLAPSED, Title=VISIBLE");
+                }
             }
             else
             {
+                System.Diagnostics.Debug.WriteLine($"[Spotlight] No Logo (or Failed). Showing Title: '{TitleBlock.Text}'");
                 LogoImage.Visibility = Visibility.Collapsed;
                 TitleBlock.Visibility = Visibility.Visible;
-                TitleBlock.Text = item.Title ?? "";
+                System.Diagnostics.Debug.WriteLine($"[Spotlight] UI State: Logo=COLLAPSED, Title=VISIBLE");
             }
 
             YearBlock.Text = item.Year ?? "";
-            RatingBlock.Text = item.Rating ?? "";
-            DescriptionBlock.Text = item.Meta?.Description ?? "";
+            
+            // [FIX] Format Rating to N1 (e.g., 8.5) and handle 10x multiplier cases (94.0 -> 9.4)
+            string rawRating = item.Rating ?? "";
+            if (double.TryParse(rawRating.Replace(",", "."), System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double val))
+            {
+                if (val > 10) val /= 10.0;
+                RatingBlock.Text = val.ToString("N1", System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else
+            {
+                RatingBlock.Text = rawRating;
+            }
+
+            DescriptionBlock.Text = item.Overview ?? item.Meta?.Description ?? "";
+            GenresBlock.Text = item.Genres ?? "";
+
+            // Handle visibility of separators if fields are missing
+            YearBlock.Visibility = string.IsNullOrEmpty(YearBlock.Text) ? Visibility.Collapsed : Visibility.Visible;
+            GenresBlock.Visibility = string.IsNullOrEmpty(GenresBlock.Text) ? Visibility.Collapsed : Visibility.Visible;
+            RatingBlock.Visibility = string.IsNullOrEmpty(RatingBlock.Text) ? Visibility.Collapsed : Visibility.Visible;
 
             BuildImageCandidates(item);
             _currentImageCandidateIndex = 0;
@@ -452,7 +692,7 @@ namespace ModernIPTVPlayer.Controls
                 WatchlistButton.Content = new FontIcon { Glyph = "\xE710", FontSize = 16 };
             }
 
-            System.Diagnostics.Debug.WriteLine($"[Spotlight] UI Updated for: {item.Title} (ID: {item.IMDbId}) | Logo: {!string.IsNullOrEmpty(item.LogoUrl)} | Desc: {(!string.IsNullOrEmpty(DescriptionBlock.Text) ? "Yes" : "No")} | ImageCandidates: {_currentImageCandidates.Count}");
+            System.Diagnostics.Debug.WriteLine($"[Spotlight] UI Updated for: {item.Title} (ID: {item.IMDbId}) | Logo: {!string.IsNullOrEmpty(item.LogoUrl)} | Trailer: {!string.IsNullOrEmpty(item.TrailerUrl)} | Desc: {(!string.IsNullOrEmpty(DescriptionBlock.Text) ? "Yes" : "No")} | ImageCandidates: {_currentImageCandidates.Count}");
 
             // Smart Pre-load: Decode next/prev logos
             DispatcherQueue.TryEnqueue(() => 
@@ -563,7 +803,9 @@ namespace ModernIPTVPlayer.Controls
                 DispatcherQueue.TryEnqueue(() =>
                 {
                     // Refresh fields if they might have been enriched
-                    if (e.PropertyName == nameof(item.Title) || e.PropertyName == nameof(item.Description) || 
+                    if (string.IsNullOrEmpty(e.PropertyName) || 
+                        e.PropertyName == nameof(item.Title) || e.PropertyName == nameof(item.Description) || 
+                        e.PropertyName == nameof(item.Overview) || e.PropertyName == nameof(item.TrailerUrl) ||
                         e.PropertyName == nameof(item.Rating) || e.PropertyName == nameof(item.Year) || 
                         e.PropertyName == nameof(item.Genres) || e.PropertyName == nameof(item.LogoUrl) ||
                         e.PropertyName == nameof(item.Banner) || e.PropertyName == nameof(item.BackdropUrl))
@@ -578,6 +820,7 @@ namespace ModernIPTVPlayer.Controls
                                 if (_items.Count > 0 && _currentIndex < _items.Count)
                                 {
                                     UpdateUI();
+                                    SynchronizeViewport(); // [SENIOR] Re-evaluate state now that we have fresh data
                                 }
                             };
                         }
@@ -588,12 +831,19 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private async void UserControl_Loaded(object sender, RoutedEventArgs e)
+        private void UserControl_Loaded(object sender, RoutedEventArgs e)
         {
+            // Ensure single subscription
+            TrailerPoolService.Instance.TrailerMessageReceived -= Instance_TrailerMessageReceived;
+            TrailerPoolService.Instance.TrailerMessageReceived += Instance_TrailerMessageReceived;
+            
+            UpdateClips();
+            SynchronizeViewport();
         }
 
         private void UserControl_Unloaded(object sender, RoutedEventArgs e)
         {
+            StremioMediaStream.OnMetadataUpdated -= HandleGlobalMetadataUpdated;
             CleanupWebView();
         }
 
@@ -601,157 +851,81 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                if (_items.Count == 0 || _currentIndex >= _items.Count) return;
+                if (!_isInViewport || _items == null || _currentIndex >= _items.Count) return;
+
                 var currentItem = _items[_currentIndex];
-                
-                // [OPTIMIZATION] Smooth cross-fade instead of binary collapse
-                _pendingTrailerId = null;
-                _isTrailerPlaying = false;
-                
-                if (VideoContainer != null)
+                string rawTrailer = currentItem.TrailerUrl;
+                string ytId = ExtractYouTubeId(rawTrailer);
+
+                System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_TRACE] TryLoad: {currentItem.Title} | Raw: {rawTrailer ?? "null"} | Extracted: {ytId ?? "null"} | Owner: {TrailerPoolService.Instance.CurrentContainer == VideoContainer}");
+
+                if (string.IsNullOrEmpty(ytId))
                 {
-                    var fadeOut = new Storyboard();
-                    var exitAnim = new DoubleAnimation { To = 0, Duration = TimeSpan.FromMilliseconds(300), EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn } };
-                    Storyboard.SetTarget(exitAnim, VideoContainer);
-                    Storyboard.SetTargetProperty(exitAnim, "Opacity");
-                    fadeOut.Children.Add(exitAnim);
-                    fadeOut.Begin();
+                    System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_TRACE] No valid trailer ID for {currentItem.Title}. Raw: {rawTrailer ?? "null"}");
+                    return;
                 }
 
-                if (ExpandButton != null) ExpandButton.Visibility = Visibility.Collapsed;
-                if (MuteButton != null) MuteButton.Visibility = Visibility.Collapsed;
+                // [GUARD] Avoid restarting the same trailer
+                if (_isTrailerPlaying && _pendingTrailerId == ytId) return;
 
-                if (_webView?.CoreWebView2 != null)
-                {
-                    try { await _webView.CoreWebView2.ExecuteScriptAsync("if(typeof stopVideo === 'function') stopVideo();"); } 
-                    catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"[Spotlight] stopVideo script error: {ex.Message}"); }
-                }
+                _pendingTrailerId = ytId;
+                System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_TRACE] Playing: {currentItem.Title} | YT: {ytId}");
 
-                string trailerId = null;
-
-                // 1. [FAST-PATH] Try existing trailers in meta to switch IMMEDIATELY
-                if (currentItem.Meta?.Trailers != null && currentItem.Meta.Trailers.Count > 0)
-                {
-                    trailerId = currentItem.Meta.Trailers.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Source))?.Source;
-                }
-
-                if (!string.IsNullOrEmpty(trailerId))
-                {
-                    string ytId = ExtractYouTubeId(trailerId);
-                    if (!string.IsNullOrEmpty(ytId))
-                    {
-                        await StartOrSwitchVideoAsync(ytId);
-                    }
-                }
-
-                // 2. Refresh metadata in background to get BETTER trailers if needed
-                Models.Metadata.UnifiedMetadata? discoveryUnified = null;
-                try
-                {
-                    discoveryUnified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(currentItem, Models.Metadata.MetadataContext.Discovery);
-                    if (currentItem != _items[_currentIndex]) return; // Check if item changed during await
-
-                    if (discoveryUnified != null)
-                    {
-                        ApplyUnifiedToSpotlightItem(currentItem, discoveryUnified);
-                        if (!string.IsNullOrEmpty(discoveryUnified.TrailerUrl))
-                        {
-                            string newTrailerId = discoveryUnified.TrailerUrl;
-                            if (newTrailerId != trailerId) // Only switch if it's a different trailer
-                            {
-                                trailerId = newTrailerId;
-                                string ytId = ExtractYouTubeId(trailerId);
-                                if (!string.IsNullOrEmpty(ytId))
-                                {
-                                    await StartOrSwitchVideoAsync(ytId);
-                                    return; // Success, found and started a new trailer
-                                }
-                            }
-                            else if (!string.IsNullOrEmpty(trailerId)) 
-                            {
-                                return; // Already started via fast-path with the same trailer
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[Spotlight] Discovery meta fetch error: {ex.Message}");
-                }
-
-                // 3. Trailer hala yoksa Detail metadata dene.
-                if (string.IsNullOrEmpty(trailerId))
-                {
-                    try
-                    {
-                        var detailUnified = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(currentItem, Models.Metadata.MetadataContext.Spotlight);
-                        if (currentItem != _items[_currentIndex]) return; // Check if item changed during await
-
-                        if (detailUnified != null)
-                        {
-                            ApplyUnifiedToSpotlightItem(currentItem, detailUnified);
-                            if (!string.IsNullOrEmpty(detailUnified.TrailerUrl))
-                            {
-                                string newTrailerId = detailUnified.TrailerUrl;
-                                if (newTrailerId != trailerId)
-                                {
-                                    trailerId = newTrailerId;
-                                    string ytId = ExtractYouTubeId(trailerId);
-                                    if (!string.IsNullOrEmpty(ytId))
-                                    {
-                                        await StartOrSwitchVideoAsync(ytId);
-                                        return; // Success
-                                    }
-                                }
-                                else if (!string.IsNullOrEmpty(trailerId))
-                                {
-                                    return; // Already started via fast-path or discovery with the same trailer
-                                }
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"[Spotlight] Detail meta fetch error: {ex.Message}");
-                    }
-                }
-                
-                if (currentItem != _items[_currentIndex]) return;
-                // If we reach here and still no trailerId, hide video
-                if (string.IsNullOrEmpty(trailerId))
-                {
-                    CleanupWebView();
-                }
+                await StartOrSwitchVideoAsync(ytId);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Spotlight] LoadTrailer Error: {ex.Message}");
-                CleanupWebView();
+                System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_ENGINE] TryLoad Error: {ex.Message}");
             }
         }
 
         private async Task StartOrSwitchVideoAsync(string ytId)
         {
-            if (string.IsNullOrEmpty(ytId) || !_isInViewport) return;
+            if (string.IsNullOrEmpty(ytId)) return;
             
-            _pendingTrailerId = ytId;
+            await _playLock.WaitAsync();
+            try 
+            {
+                System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_TRACE] StartOrSwitch: ID={ytId}, InViewport={_isInViewport}, ActualH={ActualHeight}");
+                
+                // Allow if in viewport OR if we have a valid layout height (initial sync)
+                if (!_isInViewport && ActualHeight <= 0 && _currentIndex != 0) 
+                {
+                    System.Diagnostics.Debug.WriteLine("[SPOTLIGHT_TRACE] StartOrSwitch aborted: Not in viewport and height is 0.");
+                    return;
+                }
+                
+                _pendingTrailerId = ytId;
+                _isTrailerPlaying = false; // [STATE RESET] Ensure next READY triggers a fresh reveal
 
-            if (_webView == null)
-            {
-                InitializeWebView(ytId);
-            }
-            else if (_webView.CoreWebView2 != null)
-            {
-                // Optimization: Switch video within same WebView
-                try 
-                { 
-                    await _webView.CoreWebView2.ExecuteScriptAsync($"if(typeof switchVideo === 'function') switchVideo('{ytId}');"); 
-                } 
-                catch (Exception ex) 
-                { 
-                    System.Diagnostics.Debug.WriteLine($"[Spotlight] switchVideo script error: {ex.Message}"); 
+                // [SMART TRANSITION] 
+                // Only hide the container if we don't have a WebView yet (Initial Load).
+                if (_webView == null && VideoContainer != null) 
+                {
+                    VideoContainer.Opacity = 0;
+                }
+
+                if (_webView == null)
+                {
+                    _webView = await TrailerPoolService.Instance.AcquireAsync(VideoContainer);
+                    if (_webView != null)
+                    {
+                         await TrailerPoolService.Instance.PlayTrailerAsync(_webView, ytId);
+                    }
+                }
+                else if (_webView.CoreWebView2 != null)
+                {
+                    await TrailerPoolService.Instance.PlayTrailerAsync(_webView, ytId);
                 }
                 UpdateMuteButtonIcon();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[Spotlight] StartOrSwitchVideoAsync Error: {ex.Message}");
+            }
+            finally
+            {
+                _playLock.Release();
             }
         }
 
@@ -802,6 +976,19 @@ namespace ModernIPTVPlayer.Controls
                     System.Diagnostics.Debug.WriteLine($"[Spotlight] Invalid image URL skipped: {candidate}");
                     _currentImageCandidateIndex++;
                     continue;
+                }
+
+                if (FallbackImage.Source is BitmapImage currentBmp && currentBmp.UriSource?.AbsoluteUri == candidate)
+                {
+                    return; // Same image, don't flicker
+                }
+
+                // [OPTIMIZATION] Use SharedImageManager for unified backdrop caching
+                var bitmap = SharedImageManager.GetOptimizedImage(candidate, targetWidth: 1280, xamlRoot: this.XamlRoot);
+                if (bitmap != null)
+                {
+                    FallbackImage.Source = bitmap;
+                    return;
                 }
 
                 FallbackImage.Source = new BitmapImage(uri);
@@ -876,205 +1063,56 @@ namespace ModernIPTVPlayer.Controls
             return source;
         }
 
-        private async void InitializeWebView(string ytId)
+        private void OnTrailerMessageReceived(string msg)
         {
-            // Guard against disposal
-            if (!this.IsLoaded || _webView != null || _isTrailerPlaying) return;
-
-            try
-            {
-                // 0. Ensure environment is ready (Managed by WebView2Service)
-                var env = await WebView2Service.GetSharedEnvironmentAsync();
-
-                // Re-check after await
-                if (!this.IsLoaded || _webView != null) return;
-
-                _webView = new WebView2();
-                _webView.HorizontalAlignment = HorizontalAlignment.Stretch;
-                _webView.VerticalAlignment = VerticalAlignment.Stretch;
-                
-                if (VideoContainer != null) 
-                {
-                    // Adding to the grid
-                    VideoContainer.Children.Add(_webView);
-                }
-                else
-                {
-                    _webView = null;
-                    return;
-                }
-
-                await _webView.EnsureCoreWebView2Async(env);
-                if (!this.IsLoaded || _webView == null || _webView.CoreWebView2 == null) return;
-
-                // [FIX] Apply 100% Clean UI Script (Hides Title Flash, Logos, More Videos)
-                await WebView2Service.ApplyYouTubeCleanUISettingsAsync(_webView.CoreWebView2);
-
-                // Apply composition clip immediately after UI tree changes
-                UpdateClips();
-                
-                string virtualHost = $"spotlight-{_instanceId}.moderniptv.local";
-                string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTV_Spotlight", _instanceId);
-                System.IO.Directory.CreateDirectory(tempDir);
-                
-                string htmlContent = $@"<!DOCTYPE html>
-<html>
-<head>
-    <meta charset='UTF-8'>
-    <style>
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        html, body {{ width: 100%; height: 100%; background: #000; overflow: hidden; }}
-        #player {{ 
-            position: absolute; top: 50%; left: 50%;
-            min-width: 177.77vh; min-height: 56.25vw;
-            width: 100vw; height: 56.25vw; transform: translate(-50%, -50%);
-        }}
-    </style>
-</head>
-<body>
-    <div id='player'></div>
-    <script>
-        var tag = document.createElement('script');
-        tag.src = 'https://www.youtube.com/iframe_api';
-        var firstScriptTag = document.getElementsByTagName('script')[0];
-        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
-
-        var player;
-        function onYouTubeIframeAPIReady() {{
-            player = new YT.Player('player', {{
-                height: '100%', width: '100%',
-                videoId: '{ytId}', 
-                host: 'https://www.youtube.com',
-                playerVars: {{
-                    autoplay: 1, mute: 1, controls: 0, disablekb: 1,
-                    fs: 0, rel: 0, modestbranding: 1, showinfo: 0,
-                    iv_load_policy: 3, playsinline: 1, loop: 1, playlist: '{ytId}'
-                }},
-                events: {{
-                    'onReady': function(e) {{ 
-                        e.target.mute(); 
-                        e.target.playVideo(); 
-                        try {{ window.chrome.webview.postMessage('READY'); }} catch(ex) {{}}
-                    }},
-                    'onStateChange': function(e) {{ 
-                        if (e.data === 1) {{ // Playing
-                            if (window._stallTimer) {{ 
-                                clearTimeout(window._stallTimer); 
-                                window._stallTimer = null; 
-                            }}
-                            try {{ window.chrome.webview.postMessage('READY'); }} catch(ex) {{}}
-                        }} else if (e.data === -1 || e.data === 3) {{ // Unstarted / Buffering
-                            if (!window._stallTimer) {{
-                                window._stallTimer = setTimeout(function() {{
-                                    try {{ window.chrome.webview.postMessage('ERROR'); }} catch(ex) {{}}
-                                }}, 10000); // 10 seconds for robustness
-                            }}
-                        }}
-                    }},
-                    'onError': function(e) {{
-                        if (window._stallTimer) {{ 
-                            clearTimeout(window._stallTimer); 
-                            window._stallTimer = null; 
-                        }}
-                        try {{ window.chrome.webview.postMessage('ERROR'); }} catch(ex) {{}}
-                    }}
-                }}
-            }});
-        }}
-
-        function switchVideo(newId) {{
-            if (window._stallTimer) {{ 
-                clearTimeout(window._stallTimer); 
-                window._stallTimer = null; 
-            }}
-            if (player && player.loadVideoById) {{
-                player.loadVideoById({{'videoId': newId, 'startSeconds': 0}});
-                player.playVideo();
-                // Send READY early for smoother UI if switching rapidly
-                try {{ window.chrome.webview.postMessage('READY'); }} catch(ex) {{}}
-            }}
-        }}
-
-        function stopVideo() {{
-            if (player && player.stopVideo) {{
-                player.stopVideo();
-            }}
-        }}
-    </script>
-</body>
-</html>";
-                
-                string htmlPath = System.IO.Path.Combine(tempDir, "index.html");
-                await System.IO.File.WriteAllTextAsync(htmlPath, htmlContent);
-                
-                if (_webView == null || _webView.CoreWebView2 == null) return;
-
-                _webView.CoreWebView2.SetVirtualHostNameToFolderMapping(
-                    virtualHost, tempDir, Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
-
-                _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
-                _webView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
-                _webView.Source = new Uri($"https://{virtualHost}/index.html");
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[Spotlight] WebView Error: {ex.Message}");
-                CleanupWebView();
-            }
-        }
-
-        private void CoreWebView2_WebMessageReceived(CoreWebView2 sender, CoreWebView2WebMessageReceivedEventArgs args)
-        {
-            // [CRASH FIX] This callback fires on a native COM/WebView2 thread, NOT the UI thread.
-            // Any XAML access (Visibility, Storyboard, etc.) from here causes STATUS_FATAL_USER_CALLBACK_EXCEPTION (0xC000027B).
-            // All UI work MUST be marshalled to the UI thread via DispatcherQueue.
-            string msg;
-            try { msg = args.TryGetWebMessageAsString(); }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[Spotlight] WebMessageReceived parse error: {ex.Message}");
-                return;
-            }
-
             DispatcherQueue.TryEnqueue(() =>
             {
-                try
+                if (msg.StartsWith("READY"))
                 {
-                    if (msg == "READY")
+                    string incomingId = msg.Contains(":") ? msg.Split(':')[1] : "";
+                    
+                    // [SENIOR GUARD] Only reveal if the incoming ID matches our pending trailer
+                    if (!string.IsNullOrEmpty(incomingId) && incomingId != _pendingTrailerId)
                     {
-                        _isTrailerPlaying = true;
-                        
-                        if (VideoContainer != null) 
-                        {
-                            VideoContainer.Visibility = Visibility.Visible;
-                            UpdateMuteButtonIcon();
+                        System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_VIEW_DEBUG] READY Ignored: ID Mismatch. Expected={_pendingTrailerId}, Got={incomingId}");
+                        return;
+                    }
 
-                            // Smooth Fade-In Reveal
-                            var sb = new Storyboard();
-                            var anim = new DoubleAnimation 
-                            { 
-                                To = 0.8, 
-                                Duration = TimeSpan.FromMilliseconds(1500), 
-                                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } 
-                            }; 
-                            Storyboard.SetTarget(anim, VideoContainer);
-                            Storyboard.SetTargetProperty(anim, "Opacity");
-                            sb.Children.Add(anim);
-                            sb.Begin();
-                        }
-                        
-                        if (ExpandButton != null) ExpandButton.Visibility = Visibility.Visible;
-                        if (MuteButton != null) MuteButton.Visibility = Visibility.Visible;
-                    }
-                    else if (msg == "ERROR")
+                    bool isWebViewReady = _webView != null && _webView.Parent == VideoContainer;
+                    System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_VIEW_DEBUG] Message: {msg} | WebV: {isWebViewReady} | Container: {VideoContainer != null}");
+
+                    if (!isWebViewReady) 
                     {
-                        System.Diagnostics.Debug.WriteLine("[Spotlight] Trailer error reported by WebView. Cleaning up and falling back to backdrop.");
-                        CleanupWebView();
+                        System.Diagnostics.Debug.WriteLine("[SPOTLIGHT_VIEW_DEBUG] READY Aborted: WebView not attached to this container.");
+                        return;
                     }
+
+                    if (_isTrailerPlaying) return; // [GUARD] Avoid redundant reveal animations
+                    _isTrailerPlaying = true;
+
+                    if (VideoContainer != null)
+                    {
+                        // Ensure layout is updated before reveal
+                        UpdateClips();
+                        
+                        VideoContainer.Visibility = Visibility.Visible;
+                        UpdateMuteButtonIcon();
+
+                        // Project Zero: Smooth Fade-In Reveal
+                        var anim = new DoubleAnimation { To = 1, Duration = TimeSpan.FromMilliseconds(250), EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
+                        Storyboard.SetTarget(anim, VideoContainer);
+                        Storyboard.SetTargetProperty(anim, "Opacity");
+                        var sb = new Storyboard(); sb.Children.Add(anim); sb.Begin();
+                        
+                        System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_VIEW_DEBUG] REVEAL Triggered. Size: {VideoContainer.ActualWidth}x{VideoContainer.ActualHeight}");
+                    }
+                    if (ExpandButton != null) ExpandButton.Visibility = Visibility.Visible;
+                    if (MuteButton != null) MuteButton.Visibility = Visibility.Visible;
                 }
-                catch (Exception ex)
+                else if (msg == "ERROR")
                 {
-                    System.Diagnostics.Debug.WriteLine($"[Spotlight] WebMessageReceived UI update error: {ex.Message}");
+                    System.Diagnostics.Debug.WriteLine("[SPOTLIGHT_VIEW_DEBUG] Trailer ERROR received.");
+                    CleanupWebView();
                 }
             });
         }
@@ -1084,40 +1122,12 @@ namespace ModernIPTVPlayer.Controls
             _pendingTrailerId = null;
             if (_webView != null)
             {
-                try
-                {
-                    if (_webView.CoreWebView2 != null)
-                    {
-                        _webView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived;
-                        _webView.CoreWebView2.Stop();
-                    }
-                    
-                    if (VideoContainer != null && VideoContainer.Children.Contains(_webView))
-                    {
-                        VideoContainer.Children.Remove(_webView);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[Spotlight] WebView parent removal error: {ex.Message}");
-                }
-                
+                TrailerPoolService.Instance.Release(VideoContainer);
                 _webView = null;
                 _isTrailerPlaying = false;
                 
                 if (ExpandButton != null) ExpandButton.Visibility = Visibility.Collapsed;
                 if (MuteButton != null) MuteButton.Visibility = Visibility.Collapsed;
-
-                try
-                {
-                    string tempDir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTV_Spotlight", _instanceId);
-                    if (System.IO.Directory.Exists(tempDir))
-                        System.IO.Directory.Delete(tempDir, true);
-                }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"[Spotlight] Temp directory cleanup error: {ex.Message}");
-                }
             }
             if (VideoContainer != null) VideoContainer.Opacity = 0;
         }

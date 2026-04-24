@@ -39,6 +39,7 @@ using MpvWinUI;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class MediaInfoPage : Page
     {
         private IMediaStream _item;
@@ -5538,7 +5539,11 @@ namespace ModernIPTVPlayer
                 }
 
                 // 5. Buffer settings
-                bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts"));
+                bool isExplicitVod = _item is Models.Stremio.StremioMediaStream sms_pre && (sms_pre.Meta.Type == "movie" || sms_pre.Meta.Type == "series" || sms_pre.Meta.Type == "tv");
+                if (_item is SeriesStream) isExplicitVod = true;
+                bool isExplicitLive = (_item is LiveStream) || (_item is Models.Stremio.StremioMediaStream sms_l && sms_l.Meta.Type == "live");
+
+                bool isLive = isExplicitLive || (_streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts")) && !isExplicitVod);
                 await MpvSetupHelper.ApplyBufferSettingsAsync(MediaInfoPlayer, isSecondary: true, isLive: isLive);
                 
                 Debug.WriteLine($"[Timer:MediaInfo] {swTotal.ElapsedMilliseconds}ms - Buffer/Seek properties set.");
@@ -5800,7 +5805,11 @@ namespace ModernIPTVPlayer
                             // APPLY MAIN BUFFER SETTINGS
                             try 
                             {
-                                bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts"));
+                                bool isExplicitVod = _item is Models.Stremio.StremioMediaStream sms_h && (sms_h.Meta.Type == "movie" || sms_h.Meta.Type == "series" || sms_h.Meta.Type == "tv");
+                                if (_item is SeriesStream) isExplicitVod = true;
+                                bool isExplicitLive = (_item is LiveStream) || (_item is Models.Stremio.StremioMediaStream sms_lh && sms_lh.Meta.Type == "live");
+
+                                bool isLive = isExplicitLive || (_streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts")) && !isExplicitVod);
                                 await MpvSetupHelper.ApplyBufferSettingsAsync(MediaInfoPlayer, isSecondary: false, isLive: isLive);
                                 await MediaInfoPlayer.SetPropertyAsync("pause", "no");
                             } catch { }
@@ -8270,7 +8279,7 @@ namespace ModernIPTVPlayer
         private void OnMainPointerPressed(object sender, PointerRoutedEventArgs e)
         {
             var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
-            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse)
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse && ptr.Properties.IsLeftButtonPressed)
             {
                 _isMainDragging = true;
                 _lastMainPointerPos = ptr.Position;
@@ -8332,7 +8341,7 @@ namespace ModernIPTVPlayer
         private void OnCastPointerPressed(object sender, PointerRoutedEventArgs e)
         {
             var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
-            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse)
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse && ptr.Properties.IsLeftButtonPressed)
             {
                 _isCastDragging = true;
                 _lastCastPointerPos = ptr.Position;

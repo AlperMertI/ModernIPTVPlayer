@@ -43,6 +43,7 @@ namespace ModernIPTVPlayer
         public DateTime LaunchTimestampUtc { get; init; } = DateTime.UtcNow;
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class PlayerPage : Page
     {
 
@@ -390,6 +391,10 @@ namespace ModernIPTVPlayer
                 string durationStr = "0", positionStr = "0", coreIdleStr = "no", pausedForCacheStr = "no", seekingStr = "no";
                 double duration = 0, position = 0;
 
+                bool isExplicitVod = _navArgs != null && (_navArgs.Type == "movie" || _navArgs.Type == "series" || _navArgs.Type == "episode" || _navArgs.Type == "movie_extra" || _navArgs.Type == "vod");
+                bool isExplicitLive = _navArgs != null && _navArgs.Type == "live";
+                bool isLikelyLiveUrl = _streamUrl != null && IsLikelyLiveUrl(_streamUrl);
+
                 if (_useMpvPlayer && _mpvPlayer != null)
                 {
                     // [UI_PERF] Skip polling intensive properties until media is fully loaded and demuxed.
@@ -508,7 +513,8 @@ namespace ModernIPTVPlayer
                     System.Diagnostics.Debug.WriteLine($"[HANDOFF_UNLOCK] Playback started at {position}s. Applying main buffer settings...");
                     
                     // Apply main buffer settings from user preferences
-                    bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts"));
+                    bool isLive = isExplicitLive || (isLikelyLiveUrl && !isExplicitVod);
+                    
                     await MpvSetupHelper.ApplyBufferSettingsAsync(_mpvPlayer, false, isLive);
                     
                     _bufferUnlocked = true;
@@ -531,8 +537,6 @@ namespace ModernIPTVPlayer
                 bool isSeekable = _useMpvPlayer 
                     ? (seekable != "no" || cacheDuration > 3.0) 
                     : (_nativeMediaPlayer?.PlaybackSession != null && _nativeMediaPlayer.PlaybackSession.CanSeek);
-                
-                bool isLikelyLiveUrl = _streamUrl != null && IsLikelyLiveUrl(_streamUrl);
 
                 // Native MF: Special handling for live streams that report fake CanSeek
                 if (!_useMpvPlayer && _nativeMediaPlayer != null)
@@ -597,9 +601,21 @@ namespace ModernIPTVPlayer
                 
                 // Final Live Heuristic check before Visibility
                 bool isMpvLiveFormat = _useMpvPlayer && (fileFormat == "hls" || fileFormat == "apple-http" || fileFormat == "mpegts");
-                // isLikelyLiveUrl is already defined above
-                
-                bool isLikelyLive = (fileFormat == "live") || isMpvLiveFormat || isLikelyLiveUrl || (!isSeekable);
+
+                bool isLikelyLive;
+                if (isExplicitVod) 
+                {
+                    isLikelyLive = false;
+                }
+                else if (isExplicitLive)
+                {
+                    isLikelyLive = true;
+                }
+                else
+                {
+                    // Fallback to heuristics (e.g. for raw URLs or unknown types)
+                    isLikelyLive = (fileFormat == "live") || isMpvLiveFormat || isLikelyLiveUrl || (!isSeekable);
+                }
 
                 bool isMpegTs = (fileFormat == "mpegts" || (_streamUrl != null && _streamUrl.Contains(".ts")));
 

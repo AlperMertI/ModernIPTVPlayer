@@ -8,11 +8,21 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <ResourceDictionary Source="ms-appx:///Mpv.UI/Themes/Generic.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
             <local:BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
             <converters:InverseBooleanConverter x:Key="InverseBooleanConverter"/>
             <converters:StringToVisibleConverter x:Key="StringToVisibleConverter"/>
+
+            <LinearGradientBrush x:Key="GoldGradient" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#FFD700" Offset="0"/>
+                <GradientStop Color="#DAA520" Offset="1"/>
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="SilverGradient" StartPoint="0,0" EndPoint="1,1">
+                <GradientStop Color="#E0E0E0" Offset="0"/>
+                <GradientStop Color="#A0A0A0" Offset="1"/>
+            </LinearGradientBrush>
             
             <Style x:Key="GlassButtonStyle" TargetType="Button">
                 <Setter Property="Background" Value="#1AFFFFFF"/>
@@ -208,7 +218,7 @@
                                 <StackPanel Orientation="Horizontal" Padding="4,0,0,0">
                                     <Grid Width="44" Height="44" HorizontalAlignment="Center">
                                         <FontIcon x:Name="IconPresenter"
-                                                  Glyph="{Binding RelativeSource={RelativeSource TemplatedParent}, Path=(local:NavProperties.Icon)}"
+                                                  Glyph="{TemplateBinding local:NavProperties.Icon}"
                                                   FontSize="18"
                                                   Foreground="{TemplateBinding Foreground}"
                                                   HorizontalAlignment="Center"
@@ -330,15 +340,7 @@
                                         </VisualState>
                                     </VisualStateGroup>
                                     <VisualStateGroup x:Name="ResponsivenessStates">
-                                        <VisualState x:Name="FullMode">
-                                            <VisualState.StateTriggers>
-                                                <StateTrigger IsActive="{Binding Path=(local:NavProperties.IsCompact), RelativeSource={RelativeSource TemplatedParent}, Converter={StaticResource InverseBooleanConverter}}"/>
-                                            </VisualState.StateTriggers>
-                                        </VisualState>
                                         <VisualState x:Name="IconOnlyMode">
-                                            <VisualState.StateTriggers>
-                                                <StateTrigger IsActive="{Binding Path=(local:NavProperties.IsCompact), RelativeSource={RelativeSource TemplatedParent}}"/>
-                                            </VisualState.StateTriggers>
                                             <Storyboard>
                                                 <DoubleAnimation Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.15"/>
                                                 <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ContentPresenter" Storyboard.TargetProperty="Visibility">
@@ -356,7 +358,7 @@
                                         <Border x:Name="HoverOverlay" Background="White" Opacity="0" CornerRadius="{TemplateBinding CornerRadius}"/>
                                         <StackPanel Orientation="Horizontal" Padding="{TemplateBinding Padding}">
                                             <FontIcon x:Name="IconPresenter" 
-                                                      Glyph="{Binding Path=(local:NavProperties.Icon), RelativeSource={RelativeSource TemplatedParent}}"
+                                                      Glyph="{TemplateBinding local:NavProperties.Icon}"
                                                       FontSize="14" 
                                                       Foreground="{TemplateBinding Foreground}"
                                                       VerticalAlignment="Center"/>

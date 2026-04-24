@@ -416,10 +416,13 @@
                                             </ItemsRepeater.Layout>
                                             <ItemsRepeater.ItemTemplate>
                                                 <DataTemplate x:DataType="iptv:LiveStream">
-                                                    <Grid Height="68" Background="#0AFFFFFF" CornerRadius="10" 
+                                                    <Grid Height="68" Background="Transparent" CornerRadius="10" 
                                                           Tapped="ChannelItem_Tapped"
+                                                          IsHoldingEnabled="False"
+                                                          PointerPressed="ChannelItem_PointerPressed"
                                                           PointerEntered="ChannelItem_PointerEntered"
-                                                          PointerExited="ChannelItem_PointerExited">
+                                                          PointerExited="ChannelItem_PointerExited"
+                                                          Tag="{x:Bind}">
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="Auto"/>
                                                             <ColumnDefinition Width="*"/>
@@ -427,7 +430,8 @@
             
                                                         <!-- Selection Visual (Hidden by default) -->
                                                         <Border x:Name="SelectionBorder" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" CornerRadius="10" 
-                                                                Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}" Grid.ColumnSpan="2"/>
+                                                                Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}" Grid.ColumnSpan="2"
+                                                                IsHitTestVisible="False"/>
 
                                                         <!-- Icon -->
                                                         <Border Grid.Column="0"
@@ -435,7 +439,8 @@
                                                                 CornerRadius="8"
                                                                 Background="#22FFFFFF"
                                                                 VerticalAlignment="Center"
-                                                                Margin="8,0,0,0">
+                                                                Margin="8,0,0,0"
+                                                                IsHitTestVisible="False">
                                                             <Grid>
                                                                 <Image Source="{x:Bind StreamIcon, Mode=OneTime, Converter={StaticResource ChannelIconConverter}}"
                                                                        Stretch="Uniform"
@@ -455,7 +460,7 @@
                                                         </Border>
             
                                                         <!-- Info -->
-                                                        <Grid Grid.Column="1" Margin="14,0,8,0" VerticalAlignment="Center">
+                                                        <Grid Grid.Column="1" Margin="14,0,8,0" VerticalAlignment="Center" IsHitTestVisible="False">
                                                             <TextBlock Text="{x:Bind Name, Mode=OneTime}"
                                                                        Foreground="#F0F0F0"
                                                                        FontSize="14"
@@ -484,7 +489,11 @@
                                                                 <MenuFlyoutItem Text="Kanalı Oynat" Icon="Play" Click="ChannelItem_Click" Tag="{x:Bind}"/>
                                                                 <MenuFlyoutItem Text="Analiz Et" Icon="Video" Click="CheckQuality_Click" Tag="{x:Bind}"/>
                                                                 <MenuFlyoutSeparator/>
-                                                                <MenuFlyoutItem Text="Gelişmiş Bilgiler" Icon="Info" Click="CheckQuality_Click" Tag="{x:Bind}"/>
+                                                                <MenuFlyoutItem Text="Gelişmiş Bilgiler" Click="CheckQuality_Click" Tag="{x:Bind}">
+                                                                    <MenuFlyoutItem.Icon>
+                                                                        <FontIcon Glyph="&#xE946;"/>
+                                                                    </MenuFlyoutItem.Icon>
+                                                                </MenuFlyoutItem>
                                                                 <MenuFlyoutItem Text="URL Kopyala" Icon="Copy" Click="CopyUrl_Click" Tag="{x:Bind}"/>
                                                             </MenuFlyout>
                                                         </Grid.ContextFlyout>

@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class PlaylistDialog : ContentDialog
     {
         public Playlist Result { get; private set; }

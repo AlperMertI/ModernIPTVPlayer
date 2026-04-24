@@ -5,7 +5,7 @@ using ModernIPTVPlayer.Helpers;
 namespace ModernIPTVPlayer.Models.Stremio
 {
     [Microsoft.UI.Xaml.Data.Bindable]
-    public class StremioVideo
+    public partial class StremioVideo
     {
         public string Id { get; set; } // "tt1234:1:1"
 

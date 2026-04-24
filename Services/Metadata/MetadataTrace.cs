@@ -17,6 +17,9 @@ namespace ModernIPTVPlayer.Services.Metadata
             ContextName = contextName;
             ContentKey = string.IsNullOrWhiteSpace(contentKey) ? "unknown" : contentKey;
             Title = string.IsNullOrWhiteSpace(title) ? "unknown" : title.Trim();
+            
+            // Critical for observability: Log the start of the trace so the ID is searchable
+            Log("START", $"[{contextName}] Operation initialized for '{Title}' ({ContentKey})");
         }
 
         public void UpdateTitle(string? title)
@@ -29,9 +32,8 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         public void Log(string stage, string message)
         {
-            // Metadata logları performansı etkilediği için AppLogger'dan susturuldu,
-            // ancak hata ayıklama için Debug.WriteLine ile devam ediyoruz.
-            Debug.WriteLine($"[MetadataTrace|{OperationId}|{stage}] {message}");
+            // Unify formatting to AppLogger for consistency across the app
+            AppLogger.Info($"[MetadataTrace|{OperationId}|{stage}] {message}");
         }
     }
 }

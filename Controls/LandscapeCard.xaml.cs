@@ -8,6 +8,7 @@ using ModernIPTVPlayer.Models;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class LandscapeCard : UserControl
     {
         public bool IsHovered { get; private set; }
@@ -242,17 +243,15 @@ namespace ModernIPTVPlayer.Controls
         private void OnTapped(object sender, TappedRoutedEventArgs e)
         {
             e.Handled = true;
-            System.Diagnostics.Debug.WriteLine($"[LandscapeCard] Tapped! DataContext: {DataContext?.GetType().Name}");
-            
-            IMediaStream? stream = DataContext as IMediaStream;
-            if (stream == null && DataContext is UnifiedMediaItemContext contextWrap)
+            object ctx = DataContext;
+            IMediaStream? stream = ctx as IMediaStream;
+            if (stream == null && ctx is UnifiedMediaItemContext contextWrap)
             {
                 stream = contextWrap.Data;
             }
 
             if (stream != null)
             {
-                System.Diagnostics.Debug.WriteLine($"[LandscapeCard] Firing Clicked event for: {stream.Title}");
                 Clicked?.Invoke(this, stream);
             }
         }

@@ -119,16 +119,6 @@
 
         <!-- Tech Badge Styles -->
         
-        <LinearGradientBrush x:Key="GoldGradient" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#FFD700" Offset="0"/>
-            <GradientStop Color="#DAA520" Offset="1"/>
-        </LinearGradientBrush>
-        <LinearGradientBrush x:Key="SilverGradient" StartPoint="0,0" EndPoint="1,1">
-            <GradientStop Color="#E0E0E0" Offset="0"/>
-            <GradientStop Color="#A0A0A0" Offset="1"/>
-        </LinearGradientBrush>
-
-
         <Style x:Key="PremiumEpisodeItemStyle" TargetType="ListViewItem">
             <Setter Property="Padding" Value="0"/>
             <Setter Property="Margin" Value="0,4"/>

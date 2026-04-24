@@ -4,6 +4,7 @@ using ModernIPTVPlayer.Models.Stremio;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class StreamSelectionDialog : ContentDialog
     {
         public StremioStream SelectedStream { get; private set; }

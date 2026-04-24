@@ -1,3 +1,4 @@
+#nullable enable
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -20,17 +21,17 @@ namespace MpvWinUI.Common;
 
 public partial class D3D11RenderControl : ContentControl
 {
-    private SwapChainPanel _swapChainPanel;
+    private SwapChainPanel _swapChainPanel = default!;
     private ComPtr<ID3D11Device1> _device;
     private ComPtr<ID3D11DeviceContext1> _context;
     private ComPtr<IDXGISwapChain2> _swapChain; 
     
-    private D3D11 _d3d11;
-    private DXGI _dxgi;
+    private D3D11 _d3d11 = default!;
+    private DXGI _dxgi = default!;
     
     // Threading & Synchronization
-    private Task _renderTask;
-    private CancellationTokenSource _cts;
+    private Task _renderTask = default!;
+    private CancellationTokenSource _cts = default!;
     private readonly System.Threading.Lock _renderLock = new();
     private IntPtr _frameLatencyWaitHandle = IntPtr.Zero;
     private readonly ManualResetEventSlim _resizeEvent = new(false);
@@ -44,7 +45,6 @@ public partial class D3D11RenderControl : ContentControl
     private bool _disposed = false;
     private double _targetWidth, _targetHeight;
     private double _targetScaleX = 1.0, _targetScaleY = 1.0;
-    private long _lastSizeChangedTicks;
     private long _lastPhysicalResizeTicks = 0; // Throttle for animations
     private bool _needsFirstFrameLink = false;
 
@@ -66,8 +66,9 @@ public partial class D3D11RenderControl : ContentControl
     private int _swapChainWidth;
     private int _swapChainHeight;
     private Format _swapChainFormat = Format.FormatB8G8R8A8Unorm;
-    private ColorSpaceType _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG22NoneP709;
-    private ColorSpaceType _appliedSwapChainColorSpace = (ColorSpaceType)(-1); // State Tracking
+    private Format _appliedSwapChainFormat = (Format)(-1); // State Tracking
+    private MpvColorSpace _swapChainColorSpace = MpvColorSpace.RgbFullG22NoneP709;
+    private MpvColorSpace _appliedSwapChainColorSpace = (MpvColorSpace)(-1); // State Tracking
     private float _appliedPeakLuminance = -1.0f; // State Tracking
 
     // Stable Canvas State
@@ -75,7 +76,7 @@ public partial class D3D11RenderControl : ContentControl
     private int _maxMonitorWidth = 4096;
     private int _maxMonitorHeight = 2400;
     private bool _isMonitorInfoInitialized = false;
-    public ColorSpaceType SwapChainColorSpace => _swapChainColorSpace;
+    public MpvColorSpace SwapChainColorSpace => _swapChainColorSpace;
     private bool _isHdrEnabled = false;
     public bool IsHdrEnabled => _isHdrEnabled;
 
@@ -131,14 +132,14 @@ public partial class D3D11RenderControl : ContentControl
         }
     }
 
-    public event EventHandler<bool> HdrStatusChanged;
-    public event EventHandler Ready;
+    public event EventHandler<bool>? HdrStatusChanged;
+    public event EventHandler? Ready;
     
-    private Microsoft.Graphics.Display.DisplayInformation _displayInfo;
+    private Microsoft.Graphics.Display.DisplayInformation _displayInfo = default!;
     
     // DEĞİŞİKLİK: Void Action yerine, sonucun döndüğü Func kullanıyoruz
-    public Func<TimeSpan, bool> RenderFrame; 
-    public Action SwapChainPresented;
+    public Func<TimeSpan, bool> RenderFrame = default!; 
+    public Action SwapChainPresented = default!;
     
     public void SignalUpdate() => _mpvUpdateEvent.Set();
 
@@ -213,15 +214,11 @@ public partial class D3D11RenderControl : ContentControl
     private struct DISPLAY_DEVICE
     {
         public uint cb;
-        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string DeviceName;
-        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceString;
+        public unsafe fixed char DeviceName[32];
+        public unsafe fixed char DeviceString[128];
         public uint StateFlags;
-        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceID;
-        [MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 128)]
-        public string DeviceKey;
+        public unsafe fixed char DeviceID[128];
+        public unsafe fixed char DeviceKey[128];
     }
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
@@ -367,7 +364,7 @@ public partial class D3D11RenderControl : ContentControl
                 // In this mode, luminance is absolute (PQ curve). 
                 // Windows SDR White slider does NOT affect this swapchain.
                 _swapChainFormat = Format.FormatR10G10B10A2Unorm; 
-                _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG2084NoneP2020; 
+                _swapChainColorSpace = _isHdrEnabled ? MpvColorSpace.RgbFullG2084NoneP2020 : MpvColorSpace.RgbFullG22NoneP709;
                 LogSync($"[HDR_STATUS] HDR ENABLED: Format={_swapChainFormat}, ColorSpace={_swapChainColorSpace} ({(int)_swapChainColorSpace})");
             }
             else
@@ -375,7 +372,7 @@ public partial class D3D11RenderControl : ContentControl
                 // Format: Default 8-bit (R8G8B8A8_UNORM)
                 // ColorSpace: SDR (BT.709)
                 _swapChainFormat = Format.FormatB8G8R8A8Unorm;
-                _swapChainColorSpace = ColorSpaceType.ColorSpaceRgbFullG22NoneP709; // sRGB
+                _swapChainColorSpace = MpvColorSpace.RgbFullG22NoneP709; // sRGB
                 LogSync($"[HDR_STATUS] SDR MODE: Format={_swapChainFormat}, ColorSpace={_swapChainColorSpace} ({(int)_swapChainColorSpace})");
             }
 
@@ -404,7 +401,7 @@ public partial class D3D11RenderControl : ContentControl
             if (ptr == IntPtr.Zero) return;
 
             var devMode = new DEVMODE();
-            devMode.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+            devMode.dmSize = (short)Marshal.SizeOf<DEVMODE>();
             
             if (EnumDisplaySettings(null, -1, ref devMode)) // ENUM_CURRENT_SETTINGS = -1
             {
@@ -431,9 +428,11 @@ public partial class D3D11RenderControl : ContentControl
             try
             {
                 LogControl("Loading D3D11 API...");
-                _d3d11 ??= D3D11.GetApi();
+#pragma warning disable CS0618 // Type or member is obsolete in 2.23.0 but required for context-free loading
+                _d3d11 ??= Silk.NET.Direct3D11.D3D11.GetApi();
                 LogControl("Loading DXGI API...");
-                _dxgi ??= DXGI.GetApi();
+                _dxgi ??= Silk.NET.DXGI.DXGI.GetApi();
+#pragma warning restore CS0618
                 LogControl("APIs Loaded Successfully");
             }
             catch (Exception ex)
@@ -796,7 +795,7 @@ public partial class D3D11RenderControl : ContentControl
             using var dxgiAdapter = new ComPtr<IDXGIAdapter>(adapter);
             AdapterDesc desc;
             dxgiAdapter.Handle->GetDesc(&desc);
-            AdapterName = SilkMarshal.PtrToString((IntPtr)desc.Description);
+            AdapterName = SilkMarshal.PtrToString((IntPtr)desc.Description) ?? "unknown";
             LogSync($"Device Context Ready (VideoSupport=0x800). Adapter: {AdapterName}");
         }
         catch { AdapterName = "auto"; }
@@ -880,7 +879,7 @@ public partial class D3D11RenderControl : ContentControl
                 stableHeight = targetMegaHeight;
                 
                 // Sadece tuval devasa boyuta henüz geçmemişse bir kere realloc yap (Stutter olmaz)
-                needsRealloc = _swapChain.Handle == null || _swapChainWidth != stableWidth || _swapChainHeight != stableHeight;
+                needsRealloc = _swapChain.Handle == null || _swapChainWidth != stableWidth || _swapChainHeight != stableHeight || _appliedSwapChainFormat != _swapChainFormat || force;
                 
                 LogSync($"[PERFORM_RESIZE] RESIZE MODE (MEGA CANVAS) | Req: {width}x{height} | Canvas: {stableWidth}x{stableHeight} | Realloc: {needsRealloc}");
             }
@@ -893,7 +892,9 @@ public partial class D3D11RenderControl : ContentControl
                 // Only realloc if size actually changed
                 needsRealloc = _swapChain.Handle == null ||
                               stableWidth != _swapChainWidth ||
-                              stableHeight != _swapChainHeight;
+                              stableHeight != _swapChainHeight ||
+                              _appliedSwapChainFormat != _swapChainFormat ||
+                              force;
                 
                 LogSync($"[PERFORM_RESIZE] NORMAL MODE | Req: {width}x{height} | SC: {_swapChainWidth}x{_swapChainHeight} | Realloc: {needsRealloc}");
             }
@@ -938,6 +939,7 @@ public partial class D3D11RenderControl : ContentControl
                     {
                         _swapChainWidth = stableWidth;
                         _swapChainHeight = stableHeight;
+                        _appliedSwapChainFormat = _swapChainFormat;
                     }
                 }
                 long tResizeBuffers = Stopwatch.GetTimestamp();
@@ -1022,7 +1024,8 @@ public partial class D3D11RenderControl : ContentControl
         using var sc3 = _swapChain.QueryInterface<IDXGISwapChain3>();
         if (sc3.Handle != null)
         {
-            var hr = sc3.Handle->SetColorSpace1(_swapChainColorSpace);
+            // Cast our clean wrapper enum to the native Silk.NET type at the interop boundary
+            var hr = sc3.Handle->SetColorSpace1((Silk.NET.DXGI.ColorSpaceType)_swapChainColorSpace);
             _appliedSwapChainColorSpace = _swapChainColorSpace;
             LogSync($"[DXGI_COLOR_SYNC] Space: {_swapChainColorSpace} | Result: 0x{hr:X}");
         }
@@ -1063,7 +1066,7 @@ public partial class D3D11RenderControl : ContentControl
             metadata.MaxContentLightLevel = (ushort)targetPeak;
             metadata.MaxFrameAverageLightLevel = (ushort)(targetPeak * 0.9f);
 
-            sc4.Handle->SetHDRMetaData(HdrMetadataType.HdrMetadataTypeHdr10, (uint)sizeof(HdrMetadataHdr10), &metadata);
+            sc4.Handle->SetHDRMetaData(HdrMetadataType.Hdr10, (uint)sizeof(HdrMetadataHdr10), &metadata);
             _appliedPeakLuminance = _peakLuminance;
             
             LogSync($"[DXGI_METADATA_SIGNAL] Result: 0x0 | Peak: {targetPeak:F0} nits | BT.2020 (Standard)");
@@ -1092,7 +1095,7 @@ public partial class D3D11RenderControl : ContentControl
             BufferCount = 2, // 2 is safer for composition
             BufferUsage = DXGI.UsageRenderTargetOutput,
             SampleDesc = new SampleDesc(1, 0), 
-            Scaling = Scaling.ScalingStretch, // Use Stretch combined with Matrix Transform for clipping bypass
+            Scaling = Scaling.Stretch, // Use Stretch combined with Matrix Transform for clipping bypass
             SwapEffect = SwapEffect.FlipDiscard, // Enables MPO and minimum present latency
             AlphaMode = AlphaMode.Ignore,
             Flags = (uint)SwapChainFlag.FrameLatencyWaitableObject // Remove AllowTearing
@@ -1100,6 +1103,7 @@ public partial class D3D11RenderControl : ContentControl
 
         _swapChainWidth = width;
         _swapChainHeight = height;
+        _appliedSwapChainFormat = _swapChainFormat;
 
         IDXGISwapChain1* sc1Raw;
         var hr = dxgiFactory.Handle->CreateSwapChainForComposition((IUnknown*)_device.Handle, &desc, null, &sc1Raw);
@@ -1145,18 +1149,19 @@ public partial class D3D11RenderControl : ContentControl
 
                 if (_cachedNativePanel == IntPtr.Zero)
                 {
-                     var pBase = ((WinRT.IWinRTObject)_swapChainPanel).NativeObject.ThisPtr;
+                    // [AOT FIX] Use MarshalInspectable to safely get the ABI pointer for SwapChainPanel
+                    IntPtr pBase = WinRT.MarshalInspectable<Microsoft.UI.Xaml.Controls.SwapChainPanel>.FromManaged(_swapChainPanel);
                      Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
-                     if (Marshal.QueryInterface(pBase, ref g1w, out _cachedNativePanel) != 0) {
+                     if (Marshal.QueryInterface(pBase, in g1w, out _cachedNativePanel) != 0) {
                          Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
-                         Marshal.QueryInterface(pBase, ref g1u, out _cachedNativePanel);
+                         Marshal.QueryInterface(pBase, in g1u, out _cachedNativePanel);
                      }
                 }
 
                 if (_cachedNativePanel != IntPtr.Zero) {
                     IntPtr vtable = Marshal.ReadIntPtr(_cachedNativePanel);
                     IntPtr methodPtr = Marshal.ReadIntPtr(vtable, NSwapChainPanelNative.Slot_SetSwapChain * IntPtr.Size);
-                    var setSc = (SetSwapChainDelegate)Marshal.GetDelegateForFunctionPointer(methodPtr, typeof(SetSwapChainDelegate));
+                    var setSc = Marshal.GetDelegateForFunctionPointer<SetSwapChainDelegate>(methodPtr);
                     
                     int hr = setSc(_cachedNativePanel, handle);
                     
@@ -1191,17 +1196,17 @@ public partial class D3D11RenderControl : ContentControl
                 Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
                 IntPtr nativePanel = IntPtr.Zero;
 
-                if (Marshal.QueryInterface(pBase, ref g1w, out nativePanel) != 0)
+                if (Marshal.QueryInterface(pBase, in g1w, out nativePanel) != 0)
                 {
                     Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
-                    Marshal.QueryInterface(pBase, ref g1u, out nativePanel);
+                    Marshal.QueryInterface(pBase, in g1u, out nativePanel);
                 }
 
                 if (nativePanel != IntPtr.Zero)
                 {
                     IntPtr vtable = Marshal.ReadIntPtr(nativePanel);
                     IntPtr methodPtr = Marshal.ReadIntPtr(vtable, NSwapChainPanelNative.Slot_SetSwapChain * IntPtr.Size);
-                    var setSc = (SetSwapChainDelegate)Marshal.GetDelegateForFunctionPointer(methodPtr, typeof(SetSwapChainDelegate));
+                    var setSc = Marshal.GetDelegateForFunctionPointer<SetSwapChainDelegate>(methodPtr);
 
                     int hr = setSc(nativePanel, IntPtr.Zero);
                     Marshal.Release(nativePanel);
@@ -1472,20 +1477,24 @@ public partial class D3D11RenderControl : ContentControl
 
             // 2. Enum Display Devices to find Hardware ID
             DISPLAY_DEVICE device = new DISPLAY_DEVICE();
-            device.cb = (uint)Marshal.SizeOf(device);
+            unsafe { device.cb = (uint)sizeof(DISPLAY_DEVICE); }
             
             // Loop through monitor devices on this display
             uint i = 0;
             while (EnumDisplayDevices(deviceName, i++, ref device, 1)) 
             {
-                string hardwareId = device.DeviceID;
+                string hardwareId;
+                unsafe
+                {
+                    char* pId = device.DeviceID;
+                    hardwareId = new string(pId);
+                }
+
                 if (string.IsNullOrEmpty(hardwareId)) continue;
                 
                 LogSync($"[HDR_EDID_STEP] Found Monitor {i-1}: {hardwareId}");
                 
                 // Normalize hardware ID for registry path
-                // Input: \\?\DISPLAY#SDC4178#4&32ada849&0&UID8388688#{e6f07b5f-...}
-                // Output: DISPLAY\SDC4178\4&32ada849&0&UID8388688
                 string regId = hardwareId;
                 if (regId.StartsWith(@"\\?\")) regId = regId.Substring(4);
                 
@@ -1500,7 +1509,7 @@ public partial class D3D11RenderControl : ContentControl
                 {
                     if (key != null)
                     {
-                        byte[] edid = (byte[])key.GetValue("EDID");
+                        byte[]? edid = (byte[]?)key.GetValue("EDID");
                         if (edid != null && edid.Length >= 128)
                         {
                             float peak = ParseHdrPeakFromEdid(edid);

@@ -347,6 +347,24 @@ namespace ModernIPTVPlayer.Controls
                 
                 _closeCts?.Cancel();
                 _closeCts = new CancellationTokenSource();
+                // [PHASE 1] Resolve Stream Context
+                IMediaStream? stream = sourceCard.DataContext as IMediaStream;
+                if (stream == null && sourceCard.DataContext is UnifiedMediaItemContext contextWrap)
+                {
+                    stream = contextWrap.Data;
+                }
+
+                if (stream == null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[EXP-CONTROLLER] Failed to resolve stream from DataContext: {sourceCard.DataContext?.GetType().Name}");
+                    // If we were already showing something, close it to avoid inconsistent UI
+                    if (_expandedCard.Visibility == Visibility.Visible)
+                    {
+                        _ = CloseExpandedCardAsync();
+                    }
+                    return;
+                }
+
                 _activeSourceCard = sourceCard;
                 _pointerExitNeedsRearm = false;
                 ResetCardFrame();
@@ -435,22 +453,9 @@ namespace ModernIPTVPlayer.Controls
                     visual.StartAnimation("Opacity", fadeAnim);
                 }
 
-                IMediaStream? stream = sourceCard.DataContext as IMediaStream;
-                if (stream == null && sourceCard.DataContext is UnifiedMediaItemContext contextWrap)
-                {
-                    stream = contextWrap.Data;
-                }
-
-                if (stream != null)
-                {
-                    _currentStream = stream;
-                    System.Diagnostics.Debug.WriteLine($"[EXP-CONTROLLER] Loading Expanded Card for: {stream.Title}");
-                    await _expandedCard.LoadDataAsync(stream, isMorphing: isMorph);
-                }
-                else
-                {
-                    System.Diagnostics.Debug.WriteLine($"[EXP-CONTROLLER] Failed to resolve stream from DataContext: {sourceCard.DataContext?.GetType().Name}");
-                }
+                _currentStream = stream;
+                System.Diagnostics.Debug.WriteLine($"[EXP-CONTROLLER] Loading Expanded Card for: {stream.Title}");
+                await _expandedCard.LoadDataAsync(stream, isMorphing: isMorph);
             }
             catch (OperationCanceledException) { /* Expected on hover changes */ }
             catch (Exception ex)

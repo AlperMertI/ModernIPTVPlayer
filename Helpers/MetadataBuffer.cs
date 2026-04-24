@@ -13,10 +13,14 @@ namespace ModernIPTVPlayer.Helpers
     /// </summary>
     public static class MetadataBuffer
     {
+        // PROJECT ZERO: ArrayPool-backed storage for raw UTF-8 metadata.
         private static byte[] _buffer = ArrayPool<byte>.Shared.Rent(10 * 1024 * 1024); // Start with 10MB pooled
         private static int _position = 0;
         private static readonly System.Threading.Lock _lock = new();
         private static int _storeCount = 0;
+
+        // PROJECT ZERO: Dedicated storage for large JSON blocks (AppExtras, Genres, etc.)
+        private static readonly ConcurrentDictionary<string, (int Offset, int Length)> _jsonBlockCache = new();
 
         // PROJECT ZERO: String Interning & Deduplication
         private static readonly ConcurrentDictionary<string, (int Offset, int Length)> _internPool = new();
@@ -82,6 +86,28 @@ namespace ModernIPTVPlayer.Helpers
             return (offset, len);
         }
 
+        /// <summary>
+        /// Stores a raw JSON block or large metadata segment.
+        /// Implements block-level deduplication to prevent object bloat.
+        /// </summary>
+        public static (int Offset, int Length) StoreJson(string? json)
+        {
+            if (string.IsNullOrEmpty(json)) return (-1, 0);
+
+            // 1. PROJECT ZERO: Block-level cache check
+            if (_jsonBlockCache.TryGetValue(json, out var existing)) return existing;
+
+            var result = Store(json);
+            
+            // Limit cache size for very large blocks to prevent cache-bloat
+            if (json.Length < 10000 && _jsonBlockCache.Count < 5000)
+            {
+                _jsonBlockCache.TryAdd(json, result);
+            }
+
+            return result;
+        }
+
         public static (int Offset, int Length) StoreRaw(ReadOnlySpan<byte> data)
         {
             if (data.IsEmpty) return (-1, 0);
@@ -122,7 +148,8 @@ namespace ModernIPTVPlayer.Helpers
 
             if (Encoding.UTF8.GetByteCount(value) != length) return false;
 
-            ReadOnlySpan<byte> bufferSpan = _buffer.AsSpan(offset, length);
+            byte[] current = _buffer; // Thread-safe local snapshot
+            ReadOnlySpan<byte> bufferSpan = current.AsSpan(offset, length);
             
             if (length <= 512)
             {
@@ -150,7 +177,8 @@ namespace ModernIPTVPlayer.Helpers
             var key = (offset, length);
             if (_stringCache.TryGetValue(key, out var s)) return s;
 
-            s = Encoding.UTF8.GetString(_buffer, offset, length);
+            byte[] current = _buffer; // Thread-safe local snapshot
+            s = Encoding.UTF8.GetString(current, offset, length);
 
             // [FIX] Use thread-safe counter instead of accessing ConcurrentDictionary.Count
             int currentCount = Thread.VolatileRead(ref _stringCacheCount);
@@ -178,7 +206,8 @@ namespace ModernIPTVPlayer.Helpers
         public static ReadOnlySpan<byte> GetSpan(int offset, int length)
         {
             if (offset < 0 || length <= 0) return ReadOnlySpan<byte>.Empty;
-            return new ReadOnlySpan<byte>(_buffer, offset, length);
+            byte[] current = _buffer; // Thread-safe local snapshot
+            return new ReadOnlySpan<byte>(current, offset, length);
         }
 
         /// <summary>

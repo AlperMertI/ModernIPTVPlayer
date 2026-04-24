@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Collections.Generic;
 using Windows.UI;
 using ModernIPTVPlayer;
 using ModernIPTVPlayer.Models;
@@ -38,16 +39,11 @@ namespace ModernIPTVPlayer.Controls
         private bool _isCinemaMode = false;
         
         // Pre-initialization state
-        private bool _webViewInitialized = false;
-        private bool _isPlayerReady = false;
-        private System.Threading.Tasks.TaskCompletionSource<bool> _playerReadyTcs;
         private bool _isSeriesFinished = false;
-        private string _trailerFolder;
-        private string _virtualHost = "trailers.moderniptv.local";
         private Microsoft.UI.Composition.Compositor _compositor;
-        private System.Threading.CancellationTokenSource _trailerCts;
-        private TaskCompletionSource<bool> _webViewInitTcs;
-        private Task _initTask;
+
+        // Project Zero: Shared Engine Reference
+        private WebView2? _webView;
 
         // Mouse Drag-to-Scroll State
         private bool _isDataDragging = false;
@@ -85,8 +81,26 @@ namespace ModernIPTVPlayer.Controls
             // Mouse Wheel Fix: Prevent bubbling to main page
             ContentScrollViewer.PointerWheelChanged += ContentScrollViewer_PointerWheelChanged;
 
+            // Project Zero: Shared event listener
+            TrailerPoolService.Instance.TrailerMessageReceived += Instance_TrailerMessageReceived;
+
             // Project Zero: Mandatory Cleanup Registration
             this.Unloaded += (s, e) => Cleanup();
+        }
+
+        public void PrepareForTrailer() 
+        {
+             // Project Zero: Stub for controller compatibility
+             System.Diagnostics.Debug.WriteLine("[ExpandedCard] PrepareForTrailer hook received.");
+        }
+
+        private void Instance_TrailerMessageReceived(object? sender, string e)
+        {
+            // Only process if we are the current owner of the WebView
+            if (_webView != null)
+            {
+                OnTrailerMessageReceived(e);
+            }
         }
 
         /// <summary>
@@ -102,35 +116,19 @@ namespace ModernIPTVPlayer.Controls
                 // 1. Release Heavy UI Resources
                 BackdropImage.Source = null;
                 
-                // 2. Kill Trailer Engine (WebView2 is a massive process/memory consumer)
-                if (TrailerWebView != null)
+                // 2. Kill Trailer Engine (Project Zero: Release shared engine)
+                if (_webView != null)
                 {
-                    // Fire-and-forget stop signal to JS and state reset
-                    _ = StopTrailer(forceDestroy: true);
-                    
-                    try 
-                    {
-                        if (this.XamlRoot != null)
-                        {
-                            TrailerWebView.Visibility = Visibility.Collapsed;
-                            TrailerWebView.Source = new Uri("about:blank");
-                        }
-                    } 
-                    catch { }
+                    TrailerPoolService.Instance.Release(TrailerContainer);
+                    _webView = null;
                 }
 
                 // 3. Clear Managed Collections (Breaks reference chains)
                 CastList?.Clear();
                 DirectorList?.Clear();
-                // Assuming TechBadgesPanel is a Panel control defined in XAML
-                // If not, this line might cause a compile error if not present in the actual code.
-                // For this exercise, I'm including it as per the instruction.
-                // TechBadgesPanel?.Children?.Clear(); 
 
                 // 4. Cancel pending tasks
-                _trailerCts?.Cancel();
-                _trailerCts?.Dispose();
-                _trailerCts = null;
+                TrailerPoolService.Instance.TrailerMessageReceived -= Instance_TrailerMessageReceived;
 
                 // 5. Break Interop Facades
                 _compositor = null;
@@ -153,7 +151,7 @@ namespace ModernIPTVPlayer.Controls
             if (_isCastDragging) return;
 
             var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
-            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse)
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse && ptr.Properties.IsLeftButtonPressed)
             {
                 _isDataDragging = true;
                 _lastPointerPos = ptr.Position;
@@ -230,7 +228,7 @@ namespace ModernIPTVPlayer.Controls
         private void CastListView_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {
             var ptr = e.GetCurrentPoint(null); // Use window coords for smoothness
-            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse)
+            if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse && ptr.Properties.IsLeftButtonPressed)
             {
                 _isCastDragging = true;
                 _lastCastPointerPos = ptr.Position;
@@ -291,262 +289,43 @@ namespace ModernIPTVPlayer.Controls
         #endregion
         
         /// <summary>
-        /// Call this when user hovers on a poster (before card is shown).
-        /// Uses the hover delay time to initialize WebView2 in background.
+        /// Public method to stop trailer playback when card is hidden
         /// </summary>
-        public void PrepareForTrailer()
+        public async Task StopTrailer(bool forceDestroy = false)
         {
-            if (!_webViewInitialized && !_isInitializing)
-            {
-                _isInitializing = true;
-                _ = PreInitializeWebViewAsync();
-            }
-        }
-        
-        private bool _isInitializing = false;
-        
-        /// <summary>
-        /// Pre-initialize WebView2 and YouTube player for instant loading
-        /// </summary>
-        private async Task PreInitializeWebViewAsync()
-        {
-            if (_webViewInitialized) return;
-
-            if (_initTask != null && !_initTask.IsCompleted)
-            {
-                await _initTask;
-                return;
-            }
-
-            _initTask = InternalPreInitializeWebViewAsync();
-            await _initTask;
-        }
-
-        private async Task InternalPreInitializeWebViewAsync()
-        {
-            if (_webViewInitialized) return;
-            
             try
             {
-                // [FIX] Initialize TCS before starting navigation
-                _webViewInitTcs ??= new TaskCompletionSource<bool>();
-
-                await TrailerWebView.EnsureCoreWebView2Async(await WebView2Service.GetSharedEnvironmentAsync());
-                
-                // Listen for messages
-                TrailerWebView.CoreWebView2.WebMessageReceived -= CoreWebView2_WebMessageReceived; // Prevent duplicates
-                TrailerWebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
-                
-                // Create trailer folder once
-                _trailerFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ModernIPTVPlayer_Trailers");
-                System.IO.Directory.CreateDirectory(_trailerFolder);
-                
-                string htmlFilePath = System.IO.Path.Combine(_trailerFolder, "player.html");
-                
-                // Always refresh player script so quality/behavior updates are picked up immediately.
-                string htmlContent = CreateYouTubePlayerHtml();
-                await System.IO.File.WriteAllTextAsync(htmlFilePath, htmlContent);
-                
-                // Setup virtual host mapping once
-                try
+                if (_webView != null)
                 {
-                    TrailerWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
-                        _virtualHost,
-                        _trailerFolder,
-                        Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow);
+                    TrailerPoolService.Instance.Release(TrailerContainer);
+                    _webView = null;
                 }
-                catch (ArgumentException) 
-                {
-                    // Ignore if already mapped
-                }
-                
-                // Pre-load the player page (will be ready for any video)
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Navigating to player.html via {_virtualHost}");
-                TrailerWebView.CoreWebView2.Navigate($"https://{_virtualHost}/player.html");
-                
-                _webViewInitialized = true;
-                _webViewInitTcs?.TrySetResult(true);
-                System.Diagnostics.Debug.WriteLine("[ExpandedCard] WebView2 pre-initialized (Core READY)");
+                _isTrailerRevealed = false;
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Pre-init error: {ex.Message}");
-                _webViewInitTcs?.TrySetException(ex);
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error in StopTrailer: {ex.Message}");
             }
-            finally
-            {
-                _isInitializing = false;
-            }
-        }
-        
-        private string CreateYouTubePlayerHtml()
-        {
-            return @"<!DOCTYPE html>
-<html>
-<head>
-    <meta charset='UTF-8'>
-    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
-        #player { 
-            position: absolute;
-            top: 50%; left: 50%;
-            min-width: 177.77vh;
-            min-height: 56.25vw;
-            width: 100vw; height: 56.25vw;
-            transform: translate(-50%, -50%);
-        }
-        iframe { pointer-events: none; }
-        #loading { 
-            position: absolute; top: 50%; left: 50%; 
-            transform: translate(-50%, -50%);
-            color: #333; font-family: sans-serif; font-size: 14px;
-        }
-    </style>
-</head>
-<body>
-    <div id='loading'>Loading player...</div>
-    <div id='player'></div>
-    <script>
-        var tag = document.createElement('script');
-        tag.src = 'https://www.youtube.com/iframe_api';
-        var firstScriptTag = document.getElementsByTagName('script')[0];
-        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
-        var player;
-        var isReady = false;
-        var pendingVideoId = null;
-        
-        function onYouTubeIframeAPIReady() {
-                player = new YT.Player('player', {
-                height: '100%',
-                width: '100%',
-                host: 'https://www.youtube.com',
-                playerVars: {
-                    autoplay: 1,
-                    mute: 1,
-                    controls: 0,
-                    disablekb: 1,
-                    fs: 0,
-                    rel: 0,
-                    modestbranding: 1,
-                    showinfo: 0,
-                    iv_load_policy: 3,
-                    playsinline: 1,
-                    vq: 'hd1080',
-                    enablejsapi: 1
-                },
-                events: {
-                    'onReady': onPlayerReady,
-                    'onStateChange': onPlayerStateChange
+            if (_isCinemaMode) ToggleCinemaMode(false);
+            ResetState(isMorphing: false, isStopping: true);
+        }
+        private void OnTrailerMessageReceived(string message)
+        {
+            DispatcherQueue.TryEnqueue(() => 
+            {
+                try
+                {
+                    if (message == "READY")
+                    {
+                       RevealTrailerInternal();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] WebMessage Error: {ex.Message}");
                 }
             });
-        }
-        
-        function onPlayerReady(event) {
-            isReady = true;
-            try {
-                player.mute();
-            } catch (e) {}
-            document.getElementById('loading').style.display = 'none';
-            window.chrome.webview.postMessage('PLAYER_READY');
-
-            // If a video was requested before ready, load it now
-            if (pendingVideoId) {
-                window.chrome.webview.postMessage('YT_LOADING_PENDING_VIDEO:' + pendingVideoId);
-                loadVideo(pendingVideoId);
-                pendingVideoId = null;
-            } else {
-                window.chrome.webview.postMessage('YT_READY_NO_PENDING_VIDEO');
-            }
-        }
-        
-        function onPlayerStateChange(event) {
-            var stateNames = {
-                '-1': 'UNSTARTED',
-                '0': 'ENDED',
-                '1': 'PLAYING',
-                '2': 'PAUSED',
-                '3': 'BUFFERING',
-                '5': 'CUED'
-            };
-            var stateName = stateNames[event.data] || 'UNKNOWN(' + event.data + ')';
-            window.chrome.webview.postMessage('YT_STATE:' + stateName);
-
-            if (event.data === YT.PlayerState.PLAYING) {
-                applyQualityPreference();
-                window.chrome.webview.postMessage('VIDEO_PLAYING');
-            }
-        }
-
-        function applyQualityPreference() {
-            if (!player || !isReady) return;
-            try {
-                player.setPlaybackQualityRange('hd1080');
-                player.setPlaybackQuality('hd1080');
-            } catch (e) {
-                // Device/network may limit this; YouTube will fallback automatically.
-            }
-        }
-        
-        // Called from C# to load a video
-        function loadVideo(videoId) {
-            window.chrome.webview.postMessage('YT_LOAD_VIDEO:' + videoId);
-            
-            // [MODERN] Reset Smart Crop state for new video
-            if (window.resetSmartCrop) resetSmartCrop();
-
-            if (!isReady) {
-                pendingVideoId = videoId;
-                window.chrome.webview.postMessage('YT_PLAYER_NOT_READY_QUEUED:' + videoId);
-                return;
-            }
-            player.loadVideoById({
-                videoId: videoId,
-                suggestedQuality: 'hd1080'
-            });
-            setTimeout(applyQualityPreference, 80);
-            setTimeout(applyQualityPreference, 700);
-            player.playVideo();
-        }
-        
-        // Called from C# to stop playback
-        function stopVideo() {
-            pendingVideoId = null;
-            if (player && isReady) {
-                player.stopVideo();
-            }
-        }
-
-        function getMuteState() {
-            if (player && isReady) {
-                return player.isMuted() ? 'muted' : 'unmuted';
-            }
-            return 'unknown';
-        }
-
-        function setMuted(shouldMute) {
-            if (player && isReady) {
-                if (shouldMute) player.mute();
-                else player.unMute();
-            }
-            return getMuteState();
-        }
-        
-        function toggleMute() {
-            if (!player || !isReady) return 'unknown';
-            if (player.isMuted()) {
-                player.unMute();
-                return 'unmuted';
-            } else {
-                player.mute();
-                return 'muted';
-            }
-        }
-    </script>
-</body>
-</html>";
         }
 
         private long _loadNonce = 0;
@@ -639,55 +418,6 @@ namespace ModernIPTVPlayer.Controls
         private void ExpandButton_Click(object sender, RoutedEventArgs e) => ToggleCinemaMode(!_isCinemaMode);
 
         /// <summary>
-        /// Public method to stop trailer playback when card is hidden
-        /// </summary>
-        public async Task StopTrailer(bool forceDestroy = false)
-        {
-            long session = _loadNonce; // Capture current load session
-            System.Diagnostics.Debug.WriteLine($"[ExpandedCard] StopTrailer called. Session: {session}");
-            
-            try
-            {
-                // Cancel any pending PlayTrailer or init
-                _trailerCts?.Cancel();
-                _trailerCts?.Dispose();
-                _trailerCts = null;
-                _playerReadyTcs?.TrySetCanceled();
-                _playerReadyTcs = null;
-                
-                if (forceDestroy) _isPlayerReady = false;
-                _isTrailerRevealed = false;
-
-                if (_webViewInitialized && TrailerWebView?.CoreWebView2 != null)
-                {
-                     try 
-                     {
-                         // Ensure we are still on the visual tree before calling into WinRT
-                         if (this.XamlRoot != null && TrailerWebView.Visibility == Visibility.Visible)
-                         {
-                             var jsTask = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();").AsTask();
-                             if (await Task.WhenAny(jsTask, Task.Delay(500)) == jsTask) await jsTask;
-                         }
-                     }
-                     catch { }
-                }
-
-                if (forceDestroy && TrailerWebView != null && this.IsLoaded)
-                {
-                    TrailerWebView.Source = new Uri("about:blank");
-                    _webViewInitialized = false;
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error in StopTrailer: {ex.Message}");
-            }
-
-            if (_isCinemaMode) ToggleCinemaMode(false);
-            ResetState(isMorphing: false, isStopping: true, sessionNonce: session);
-        }
-
-        /// <summary>
         /// Resets the card to initial state before loading new data
         /// </summary>
         private void ResetState(bool isMorphing = false, bool isStopping = false, bool forceSkeleton = true, long sessionNonce = -1)
@@ -708,7 +438,11 @@ namespace ModernIPTVPlayer.Controls
             if (!isStopping) 
             {
                 _lastMetadata = null;
-                _isRevealed = false;
+                // [FIX] Preserve revealed state during smart swaps to prevent redundant stagger animations
+                if (!isSmartSwap)
+                {
+                    _isRevealed = false;
+                }
             }
             
             // 3. UNIVERSAL CLEANUP: Reset layout, trailers, and progress
@@ -749,10 +483,13 @@ namespace ModernIPTVPlayer.Controls
             AmbienceGrid.Visibility = Visibility.Visible;
 
             // Media & Trailers
-            if (_webViewInitialized && TrailerWebView?.CoreWebView2 != null)
-                _ = TrailerWebView.CoreWebView2.ExecuteScriptAsync("stopVideo();");
+            if (_webView != null)
+            {
+                TrailerPoolService.Instance.Release(TrailerContainer);
+                _webView = null;
+            }
             
-            TrailerWebView.Visibility = Visibility.Collapsed;
+            TrailerContainer.Visibility = Visibility.Collapsed;
             MuteButton.Visibility = Visibility.Collapsed;
             ExpandButton.Visibility = Visibility.Collapsed;
             _isMuted = true;
@@ -829,6 +566,7 @@ namespace ModernIPTVPlayer.Controls
                     RealContentPanel.Opacity = 0;
                     MainSkeleton.Visibility = Visibility.Visible;
                     MainSkeleton.Opacity = 1;
+                    BadgeSkeleton.Visibility = Visibility.Visible;
                 }
             }
             else
@@ -836,6 +574,7 @@ namespace ModernIPTVPlayer.Controls
                 // Smart Swap: Keep content visible for instant swap
                 RealContentPanel.Opacity = 1;
                 MainSkeleton.Visibility = Visibility.Collapsed;
+                BadgeSkeleton.Visibility = Visibility.Collapsed;
                 var vPanel = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(RealContentPanel);
                 vPanel.Opacity = 1f;
             }
@@ -936,11 +675,20 @@ namespace ModernIPTVPlayer.Controls
             _stream = stream;
 
             // 3. Authority Seeding (0ms)
-            UpdateUiFromUnified(seed);
+            // [FIX] Perform seed update AFTER setting the stream to ensure all UI components have context
+            if (seed != null)
+            {
+                UpdateUiFromUnified(seed);
+            }
 
-            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Authorities seeded. UI updated.");
             // 4. Session-Locked Reset (Shielded if smart swapping)
             ResetState(isMorphing, forceSkeleton: !isEligibleForSmartSwap, sessionNonce: loadNonce);
+
+            // [FIX] If we are smart-swapping with seed data, ensure we don't re-trigger the reveal stagger
+            if (seed != null && isEligibleForSmartSwap)
+            {
+                _isRevealed = true; 
+            }
 
             // Minimal delay for layout settlement, then start enrichment tasks
             await Task.Delay(10);
@@ -1171,6 +919,10 @@ namespace ModernIPTVPlayer.Controls
                 _ = ProbeStreamInternal(stream, loadNonce);
 
             }
+            catch (OperationCanceledException)
+            {
+                System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Session {loadNonce} CANCELLED.");
+            }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Error: {ex.Message}");
@@ -1185,11 +937,14 @@ namespace ModernIPTVPlayer.Controls
                 {
                     LoadingRing.IsActive = false;
                     LoadingRing.Visibility = Visibility.Collapsed;
-                    // Ensure content is visible if we crashed but had partial data
-                    if (MainSkeleton.Visibility == Visibility.Visible)
+                    
+                    // [SAFETY NET] Ensure all skeletons are collapsed and content is revealed if we are still active
+                    if (MainSkeleton.Visibility == Visibility.Visible || BadgeSkeleton.Visibility == Visibility.Visible)
                     {
-                         MainSkeleton.Visibility = Visibility.Collapsed;
-                         RealContentPanel.Opacity = 1;
+                        System.Diagnostics.Debug.WriteLine("[EXP-LOAD] Safety Net Triggered - Forcing Skeleton Collapse");
+                        MainSkeleton.Visibility = Visibility.Collapsed;
+                        BadgeSkeleton.Visibility = Visibility.Collapsed;
+                        RealContentPanel.Opacity = 1;
                     }
                 }
             }
@@ -1480,91 +1235,20 @@ namespace ModernIPTVPlayer.Controls
 
         private async Task PlayTrailer(string videoKey)
         {
-            // Cancel previous Play requests
-            _trailerCts?.Cancel();
-            _trailerCts?.Dispose();
-            _trailerCts = new System.Threading.CancellationTokenSource();
-            var token = _trailerCts.Token;
-
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Requested: {videoKey}");
-
-                // Only reinitialize if not already ready
-                if (!_webViewInitialized)
-                {
-                    await PreInitializeWebViewAsync();
-                }
-
-                // [REFACTORED] Remove blocking wait for JS 'PLAYER_READY' signal to avoid hangs.
-                // WebView2 handles script execution queuing normally, or we catch the error if totally unready.
-                if (token.IsCancellationRequested) return;
-
-                // Check if it is a full URL or ID
-                if (videoKey.StartsWith("http") && (videoKey.Contains("youtube.com") || videoKey.Contains("youtu.be")))
-                {
-                     // Extract ID from URL
-                     try
-                     {
-                        var uri = new Uri(videoKey);
-                        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
-                        if (query.AllKeys.Contains("v"))
-                        {
-                            videoKey = query["v"];
-                        }
-                        else if (videoKey.Contains("youtu.be"))
-                        {
-                            videoKey = uri.Segments.Last();
-                        }
-                     }
-                     catch
-                     {
-                        // URL parsing failed, use as-is
-                     }
-                }
-
-                await TrailerWebView.CoreWebView2.ExecuteScriptAsync($"loadVideo('{videoKey}')");
-
-                if (token.IsCancellationRequested) return;
-
-                // Sync UI: Hide Backdrop and show WebView via consolidated method
-                RevealTrailerInternal();
-
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Requested via Pool: {videoKey}");
+                _webView = await TrailerPoolService.Instance.AcquireAsync(TrailerContainer, videoKey);
+                
                 // Mute state setup
                 _isMuted = true;
                 UpdateMuteIcon();
-                _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
-            }
-            catch (TaskCanceledException)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Cancelled for {videoKey}");
+                if (_webView != null)
+                    _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Error: {ex.Message}");
-            }
-        }
-        
-        private void CoreWebView2_WebMessageReceived(object sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs e)
-        {
-            try
-            {
-                string message = e.TryGetWebMessageAsString();
-
-                if (message == "PLAYER_READY")
-                {
-                    _isPlayerReady = true;
-                    _webViewInitTcs?.TrySetResult(true);
-                    _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
-                }
-                else if (message == "VIDEO_PLAYING")
-                {
-                    _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] WebMessage Error: {ex.Message}");
             }
         }
         
@@ -1579,8 +1263,9 @@ namespace ModernIPTVPlayer.Controls
             BackdropContainer.Visibility = Visibility.Collapsed;
             AmbienceGrid.Visibility = Visibility.Collapsed;
 
-            TrailerWebView.Visibility = Visibility.Visible;
-            TrailerWebView.Opacity = 1;
+            TrailerContainer.Visibility = Visibility.Visible;
+            if (_webView != null) _webView.Opacity = 1;
+
             MuteButton.Visibility = Visibility.Visible;
             ExpandButton.Visibility = Visibility.Visible;
         }
@@ -1588,46 +1273,20 @@ namespace ModernIPTVPlayer.Controls
         private bool _isRevealed;
         private bool _isMuted = true;
 
-        private static string? ParseScriptString(string? rawResult)
-        {
-            if (string.IsNullOrWhiteSpace(rawResult)) return null;
-            var value = rawResult.Trim();
-
-            // WebView2 returns JSON encoded values ("\"muted\"" etc).
-            if (value.Length >= 2 && value[0] == '"' && value[^1] == '"')
-            {
-                value = value.Substring(1, value.Length - 2).Replace("\\\"", "\"");
-            }
-            return value;
-        }
-
-        private bool? ParseMuteState(string? rawResult)
-        {
-            var state = ParseScriptString(rawResult)?.ToLowerInvariant();
-            return state switch
-            {
-                "muted" => true,
-                "unmuted" => false,
-                "true" => true,
-                "false" => false,
-                _ => null
-            };
-        }
-
         private async Task RefreshMuteStateFromPlayerAsync(bool defaultMutedWhenUnknown = true)
         {
             try
             {
-                if (TrailerWebView.CoreWebView2 == null)
+                if (_webView?.CoreWebView2 == null)
                 {
                     _isMuted = defaultMutedWhenUnknown;
                     UpdateMuteIcon();
                     return;
                 }
 
-                var raw = await TrailerWebView.CoreWebView2.ExecuteScriptAsync("getMuteState()");
-                var parsed = ParseMuteState(raw);
-                _isMuted = parsed ?? defaultMutedWhenUnknown;
+                // Check YouTube-specific muted state via simple script (matching engine implementation)
+                var raw = await _webView.CoreWebView2.ExecuteScriptAsync("try { player.isMuted(); } catch(e) { true; }");
+                _isMuted = raw.Trim().ToLower() == "true";
                 UpdateMuteIcon();
             }
             catch
@@ -1641,39 +1300,20 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                if (TrailerWebView.CoreWebView2 == null)
-                {
-                    return;
-                }
-
-                var raw = await TrailerWebView.CoreWebView2.ExecuteScriptAsync($"setMuted({(shouldMute ? "true" : "false")})");
-                var parsed = ParseMuteState(raw);
-                _isMuted = parsed ?? shouldMute;
+                if (_webView?.CoreWebView2 == null) return;
+                await _webView.CoreWebView2.ExecuteScriptAsync($"try {{ if ({ (shouldMute ? "true" : "false") }) player.mute(); else player.unMute(); }} catch(e) {{}}");
+                _isMuted = shouldMute;
                 UpdateMuteIcon();
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"[ExpandedCard] Mute Error: {ex.Message}");
-                _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: _isMuted);
             }
         }
         
         private async void MuteButton_Click(object sender, RoutedEventArgs e)
         {
-            try
-            {
-                if (TrailerWebView.CoreWebView2 != null)
-                {
-                    var raw = await TrailerWebView.CoreWebView2.ExecuteScriptAsync("toggleMute()");
-                    var parsed = ParseMuteState(raw);
-                    _isMuted = parsed ?? _isMuted;
-                    UpdateMuteIcon();
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Mute Error: {ex.Message}");
-            }
+            await SetMutedAsync(!_isMuted);
         }
         
         private void UpdateMuteIcon()
@@ -1762,11 +1402,11 @@ namespace ModernIPTVPlayer.Controls
             if (StaticMetadataPanel != null)
                 StaticMetadataPanel.Visibility = (hasAge || hasCountry) ? Visibility.Visible : Visibility.Collapsed;
             
-            _ = UpdateCastListAsync(unified);
-            _ = UpdateDirectorListAsync(unified);
+            _ = UpdateCreditsAsync(unified);
 
             // 4. State & Background
             MainSkeleton.Visibility = Visibility.Collapsed;
+            BadgeSkeleton.Visibility = Visibility.Collapsed;
             RealContentPanel.Opacity = 1; 
             SafeSetImage(BackdropImage, overrideBackdrop ?? unified.BackdropUrl, ref _currentBackdropUrl);
 
@@ -1864,74 +1504,78 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private async Task UpdateDirectorListAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
+        private async Task UpdateCreditsAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
         {
             if (unified == null) return;
             
             try
             {
-                DirectorList.Clear();
+                var dispatcher = this.DispatcherQueue;
+                if (dispatcher == null) return;
 
+                List<CastItem> castItems = new();
+                List<CastItem> directorItems = new();
+
+                // 1. Gather Cast from Seed Metadata
+                if (unified.Cast != null && unified.Cast.Count > 0)
+                {
+                    foreach (var c in unified.Cast.Take(12))
+                        castItems.Add(CreateCastItem(c.Name, c.ProfileUrl));
+                }
+
+                // 2. Gather Directors from Seed Metadata
                 if (unified.Directors != null && unified.Directors.Count > 0)
                 {
                     foreach (var d in unified.Directors.Take(5))
-                    {
-                        DirectorList.Add(CreateCastItem(d.Name, d.ProfileUrl));
-                    }
+                        directorItems.Add(CreateCastItem(d.Name, d.ProfileUrl));
                 }
 
-                if (DirectorList.Count > 0)
-                {
-                    DirectorHeaderText.Visibility = Visibility.Visible;
-                    DirectorListView.Visibility = Visibility.Visible;
-                    DirectorListView.ItemsSource = DirectorList;
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Director Error: {ex.Message}");
-            }
-        }
-
-        private async Task UpdateCastListAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
-        {
-            if (unified == null) return;
-            
-            try
-            {
-                CastList.Clear();
-
-                // 1. Check if Catalog/Unified already provided cast
-                if (unified.Cast != null && unified.Cast.Count > 0)
-                {
-                    foreach (var c in unified.Cast.Take(10))
-                    {
-                        CastList.Add(CreateCastItem(c.Name, c.ProfileUrl));
-                    }
-                }
-                // 2. Otherwise fallback to TMDB fetch
-                else if (unified.TmdbInfo != null && ModernIPTVPlayer.AppSettings.IsTmdbEnabled)
+                // 3. TMDB Fallback for Missing Information
+                if ((castItems.Count == 0 || directorItems.Count == 0) && unified.TmdbInfo != null && ModernIPTVPlayer.AppSettings.IsTmdbEnabled)
                 {
                     var credits = await TmdbHelper.GetCreditsAsync(unified.TmdbInfo.Id, unified.IsSeries);
-                    if (credits?.Cast != null)
+                    if (credits != null)
                     {
-                        foreach (var c in credits.Cast.Take(10))
+                        if (castItems.Count == 0 && credits.Cast != null)
                         {
-                            CastList.Add(CreateCastItem(c.Name, c.FullProfileUrl));
+                            foreach (var c in credits.Cast.Take(12))
+                                castItems.Add(CreateCastItem(c.Name, c.FullProfileUrl));
+                        }
+                        if (directorItems.Count == 0 && credits.Crew != null)
+                        {
+                            var directors = credits.Crew.Where(crew => crew.Job == "Director").Take(5);
+                            foreach (var d in directors)
+                                directorItems.Add(CreateCastItem(d.Name, d.FullProfileUrl));
                         }
                     }
                 }
 
-                if (CastList.Count > 0)
-                {
-                    CastHeaderText.Visibility = Visibility.Visible;
-                    CastListView.Visibility = Visibility.Visible;
-                    CastListView.ItemsSource = CastList;
-                }
+                dispatcher.TryEnqueue(() => {
+                    // Safety check: is the card still showing the same content?
+                    if (_lastMetadata != unified) return;
+
+                    // Update Cast Section
+                    CastList.Clear();
+                    foreach (var item in castItems) CastList.Add(item);
+                    
+                    bool hasCast = CastList.Count > 0;
+                    CastHeaderText.Visibility = hasCast ? Visibility.Visible : Visibility.Collapsed;
+                    CastListView.Visibility = hasCast ? Visibility.Visible : Visibility.Collapsed;
+                    if (hasCast) CastListView.ItemsSource = CastList;
+
+                    // Update Directors Section
+                    DirectorList.Clear();
+                    foreach (var item in directorItems) DirectorList.Add(item);
+
+                    bool hasDirectors = DirectorList.Count > 0;
+                    DirectorHeaderText.Visibility = hasDirectors ? Visibility.Visible : Visibility.Collapsed;
+                    DirectorListView.Visibility = hasDirectors ? Visibility.Visible : Visibility.Collapsed;
+                    if (hasDirectors) DirectorListView.ItemsSource = DirectorList;
+                });
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Cast Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Credits Update Error: {ex.Message}");
             }
         }
 
@@ -1951,10 +1595,17 @@ namespace ModernIPTVPlayer.Controls
             // Neutral Dark Gray for a professional, unified look across all platform items.
             var neutralColor = AppColorHelper.FromHex("#333333");
 
+            // Only set URL if it's a valid absolute URI to avoid conversion crashes in XAML
+            string? safeUrl = null;
+            if (!string.IsNullOrWhiteSpace(profileUrl) && Uri.TryCreate(profileUrl, UriKind.Absolute, out _))
+            {
+                safeUrl = profileUrl;
+            }
+
             return new CastItem 
             { 
                 Name = name, 
-                FullProfileUrl = profileUrl,
+                FullProfileUrl = safeUrl,
                 Initials = initials.ToUpperInvariant(),
                 ProfileBackground = new SolidColorBrush(neutralColor)
             };
@@ -2188,7 +1839,24 @@ namespace ModernIPTVPlayer.Controls
             if (currentUrl != newUrl)
             {
                 currentUrl = newUrl;
-                target.Source = new BitmapImage(new Uri(newUrl));
+                try
+                {
+                    if (Uri.TryCreate(newUrl, UriKind.Absolute, out var uri))
+                    {
+                        target.Source = new BitmapImage(uri);
+                    }
+                    else
+                    {
+                        target.Source = null;
+                        currentUrl = null;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Image Error ({newUrl}): {ex.Message}");
+                    target.Source = null;
+                    currentUrl = null;
+                }
             }
         }
     }
@@ -2197,7 +1865,12 @@ namespace ModernIPTVPlayer.Controls
     public class CastItem
     {
         public string Name { get; set; }
-        public string FullProfileUrl { get; set; }
+        private string? _fullProfileUrl;
+        public string? FullProfileUrl 
+        { 
+            get => _fullProfileUrl; 
+            set => _fullProfileUrl = string.IsNullOrWhiteSpace(value) ? null : value; 
+        }
         public string Initials { get; set; }
         public SolidColorBrush ProfileBackground { get; set; }
         public Visibility ImageVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Collapsed : Visibility.Visible;

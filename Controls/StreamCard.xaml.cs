@@ -6,6 +6,7 @@ using System;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class StreamCard : UserControl
     {
         public static readonly DependencyProperty ViewModelProperty =

@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class WatchlistPage : Page
     {
         public WatchlistPage()

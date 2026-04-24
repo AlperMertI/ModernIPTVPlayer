@@ -164,7 +164,7 @@
                             </LinearGradientBrush>
                         </Border.Background>
                         <Border.RenderTransform>
-                            <CompositeTransform ScaleX="{x:Bind GetProgressScale(ProgressValue), Mode=OneWay}"/>
+                            <CompositeTransform ScaleX="{x:Bind GetProgressScale(ProgressValue), Mode=OneWay, FallbackValue=0}"/>
                         </Border.RenderTransform>
                     </Border>
                 </Grid>

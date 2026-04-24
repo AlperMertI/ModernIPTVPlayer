@@ -9,6 +9,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
@@ -21,13 +22,17 @@ using Microsoft.UI.Xaml.Data;
 
 namespace ModernIPTVPlayer.Controls
 {
-    public class RowStyleToTemplateConverter : IValueConverter
+    [Microsoft.UI.Xaml.Data.Bindable]
+    public partial class RowStyleToTemplateConverter : IValueConverter
     {
         public DataTemplate StandardTemplate { get; set; }
         public DataTemplate LandscapeTemplate { get; set; }
 
         public object Convert(object value, Type targetType, object parameter, string language)
         {
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:RowStyleConv.Convert", "enter", new System.Collections.Generic.Dictionary<string, object?> { ["valueType"] = value?.GetType().FullName, ["value"] = value?.ToString() }, "H-RENDER"); } catch { }
+            // #endregion
             if (value is string style)
             {
                 if (style == "Landscape") return LandscapeTemplate;
@@ -41,7 +46,8 @@ namespace ModernIPTVPlayer.Controls
         }
     }
 
-    public class DiscoveryRowTemplateSelector : DataTemplateSelector
+    [Microsoft.UI.Xaml.Data.Bindable]
+    public partial class DiscoveryRowTemplateSelector : DataTemplateSelector
     {
         public DataTemplate StandardRowTemplate { get; set; }
         public DataTemplate SpotlightRowTemplate { get; set; }
@@ -54,8 +60,12 @@ namespace ModernIPTVPlayer.Controls
                 {
                     return SpotlightRowTemplate;
                 }
+                return StandardRowTemplate;
             }
-            return StandardRowTemplate;
+            
+            // [AOT GUARD] If for some reason we get a null or unexpected type, 
+            // returning null is safer than returning a template with the wrong x:DataType.
+            return null;
         }
 
         protected override DataTemplate SelectTemplateCore(object item, DependencyObject container)
@@ -64,6 +74,7 @@ namespace ModernIPTVPlayer.Controls
         }
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class StremioDiscoveryControl : UserControl
     {
         // Public Events
@@ -106,9 +117,9 @@ namespace ModernIPTVPlayer.Controls
         private bool _isSourceActive = true;
 
         // Hero Priority Logic
-        internal enum RowState { Pending, Success, Failed }
+        public enum RowState { Pending, Success, Failed }
         private Dictionary<string, RowState> _rowStates = new();
-        private Dictionary<string, ObservableCollection<StremioMediaStream>> _rowItemsBuffer = new();
+        private Dictionary<string, System.Collections.IList> _rowItemsBuffer = new();
         private List<string> _heroPriorityOrder = new();
 
         // Track used Spotlight IDs and last style to prevent duplicates/clutter
@@ -125,36 +136,67 @@ namespace ModernIPTVPlayer.Controls
         private bool _isFirstHeroLoad = true;
         
         // [PERF FIX] Global throttling for catalog loading to prevent "thundering herd" CPU/Disk saturation
-        private static readonly System.Threading.SemaphoreSlim _catalogSemaphore = new System.Threading.SemaphoreSlim(2);
+        // Increased to 5 for better parallelism while maintaining system stability.
+        private static readonly System.Threading.SemaphoreSlim _catalogSemaphore = new System.Threading.SemaphoreSlim(5);
+        
+        // [PERF FIX] Store ETags found during Phase 0 to skip redundant disk reads in Phase 1
+        private readonly Dictionary<string, string> _rowEtags = new();
 
         // --- OPTIMIZATION FIELDS ---
         private static Dictionary<string, List<CachedSlot>> _slotMapCache = new();
         private static Task _historyInitTask;
         private const string LAYOUT_CACHE_FILE = "discovery_layout.bin.zst";
 
-        internal class CachedSlot
+        public class CachedSlot
         {
-            public string BaseUrl { get; set; }
-            public StremioCatalog Catalog { get; set; }
+            public string BaseUrl { get; set; } = string.Empty;
+            public StremioCatalog Catalog { get; set; } = new();
             public int SortIndex { get; set; }
-            public string RowId { get; set; }
+            public string RowId { get; set; } = string.Empty;
         }
         // ---------------------------
 
         // Memory Cache for instant switching
-        internal class DiscoveryState
+        public class DiscoveryState
         {
             public List<CatalogRowViewModel> Rows { get; set; } = new();
             public Dictionary<string, RowState> RowStates { get; set; } = new();
-            public Dictionary<string, ObservableCollection<StremioMediaStream>> RowItemsBuffer { get; set; } = new();
+            public Dictionary<string, System.Collections.IList> RowItemsBuffer { get; set; } = new();
             public List<string> HeroPriorityOrder { get; set; } = new();
             public (Windows.UI.Color Primary, Windows.UI.Color Secondary)? HeroColors { get; set; }
         }
         private Dictionary<string, DiscoveryState> _contentCache = new();
 
+        private record EnrichmentTask(
+            StremioMediaStream Item, 
+            Models.Metadata.MetadataContext Context, 
+            int Priority) : IComparable<EnrichmentTask>
+        {
+            public int CompareTo(EnrichmentTask other) => Priority.CompareTo(other.Priority);
+        }
+
+        private readonly System.Threading.Channels.Channel<EnrichmentTask> _enrichmentChannel = 
+            System.Threading.Channels.Channel.CreateUnboundedPrioritized<EnrichmentTask>();
+
+        private bool _isWorkerRunning = false;
+        private const int STAGGER_DELAY_MS = 50; 
+
         public StremioDiscoveryControl()
         {
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:ctor", "enter", null, "H6-H7-H8"); } catch { }
+            // #endregion
             this.InitializeComponent();
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:ctor", "InitializeComponent done", null, "H6-H7-H8"); } catch { }
+            // #endregion
+            this.DataContext = this;
+            this.Loaded += (s, e) => {
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:Loaded", "loaded", null, "H6-H7-H8"); } catch { }
+                // #endregion
+                StartBackgroundEnrichmentWorker();
+            };
             
             // Hero Events
             HeroControl.PlayAction += (s, e) => PlayAction?.Invoke(this, e);
@@ -165,6 +207,28 @@ namespace ModernIPTVPlayer.Controls
             };
 
             DiscoveryRepeater.ItemsSource = _discoveryRows;
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:ctor", "ItemsSource bound", null, "H6-H7"); } catch { }
+            // #endregion
+
+            // #region agent log
+            // Hook layout/render events so we can see where the crash lands during
+            // ItemsRepeater's first measure/arrange after rows are added.
+            _discoveryRows.CollectionChanged += (s, ev) =>
+            {
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:_discoveryRows.CollectionChanged", "fired", new System.Collections.Generic.Dictionary<string, object?> { ["action"] = ev.Action.ToString(), ["newItems"] = ev.NewItems?.Count ?? 0, ["oldItems"] = ev.OldItems?.Count ?? 0, ["total"] = _discoveryRows.Count }, "H-XAML"); } catch { }
+            };
+            int _layoutUpdatedLogCap = 0;
+            DiscoveryRepeater.LayoutUpdated += (s, ev) =>
+            {
+                if (System.Threading.Interlocked.Increment(ref _layoutUpdatedLogCap) > 3) return;
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:DiscoveryRepeater.LayoutUpdated", "fired", new System.Collections.Generic.Dictionary<string, object?> { ["n"] = _layoutUpdatedLogCap, ["actualW"] = DiscoveryRepeater.ActualWidth, ["actualH"] = DiscoveryRepeater.ActualHeight }, "H-XAML"); } catch { }
+            };
+            DiscoveryRepeater.SizeChanged += (s, ev) =>
+            {
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:DiscoveryRepeater.SizeChanged", "fired", new System.Collections.Generic.Dictionary<string, object?> { ["w"] = ev.NewSize.Width, ["h"] = ev.NewSize.Height }, "H-XAML"); } catch { }
+            };
+            // #endregion
 
             StremioAddonManager.Instance.AddonsChanged += OnStremioAddonsChanged;
 
@@ -186,6 +250,40 @@ namespace ModernIPTVPlayer.Controls
 
             // [FIX] Sync hero rotation with control visibility (handles switching to IPTV/Kütüphanem)
             this.RegisterPropertyChangedCallback(VisibilityProperty, (s, dp) => UpdateHeroLifecycle());
+        }
+
+        /// <summary>
+        /// Starts the high-performance background enrichment worker.
+        /// Leverages .NET 11's Prioritized Channels for thread-safe, async task processing.
+        /// </summary>
+        private void StartBackgroundEnrichmentWorker()
+        {
+            if (_isWorkerRunning) return;
+            _isWorkerRunning = true;
+
+            _ = Task.Run(async () => 
+            {
+                var reader = _enrichmentChannel.Reader;
+                while (await reader.WaitToReadAsync())
+                {
+                    while (reader.TryRead(out var task))
+                    {
+                        try
+                        {
+                            // [SENIOR ARCHITECTURE] Staggered Parallelism
+                            // .NET 11 prioritized channel ensures 'task' is the highest priority item currently available.
+                            _ = Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(task.Item, task.Context);
+
+                            // Small breather before starting the next parallel task
+                            await Task.Delay(STAGGER_DELAY_MS);
+                        }
+                        catch (Exception ex)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[EnrichmentWorker] Error: {ex.Message}");
+                        }
+                    }
+                }
+            });
         }
 
         public void SetSourceActive(bool isActive)
@@ -222,50 +320,136 @@ namespace ModernIPTVPlayer.Controls
 
         private async Task LoadLayoutCacheFromDiskAsync()
         {
-            try
-            {
-                var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
-                var item = await folder.TryGetItemAsync(LAYOUT_CACHE_FILE);
-                
-                if (item == null) return;
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadLayoutCacheFromDiskAsync", "enter", null, "H1-cache"); } catch { }
+            // #endregion
 
-                var zstFile = await folder.GetFileAsync(LAYOUT_CACHE_FILE);
-                using (var stream = await zstFile.OpenStreamForReadAsync())
-                using (var decompressor = new ZstdSharp.DecompressionStream(stream))
+            // CRITICAL: run entirely off the UI thread to avoid marshaling JSON/Zstd exceptions
+            // back to the UI synchronization context. In NativeAOT + CsWinRT, the WinRT async
+            // completion machinery can corrupt state when a managed exception crosses the
+            // interop boundary during deserialization.
+            await Task.Run(() =>
+            {
+                try
                 {
-                    var diskCache = await JsonSerializer.DeserializeAsync(decompressor, AppJsonContext.Default.DictionaryStringListCachedSlot);
+                    var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
+                    // use synchronous .Path to avoid WinRT async-continuation marshaling
+                    string path = System.IO.Path.Combine(folder.Path, LAYOUT_CACHE_FILE);
+
+                    if (!System.IO.File.Exists(path))
+                    {
+                        // #region agent log
+                        try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadLayoutCacheFromDiskAsync", "file missing", null, "H1-cache"); } catch { }
+                        // #endregion
+                        return;
+                    }
+
+                    byte[] raw;
+                    try
+                    {
+                        raw = System.IO.File.ReadAllBytes(path);
+                    }
+                    catch (Exception readEx)
+                    {
+                        // #region agent log
+                        try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadLayoutCacheFromDiskAsync", "read fail", new System.Collections.Generic.Dictionary<string, object?> { ["type"] = readEx.GetType().FullName, ["msg"] = readEx.Message }, "H1-cache"); } catch { }
+                        // #endregion
+                        return;
+                    }
+
+                    if (raw.Length == 0)
+                    {
+                        // empty file → corrupt remnant from a previous crash. delete it.
+                        // #region agent log
+                        try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadLayoutCacheFromDiskAsync", "empty file - deleting", null, "H1-cache"); } catch { }
+                        // #endregion
+                        try { System.IO.File.Delete(path); } catch { }
+                        return;
+                    }
+
+                    Dictionary<string, List<CachedSlot>>? diskCache = null;
+                    try
+                    {
+                        using var ms = new System.IO.MemoryStream(raw);
+                        using var decompressor = new ZstdSharp.DecompressionStream(ms);
+                        // synchronous deserialize on the decompressed stream — no async boundary
+                        diskCache = JsonSerializer.Deserialize(decompressor, AppJsonContext.Default.DictionaryStringListCachedSlot);
+                    }
+                    catch (Exception deserEx)
+                    {
+                        // #region agent log
+                        try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadLayoutCacheFromDiskAsync", "deserialize fail - deleting corrupt", new System.Collections.Generic.Dictionary<string, object?> { ["type"] = deserEx.GetType().FullName, ["msg"] = deserEx.Message }, "H1-cache"); } catch { }
+                        // #endregion
+                        try { System.IO.File.Delete(path); } catch { }
+                        return;
+                    }
+
                     if (diskCache != null)
                     {
-                        lock(_slotMapCache)
+                        lock (_slotMapCache)
                         {
-                            foreach(var kv in diskCache)
+                            foreach (var kv in diskCache)
                             {
                                 if (kv.Value == null || kv.Value.Count == 0) continue;
                                 _slotMapCache[kv.Key] = kv.Value;
                             }
                         }
+                        // #region agent log
+                        try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadLayoutCacheFromDiskAsync", "loaded", new System.Collections.Generic.Dictionary<string, object?> { ["entries"] = diskCache.Count }, "H1-cache"); } catch { }
+                        // #endregion
                     }
                 }
-            }
-            catch { }
+                catch (Exception ex)
+                {
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadLayoutCacheFromDiskAsync", "outer catch", new System.Collections.Generic.Dictionary<string, object?> { ["type"] = ex.GetType().FullName, ["msg"] = ex.Message }, "H1-cache"); } catch { }
+                    // #endregion
+                }
+            }).ConfigureAwait(false);
         }
 
         private async Task SaveLayoutCacheToDiskAsync()
         {
-            try
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:SaveLayoutCacheToDiskAsync", "enter", null, "H1-cache"); } catch { }
+            // #endregion
+
+            // See LoadLayoutCacheFromDiskAsync: keep all WinRT/IO operations off the UI
+            // synchronization context, and perform JSON/Zstd work with synchronous streams
+            // to avoid async-boundary marshaling issues in NativeAOT.
+            await Task.Run(() =>
             {
-                var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
-                var file = await folder.CreateFileAsync(LAYOUT_CACHE_FILE, Windows.Storage.CreationCollisionOption.ReplaceExisting);
-                
-                using (var stream = await file.OpenStreamForWriteAsync())
-                using (var compressor = new ZstdSharp.CompressionStream(stream, 3))
+                try
                 {
+                    var folder = Windows.Storage.ApplicationData.Current.LocalFolder;
+                    string path = System.IO.Path.Combine(folder.Path, LAYOUT_CACHE_FILE);
+                    string tmpPath = path + ".tmp";
+
                     Dictionary<string, List<CachedSlot>> copy;
                     lock (_slotMapCache) copy = new Dictionary<string, List<CachedSlot>>(_slotMapCache);
-                    await JsonSerializer.SerializeAsync(compressor, copy, AppJsonContext.Default.DictionaryStringListCachedSlot);
+
+                    // atomic write: serialize to tmp, then rename. Prevents ever leaving
+                    // a half-written (or zero-byte) file behind on crash.
+                    using (var fs = System.IO.File.Create(tmpPath))
+                    using (var compressor = new ZstdSharp.CompressionStream(fs, 3))
+                    {
+                        JsonSerializer.Serialize(compressor, copy, AppJsonContext.Default.DictionaryStringListCachedSlot);
+                    }
+
+                    try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); } catch { }
+                    System.IO.File.Move(tmpPath, path);
+
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:SaveLayoutCacheToDiskAsync", "done", new System.Collections.Generic.Dictionary<string, object?> { ["entries"] = copy.Count }, "H1-cache"); } catch { }
+                    // #endregion
                 }
-            }
-            catch { }
+                catch (Exception ex)
+                {
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:SaveLayoutCacheToDiskAsync", "error", new System.Collections.Generic.Dictionary<string, object?> { ["type"] = ex.GetType().FullName, ["msg"] = ex.Message }, "H1-cache"); } catch { }
+                    // #endregion
+                }
+            }).ConfigureAwait(false);
         }
 
         private void OnHistoryChanged(object sender, EventArgs e)
@@ -444,9 +628,9 @@ namespace ModernIPTVPlayer.Controls
 
         private async Task EnrichItemsBatchAsync(IEnumerable<StremioMediaStream> items, MetadataContext context = MetadataContext.Discovery)
         {
-            if (items == null || !items.Any()) return;
-            
+            if (items == null) return;
             var itemList = items.ToList();
+            if (itemList.Count == 0) return;
             var tasks = itemList.Select(async item => 
             {
                 try
@@ -476,36 +660,46 @@ namespace ModernIPTVPlayer.Controls
             await Task.WhenAll(tasks);
         }
 
-        private async Task EnrichRowMetadataAsync(CatalogRowViewModel row, MetadataContext context = MetadataContext.Discovery)
+        /// <summary>
+        /// Orchestrates metadata enrichment for a specific row.
+        /// Items are queued based on their visual order (RowIndex).
+        /// </summary>
+        private Task EnrichRowMetadataAsync(CatalogRowViewModel row, Models.Metadata.MetadataContext context = Models.Metadata.MetadataContext.Discovery)
         {
-            if (row.RowStyle != "Landscape" && row.RowStyle != "Spotlight") return;
-            if (row.Items == null || row.Items.Count == 0) return;
+            if (row.Items == null || row.Items.Count == 0) return Task.CompletedTask;
 
-            // [OPTIMIZATION] Only enrich first 5 items for Spotlight (Carousel items)
-            var streams = (row.RowStyle == "Spotlight") ? row.Items.Take(5) : row.Items;
+            if (row.RowStyle != "Landscape" && row.RowStyle != "Spotlight" && row.RowStyle != "Hero") return Task.CompletedTask;
 
-            // Only enrich items that need it
-            var toEnrich = streams.Where(stream => 
-                context == MetadataContext.Spotlight || // ALWAYS enrich if it's Spotlight row to get Logos/Localizations
-                string.IsNullOrEmpty(stream.Banner) || 
-                string.IsNullOrEmpty(stream.Year) || 
-                string.IsNullOrEmpty(stream.Genres) ||
-                MetadataProvider.Instance.IsPlaceholderOverview(stream.Description) ||
-                string.IsNullOrEmpty(stream.Rating) ||
-                stream.Rating == "0.0" || stream.Rating == "0").ToList();
+            var targetContext = context;
+            if (row.RowStyle == "Landscape") targetContext = Models.Metadata.MetadataContext.Landscape;
+            else if (row.RowStyle == "Spotlight") targetContext = Models.Metadata.MetadataContext.Spotlight;
+            else if (row.RowStyle == "Hero") targetContext = Models.Metadata.MetadataContext.Hero;
 
-            if (toEnrich.Count > 0)
+            var streams = (row.RowStyle == "Spotlight" || row.RowStyle == "Hero") 
+                ? row.Items.Cast<StremioMediaStream>().Take(5) 
+                : row.Items.Cast<StremioMediaStream>();
+
+            int priority = 999;
+            if (_discoveryRows != null)
             {
-                await EnrichItemsBatchAsync(toEnrich, context);
+                int idx = _discoveryRows.IndexOf(row);
+                if (idx >= 0) priority = idx;
             }
+
+            foreach (var stream in streams)
+            {
+                _enrichmentChannel.Writer.TryWrite(new EnrichmentTask(stream, targetContext, priority));
+            }
+            return Task.CompletedTask;
         }
 
 
         public async Task LoadDiscoveryAsync(string contentType)
         {
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "enter", new System.Collections.Generic.Dictionary<string, object?> { ["type"] = contentType }, "H6-H7-H8"); } catch { }
+            // #endregion
             var overallSw = System.Diagnostics.Stopwatch.StartNew();
-            // (Logger is a long-lived StreamWriter; deleting the file here would orphan the handle,
-            // so we just emit a separator line instead.)
             HeroPerfLog("=== =================================================== ===");
             HeroPerfLog($"=== LoadDiscoveryAsync started for {contentType} ===");
             HeroPerfLog($"[StremioControl] LoadDiscoveryAsync START: {contentType}");
@@ -530,12 +724,18 @@ namespace ModernIPTVPlayer.Controls
                 _loadCts?.Cancel();
                 _loadCts = new System.Threading.CancellationTokenSource();
                 var token = _loadCts.Token;
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: cts created", null, "H8"); } catch { }
+                // #endregion
 
                 // [OPTIMIZATION] Don't await history immediately. Just ensure it started.
                 // It's needed for the CW row and individual items, but we can start Manifest/Catalog tasks now.
                 HeroPerfLog("Step 1: History Initialization CHECK");
                 if (_historyInitTask == null || _historyInitTask.IsFaulted) 
                     _historyInitTask = HistoryManager.Instance.InitializeAsync();
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: history init", null, "H8"); } catch { }
+                // #endregion
                 
                 // We'll await it later only when generating the CW row items.
 
@@ -548,6 +748,8 @@ namespace ModernIPTVPlayer.Controls
                     _usedSpotlightIds.Clear();
                     _lastUsedStyle = "Standard";
                 }
+                
+                lock(_rowEtags) _rowEtags.Clear();
 
                 // Fetch Manifests from Cache
                 _currentContentType = contentType;
@@ -577,7 +779,7 @@ namespace ModernIPTVPlayer.Controls
                     lock (_rowItemsBuffer)
                     {
                         _rowStates = new Dictionary<string, RowState>(cachedState.RowStates);
-                        _rowItemsBuffer = new Dictionary<string, ObservableCollection<StremioMediaStream>>(cachedState.RowItemsBuffer);
+                        _rowItemsBuffer = new Dictionary<string, System.Collections.IList>(cachedState.RowItemsBuffer);
                     }
 
                     _discoveryRows.Clear();
@@ -602,7 +804,7 @@ namespace ModernIPTVPlayer.Controls
                     {
                         if (_rowItemsBuffer.TryGetValue(rid, out var rowItems))
                         {
-                            cachedHeroItems.AddRange(rowItems);
+                            foreach(var item in rowItems.Cast<StremioMediaStream>()) cachedHeroItems.Add(item);
                             if (cachedHeroItems.Count >= 5) break;
                         }
                     }
@@ -628,6 +830,9 @@ namespace ModernIPTVPlayer.Controls
                     // No cache: Perform a clean reset and show shimmer
                     HeroPerfLog($"[StremioControl] CACHE MISS for {contentType}. Clearing UI.");
                     HeroPerfLog($"[CACHE-CLEAR] No cache found for {contentType}. Performing clean reset.");
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: cache miss branch", null, "H8"); } catch { }
+                    // #endregion
                     _heroPriorityOrder.Clear(); 
                     _discoveryRows.Clear();
                     lock (_rowItemsBuffer)
@@ -638,9 +843,18 @@ namespace ModernIPTVPlayer.Controls
                     
                     // [LOG] Check if we call SetLoading here
                     HeroPerfLog("[StremioControl] No cache -> Setting Hero to Loading (Shimmer)");
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: before HeroControl.SetLoading(true)", null, "H10"); } catch { }
+                    // #endregion
                     HeroControl.SetLoading(true);
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: after HeroControl.SetLoading(true)", null, "H10"); } catch { }
+                    // #endregion
                 }
 
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: before first await (manifests)", null, "H8"); } catch { }
+                // #endregion
                 HeroPerfLog("Step 2: Fetch Addons/Manifests START");
                 // [STARTUP RACE FIX] Block briefly (up to 1.5s) for manifests to be restored from disk the
                 // first time discovery runs. Before this guard, we'd get an addon list with all-null manifests
@@ -658,7 +872,7 @@ namespace ModernIPTVPlayer.Controls
 
                 if (addons.Count == 0)
                 {
-                    HeroControl.SetLoading(false);
+                    HeroControl.SetLoading(false, reset: false);
                     return;
                 }
 
@@ -728,11 +942,20 @@ namespace ModernIPTVPlayer.Controls
                     }
                 }
                 
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: after Save call, before heroPriorityOrder assign", new System.Collections.Generic.Dictionary<string, object?> { ["slotMap.Count"] = slotMap.Count, ["newPriority.Count"] = newPriorityOrder.Count }, "H-A"); } catch { }
+                // #endregion
                 _heroPriorityOrder = newPriorityOrder;
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: before DispatcherQueue.TryEnqueue", null, "H-A"); } catch { }
+                // #endregion
 
                 // Sync UI rows: Add missing, remove stale, then sort
                 DispatcherQueue.TryEnqueue(() => 
                 {
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync.TryEnqueue", "enter callback", null, "H-A"); } catch { }
+                    // #endregion
                     // 1. Remove stale
                     for (int i = _discoveryRows.Count - 1; i >= 0; i--)
                     {
@@ -751,6 +974,15 @@ namespace ModernIPTVPlayer.Controls
                     {
                         if (!_discoveryRows.Any(r => r.RowId == slot.RowId))
                         {
+                            // [SYNC] Check if data for this row already arrived (e.g. Hero-first fetch or fast cache hit)
+                            // This prevents the "Empty Row" race condition where Data arrived before the UI row existed.
+                            System.Collections.IList? preLoadedItems = null;
+                            lock (_rowItemsBuffer)
+                            {
+                                if (_rowItemsBuffer.TryGetValue(slot.RowId, out var buffered))
+                                    preLoadedItems = buffered;
+                            }
+
                             // [STYLE PATTERN] Standard (Vertical) -> Landscape (Horizontal) -> Spotlight (Banner)
                             int patternIdx = slot.SortIndex % 3;
                             string rowStyle = patternIdx switch
@@ -765,14 +997,24 @@ namespace ModernIPTVPlayer.Controls
                                 RowId = slot.RowId,
                                 CatalogName = slot.Catalog.Name,
                                 SortIndex = slot.SortIndex,
-                                IsLoading = true,
-                                Items = new ObservableCollection<StremioMediaStream>(),
+                                IsLoading = preLoadedItems == null, // Set to False if data is already here
+                                Items = preLoadedItems ?? new ObservableCollection<StremioMediaStream>(),
                                 SourceUrl = slot.BaseUrl,
                                 CatalogType = slot.Catalog.Type,
                                 CatalogId = slot.Catalog.Id,
                                 RowStyle = rowStyle
                             };
+
+                            // #region agent log
+                            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync.TryEnqueue", "before Add row", new System.Collections.Generic.Dictionary<string, object?> { ["rowId"] = skeleton.RowId, ["style"] = skeleton.RowStyle, ["idx"] = skeleton.SortIndex, ["count_before"] = _discoveryRows.Count }, "H-A"); } catch { }
+                            // #endregion
                             _discoveryRows.Add(skeleton);
+                            // #region agent log
+                            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync.TryEnqueue", "after Add row", null, "H-A"); } catch { }
+                            // #endregion
+
+                            if (preLoadedItems != null)
+                                HeroPerfLog($"[UI-SYNC] Row {slot.RowId} initialized with {preLoadedItems.Count} pre-buffered items.");
                         }
                         else
                         {
@@ -782,6 +1024,9 @@ namespace ModernIPTVPlayer.Controls
                         }
                     }
                     
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync.TryEnqueue", "before sort", new System.Collections.Generic.Dictionary<string, object?> { ["rows"] = _discoveryRows.Count }, "H-A"); } catch { }
+                    // #endregion
                     // 3. Keep ObservableCollection sorted by SortIndex
                     for (int i = 0; i < _discoveryRows.Count - 1; i++)
                     {
@@ -793,7 +1038,19 @@ namespace ModernIPTVPlayer.Controls
                             }
                         }
                     }
+                    // #region agent log
+                    try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync.TryEnqueue", "exit callback", null, "H-A"); } catch { }
+                    // Schedule a Low-priority ping so we can see whether ItemsRepeater's layout pass
+                    // completes (Low runs after Normal-priority layout work).
+                    DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                    {
+                        try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync.TryEnqueue", "low-priority after-layout ping", null, "H-XAML"); } catch { }
+                    });
+                    // #endregion
                 });
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: after DispatcherQueue.TryEnqueue", null, "H-A"); } catch { }
+                // #endregion
 
                 if (slotMap.Count == 0)
                 {
@@ -804,14 +1061,20 @@ namespace ModernIPTVPlayer.Controls
                          return; 
                     }
 
-                    HeroControl.SetLoading(false);
+                    HeroControl.SetLoading(false, reset: false);
                     return;
                 }
 
                 HeroPerfLog($"Step 3: Slot Mapping DONE ({overallSw.ElapsedMilliseconds}ms). Total slots: {slotMap.Count}");
                 
                 HeroPerfLog($"Step 3.5: Phase 0 Disk Load START ({overallSw.ElapsedMilliseconds}ms)");
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: before Phase0 tasks create", new System.Collections.Generic.Dictionary<string, object?> { ["slots"] = slotMap.Count }, "H-C"); } catch { }
+                // #endregion
                 var phase0Tasks = slotMap.Select(slot => ProcessCatalogSlotAsync(slot, isPhase0: true, myVersion, token)).ToArray();
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: before Phase0 WhenAll", null, "H-C"); } catch { }
+                // #endregion
                 await Task.WhenAll(phase0Tasks);
                 if (token.IsCancellationRequested || myVersion != _discoveryVersion) return;
 
@@ -835,6 +1098,9 @@ namespace ModernIPTVPlayer.Controls
 
         private void DiscoveryRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
         {
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:ElementPrepared", "enter", new System.Collections.Generic.Dictionary<string, object?> { ["elementType"] = args.Element?.GetType().FullName, ["idx"] = args.Index }, "H6"); } catch { }
+            // #endregion
             if (args.Element is CatalogRow row)
             {
                 row.ItemClicked -= CatalogRow_ItemClicked;
@@ -858,6 +1124,10 @@ namespace ModernIPTVPlayer.Controls
                 spotlight.ItemClicked += SpotlightInjectRow_ItemClicked;
                 spotlight.HeaderClicked -= CatalogRow_HeaderClicked;
                 spotlight.HeaderClicked += CatalogRow_HeaderClicked;
+                
+                // [NATIVE SYNC] Prompt the spotlight to check its viewport immediately upon preparation
+                // [FIX] Defer to the next cycle to ensure the row has a valid size/layout
+                DispatcherQueue.TryEnqueue(() => spotlight.SynchronizeViewport());
             }
         }
 
@@ -899,7 +1169,7 @@ namespace ModernIPTVPlayer.Controls
             lock (_rowItemsBuffer)
             {
                 state.RowStates = new Dictionary<string, RowState>(_rowStates);
-                state.RowItemsBuffer = new Dictionary<string, ObservableCollection<StremioMediaStream>>(_rowItemsBuffer);
+                state.RowItemsBuffer = new Dictionary<string, System.Collections.IList>(_rowItemsBuffer);
             }
 
             _contentCache[contentType] = state;
@@ -1020,18 +1290,27 @@ namespace ModernIPTVPlayer.Controls
                 if (row.DataContext is CatalogRowViewModel vm)
                 {
                     _lastRowIndex = rows.IndexOf(vm);
-                    if (vm.Items != null)
+                    if (vm.Items != null && e.Stream is StremioMediaStream sms)
                     {
-                        _lastItemIndex = vm.Items.IndexOf((StremioMediaStream)e.Stream);
-                        _lastItemId = e.Stream.IMDbId ?? e.Stream.Id.ToString();
+                        _lastItemIndex = vm.Items.IndexOf(sms);
+                        _lastItemId = sms.IMDbId ?? sms.Id.ToString();
                     }
                 }
             }
             ItemClicked?.Invoke(this, (e.Stream, e.SourceElement, null));
         }
 
-        private void CatalogRow_HoverStarted(object sender, FrameworkElement e) => CardHoverStarted?.Invoke(this, e);
-        private void CatalogRow_HoverEnded(object sender, FrameworkElement e) => CardHoverEnded?.Invoke(this, e);
+        private void CatalogRow_HoverStarted(object sender, FrameworkElement e) 
+        {
+            if (e.DataContext is StremioMediaStream stream) stream.Pin();
+            CardHoverStarted?.Invoke(this, e);
+        }
+
+        private void CatalogRow_HoverEnded(object sender, FrameworkElement e) 
+        {
+            if (e.DataContext is StremioMediaStream stream) stream.Unpin();
+            CardHoverEnded?.Invoke(this, e);
+        }
         private void CatalogRow_ScrollStarted(object sender, EventArgs e) => RowScrollStarted?.Invoke(this, e);
         private void CatalogRow_ScrollEnded(object sender, EventArgs e) => RowScrollEnded?.Invoke(this, e);
 
@@ -1056,7 +1335,16 @@ namespace ModernIPTVPlayer.Controls
                     var newItems = await StremioService.Instance.GetCatalogItemsAsync(vm.SourceUrl, vm.CatalogType, vm.CatalogId, vm.Extra, vm.Skip);
                     if (newItems != null && newItems.Count > 0)
                     {
-                        foreach(var item in newItems) vm.Items.Add(item);
+                        if (vm.Items is StremioVirtualCollection virtualColl)
+                        {
+                            virtualColl.AddRange(newItems.Select(i => i.Meta));
+                        }
+                        else if (vm.Items is System.Collections.IList list)
+                        {
+                            // Fallback for non-virtual legacy collections
+                            foreach (var item in newItems) list.Add(item);
+                        }
+                        
                         vm.Skip += newItems.Count;
                         vm.HasMore = newItems.Count > 0;
                     }
@@ -1213,7 +1501,7 @@ namespace ModernIPTVPlayer.Controls
             CatalogRowViewModel targetRow = null;
             foreach (var row in rows)
             {
-                if (row.Items.Any(x => (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == item.IMDbId) || x.Id == item.Id))
+                if (row.Items.Cast<StremioMediaStream>().Any(x => (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == item.IMDbId) || x.Id == item.Id))
                 {
                     targetRow = row;
                     break;
@@ -1255,7 +1543,12 @@ namespace ModernIPTVPlayer.Controls
         public void Clear()
         {
             _discoveryRows.Clear();
-            HeroControl.SetLoading(false);
+            _rowStates.Clear();
+            lock (_rowItemsBuffer) _rowItemsBuffer.Clear();
+            lock (_rowEtags) _rowEtags.Clear();
+            lock (_usedSpotlightIds) _usedSpotlightIds.Clear();
+            
+            HeroControl.SetLoading(false, reset: false);
             HeroControl.SetItems(null);
             _currentContentType = string.Empty;
         }
@@ -1294,7 +1587,7 @@ namespace ModernIPTVPlayer.Controls
                 {
                     if (!_rowItemsBuffer.ContainsKey(firstTargetRowId)) {
                         if (this.Visibility == Visibility.Visible)
-                            HeroControl.SetLoading(true, silent: false, resetHeroPipelineState: false);
+                            HeroControl.SetLoading(true, silent: false, reset: false);
                         return;
                     }
                 }
@@ -1304,7 +1597,7 @@ namespace ModernIPTVPlayer.Controls
                 // [FIX] Don't trigger hero transitions if we are hidden
                 if (this.Visibility != Visibility.Visible) return;
 
-                var heroItems = items.Take(5).ToList();
+                var heroItems = items.Cast<StremioMediaStream>().Take(5).ToList();
                 var newIds = heroItems.Select(i => i.IMDbId ?? i.Id.ToString()).ToList();
                 
                 bool isMatch = _currentHeroIds.SequenceEqual(newIds);
@@ -1329,6 +1622,12 @@ namespace ModernIPTVPlayer.Controls
                 HeroPerfLog($"[HERO-READY] Row 0 processing took {sw.ElapsedMilliseconds}ms. Setting {heroItems.Count} items.");
                 
                 HeroControl.SetItems(heroItems, animate: !skipShimmer);
+
+                // [VIP ENRICHMENT] .NET 11 Prioritized Channel
+                foreach(var item in heroItems)
+                {
+                    _enrichmentChannel.Writer.TryWrite(new EnrichmentTask(item, Models.Metadata.MetadataContext.Hero, -1));
+                }
                 // Do not SetLoading(false) here — races ApplyTransitionInternalAsync / shimmer; hero clears loading in ShowRealContent.
             });
         }
@@ -1434,7 +1733,12 @@ namespace ModernIPTVPlayer.Controls
                 
                 if (isPhase0)
                 {
-                    var (_, items, _) = await CatalogCacheManager.LoadCatalogBinaryAsync(catalogUrl);
+                    var (diskEtag, items, _) = await CatalogCacheManager.LoadCatalogBinaryAsync(catalogUrl);
+                    if (!string.IsNullOrEmpty(diskEtag))
+                    {
+                        lock (_rowEtags) _rowEtags[rid] = diskEtag;
+                    }
+                    
                     if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion) return;
                     if (items != null && items.Count > 0)
                     {
@@ -1444,7 +1748,8 @@ namespace ModernIPTVPlayer.Controls
                         {
                             if (!_rowItemsBuffer.ContainsKey(rid))
                             {
-                                _rowItemsBuffer[rid] = new ObservableCollection<StremioMediaStream>(items);
+                                // PROJECT ZERO: Wrap in Recycling Collection
+                                _rowItemsBuffer[rid] = new StremioVirtualCollection(items.Select(i => i.Meta), u);
                                 _rowStates[rid] = RowState.Success;
                                 
                                 // Only update Hero if this is the priority row
@@ -1463,21 +1768,48 @@ namespace ModernIPTVPlayer.Controls
                                 }
                                 else
                                 {
-                                    row.Items = new ObservableCollection<StremioMediaStream>(items);
+                                    if (_rowItemsBuffer.TryGetValue(rid, out var virtualColl))
+                                    {
+                                        row.Items = virtualColl;
+                                    }
+                                    else
+                                    {
+                                        row.Items = new ObservableCollection<StremioMediaStream>(items);
+                                    }
                                     row.IsLoading = false;
+                                    HeroPerfLog($"[UI-UPD] Row {rid} (Phase 0) hydrated from cache.");
+
+                                    // [ARCHITECTURAL FIX] Trigger enrichment IMMEDIATELY for Spotlight rows
+                                    if (row.RowStyle == "Spotlight")
+                                    {
+                                        _ = EnrichRowMetadataAsync(row, Models.Metadata.MetadataContext.Spotlight);
+                                    }
                                 }
                             }
+                            else
+                            {
+                                HeroPerfLog($"[UI-LAT] Row {rid} (Phase 0) data ready, awaiting UI skeleton.");
+                            }
                         });
+                    }
+                    else
+                    {
+                        HeroPerfLog($"[ROW] Slot {rid} (Phase0) CACHE MISS or EMPTY from {u}");
                     }
                 }
                 else
                 {
-                    var root = await StremioService.Instance.GetCatalogAsync(u, cat.Type, cat.Id);
+                    string? currentEtag = null;
+                    lock(_rowEtags) _rowEtags.TryGetValue(rid, out currentEtag);
+
+                    var root = await StremioService.Instance.GetCatalogAsync(catalogUrl, token, preloadedEtag: currentEtag);
                     if (token.IsCancellationRequested || discoveryVersion != _discoveryVersion) return;
                     if (root?.Metas != null)
                     {
                         var itemsList = root.Metas.Select(m => new StremioMediaStream(m) { SourceAddon = u }).ToList();
-                        var collection = new ObservableCollection<StremioMediaStream>(itemsList);
+                        
+                        // PROJECT ZERO: Wrap in Recycling Collection
+                        var collection = new StremioVirtualCollection(itemsList.Select(i => i.Meta), u);
 
                         lock (_rowItemsBuffer)
                         {
@@ -1501,16 +1833,33 @@ namespace ModernIPTVPlayer.Controls
                                 {
                                     row.Items = collection;
                                     row.IsLoading = false;
+                                    HeroPerfLog($"[UI-UPD] Row {rid} (Phase 1) hydrated from network.");
+
+                                    // [ARCHITECTURAL FIX] Trigger enrichment IMMEDIATELY for Spotlight rows
+                                    // This ensures that trailers/logos are found in the background before the row is even scrolled into view.
+                                    if (row.RowStyle == "Spotlight")
+                                    {
+                                        _ = EnrichRowMetadataAsync(row, Models.Metadata.MetadataContext.Spotlight);
+                                    }
                                 }
+                            }
+                            else
+                            {
+                                HeroPerfLog($"[UI-LAT] Row {rid} (Phase 1) data ready, awaiting UI skeleton.");
                             }
                         });
                     }
                     else
                     {
                          // No items list at all
+                         HeroPerfLog($"[ROW] Slot {rid} returned NO METAS from {u} (Check Addon Status)");
                          DispatcherQueue.TryEnqueue(() => {
                              var row = _discoveryRows.FirstOrDefault(r => r.RowId == rid);
-                             if (row != null) _discoveryRows.Remove(row);
+                             if (row != null) 
+                             {
+                                 _discoveryRows.Remove(row);
+                                 HeroPerfLog($"[UI-REM] Row {rid} removed (Empty response).");
+                             }
                          });
                     }
                 }

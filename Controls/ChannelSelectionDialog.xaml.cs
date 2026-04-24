@@ -13,6 +13,7 @@ using ModernIPTVPlayer.Services.Json;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class ChannelSelectionDialog : ContentDialog
     {
         public LiveStream SelectedStream { get; private set; }

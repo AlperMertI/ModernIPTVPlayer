@@ -1,3 +1,4 @@
+#nullable enable
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Mpv.Core;
@@ -24,7 +25,7 @@ public sealed partial class MpvPlayer : Control
 
     private bool _mpvGpuIsDirty = false;
     private bool _isDisposed = false;
-    private Mpv.Core.Interop.MpvRenderContextNative.MpvRenderUpdateCallback _updateCallback;
+    private Mpv.Core.Interop.MpvRenderContextNative.MpvRenderUpdateCallback? _updateCallback;
 
     public static readonly DependencyProperty RenderApiProperty =
         DependencyProperty.Register("RenderApi", typeof(string), typeof(MpvPlayer), new PropertyMetadata("dxgi"));
@@ -218,13 +219,13 @@ public sealed partial class MpvPlayer : Control
             await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi, colorspace: (int)_renderControl.SwapChainColorSpace);
             
             // Register callback AFTER RenderContext is created by InitializeDXGIAsync
-            Player.RenderContext?.SetUpdateCallback(_updateCallback, IntPtr.Zero);
+            if (_updateCallback != null) Player.RenderContext?.SetUpdateCallback(_updateCallback, IntPtr.Zero);
             
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
     }
 
-    private void OnStateChanged(object sender, PlaybackStateChangedEventArgs e)
+    private void OnStateChanged(object? sender, PlaybackStateChangedEventArgs e)
     {
         // [OPTIMIZATION] Removed SyncHdrStatusAsync from here. 
         // Initial setup handles the start, and OnHdrStatusChanged handles display changes.
@@ -233,7 +234,7 @@ public sealed partial class MpvPlayer : Control
 
     public event EventHandler<Mpv.Core.Structs.Client.MpvEventProperty>? PropertyChanged;
 
-    private void OnPositionChanged(object sender, PlaybackPositionChangedEventArgs e)
+    private void OnPositionChanged(object? sender, PlaybackPositionChangedEventArgs e)
     {
     }
 
@@ -264,7 +265,7 @@ public sealed partial class MpvPlayer : Control
     public void Pause()
         => Player?.Pause();
 
-    private void OnLogMessageReceived(object sender, LogMessageReceivedEventArgs e)
+    private void OnLogMessageReceived(object? sender, LogMessageReceivedEventArgs e)
     {
         Debug.WriteLine($"[{e.Level}]\t{e.Prefix}: {e.Message}");
     }
@@ -290,7 +291,7 @@ public sealed partial class MpvPlayer : Control
             await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi, skipScripts, colorspace: (int)_renderControl.SwapChainColorSpace);
             
             // Register callback
-            Player.RenderContext?.SetUpdateCallback(_updateCallback, IntPtr.Zero);
+            if (_updateCallback != null) Player.RenderContext?.SetUpdateCallback(_updateCallback, IntPtr.Zero);
             
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
         }
@@ -309,7 +310,7 @@ public sealed partial class MpvPlayer : Control
         // Ensure decimal values ALWAYS use '.' (dot) regardless of system language.
         string valStr = value is IFormattable formattable
             ? formattable.ToString(null, System.Globalization.CultureInfo.InvariantCulture)
-            : value.ToString();
+            : value.ToString() ?? string.Empty;
 
         int maxRetries = 3;
         int delay = 200;
@@ -532,7 +533,7 @@ public sealed partial class MpvPlayer : Control
     // Dönüş: True = Çizim yapıldı, False = Yapılmadı
     private unsafe bool Render(TimeSpan delta)
     {
-        if (Player == null || Player.Client?.IsInitialized is not true || Player.RenderContext == null)
+        if (Player == null || Player.Client?.IsInitialized is not true || Player.RenderContext == null || _renderControl == null)
         {
             return false;
         }

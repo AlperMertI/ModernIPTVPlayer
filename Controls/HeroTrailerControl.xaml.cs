@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class HeroTrailerControl : UserControl
     {
         public event EventHandler<bool> PlayStateChanged;

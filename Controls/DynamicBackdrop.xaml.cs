@@ -8,6 +8,7 @@ using Windows.UI;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class DynamicBackdrop : UserControl
     {
         private DispatcherTimer _backdropAnimationTimer;
@@ -27,13 +28,25 @@ namespace ModernIPTVPlayer.Controls
 
         public DynamicBackdrop()
         {
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("DynamicBackdrop.xaml.cs:ctor", "enter", null, "H9"); } catch { }
+            // #endregion
             this.InitializeComponent();
+            // #region agent log
+            try { ModernIPTVPlayer.App.DebugNdjson("DynamicBackdrop.xaml.cs:ctor", "InitializeComponent done", null, "H9"); } catch { }
+            // #endregion
             InitializeBrushes();
             
             this.Loaded += (s, e) => 
             {
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("DynamicBackdrop.xaml.cs:Loaded", "enter", null, "H9"); } catch { }
+                // #endregion
                 System.Diagnostics.Debug.WriteLine($"[DynamicBackdrop] Loaded. Opacity: {this.Opacity}, Visibility: {this.Visibility}, ActualSize: {this.ActualWidth}x{this.ActualHeight}");
                 StartBreathingAnimation();
+                // #region agent log
+                try { ModernIPTVPlayer.App.DebugNdjson("DynamicBackdrop.xaml.cs:Loaded", "StartBreathingAnimation done", null, "H9"); } catch { }
+                // #endregion
             };
         }
 

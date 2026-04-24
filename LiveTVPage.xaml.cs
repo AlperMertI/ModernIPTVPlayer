@@ -21,6 +21,7 @@ using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Iptv;
 using ModernIPTVPlayer.Models.Common;
 using ModernIPTVPlayer.Helpers;
+using System.Runtime.InteropServices;
 
 namespace ModernIPTVPlayer
 {
@@ -33,6 +34,7 @@ namespace ModernIPTVPlayer
         Recent
     }
 
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class LiveTVPage : Page
     {
         private LoginParams? _loginInfo;
@@ -73,6 +75,14 @@ namespace ModernIPTVPlayer
         private bool _isWorkerRunning = false;
         private bool _canAutoProbe = false;
 
+        // Win32 Cursor Overrides
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
+        [DllImport("user32.dll", SetLastError = true)]
+        static extern IntPtr SetCursor(IntPtr hCursor);
+        const int IDC_ARROW = 32512;
+        private static IntPtr _arrowCursor = IntPtr.Zero;
+
         // SCROLL-BASED PROBING
         private ScrollViewer? _channelScrollViewer;
 
@@ -82,6 +92,16 @@ namespace ModernIPTVPlayer
         public LiveTVPage()
         {
             this.InitializeComponent();
+            
+            if (_arrowCursor == IntPtr.Zero)
+            {
+                _arrowCursor = LoadCursor(IntPtr.Zero, IDC_ARROW);
+            }
+
+            this.Loaded += LiveTVPage_Loaded;
+            this.PointerEntered += (s, e) => { if (_arrowCursor != IntPtr.Zero) SetCursor(_arrowCursor); };
+            this.PointerPressed += (s, e) => { if (_arrowCursor != IntPtr.Zero) SetCursor(_arrowCursor); };
+
             _httpClient = HttpHelper.Client;
             
             // Start Clock
@@ -111,9 +131,10 @@ namespace ModernIPTVPlayer
             return null;
         }
 
-        private void ChannelRepeater_Loaded(object sender, RoutedEventArgs e)
+        private void LiveTVPage_Loaded(object sender, RoutedEventArgs e)
         {
-            _channelScrollViewer = FindChildOfType<ScrollViewer>(ChannelRepeater);
+            // Find the ScrollViewer that contains the Repeater
+            _channelScrollViewer = ChannelScrollViewer; // Direct reference from XAML name
             if (_channelScrollViewer != null)
             {
                 _channelScrollViewer.ViewChanged += ChannelScrollViewer_ViewChanged;
@@ -540,11 +561,17 @@ namespace ModernIPTVPlayer
         private void ChannelRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args) { }
         private void ChannelRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args) { }
 
+
+
         private void ChannelItem_Tapped(object sender, Microsoft.UI.Xaml.Input.TappedRoutedEventArgs e)
         {
-            if (sender is FrameworkElement fe && fe.DataContext is LiveStream stream)
+            if (sender is FrameworkElement fe)
             {
-                PlayChannel(stream);
+                var stream = fe.DataContext as LiveStream ?? fe.Tag as LiveStream;
+                if (stream != null)
+                {
+                    PlayChannel(stream);
+                }
             }
         }
 
@@ -556,19 +583,55 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void ChannelItem_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        private void ChannelItem_PointerPressed(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
         {
-            if (sender is FrameworkElement fe)
+            if (_arrowCursor != IntPtr.Zero) SetCursor(_arrowCursor);
+
+            var ptrPt = e.GetCurrentPoint(sender as UIElement);
+            if (ptrPt.Properties.IsRightButtonPressed)
             {
-                // Simple hover effect if needed via VisualStateManager or direct property
+                // Native WinUI 3 way to tell ScrollViewer to stop tracking this pointer for manipulation.
+                // This fixes the SizeNS cursor glitch without manual event bubbling hacks.
+                (sender as UIElement).CancelDirectManipulations();
             }
         }
 
-        private void ChannelItem_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e) { }
+        // ContextRequested handler removed - native ContextFlyout property in XAML handles it correctly now.
+
+        private void ChannelItem_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (_arrowCursor != IntPtr.Zero) SetCursor(_arrowCursor);
+
+            if (sender is Grid grid)
+            {
+                grid.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.White) { Opacity = 0.1 };
+            }
+        }
+
+        private void ChannelItem_PointerExited(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
+        {
+            if (sender is Grid grid)
+            {
+                grid.Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent);
+            }
+        }
 
         private void PlayChannel(LiveStream stream)
         {
             if (stream == null) return;
+
+            // Show notification
+            if (NotificationInfoBar != null)
+            {
+                NotificationInfoBar.Message = $"{stream.Name} oynatılıyor...";
+                NotificationInfoBar.Severity = InfoBarSeverity.Informational;
+                NotificationInfoBar.IsOpen = true;
+                
+                // Auto-hide after 2 seconds
+                var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+                timer.Tick += (s, e) => { NotificationInfoBar.IsOpen = false; timer.Stop(); };
+                timer.Start();
+            }
             
             // UI Selection State
             if (_activeChannel != null) _activeChannel.IsActive = false;
@@ -579,13 +642,22 @@ namespace ModernIPTVPlayer
             var loginInfo = _loginInfo ?? App.CurrentLogin;
             if (loginInfo != null)
             {
-                Dictionary<string, object> parameters = new()
-                {
-                    { "Stream", stream },
-                    { "LoginInfo", loginInfo },
-                    { "CategoryChannels", _visibleChannels.ToList() }
-                };
-                Frame.Navigate(typeof(PlayerPage), parameters, new DrillInNavigationTransitionInfo());
+                var args = new PlayerNavigationArgs(
+                    stream.StreamUrl,
+                    stream.Name,
+                    stream.StreamId.ToString(),
+                    null, // ParentId
+                    null, // SeriesName
+                    0,    // Season
+                    0,    // Episode
+                    -1,   // StartSeconds
+                    stream.StreamIcon,
+                    "live",
+                    null, // Backdrop
+                    stream.StreamIcon // Logo
+                );
+
+                Frame.Navigate(typeof(PlayerPage), args, new DrillInNavigationTransitionInfo());
             }
         }
         
@@ -1569,6 +1641,7 @@ namespace ModernIPTVPlayer
     // Converts channel icon URL to BitmapImage with DecodePixelWidth=48.
     // Prevents full-resolution image loading for 48x48 display area.
     // ==========================================
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class ChannelIconConverter : Microsoft.UI.Xaml.Data.IValueConverter
     {
         private static readonly ConcurrentDictionary<string, BitmapImage> _cache = new();

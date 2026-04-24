@@ -21,6 +21,7 @@ using System.Collections.Concurrent;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class MediaLibraryPage : Page
     {
         private enum ContentSource { IPTV, Stremio }
@@ -51,13 +52,25 @@ namespace ModernIPTVPlayer
         {
             try
             {
+                // #region agent log
+                App.DebugNdjson("MediaLibraryPage.xaml.cs:ctor", "enter", null, "H2-H3");
+                // #endregion
                 this.InitializeComponent();
+                // #region agent log
+                App.DebugNdjson("MediaLibraryPage.xaml.cs:ctor", "InitializeComponent done", null, "H2-H3");
+                // #endregion
                 this.NavigationCacheMode = NavigationCacheMode.Enabled;
                 _httpClient = HttpHelper.Client;
                 
                 // [ENGINEERED] Initialize Composition Visuals
                 _compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
+                // #region agent log
+                App.DebugNdjson("MediaLibraryPage.xaml.cs:ctor", "ElementCompositionPreview ok", null, "H1-H4");
+                // #endregion
                 SetupCompositionTransitions();
+                // #region agent log
+                App.DebugNdjson("MediaLibraryPage.xaml.cs:ctor", "SetupCompositionTransitions done", null, "H4");
+                // #endregion
 
                 this.SizeChanged += (s, e) => 
                 {
@@ -66,13 +79,25 @@ namespace ModernIPTVPlayer
                 };
 
                 PageHeader.SizeChanged += (s, e) => SyncHeaderSpacerHeight();
-                this.Loaded += (s, e) => SyncHeaderSpacerHeight();
+                this.Loaded += (s, e) =>
+                {
+                    // #region agent log
+                    App.DebugNdjson("MediaLibraryPage.xaml.cs:Loaded", "page loaded", null, "H2-H3");
+                    // #endregion
+                    SyncHeaderSpacerHeight();
+                };
 
                 WireEvents();
                 AppLogger.Info($"[MediaLibraryPage] Initialized");
+                // #region agent log
+                App.DebugNdjson("MediaLibraryPage.xaml.cs:ctor", "exit", null, "H2-H3");
+                // #endregion
             }
             catch (Exception ex)
             {
+                // #region agent log
+                App.DebugNdjson("MediaLibraryPage.xaml.cs:ctor", "EXCEPTION", new System.Collections.Generic.Dictionary<string, object?> { ["type"] = ex.GetType().FullName, ["msg"] = ex.Message, ["stack"] = ex.StackTrace }, "H2-H3");
+                // #endregion
                 AppLogger.Critical($"[MediaLibraryPage] Constructor Error", ex);
             }
         }
@@ -236,7 +261,13 @@ namespace ModernIPTVPlayer
 
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
+            // #region agent log
+            App.DebugNdjson("MediaLibraryPage.xaml.cs:OnNavigatedTo", "enter", new System.Collections.Generic.Dictionary<string, object?> { ["param"] = e.Parameter?.GetType().FullName, ["source"] = e.SourcePageType?.FullName }, "H2-H3");
+            // #endregion
             base.OnNavigatedTo(e);
+            // #region agent log
+            App.DebugNdjson("MediaLibraryPage.xaml.cs:OnNavigatedTo", "after base", null, "H2-H3");
+            // #endregion
             
             try
             {
@@ -270,7 +301,13 @@ namespace ModernIPTVPlayer
                 }
                 else if (_currentSource == ContentSource.Stremio && !StremioControl.HasContent)
                 {
+                    // #region agent log
+                    App.DebugNdjson("MediaLibraryPage.xaml.cs:OnNavigatedTo", "calling LoadDiscoveryAsync", null, "H6-H7-H8");
+                    // #endregion
                     await StremioControl.LoadDiscoveryAsync(_mediaType == MediaType.Movie ? "movie" : "series");
+                    // #region agent log
+                    App.DebugNdjson("MediaLibraryPage.xaml.cs:OnNavigatedTo", "LoadDiscoveryAsync returned", null, "H6-H7-H8");
+                    // #endregion
                 }
             }
             catch (Exception ex)

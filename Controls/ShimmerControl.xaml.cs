@@ -5,6 +5,7 @@ using System;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class ShimmerControl : UserControl
     {
         private Storyboard _storyboard;

@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 
 namespace ModernIPTVPlayer.Controls
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class ShimmerRow : UserControl
     {
         public ShimmerRow()

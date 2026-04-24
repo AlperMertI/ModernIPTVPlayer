@@ -10,6 +10,7 @@ using ModernIPTVPlayer.Services;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class LoginPage : Page
     {
         private bool _isLoading = false;

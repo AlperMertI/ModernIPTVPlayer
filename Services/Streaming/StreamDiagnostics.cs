@@ -11,7 +11,7 @@ namespace ModernIPTVPlayer.Services.Streaming
         private static readonly Lazy<StreamDiagnostics> _instance = new Lazy<StreamDiagnostics>(() => new StreamDiagnostics());
         public static StreamDiagnostics Instance => _instance.Value;
 
-        private readonly Timer _logTimer;
+        private readonly System.Timers.Timer _logTimer;
         private readonly ConcurrentDictionary<string, StreamHealth> _stats = new ConcurrentDictionary<string, StreamHealth>();
 
         private StreamDiagnostics()

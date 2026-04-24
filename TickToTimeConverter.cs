@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Data;
 
 namespace ModernIPTVPlayer
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public class TickToTimeConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)

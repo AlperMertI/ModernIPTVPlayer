@@ -7,6 +7,7 @@ using ModernIPTVPlayer.Services.Stremio;
 
 namespace ModernIPTVPlayer.Pages
 {
+    [Microsoft.UI.Xaml.Data.Bindable]
     public sealed partial class AddonsPage : Page
     {
         public ObservableCollection<AddonItem> InstalledAddons { get; } = new();

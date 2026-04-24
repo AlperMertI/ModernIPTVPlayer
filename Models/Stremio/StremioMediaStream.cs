@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel;
-
+using System.Threading;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
@@ -12,23 +13,114 @@ using ModernIPTVPlayer.Models.Stremio;
 namespace ModernIPTVPlayer.Models.Stremio
 {
     [Microsoft.UI.Xaml.Data.Bindable]
-    public class StremioMediaStream : IMediaStream, INotifyPropertyChanged
+    public partial class StremioMediaStream : IMediaStream, INotifyPropertyChanged
     {
-        public StremioMeta Meta { get; set; }
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        // PROJECT ZERO: Centralized update bus for zero-allocation UI refreshes.
+        public static event Action<string>? OnMetadataUpdated;
+
+        private bool _isPinned;
+        /// <summary>
+        /// Prevents the object from being recycled by the VirtualCollection.
+        /// Essential for stability in ExpandedCard and Hero transitions.
+        /// </summary>
+        public void Pin() => _isPinned = true;
+        public void Unpin() => _isPinned = false;
+        public bool IsPinned => _isPinned;
+
+        private int _updateLevel;
+        private bool IsUpdating => _updateLevel > 0;
+
+        /// <summary>
+        /// Suspends UI notifications for multiple property changes.
+        /// </summary>
+        public void BeginUpdate() => Interlocked.Increment(ref _updateLevel);
+
+        private long _lastRefreshTime;
+        /// <summary>
+        /// Resumes UI notifications and fires a single global refresh signal.
+        /// </summary>
+        public void EndUpdate()
+        {
+            if (Interlocked.Decrement(ref _updateLevel) == 0)
+            {
+                // [THROTTLE] Only fire if substantial time has passed or it's the final update.
+                // This prevents "UI Thread floods" during rapid successive Sync() calls.
+                long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                if (now - _lastRefreshTime > 150) // Increased threshold for stability
+                {
+                    NotifyMetadataUpdated();
+                    _lastRefreshTime = now;
+                }
+            }
+        }
+
+        public virtual void OnPropertyChanged([CallerMemberName] string? name = null)
+        {
+            if (IsUpdating) return;
+
+            var queue = App.MainWindow?.DispatcherQueue;
+            if (queue == null || queue.HasThreadAccess)
+            {
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+            }
+            else
+            {
+                queue.TryEnqueue(() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name)));
+            }
+        }
+
+        private StremioMeta _meta;
+        public StremioMeta Meta 
+        { 
+            get => _meta; 
+            set 
+            { 
+                if (_meta != value) 
+                { 
+                    _meta = value; 
+                    ResetEnrichmentState();
+                    OnPropertyChanged(); 
+                    OnPropertyChanged(string.Empty); // Broad refresh
+                } 
+            } 
+        }
+
+        private void ResetEnrichmentState()
+        {
+            TrailerUrl = null;
+            _sourceAddon = null;
+            MetadataPriority = 0;
+            // LogoLoadFailed = false; // [FIX] Don't reset logo failure state, it will be re-evaluated by UI if URL changes.
+            // Add other transient fields here if necessary
+        }
         
-        public StremioMediaStream() { Meta = new StremioMeta(); }
-        
-        private readonly System.Threading.Lock _metaLock = new();
-        public int MetadataPriority { get; set; } = 0;
-        public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
-        public uint Fingerprint { get; set; }
-        
-        public StremioMediaStream(StremioMeta meta)
+        public StremioMediaStream() 
+        { 
+            Meta = new StremioMeta(); 
+            OnMetadataUpdated += HandleMetadataUpdate;
+        }
+
+        public StremioMediaStream(StremioMeta meta) : this()
         {
             Meta = meta;
             TryPreEnrichFromCache();
         }
 
+        private void HandleMetadataUpdate(string id)
+        {
+            if (Meta?.Id == id)
+            {
+                NotifyMetadataUpdated();
+            }
+        }
+
+        private readonly System.Threading.Lock _metaLock = new();
+        public int MetadataPriority { get; set; } = 0;
+        public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
+        public uint Fingerprint { get; set; }
+        
         private void TryPreEnrichFromCache()
         {
             if (Meta == null) return;
@@ -36,7 +128,6 @@ namespace ModernIPTVPlayer.Models.Stremio
             {
                 try
                 {
-                    // Try to find in TMDB Cache synchronously (RAM)
                     string typeKey = IsSeries ? "tv" : "movie";
                     string idKey = Meta.Id.StartsWith("tt") ? $"{typeKey}_id_{Meta.Id}" : null;
                     
@@ -46,16 +137,28 @@ namespace ModernIPTVPlayer.Models.Stremio
                         if (cached != null && !string.IsNullOrEmpty(cached.BackdropPath))
                         {
                             Meta.Background = $"https://image.tmdb.org/t/p/w1280{cached.BackdropPath}";
-                            System.Diagnostics.Debug.WriteLine($"[StremioStream] Pre-enriched Backdrop from Cache for {Meta.Name}");
                         }
                     }
                 }
-                catch { /* Silent fail for pre-enrichment */ }
+                catch { }
             }
         }
 
-        public string SourceAddon { get; set; }
-        public int SourceIndex { get; set; } = 999; // Default to low priority position
+        private string? _sourceAddon;
+        public string? SourceAddon 
+        { 
+            get 
+            {
+                if (string.IsNullOrEmpty(_sourceAddon))
+                {
+                    // System.Diagnostics.Debug.WriteLine($"[STREAM_DEBUG] SourceAddon MISSING for: {Title}");
+                }
+                return _sourceAddon; 
+            }
+            set => _sourceAddon = value; 
+        }
+        public bool LogoLoadFailed { get; set; }
+        public int SourceIndex { get; set; } = 999;
 
         // IMediaStream Implementation
         public int Id 
@@ -64,49 +167,39 @@ namespace ModernIPTVPlayer.Models.Stremio
             {
                 if (int.TryParse(Meta?.Id, out var id)) return id;
                 if (!string.IsNullOrEmpty(Meta?.Id)) return Meta.Id.GetHashCode();
-                if (!string.IsNullOrEmpty(Meta?.Name)) return Meta.Name.GetHashCode();
                 return 0;
             } 
         }
-        public string? IMDbId => !string.IsNullOrEmpty(Meta?.Id) ? Meta.Id : string.Empty;
+        public string? IMDbId => Meta?.Id ?? string.Empty;
 
         public string Title { get => Meta?.Name ?? "Loading..."; set { if (Meta != null) Meta.Name = value; } }
         public string? SourceTitle { get => Title; set => Title = value; }
 
-        // PosterUrl: uses override (set by async enrichment) if available, else Meta.Poster
         private string _overridePosterUrl;
         public string PosterUrl
         {
             get => _overridePosterUrl ?? Meta?.Poster;
-            set
-            {
-                if (_overridePosterUrl != value)
-                {
-                    _overridePosterUrl = value;
-                    OnPropertyChanged();
-                }
-            }
+            set { if (_overridePosterUrl != value) { _overridePosterUrl = value; OnPropertyChanged(); OnPropertyChanged(nameof(PosterBitmap)); } }
         }
+
+        public BitmapImage? PosterBitmap => string.IsNullOrEmpty(PosterUrl) ? null : SharedImageManager.GetOptimizedImage(PosterUrl, targetWidth: 150);
+        public BitmapImage? BannerBitmap => string.IsNullOrEmpty(Banner) ? null : SharedImageManager.GetOptimizedImage(Banner, targetWidth: 900);
 
         private string _overrideLogoUrl;
         public string LogoUrl
         {
             get => _overrideLogoUrl ?? Meta?.Logo;
-            set
-            {
-                if (_overrideLogoUrl != value)
-                {
-                    _overrideLogoUrl = value;
-                    OnPropertyChanged();
-                }
-            }
+            set { if (_overrideLogoUrl != value) { _overrideLogoUrl = value; OnPropertyChanged(); } }
         }
 
-        public string Rating { get => string.IsNullOrEmpty(Meta?.Imdbrating) || Meta?.Imdbrating == "N/A" || Meta?.Imdbrating == "Unknown" ? "" : Meta.Imdbrating; set { if (Meta != null) { Meta.Imdbrating = value; OnPropertyChanged(); } } }
+        public string Rating 
+        { 
+            get => (Meta?.Imdbrating > 0) ? Meta.Imdbrating.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) : ""; 
+            set { if (Meta != null && double.TryParse(value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var r)) Meta.Imdbrating = r; OnPropertyChanged(); }
+        }
         public string StreamUrl { get; set; } = "";
-        public string? BackdropUrl { get => Banner; set { if (Meta != null) { Meta.Background = value; OnPropertyChanged(nameof(Banner)); OnPropertyChanged(nameof(BackdropUrl)); OnPropertyChanged(nameof(LandscapeImageUrl)); } } }
+        public string? BackdropUrl { get => Banner; set { if (Meta != null) { Meta.Background = value; OnPropertyChanged(nameof(Banner)); OnPropertyChanged(nameof(BackdropUrl)); OnPropertyChanged(nameof(LandscapeImageUrl)); OnPropertyChanged(nameof(BannerBitmap)); } } }
         
-        // Use Backdrop/Banner for Landscape cards if available, else fallback to Poster.
         public string LandscapeImageUrl => !string.IsNullOrEmpty(Banner) ? Banner : PosterUrl;
 
         public bool IsContinueWatching { get; set; }
@@ -114,30 +207,11 @@ namespace ModernIPTVPlayer.Models.Stremio
         public bool IsMovie => Meta?.Type?.ToLower() == "movie";
         public bool IsSeries => Meta?.Type?.ToLower() == "series" || Meta?.Type?.ToLower() == "tv";
 
-        public void UpdateBackground(string url)
-        {
-            if (Meta.Background != url)
-            {
-                Meta.Background = url;
-                OnPropertyChanged(nameof(Banner));
-                OnPropertyChanged(nameof(LandscapeImageUrl));
-            }
-        }
-
-        // UI Binding Implementation
         private double _progressValue;
         public double ProgressValue 
         { 
             get => _progressValue; 
-            set 
-            {
-                if (_progressValue != value)
-                {
-                    _progressValue = value;
-                    OnPropertyChanged();
-                    OnPropertyChanged(nameof(ShowProgress));
-                }
-            } 
+            set { if (_progressValue != value) { _progressValue = value; OnPropertyChanged(); OnPropertyChanged(nameof(ShowProgress)); } } 
         }
         public bool ShowProgress => ProgressValue > 0;
         public string BadgeText => "";
@@ -147,24 +221,14 @@ namespace ModernIPTVPlayer.Models.Stremio
         public bool IsAvailableOnIptv 
         { 
             get => _isAvailableOnIptv; 
-            set 
-            {
-                if (_isAvailableOnIptv != value)
-                {
-                    _isAvailableOnIptv = value;
-                    OnPropertyChanged();
-                    OnPropertyChanged(nameof(ShowSourceBadge));
-                    OnPropertyChanged(nameof(SourceBadgeText));
-                }
-            }
+            set { if (_isAvailableOnIptv != value) { _isAvailableOnIptv = value; OnPropertyChanged(); OnPropertyChanged(nameof(ShowSourceBadge)); OnPropertyChanged(nameof(SourceBadgeText)); } }
         }
         public string SourceBadgeText => (IsAvailableOnIptv || IsIptv) ? "IPTV" : "";
         public bool IsIptvChecked { get; set; } = false;
         public bool ShowSourceBadge => IsAvailableOnIptv || IsIptv;
 
-        public TmdbMovieResult TmdbInfo { get; set; } // Can populate later if needed
+        public TmdbMovieResult TmdbInfo { get; set; }
 
-        // Technical Metadata (Probe Results)
         public bool HasMetadata => !string.IsNullOrEmpty(Resolution);
         public bool IsProbing { get; set; }
         public bool? IsOnline { get; set; }
@@ -174,32 +238,29 @@ namespace ModernIPTVPlayer.Models.Stremio
         public long Bitrate { get; set; }
         public bool IsHdr { get; set; }
 
-        // Properties for UI Binding
         public string Type { get => Meta?.Type ?? "movie"; set { if (Meta != null) Meta.Type = value; } }
         public string Year 
         { 
             get 
             {
                 if (Meta == null) return "";
-                // 1. Check Year field
-                string y = TitleHelper.ExtractYear(Meta.Year);
-                if (!string.IsNullOrEmpty(y)) return y;
-
-                // 2. Check Releaseinfo field
-                y = TitleHelper.ExtractYear(Meta.Releaseinfo);
-                if (!string.IsNullOrEmpty(y)) return y;
-
-                // 3. Check Released ISO date
-                y = TitleHelper.ExtractYear(Meta.Released);
-                if (!string.IsNullOrEmpty(y)) return y;
-
-                // 4. Fallback to Title
-                return TitleHelper.ExtractYear(Meta.Name) ?? "";
+                string y = TitleHelper.ExtractYear(Meta.Year) ?? TitleHelper.ExtractYear(Meta.Releaseinfo) ?? TitleHelper.ExtractYear(Meta.Released) ?? TitleHelper.ExtractYear(Meta.Name) ?? "";
+                return y;
             }
-            set { if (Meta != null) Meta.Releaseinfo = value; } 
+            set { if (Meta != null) { Meta.Year = value; OnPropertyChanged(); } }
         }
         public string Banner => Meta?.Background ?? "";
-        public string Description { get => Meta?.Description ?? ""; set { if (Meta != null) { Meta.Description = value; OnPropertyChanged(); } } }
+        public string Description 
+        { 
+            get 
+            {
+                if (Meta == null) return "";
+                if (!string.IsNullOrEmpty(Meta.Description) && !Services.Metadata.MetadataProvider.IsPlaceholderOverview(Meta.Description)) return Meta.Description;
+                return Meta.Description ?? "";
+            }
+            set { if (Meta != null) { Meta.Description = value; OnPropertyChanged(); } } 
+        }
+        public string Overview { get => Description; set => Description = value; }
 
         private string? _overrideCast;
         public string? Cast { get => _overrideCast ?? (Meta?.Cast != null && Meta.Cast.Count > 0 ? string.Join(", ", Meta.Cast) : null); set { if (_overrideCast != value) { _overrideCast = value; OnPropertyChanged(); } } }
@@ -207,147 +268,93 @@ namespace ModernIPTVPlayer.Models.Stremio
         private string? _overrideDirector;
         public string? Director { get => _overrideDirector ?? (Meta?.Director != null && Meta.Director.Count > 0 ? string.Join(", ", Meta.Director) : null); set { if (_overrideDirector != value) { _overrideDirector = value; OnPropertyChanged(); } } }
 
-        private string? _trailerUrl; // For manual enrichment retention
         public string? TrailerUrl 
         { 
-            get
+            get 
             {
-                if (!string.IsNullOrWhiteSpace(_trailerUrl)) return _trailerUrl;
+                // 1. Check local field (Enriched via Sync)
+                if (!string.IsNullOrEmpty(field)) return field;
 
-                string? trailer = Meta?.Trailers?.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Source))?.Source;
-                if (!string.IsNullOrWhiteSpace(trailer))
-                {
-                    return trailer;
-                }
-
-                trailer = Meta?.TrailerStreams?.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.YtId))?.YtId;
-                if (!string.IsNullOrWhiteSpace(trailer))
-                {
-                    return trailer;
-                }
-
-                trailer = Meta?.AppExtras?.Trailer;
-                return string.IsNullOrWhiteSpace(trailer) ? null : trailer;
+                // 2. Fallback to Catalog Data
+                return Meta?.Trailers?.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.Source))?.Source ?? 
+                       Meta?.TrailerStreams?.FirstOrDefault(t => !string.IsNullOrWhiteSpace(t.YtId))?.YtId ?? 
+                       Meta?.AppExtras?.Trailer;
             }
             set 
             { 
-                if (_trailerUrl != value)
-                {
-                    _trailerUrl = value;
-                    
-                    // Also sync back to Meta.Trailers if possible
-                    if (Meta != null && !string.IsNullOrEmpty(value))
-                    {
-                        if (Meta.Trailers == null) Meta.Trailers = new System.Collections.Generic.List<StremioMetaTrailer>();
-                        var existing = Meta.Trailers.FirstOrDefault();
-                        if (existing != null) existing.Source = value;
-                        else Meta.Trailers.Add(new StremioMetaTrailer { Source = value, Type = "Trailer" });
-                    }
-                    OnPropertyChanged();
-                }
+                if (field != value) 
+                { 
+                    field = value; 
+                    OnPropertyChanged(); 
+                } 
             } 
-        }
+        } = null;
 
-        public string? Genres 
-        { 
-            get => (Meta.Genres != null && Meta.Genres.Count > 0) ? string.Join(", ", Meta.Genres) : "";
-            set { if (Meta != null && value != null) { Meta.Genres = value.Split(", ").ToList(); OnPropertyChanged(); } } 
-        }
+        public string? Genres { get => Meta?.Genres ?? ""; set { if (Meta != null) { Meta.Genres = value; OnPropertyChanged(); OnPropertyChanged(nameof(DisplaySubtext)); } } }
 
         public string? EpisodeSubtext { get; set; }
         public string? SeriesName { get; set; }
-        
-        // [IPTV Integration]
         public bool IsIptv { get; set; } = false;
-        public string IMDbIdRaw { set => Meta.Id = value; }
 
         public bool HasPoster => IsPosterValid(PosterUrl);
         public bool HasNoPoster => !IsPosterValid(PosterUrl);
 
-        public static bool IsPosterValid(string? url)
-        {
-            if (string.IsNullOrWhiteSpace(url)) return false;
-            if (url.Equals("null", StringComparison.OrdinalIgnoreCase)) return false;
-            if (url.Length < 10) return false; // Most valid image URLs are longer
-            return true;
-        }
-
+        public static bool IsPosterValid(string? url) => !string.IsNullOrWhiteSpace(url) && !url.Equals("null", StringComparison.OrdinalIgnoreCase) && url.Length > 10;
         
         public string DisplaySubtext => IsContinueWatching 
             ? (IsSeries && !string.IsNullOrEmpty(EpisodeSubtext) ? EpisodeSubtext : "") 
             : (IsMovie ? "" : Genres); 
-        
-        // Helper
-        [JsonIgnore]
-        public BitmapImage PosterBitmap => !string.IsNullOrEmpty(PosterUrl) ? new BitmapImage(new System.Uri(PosterUrl)) : null;
 
-        public event PropertyChangedEventHandler? PropertyChanged;
-        public void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-        {
-            var queue = App.MainWindow?.DispatcherQueue;
-            if (queue == null)
-            {
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-                return;
-            }
-
-            if (queue.HasThreadAccess)
-            {
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-            }
-            else
-            {
-                queue.TryEnqueue(() =>
-                {
-                    PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-                });
-            }
-        }
-
-        [JsonIgnore]
-        public Models.Metadata.MetadataContext CurrentEnrichmentLevel { get; set; } = Models.Metadata.MetadataContext.Discovery;
-
-        public void UpdateFromUnified(Models.Metadata.UnifiedMetadata? meta)
+        private bool _isSilenced = false;
+        public void UpdateFromUnified(Models.Metadata.UnifiedMetadata meta)
         {
             if (meta == null) return;
-
             lock (_metaLock)
             {
-                // Source-Based Priority Protection
+                BeginUpdate();
                 bool isDowngrade = meta.PriorityScore < this.MetadataPriority;
-
-                // Sync with backfillOnly = true if incoming data has lower priority
                 Models.Metadata.MetadataSync.Sync(this, meta, isDowngrade);
-
-                // Update current priority if we successfully enriched or it's equal priority
+                
                 if (!isDowngrade)
                 {
                     this.MetadataPriority = meta.PriorityScore;
-                    this.CurrentEnrichmentLevel = meta.MaxEnrichmentContext;
                 }
-            }
-
-            // High-priority IPTV fields (if specialized)
-            if (meta.IsAvailableOnIptv)
-            {
-                this.IsAvailableOnIptv = true;
-                if (string.IsNullOrEmpty(this.StreamUrl)) this.StreamUrl = meta.StreamUrl;
+                EndUpdate();
             }
         }
 
+        /// <summary>
+        /// PROJECT ZERO: Batched UI Refresh.
+        /// Notifies the UI that multiple properties have changed in a single dispatcher task.
+        /// This is the key to maintaining 60FPS during background enrichment.
+        /// </summary>
+        private bool _isRefreshPending;
+        /// <summary>
+        /// PROJECT ZERO: Batched UI Refresh.
+        /// Notifies the UI that multiple properties have changed in a single dispatcher task.
+        /// This is the key to maintaining 60FPS during background enrichment.
+        /// </summary>
         public void NotifyMetadataUpdated()
         {
-            OnPropertyChanged(nameof(Title));
-            OnPropertyChanged(nameof(Year));
-            OnPropertyChanged(nameof(PosterUrl));
-            OnPropertyChanged(nameof(HasPoster));
-            OnPropertyChanged(nameof(HasNoPoster));
-            OnPropertyChanged(nameof(LandscapeImageUrl));
-            OnPropertyChanged(nameof(Banner));
-            OnPropertyChanged(nameof(BackdropUrl));
-            OnPropertyChanged(nameof(Description));
-            OnPropertyChanged(nameof(Rating));
-            OnPropertyChanged(nameof(TrailerUrl));
+            if (_isRefreshPending) return;
+
+            var queue = App.MainWindow?.DispatcherQueue;
+            if (queue == null)
+            {
+                OnPropertyChanged(string.Empty);
+                return;
+            }
+
+            _isRefreshPending = true;
+            queue.TryEnqueue(() => {
+                _isRefreshPending = false;
+                OnPropertyChanged(string.Empty);
+            });
+        }
+
+        ~StremioMediaStream()
+        {
+            OnMetadataUpdated -= HandleMetadataUpdate;
         }
     }
 }

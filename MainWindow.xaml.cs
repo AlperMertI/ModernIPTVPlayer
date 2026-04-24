@@ -24,31 +24,43 @@ namespace ModernIPTVPlayer
         public UIElement TitleBarElement => AppTitleBar;
         public MainWindow()
         {
+            AppLogger.Info("[MainWindow] Constructor Start");
             Current = this;
-            this.InitializeComponent();
+            try {
+                AppLogger.Info("[MainWindow] InitializeComponent Start");
+                this.InitializeComponent();
+                AppLogger.Info("[MainWindow] InitializeComponent End");
 
-            _compositor = ElementCompositionPreview.GetElementVisual(this.Content).Compositor;
+                AppLogger.Info("[MainWindow] Composition Setup Start");
+                _compositor = ElementCompositionPreview.GetElementVisual(this.Content).Compositor;
+                AppLogger.Info("[MainWindow] Composition Setup End");
 
-            InitializeDownloadManager();
-            
-            // Set title bar
-            ExtendsContentIntoTitleBar = true;
-            SetTitleBar(AppDragRegion);
+                InitializeDownloadManager();
+                
+                // Set title bar
+                ExtendsContentIntoTitleBar = true;
+                SetTitleBar(AppDragRegion);
 
-            // Default navigation based on settings
-            string startupPageTag = AppSettings.DefaultStartupPage;
-            UpdateTitleBar();
+                // Default navigation based on settings
+                string startupPageTag = AppSettings.DefaultStartupPage;
+                UpdateTitleBar();
 
-            // Initialize behaviors immediately to avoid race conditions during async startup
-            InitializeSidebarBehavior();
+                // Initialize behaviors immediately to avoid race conditions during async startup
+                InitializeSidebarBehavior();
 
-            Type startupPageType = GetPageTypeFromTag(startupPageTag);
+                Type startupPageType = GetPageTypeFromTag(startupPageTag);
 
-            // Perform auto-login then navigate
-            _ = InitializeStartupAsync(startupPageType, startupPageTag);
+                // Perform auto-login then navigate
+                AppLogger.Info("[MainWindow] InitializeStartupAsync Start");
+                _ = InitializeStartupAsync(startupPageType, startupPageTag);
 
-            // [PROJECT ZERO] Phase 4: Reliable Async Shutdown
-            InitializeShutdownHook();
+                // [PROJECT ZERO] Phase 4: Reliable Async Shutdown
+                InitializeShutdownHook();
+                AppLogger.Info("[MainWindow] Constructor End");
+            } catch (Exception ex) {
+                AppLogger.Critical("[MainWindow] Constructor FATAL", ex);
+                throw;
+            }
         }
 
         private bool _isClosing = false;
@@ -86,13 +98,17 @@ namespace ModernIPTVPlayer
 
         private async Task InitializeStartupAsync(Type startupPageType, string startupPageTag)
         {
+            AppLogger.Info($"[MainWindow] InitializeStartupAsync: Page={startupPageTag}");
             // Attempt auto-login if not already logged in
             if (App.CurrentLogin == null)
             {
+                AppLogger.Info("[MainWindow] CheckAutoLoginAsync Start");
                 await AuthService.Instance.CheckAutoLoginAsync();
+                AppLogger.Info("[MainWindow] CheckAutoLoginAsync End");
             }
 
             // Navigate initial
+            AppLogger.Info("[MainWindow] Initial Navigation Start");
             if (startupPageType == typeof(MediaLibraryPage))
             {
                 var targetType = startupPageTag == "SeriesPage" ? MediaType.Series : MediaType.Movie;
@@ -102,6 +118,7 @@ namespace ModernIPTVPlayer
             {
                 ContentFrame.Navigate(startupPageType, App.CurrentLogin);
             }
+            AppLogger.Info("[MainWindow] Initial Navigation End");
 
             // Sync initial nav button selection to match the startup page
             var initialBtn = NavButtonsStack.Children.OfType<RadioButton>()
@@ -122,13 +139,17 @@ namespace ModernIPTVPlayer
             // Initialize sidebar state
             RootGrid.Loaded += (s, e) => AnimateSidebar(60);
 
+            AppLogger.Info("[MainWindow] Composition Setup (Secondary) Start");
             _compositor = ElementCompositionPreview.GetElementVisual(this.Content).Compositor;
+            AppLogger.Info("[MainWindow] Composition Setup (Secondary) End");
 
             // Auto-Restore Opacity when Window is Activated
             this.Activated += MainWindow_Activated;
 
             // Set Window Icon explicitly for Taskbar/Switcher visibility in Debug
+            AppLogger.Info("[MainWindow] SetIcon Start");
             SetIcon("Assets\\Square44x44Logo.targetsize-256.png");
+            AppLogger.Info("[MainWindow] SetIcon End");
         }
 
         private DispatcherTimer _sidebarHideTimer;
