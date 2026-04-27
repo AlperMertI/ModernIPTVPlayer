@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Linq;
@@ -20,19 +21,89 @@ namespace ModernIPTVPlayer.Helpers
     public class VirtualLiveList : ReadOnlyVirtualListBase<LiveStream>, IDisposable, IVirtualStreamList
     {
         private readonly BinaryCacheSession _session;
-        private readonly WeakReference<LiveStream>[] _identityMap;
         private readonly int _count;
         public long Fingerprint { get; }
+
+        private readonly ConcurrentDictionary<int, LiveStream> _itemCache = new();
+        private readonly ConcurrentQueue<int> _lruQueue = new();
+        
+        // PROJECT ZERO: ID-to-Index map for O(1) lookups across 50k items
+        private FrozenDictionary<int, int> _idToIndexMap = FrozenDictionary<int, int>.Empty;
+        
+        public int MaxCacheItems { get; set; } = 400; // Increased for better stability on high-res screens
 
         public VirtualLiveList(BinaryCacheSession session, long fingerprint = 0)
         {
             _session = session;
             _count = session.RecordCount;
             Fingerprint = fingerprint;
-            _identityMap = new WeakReference<LiveStream>[_count];
         }
 
         public override int Count => _count;
+
+        private static readonly ConcurrentStack<LiveStream> _pool = new();
+        private static long _globalHydrationCount = 0;
+
+        public override LiveStream this[int index]
+        {
+            get
+            {
+                if (index < 0 || index >= _count) throw new IndexOutOfRangeException();
+
+                // 1. Fast Path: Check LRU Cache
+                if (_itemCache.TryGetValue(index, out var cached)) return cached;
+
+                // 2. Slow Path: Rent from Pool or Hydrate
+                if (!_pool.TryPop(out var stream))
+                {
+                    stream = new LiveStream();
+                    
+                    // Track hydration for telemetry
+                    var count = Interlocked.Increment(ref _globalHydrationCount);
+                    if (count % 10000 == 0)
+                    {
+                        AppLogger.Info($"[PERF] VirtualLiveList: {count} objects created. Pool: {_pool.Count}");
+                    }
+                }
+                else
+                {
+                    stream.Reset(); // Clear state before reuse
+                }
+
+                if (_session.TryReadRecord<LiveStreamData>(index, out var record))
+                {
+                    stream.LoadFromData(record);
+                    stream.SetCacheSession(_session, index);
+                    
+                    if (_xtreamContext != null)
+                        stream.SetXtreamContext(_xtreamContext);
+                }
+
+                // 3. LRU Management
+                if (_itemCache.TryAdd(index, stream))
+                {
+                    _lruQueue.Enqueue(index);
+                    while (_itemCache.Count > MaxCacheItems)
+                    {
+                        if (_lruQueue.TryDequeue(out int oldestIndex))
+                        {
+                            if (_itemCache.TryRemove(oldestIndex, out var evicted))
+                            {
+                                // PROJECT ZERO: Return to pool for reuse
+                                _pool.Push(evicted);
+                            }
+                        }
+                    }
+                }
+
+                return stream;
+            }
+        }
+
+        public int FindIndexByStreamId(int streamId)
+        {
+            return _idToIndexMap.TryGetValue(streamId, out int index) ? index : -1;
+        }
 
         /// <summary>
         /// Retrieves the stream title using high-speed UTF8-to-UTF16 conversion.
@@ -87,48 +158,14 @@ namespace ModernIPTVPlayer.Helpers
             return record.StreamId;
         }
 
-        public override LiveStream this[int index]
-        {
-            get
-            {
-                if (index < 0 || index >= _count) throw new IndexOutOfRangeException();
-
-                // 1. Identity Check (Double-Checked Locking with WeakReference)
-                var weakRef = Volatile.Read(ref _identityMap[index]);
-                if (weakRef != null && weakRef.TryGetTarget(out var existing)) return existing;
-
-                lock (_identityMap)
-                {
-                    weakRef = _identityMap[index];
-                    if (weakRef != null && weakRef.TryGetTarget(out var existing2)) return existing2;
-
-                    // 2. Just-In-Time Hydration (Flyweight)
-                    var stream = new LiveStream();
-                    if (_session.TryReadRecord<LiveStreamData>(index, out var record))
-                    {
-                        stream.LoadFromData(record);
-                        stream.SetCacheSession(_session, index);
-                        
-                        // Propagate shared context for lazy URL reconstruction
-                        if (_xtreamContext != null)
-                        {
-                            stream.SetXtreamContext(_xtreamContext);
-                        }
-                    }
-
-                    _identityMap[index] = new WeakReference<LiveStream>(stream);
-                    return stream;
-                }
-            }
-        }
-
         /// <summary>
-        /// Performs a high-speed parallel scan of the entire dataset to build an index map
-        /// without hydrating any managed objects. Aligns with Master Plan Item 45.
+        /// Performs a high-speed parallel scan of the entire dataset to build indexing metadata.
+        /// Zero-allocation category mapping and ID indexing.
         /// </summary>
         public void ParallelScanInto(ConcurrentDictionary<string, List<int>> indexMap)
         {
             var partitioner = Partitioner.Create(0, _count, Math.Max(1, _count / (Environment.ProcessorCount * 2)));
+            var tempIdMap = new ConcurrentDictionary<int, int>(Environment.ProcessorCount * 2, _count);
 
             Parallel.ForEach(partitioner, range =>
             {
@@ -136,14 +173,21 @@ namespace ModernIPTVPlayer.Helpers
                 {
                     if (_session.TryReadRecord<LiveStreamData>(i, out var record))
                     {
-                        var utf8 = _session.GetUtf8Span(record.CatOff, record.CatLen);
-                        string catId = !utf8.IsEmpty ? _session.GetString(record.CatOff, record.CatLen) : "Genel";
+                        // 1. Populate ID Map
+                        tempIdMap.TryAdd(record.StreamId, i);
+
+                        // 2. Map Category (Uses session's StringPool internally)
+                        string catId = _session.GetString(record.CatOff, record.CatLen);
+                        if (string.IsNullOrEmpty(catId)) catId = "Genel";
                         
                         var list = indexMap.GetOrAdd(catId, _ => new List<int>());
                         lock (list) { list.Add(i); }
                     }
                 }
             });
+
+            _idToIndexMap = tempIdMap.ToFrozenDictionary();
+            AppLogger.Info($"[PERF] VirtualLiveList: Parallel scan completed. Indexed {_count} streams.");
         }
 
         /// <summary>

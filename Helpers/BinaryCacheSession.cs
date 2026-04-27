@@ -143,6 +143,8 @@ namespace ModernIPTVPlayer.Helpers
             // Security: Constrain massive allocations from corruption
             if (length > 65536) return string.Empty;
 
+            if (_ptr == null || _disposed) return string.Empty;
+
             long absOffset = _stringBufferOffset + offset;
             if (absOffset + length > _currentCapacity) return string.Empty;
 

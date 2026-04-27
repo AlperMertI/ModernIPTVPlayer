@@ -58,9 +58,19 @@ namespace ModernIPTVPlayer.Tests
                 string norm = TitleHelper.Normalize(test.Input);
                 bool normMatch = (norm.Trim() == test.Normalized.Trim());
 
-                // 2. Check Tokens
-                var tokens = TitleHelper.GetSignificantTokens(test.Input);
-                bool tokensMatch = tokens.Count == test.Tokens.Length && test.Tokens.All(t => tokens.Contains(t));
+                // 2. Check Tokens (Pinnacle Iterator)
+                int tokenCount = 0;
+                bool allTokensMatch = true;
+                foreach (var token in TitleHelper.GetTokens(test.Input.AsSpan()))
+                {
+                    if (tokenCount >= test.Tokens.Length || !token.Equals(test.Tokens[tokenCount].AsSpan(), StringComparison.OrdinalIgnoreCase))
+                    {
+                        allTokensMatch = false;
+                        break;
+                    }
+                    tokenCount++;
+                }
+                bool tokensMatch = allTokensMatch && tokenCount == test.Tokens.Length;
 
                 if (normMatch && tokensMatch)
                 {
@@ -71,7 +81,7 @@ namespace ModernIPTVPlayer.Tests
                 {
                     Console.WriteLine($"[FAIL] {test.Input}");
                     if (!normMatch) Console.WriteLine($"  Expected Norm: '{test.Normalized}' | Got: '{norm}'");
-                    if (!tokensMatch) Console.WriteLine($"  Expected Tokens: [{string.Join(", ", test.Tokens)}] | Got: [{string.Join(", ", tokens)}]");
+                    if (!tokensMatch) Console.WriteLine($"  Expected Tokens: [{string.Join(", ", test.Tokens)}] | Count mismatch or content mismatch.");
                 }
             }
 

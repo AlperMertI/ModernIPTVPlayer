@@ -1,5 +1,6 @@
 using Microsoft.UI.Xaml.Media.Imaging;
 using System;
+using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.UI.Xaml;
@@ -7,137 +8,108 @@ using Microsoft.UI.Xaml;
 namespace ModernIPTVPlayer.Helpers
 {
     /// <summary>
-    /// Project Zero: Unified High-Performance Image Engine.
-    /// Manages DPI-aware decoding, adaptive memory management, and caching for all discovery visuals.
-    /// Eliminates VRAM bloat and decoding-induced UI stutters.
+    /// PROJECT ZERO: Ultra-Performance Image Engine.
+    /// Optimized for 120Hz scrolling with O(1) cache lookups and zero-impact eviction.
     /// </summary>
     public static class SharedImageManager
     {
-        private static readonly ConcurrentDictionary<string, WeakReference<BitmapImage>> _imagePool = new();
-        private static readonly System.Collections.Generic.LinkedList<string> _mruList = new();
-        private static readonly System.Collections.Generic.Dictionary<string, BitmapImage> _strongCache = new();
-        private const int MAX_STRONG_CACHE = 200; 
-        private static readonly System.Threading.Lock _poolLock = new();
+        // Secondary weak pool for memory sharing
+        private static readonly ConcurrentDictionary<string, WeakReference<BitmapImage>> _weakPool = new();
+        
+        // Primary strong cache for instant hits (O(1) access)
+        private static readonly Dictionary<string, BitmapImage> _strongCache = new();
+        private static readonly Queue<string> _evictionQueue = new();
+        
+        private const int MAX_STRONG_CACHE = 250; 
+        private static readonly System.Threading.Lock _cacheLock = new();
 
-        private static void AddToStrongCache(string key, BitmapImage bitmap)
-        {
-            // Maintain MRU order
-            _mruList.Remove(key);
-            _mruList.AddFirst(key);
-            _strongCache[key] = bitmap;
-
-            // Evict oldest if we exceed capacity
-            if (_strongCache.Count > MAX_STRONG_CACHE)
-            {
-                var last = _mruList.Last.Value;
-                _mruList.RemoveLast();
-                _strongCache.Remove(last);
-            }
-        }
-
-        /// <summary>
-        /// Retrieves or creates an optimized BitmapImage.
-        /// DPI-Aware: Automatically calculates physical pixel requirements based on screen scaling.
-        /// </summary>
-        /// <param name="url">Source URL</param>
-        /// <param name="targetWidth">Desired Width in DIPs</param>
-        /// <param name="targetHeight">Desired Height in DIPs</param>
-        /// <param name="xamlRoot">Optional XamlRoot for DPI scaling detection</param>
         public static BitmapImage GetOptimizedImage(string? url, double targetWidth = 0, double targetHeight = 0, XamlRoot? xamlRoot = null)
         {
             if (string.IsNullOrEmpty(url)) return null;
 
-            // 1. Check pool for existing instance to share memory
             string cacheKey = $"{url}_{targetWidth}_{targetHeight}";
-            lock (_poolLock)
-            {
-                // A. Primary: Check the strong MRU cache for an instant hit
-                if (_strongCache.TryGetValue(cacheKey, out var strong))
-                {
-                    _mruList.Remove(cacheKey);
-                    _mruList.AddFirst(cacheKey);
-                    return strong;
-                }
 
-                // B. Secondary: Check the weak reference pool for promotion
-                if (_imagePool.TryGetValue(cacheKey, out var weakRef) && weakRef.TryGetTarget(out var existing))
+            lock (_cacheLock)
+            {
+                // 1. O(1) Strong Hit
+                if (_strongCache.TryGetValue(cacheKey, out var strong)) return strong;
+
+                // 2. Weak Promotion
+                if (_weakPool.TryGetValue(cacheKey, out var weakRef) && weakRef.TryGetTarget(out var promoted))
                 {
-                    AddToStrongCache(cacheKey, existing);
-                    return existing;
+                    _strongCache[cacheKey] = promoted;
+                    _evictionQueue.Enqueue(cacheKey);
+                    return promoted;
                 }
             }
 
+            // 3. UI Thread Creation & Throttled Load
+            var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+            if (queue == null) return null;
+
             try
             {
-                // 2. Thread-Safety Check (Project Zero Stability)
-                // UI objects (BitmapImage) MUST be created on the UI thread.
-                var queue = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
-                if (queue == null)
-                {
-                    // [SILENT FAIL] Returning null on background thread is expected during enrichment.
-                    // The UI will eventually re-read this on the UI thread via data binding.
-                    return null;
-                }
-
                 var bitmap = new BitmapImage();
-                
-                // 3. DPI-Aware Scaling (Senior Optimization)
-                // We decode at exact physical pixel size to avoid GPU scaling overhead and RAM waste.
                 double scale = xamlRoot?.RasterizationScale ?? 1.0;
                 
                 if (targetWidth > 0 || targetHeight > 0)
                 {
-                    // [PRECISION] Use Physical pixels to ensure we occupy exact memory bits on high-DPI screens.
                     bitmap.DecodePixelType = DecodePixelType.Physical;
                     if (targetWidth > 0) bitmap.DecodePixelWidth = (int)(targetWidth * scale);
                     if (targetHeight > 0) bitmap.DecodePixelHeight = (int)(targetHeight * scale);
                 }
 
-                // 4. Low-Impact Delivery
-                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache; // We manage our own pool
-                bitmap.UriSource = new Uri(url);
+                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
 
-                // 5. Memory Management: Register in pool
-                lock (_poolLock)
+                lock (_cacheLock)
                 {
-                    _imagePool[cacheKey] = new WeakReference<BitmapImage>(bitmap);
-                    AddToStrongCache(cacheKey, bitmap);
+                    // Cache the shell immediately so concurrent requests for the same URL get the same instance
+                    _weakPool[cacheKey] = new WeakReference<BitmapImage>(bitmap);
+                    _strongCache[cacheKey] = bitmap;
+                    _evictionQueue.Enqueue(cacheKey);
+
+                    // Reduced capacity for "Zero-Trace" - keep only the active working set
+                    while (_strongCache.Count > 100 && _evictionQueue.TryDequeue(out var oldKey))
+                    {
+                        _strongCache.Remove(oldKey);
+                    }
+
+                    // PROJECT ZERO: Proactive Weak Pool Pruning (Prevent WeakReference leak)
+                    if (_weakPool.Count > 1000)
+                    {
+                        PeriodicCleanup();
+                    }
                 }
+
+                // PROJECT ZERO V3: Zero-Trace Async Loading
+                // Use a weak reference to the bitmap inside the task.
+                // If the UI has already cleared the image (due to scrolling away), 
+                // and it was evicted from strong cache, the WeakReference will fail 
+                // and the task will abort, saving RAM and CPU.
+                var weakBitmap = new WeakReference<BitmapImage>(bitmap);
+
+                queue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                {
+                    if (weakBitmap.TryGetTarget(out var b))
+                    {
+                        try { b.UriSource = new Uri(url); } catch { }
+                    }
+                });
 
                 return bitmap;
             }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[SharedImage] Failed to load {url}: {ex.Message}");
-                return null;
-            }
+            catch { return null; }
         }
 
-        /// <summary>
-        /// Proactively releases image resources from memory.
-        /// Essential for resolving 'Memory Creep' in long scrolling sessions.
-        /// </summary>
-        public static void EvictImage(BitmapImage? bitmap)
-        {
-            // [STABILITY FIX] We no longer clear UriSource here because many controls share the same BitmapImage.
-            // Clearing it for one would break it for everyone.
-            // Simply allowing the BitmapImage to be garbage collected when no longer used is sufficient.
-            if (bitmap == null) return;
-        }
-
-        /// <summary>
-        /// Periodic cleanup of dead references in the weak pool.
-        /// </summary>
         public static void PeriodicCleanup()
         {
-            lock (_poolLock)
+            lock (_cacheLock)
             {
-                var keysToRemove = new System.Collections.Generic.List<string>();
-                foreach (var kvp in _imagePool)
+                foreach (var key in _weakPool.Keys)
                 {
-                    if (!kvp.Value.TryGetTarget(out _)) keysToRemove.Add(kvp.Key);
+                    if (!_weakPool[key].TryGetTarget(out _))
+                        _weakPool.TryRemove(key, out _);
                 }
-                foreach (var key in keysToRemove) _imagePool.TryRemove(key, out _);
             }
         }
     }

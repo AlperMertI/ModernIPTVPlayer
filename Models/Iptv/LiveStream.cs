@@ -47,6 +47,23 @@ namespace ModernIPTVPlayer.Models.Iptv
         public int PriorityScore { get => MetadataPriority; set => MetadataPriority = value; }
         public int RecordIndex { get; private set; } = -1;
         public uint Fingerprint { get; set; }
+
+        public void Reset()
+        {
+            _session = null;
+            _roMask = 0;
+            _roBufOff = null;
+            _roBufLen = null;
+            RecordIndex = -1;
+            _probeCache = null;
+            _lastCacheVersion = -1;
+            _streamUrlOverride = null;
+            IsLoading = true; // Suspend events during reset
+            _isProbing = false;
+            _isActive = false;
+            _isOnline = null;
+            IsLoading = false;
+        }
         [JsonIgnore]
         public bool IsLoading { get; set; } = false;
         
@@ -369,11 +386,32 @@ namespace ModernIPTVPlayer.Models.Iptv
         // ==========================================
         
         private Services.ProbeData? _probeCache;
+        private int _lastCacheVersion = -1;
+
         private Services.ProbeData? GetProbe()
         {
+            var currentVersion = Services.ProbeCacheService.Instance.CacheVersion;
+            if (_lastCacheVersion != currentVersion)
+            {
+                _probeCache = null;
+                _lastCacheVersion = currentVersion;
+            }
+
             if (_probeCache != null) return _probeCache;
             _probeCache = Services.ProbeCacheService.Instance.Get(StreamId);
             return _probeCache;
+        }
+
+        public string Codec
+        {
+            get => GetProbe()?.Codec ?? "";
+            set { OnPropertyChanged(); OnPropertyChanged(nameof(TechnicalBadges)); }
+        }
+        
+        public string Fps
+        {
+            get => GetProbe()?.Fps ?? "";
+            set { OnPropertyChanged(); }
         }
 
         public string Resolution
@@ -382,22 +420,10 @@ namespace ModernIPTVPlayer.Models.Iptv
             set { OnPropertyChanged(); }
         }
 
-        public string Fps
-        {
-            get => GetProbe()?.Fps ?? "";
-            set { OnPropertyChanged(); }
-        }
-
-        public string Codec
-        {
-            get => GetProbe()?.Codec ?? "";
-            set { OnPropertyChanged(); }
-        }
-
         public bool IsHdr
         {
             get => GetProbe()?.IsHdr ?? false;
-            set { OnPropertyChanged(); }
+            set { OnPropertyChanged(); OnPropertyChanged(nameof(TechnicalBadges)); }
         }
 
         public bool ShowHdrBadge => IsHdr && ShowTechnicalBadges;
@@ -420,7 +446,7 @@ namespace ModernIPTVPlayer.Models.Iptv
         private bool? _isOnline;
         public bool? IsOnline
         {
-            get => _isOnline ?? GetProbe() != null;
+            get => _isOnline ?? (GetProbe() != null ? true : (bool?)null);
             set
             {
                 _isOnline = value;
@@ -481,6 +507,74 @@ namespace ModernIPTVPlayer.Models.Iptv
 
         public bool ShowTechnicalBadges => IsOnline == true && HasMetadata;
         public bool ShowStatusDot => IsOnline != null;
+
+        [JsonIgnore]
+        public System.Collections.Generic.List<string> TechnicalBadges
+        {
+            get
+            {
+                var list = new System.Collections.Generic.List<string>();
+                if (!string.IsNullOrEmpty(Resolution) && HasMetadata) list.Add(Resolution);
+                if (!string.IsNullOrEmpty(Codec)) list.Add(Codec);
+                if (!string.IsNullOrEmpty(Fps)) list.Add(Fps + " FPS");
+                if (IsHdr) list.Add("HDR");
+                
+                var probe = GetProbe();
+                if (probe != null)
+                {
+                    if (probe.ScanType == "i") list.Add("1080i");
+                    if (probe.Bitrate > 10000000) list.Add("UHD+");
+                }
+                return list;
+            }
+        }
+
+        /// <summary>
+        /// SENIOR: Batched property applier to minimize DispatcherQueue overhead.
+        /// Updates all technical metadata in a single pass.
+        /// </summary>
+        public void ApplyProbeData(Services.ProbeData data)
+        {
+            // Note: ProbeData is already in the cache before this is called
+            // We just need to trigger the UI update for all properties
+            NotifyTechnicalUpdate();
+        }
+
+        public void ApplyProbeData(Services.ProbeResult result)
+        {
+            // For real-time results from the prober (ProbeResult),
+            // ensure we update status based on Success
+            this.IsOnline = result.Success;
+            NotifyTechnicalUpdate();
+        }
+
+        public void NotifyIconUpdate()
+        {
+            // [FORCE REFRESH] null property name triggers re-evaluation of ALL bindings 
+            // on this object. This is essential to break x:Bind optimizations after scrolls.
+            OnPropertyChanged(null);
+        }
+
+        public void NotifyTechnicalUpdate()
+        {
+            _probeCache = null; // Invalidate local field cache to force re-read from Service
+            
+            OnPropertyChanged(nameof(Resolution));
+            OnPropertyChanged(nameof(Fps));
+            OnPropertyChanged(nameof(Codec));
+            OnPropertyChanged(nameof(IsHdr));
+            OnPropertyChanged(nameof(Bitrate));
+            OnPropertyChanged(nameof(FormattedBitrate));
+            OnPropertyChanged(nameof(TechnicalBadges));
+            OnPropertyChanged(nameof(ShowTechnicalBadges));
+            OnPropertyChanged(nameof(ShowHdrBadge));
+            OnPropertyChanged(nameof(IsOnline));
+            OnPropertyChanged(nameof(Status));
+            OnPropertyChanged(nameof(IsOffline));
+            OnPropertyChanged(nameof(StatusToolTip));
+            OnPropertyChanged(nameof(ShowStatusDot));
+            OnPropertyChanged(nameof(HasMetadata));
+        }
 
         public string StatusToolTip
         {

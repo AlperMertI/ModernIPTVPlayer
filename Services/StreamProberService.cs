@@ -9,33 +9,109 @@ using System.Globalization;
 using System.Linq;
 using System.Net;
 using System.Timers;
+using System.Text.Json;
 
 namespace ModernIPTVPlayer.Services
 {
+    /// <summary>
+    /// Holds the results of a stream analysis.
+    /// Can be reported incrementally via IProgress.
+    /// </summary>
     public class ProbeResult
     {
+        // Basic Info
         public string Resolution { get; set; }
         public string Fps { get; set; }
         public string Codec { get; set; }
         public long Bitrate { get; set; }
         public bool IsHdr { get; set; }
+
+        // Advanced Video
+        public string AspectRatio { get; set; }
+        public string PixelFormat { get; set; }
+        public string ColorSpace { get; set; }
+        public string ColorRange { get; set; }
+        public string ChromaSubsampling { get; set; }
+        public string ScanType { get; set; }
+        public string Encoder { get; set; }
+
+        // Audio Details
+        public string AudioCodec { get; set; }
+        public string AudioChannels { get; set; }
+        public string AudioSampleRate { get; set; }
+        public string AudioLanguages { get; set; }
+
+        // Network & Protocol
+        public string Container { get; set; }
+        public string Protocol { get; set; }
+        public string Server { get; set; }
+        public string MimeType { get; set; }
+        public int Latency { get; set; }
+
+        // Buffer & Performance
+        public long BufferSize { get; set; }
+        public double BufferDuration { get; set; }
+        public double AvSync { get; set; }
+
+        // Security & Tracks
+        public bool IsEncrypted { get; set; }
+        public string DrmType { get; set; }
+        public string SubtitleTracks { get; set; }
+
         public bool Success { get; set; }
         public string Error { get; set; }
+
+        public ProbeData ToCacheData() => new ProbeData
+        {
+            Resolution = Resolution,
+            Fps = Fps,
+            Codec = Codec,
+            Bitrate = Bitrate,
+            IsHdr = IsHdr,
+            AspectRatio = AspectRatio,
+            PixelFormat = PixelFormat,
+            ColorSpace = ColorSpace,
+            ColorRange = ColorRange,
+            ChromaSubsampling = ChromaSubsampling,
+            ScanType = ScanType,
+            Encoder = Encoder,
+            AudioCodec = AudioCodec,
+            AudioChannels = AudioChannels,
+            AudioSampleRate = AudioSampleRate,
+            AudioLanguages = AudioLanguages,
+            Container = Container,
+            Protocol = Protocol,
+            Server = Server,
+            MimeType = MimeType,
+            Latency = Latency,
+            BufferSize = BufferSize,
+            BufferDuration = BufferDuration,
+            AvSync = AvSync,
+            IsEncrypted = IsEncrypted,
+            DrmType = DrmType,
+            SubtitleTracks = SubtitleTracks,
+            LastUpdated = DateTime.Now
+        };
     }
 
+    /// <summary>
+    /// Service for background stream analysis using pooled mpv instances.
+    /// Supports progressive reporting for modern "shimmer" UI effects.
+    /// </summary>
     public class StreamProberService : IDisposable
     {
         private static StreamProberService _instance;
         public static StreamProberService Instance => _instance ??= new StreamProberService();
 
-        private readonly SemaphoreSlim _poolLock = new SemaphoreSlim(10, 10); // Scalable lock
+        private readonly SemaphoreSlim _poolLock = new SemaphoreSlim(AppSettings.ProbingWorkerCount, AppSettings.ProbingWorkerCount);
         private readonly System.Collections.Concurrent.ConcurrentStack<(Player Player, DateTime LastUsed)> _playerPool = new System.Collections.Concurrent.ConcurrentStack<(Player, DateTime)>();
         private readonly System.Timers.Timer _idleCleanupTimer;
         private bool _isDisposed = false;
+        private const int MAX_WARM_PLAYERS = 1; // Keep 1 ready for instant response
 
         private StreamProberService() 
         {
-            _idleCleanupTimer = new System.Timers.Timer(60000); // 1 minute
+            _idleCleanupTimer = new System.Timers.Timer(60000); 
             _idleCleanupTimer.Elapsed += OnIdleCleanupElapsed;
             _idleCleanupTimer.AutoReset = true;
             _idleCleanupTimer.Start();
@@ -45,325 +121,287 @@ namespace ModernIPTVPlayer.Services
         {
             var now = DateTime.Now;
             var toDispose = new List<Player>();
-
-            // Temporarily drain pool to check ages
             var temp = new List<(Player Player, DateTime LastUsed)>();
+
             while (_playerPool.TryPop(out var entry))
             {
-                if ((now - entry.LastUsed).TotalMinutes > 5)
+                // Keep only warm players or items used recently (last 60s)
+                if (temp.Count >= MAX_WARM_PLAYERS && (now - entry.LastUsed).TotalSeconds > 60) 
                 {
                     toDispose.Add(entry.Player);
                 }
-                else
+                else 
                 {
                     temp.Add(entry);
                 }
             }
 
-            // Put back fresh ones
-            foreach (var entry in temp) _playerPool.Push(entry);
-
-            // Dispose old ones
-            foreach (var p in toDispose)
+            for (int i = temp.Count - 1; i >= 0; i--)
             {
-                Debug.WriteLine("[StreamProber] Disposing idle player instance due to inactivity.");
-                try { await p.DisposeAsync(); } catch { }
+                _playerPool.Push(temp[i]);
+            }
+
+            foreach (var p in toDispose) 
+            { 
+                try { await p.DisposeAsync(); } catch { } 
             }
         }
 
-        public async Task<ProbeResult> ProbeAsync(int streamId, string url, CancellationToken ct = default)
+        /// <summary>
+        /// Probes a stream with optional progressive reporting.
+        /// </summary>
+        public async Task<ProbeResult> ProbeAsync(int streamId, string url, IProgress<ProbeResult> progress = null, CancellationToken ct = default)
         {
-            // 1. Check Cache First
+            // 1. Check Cache
             var cached = ProbeCacheService.Instance.Get(streamId);
             if (cached != null)
             {
-                return new ProbeResult
+                var cachedResult = new ProbeResult
                 {
                     Resolution = cached.Resolution,
                     Fps = cached.Fps,
                     Codec = cached.Codec,
                     Bitrate = cached.Bitrate,
                     IsHdr = cached.IsHdr,
+                    AspectRatio = cached.AspectRatio,
+                    PixelFormat = cached.PixelFormat,
+                    ColorSpace = cached.ColorSpace,
+                    ScanType = cached.ScanType,
+                    AudioCodec = cached.AudioCodec,
+                    AudioChannels = cached.AudioChannels,
+                    AudioSampleRate = cached.AudioSampleRate,
+                    Container = cached.Container,
+                    Server = cached.Server,
                     Success = true
                 };
+                progress?.Report(cachedResult);
+                return cachedResult;
             }
 
-            // 2. Acquire Slot (Wait for a slot if more than 10 concurrent requests)
             await _poolLock.WaitAsync(ct);
             Player player = null;
             try
             {
-                Debug.WriteLine($"[StreamProber] Starting native probe for: {url}");
-                
-                // 3. Get or Create Player
                 if (!_playerPool.TryPop(out var entry))
                 {
                     player = new Player();
-                    // Configure CORE options BEFORE initialization
-                    try { player.Client.SetOption("vo", "null"); } catch { }
-                    try { player.Client.SetOption("ao", "null"); } catch { }
-                    try { player.Client.SetOption("ytdl", "no"); } catch { }
-                    try { player.Client.SetOption("load-stats-overlay", "no"); } catch { }
-                    try { player.Client.SetOption("load-osd-console", "no"); } catch { }
                     
+                    // ULTRA-LIGHT BACKGROUND PROBING CONFIGURATION
+                    // Minimizes native memory, threads, and network buffers.
+                    player.Client.SetOption("vo", "null");
+                    player.Client.SetOption("ao", "null");
+                    player.Client.SetOption("ytdl", "no");
+                    player.Client.SetOption("demuxer-max-bytes", "131072");      // 128 KB limit
+                    player.Client.SetOption("demuxer-max-back-bytes", "131072"); // 128 KB back buffer
+                    player.Client.SetOption("cache", "no");                      // Disable disk cache
+                    player.Client.SetOption("network-timeout", "5");             // Fast fail
+                    player.Client.SetOption("vd-lavc-fast", "yes");              // Fast decoding
+                    player.Client.SetOption("load-stats-overlay", "no");
+                    player.Client.SetOption("input-default-bindings", "no");
+                    player.Client.SetOption("input-vo-keyboard", "no");
+
                     await player.InitializeAsync();
-                    
-                    // Safer settings after init
-                    try { player.Client.SetProperty("aid", "no"); } catch { }
-                    try { player.Client.SetProperty("sid", "no"); } catch { }
-                    try { player.Client.SetProperty("input-default-bindings", "no"); } catch { }
-                    try { player.Client.SetProperty("input-vo-keyboard", "no"); } catch { }
                 }
-                else
-                {
-                    player = entry.Player;
-                }
+                else player = entry.Player;
 
-                // Per-Probe Configuration
-                string ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
-                string headers = "Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
-                string cookies = ExtractCookiesForProber(url);
-                if (!string.IsNullOrEmpty(cookies)) headers += $"Cookie: {cookies}\n";
-
-                try { player.Client.SetProperty("user-agent", ua); } catch { }
-                try { player.Client.SetProperty("http-header-fields", headers); } catch { }
-                
-                // OPTIMIZATION: Faster connectivity detection
-                try { player.Client.SetProperty("demuxer-lavf-o", "reconnect=1,reconnect_streamed=1,reconnect_delay_max=2"); } catch { }
-                try { player.Client.SetProperty("demuxer-readahead-secs", "1"); } catch { }
-                try { player.Client.SetProperty("network-timeout", "5"); } catch { }
-                
-                // 4. Load file
+                // Load file
                 await player.Client.ExecuteAsync($"loadfile \"{url.Replace("\"", "\\\"")}\" replace");
                 
-                // 5. Poll for Metadata (Max 10 seconds for difficult streams)
                 var stopwatch = Stopwatch.StartNew();
-                bool metadataFound = false;
-                ProbeResult result = new ProbeResult { Success = false };
+                var result = new ProbeResult { Success = false };
 
-                while (stopwatch.ElapsedMilliseconds < 10000 && !ct.IsCancellationRequested)
+                // Progressive Polling Logic
+                while (stopwatch.ElapsedMilliseconds < 12000 && !ct.IsCancellationRequested)
                 {
-                    try 
+                    bool changed = false;
+
+                    // 1. Video Core Info
+                    if (string.IsNullOrEmpty(result.Resolution))
                     {
-                        // Use safe wrapper for resolution
-                        string wStr = await GetPropertySafeAsync(player.Client, "video-params/w");
-                        string hStr = await GetPropertySafeAsync(player.Client, "video-params/h");
-                        
-                        if (!string.IsNullOrEmpty(wStr) && !string.IsNullOrEmpty(hStr) && 
-                            long.TryParse(wStr, out long width) && long.TryParse(hStr, out long height) && 
-                            width > 0 && height > 0)
+                        string w = await GetPropertySafeAsync(player.Client, "video-params/w");
+                        string h = await GetPropertySafeAsync(player.Client, "video-params/h");
+                        if (!string.IsNullOrEmpty(w) && !string.IsNullOrEmpty(h))
                         {
-                            metadataFound = true;
-                            result.Resolution = $"{width}x{height}";
+                            result.Resolution = $"{w}x{h}";
                             
-                            // Better FPS Detection (Check multiple sources)
-                            string fpsStr = await GetPropertySafeAsync(player.Client, "container-fps") ?? 
-                                           await GetPropertySafeAsync(player.Client, "video-params/fps") ??
-                                           await GetPropertySafeAsync(player.Client, "estimated-fps");
-                            
-                            if (double.TryParse(fpsStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double fpsVal) && fpsVal > 0)
-                                result.Fps = $"{fpsVal:0.##} FPS";
-                            else
-                                result.Fps = "0 FPS";
+                            string f = await GetPropertySafeAsync(player.Client, "estimated-fps");
+                            if (string.IsNullOrEmpty(f) || f == "0.000000") f = await GetPropertySafeAsync(player.Client, "fps");
+                            if (string.IsNullOrEmpty(f) || f == "0.000000") f = await GetPropertySafeAsync(player.Client, "container-fps");
+                            if (double.TryParse(f, NumberStyles.Any, CultureInfo.InvariantCulture, out double fv) && fv > 0)
+                                result.Fps = fv.ToString("F2");
 
-                            // Simplified Codec Mapping
-                            string rawCodec = (await GetPropertySafeAsync(player.Client, "video-codec"))?.ToUpper() ?? "UNKNOWN";
-                            result.Codec = rawCodec switch
-                            {
-                                string c when c.Contains("H264") || c.Contains("AVC") => "H.264",
-                                string c when c.Contains("HEVC") || c.Contains("H265") || c.Contains("H.265") => "HEVC",
-                                string c when c.Contains("HIGH EFFICIENCY") => "HEVC",
-                                string c when c.Contains("VP9") => "VP9",
-                                string c when c.Contains("AV1") => "AV1",
-                                string c when c.Contains("MPEG2") => "MPEG2",
-                                _ => FormatFallbackCodec(rawCodec)
-                            };
-                            
-                            string br1 = await GetPropertySafeAsync(player.Client, "video-bitrate");
-                            string br2 = await GetPropertySafeAsync(player.Client, "bitrate");
-                            string br3 = await GetPropertySafeAsync(player.Client, "estimated-bitrate");
-                            string br4 = await GetPropertySafeAsync(player.Client, "demuxer-bitrate");
-                            string br5 = await GetPropertySafeAsync(player.Client, "packet-video-bitrate");
-                            string br6 = await GetPropertySafeAsync(player.Client, "packet-bitrate");
+                            string vCodec = await GetPropertySafeAsync(player.Client, "video-codec");
+                            if (string.IsNullOrEmpty(vCodec)) vCodec = await GetPropertySafeAsync(player.Client, "video-params/codec");
+                            result.Codec = SimplifyCodec(vCodec);
 
-                            Debug.WriteLine($"[StreamProber] Bitrate Trace ({stopwatch.ElapsedMilliseconds}ms): v-br:{br1} | br:{br2} | est:{br3} | demux:{br4} | p-v-br:{br5} | p-br:{br6}");
-
-                            // HDR Detection
-                            string primaries = await GetPropertySafeAsync(player.Client, "video-params/primaries");
-                            string trc = await GetPropertySafeAsync(player.Client, "video-params/trc");
-                            result.IsHdr = (primaries == "bt.2020") || (trc == "pq" || trc == "hlg");
+                            result.AspectRatio = await GetPropertySafeAsync(player.Client, "video-params/aspect");
+                            result.PixelFormat = await GetPropertySafeAsync(player.Client, "video-params/pixelformat");
                             
-                            string brStr = br1 ?? br2 ?? br3 ?? br4 ?? br5 ?? br6;
-
-                            if (long.TryParse(brStr, out long bitrate) && bitrate > 0)
-                            {
-                                result.Bitrate = bitrate;
-                                result.Success = true;
-                                Debug.WriteLine($"[StreamProber] ✅ Metadata Found (Found Bitrate: {bitrate}) at {stopwatch.ElapsedMilliseconds}ms | HDR: {result.IsHdr}");
-                                break; // FINALLY GOT BITRATE
-                            }
-                            else
-                            {
-                                // If we have resolution but NO bitrate, we KEEP POLLING specifically for bitrate
-                                if (stopwatch.ElapsedMilliseconds < 9500)
-                                {
-                                    await Task.Delay(250, ct); 
-                                    continue; 
-                                }
-                                else if (stopwatch.ElapsedMilliseconds >= 9500)
-                                {
-                                    // Timeout reached, we give up on bitrate but return success if we have resolution
-                                    Debug.WriteLine($"[StreamProber] ⚠️ Bitrate Timeout (Returning resolution only) | HDR: {result.IsHdr}");
-                                    result.Success = true;
-                                    break; 
-                                }
-                            }
+                            string interlaced = await GetPropertySafeAsync(player.Client, "video-params/interlaced");
+                            result.ScanType = interlaced == "yes" ? "i" : "p";
                             
-                            result.Success = true;
-                            break;
-                        }
-                        
-                        // Check for error/idle
-                        string idleStr = await GetPropertySafeAsync(player.Client, "idle-active");
-                        if (idleStr == "yes" && stopwatch.ElapsedMilliseconds > 3000)
-                        {
-                            result.Error = "Idle state reached without metadata";
-                            break;
+                            changed = true;
                         }
                     }
-                    catch (Exception ex)
+
+                    // 2. Color & Encryption & Encoder
+                    if (result.Resolution != null && string.IsNullOrEmpty(result.ColorSpace))
                     {
-                        // Some properties throw a generic exception if the player state is "unstable"
-                        // We skip these until the next poll.
-                        if (ex is TaskCanceledException || ex is OperationCanceledException) throw;
+                        result.ColorSpace = await GetPropertySafeAsync(player.Client, "video-params/primaries") ?? "Auto";
+                        result.ColorRange = await GetPropertySafeAsync(player.Client, "video-params/colorlevels");
+                        result.ChromaSubsampling = await GetPropertySafeAsync(player.Client, "video-params/chroma-location");
+                        
+                        string trc = await GetPropertySafeAsync(player.Client, "video-params/trc");
+                        result.IsHdr = result.ColorSpace == "bt.2020" || trc == "pq" || trc == "hlg";
+                        
+                        result.Encoder = await GetPropertySafeAsync(player.Client, "metadata/by-key/encoder");
+                        changed = true;
                     }
+
+                    // 3. Audio & Tracks (Languages / Subtitles)
+                    if (string.IsNullOrEmpty(result.AudioCodec))
+                    {
+                        result.AudioCodec = SimplifyCodec(await GetPropertySafeAsync(player.Client, "audio-codec"));
+                        result.AudioChannels = await GetPropertySafeAsync(player.Client, "audio-params/channel-count");
+                        result.AudioSampleRate = await GetPropertySafeAsync(player.Client, "audio-params/samplerate");
+                        
+                        // Extract languages and subtitles from track-list
+                        string tracksJson = await GetPropertySafeAsync(player.Client, "track-list");
+                        if (!string.IsNullOrEmpty(tracksJson))
+                        {
+                            try {
+                                using var doc = JsonDocument.Parse(tracksJson);
+                                var audioLangs = new List<string>();
+                                var subTracks = new List<string>();
+                                foreach (var track in doc.RootElement.EnumerateArray()) {
+                                    string type = track.TryGetProperty("type", out var tp) ? tp.GetString() : "";
+                                    string lang = track.TryGetProperty("lang", out var lp) ? lp.GetString() : "Unknown";
+                                    if (type == "audio") audioLangs.Add(lang);
+                                    else if (type == "sub") subTracks.Add(lang);
+                                }
+                                result.AudioLanguages = string.Join(", ", audioLangs.Distinct());
+                                result.SubtitleTracks = string.Join(", ", subTracks.Distinct());
+                            } catch { }
+                        }
+                        if (result.AudioCodec != null) changed = true;
+                    }
+
+                    // 4. Network & Buffer & Stats
+                    result.Container = (await GetPropertySafeAsync(player.Client, "file-format"))?.ToUpper();
+                    result.Protocol = (await GetPropertySafeAsync(player.Client, "metadata/by-key/protocol")) ?? (url.StartsWith("http") ? "HTTP" : "UDP");
+                    result.MimeType = await GetPropertySafeAsync(player.Client, "metadata/by-key/content-type");
                     
-                    try { await Task.Delay(250, ct); } catch { break; }
+                    // Real-time stats
+                    string avs = await GetPropertySafeAsync(player.Client, "avsync");
+                    if (double.TryParse(avs, NumberStyles.Any, CultureInfo.InvariantCulture, out double avv)) result.AvSync = avv * 1000;
+
+                    // Buffer stats from demuxer-cache-state
+                    string cacheJson = await GetPropertySafeAsync(player.Client, "demuxer-cache-state");
+                    if (!string.IsNullOrEmpty(cacheJson))
+                    {
+                        try {
+                            using var doc = JsonDocument.Parse(cacheJson);
+                            if (doc.RootElement.TryGetProperty("fw-bytes", out var b)) result.BufferSize = b.GetInt64();
+                            if (doc.RootElement.TryGetProperty("reader-pts", out var r) && doc.RootElement.TryGetProperty("cache-end", out var c))
+                                result.BufferDuration = c.GetDouble() - r.GetDouble();
+                        } catch { }
+                    }
+
+                    // 5. Bitrate
+                    if (result.Bitrate == 0)
+                    {
+                        string br = await GetPropertySafeAsync(player.Client, "video-bitrate") ?? 
+                                    await GetPropertySafeAsync(player.Client, "bitrate");
+                        if (long.TryParse(br, out long brVal) && brVal > 0)
+                        {
+                            result.Bitrate = brVal;
+                            changed = true;
+                        }
+                    }
+
+                    if (changed) progress?.Report(result);
+                    await Task.Delay(250, ct);
+
+                    if (changed) progress?.Report(result);
+
+                    // Break if we have the "minimum viable technical info"
+                    if (result.Resolution != null && result.AudioCodec != null && (result.Bitrate > 0 || stopwatch.ElapsedMilliseconds > 8000))
+                    {
+                        result.Success = true;
+                        break;
+                    }
+
+                    await Task.Delay(400, ct);
                 }
 
-                if (result.Success)
-                {
-                    // Update Cache
-                    ProbeCacheService.Instance.Update(streamId, result.Resolution, result.Fps, result.Codec, result.Bitrate, result.IsHdr);
-                }
-
+                if (result.Success) ProbeCacheService.Instance.Update(streamId, result.ToCacheData());
                 return result;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[StreamProber] Error: {ex.Message}");
                 return new ProbeResult { Success = false, Error = ex.Message };
             }
             finally
             {
                 if (player != null)
                 {
-                    try 
-                    { 
-                        // Instead of disposing, we stop and return to pool
-                        await player.Client.ExecuteAsync("stop");
-                        _playerPool.Push((player, DateTime.Now)); 
-                    } 
-                    catch 
-                    { 
-                        // If something went wrong, dispose it instead of returning to pool
-                        try { await player.DisposeAsync(); } catch { }
-                    }
+                    try { await player.Client.ExecuteAsync("stop"); _playerPool.Push((player, DateTime.Now)); } 
+                    catch { try { await player.DisposeAsync(); } catch { } }
                 }
                 _poolLock.Release();
             }
         }
 
-        public static async Task<(string Res, string Fps, string Codec, long Bitrate, bool Success, bool IsHdr)> ExtractProbeDataAsync(MpvWinUI.MpvPlayer player, CancellationToken ct)
-        {
-            try
-            {
-                // Wait for video parameters to be available
-                var stopwatch = Stopwatch.StartNew();
-                while (stopwatch.ElapsedMilliseconds < 5000 && !ct.IsCancellationRequested)
-                {
-                    string wStr = await GetPropertySafeAsync(player, "video-params/w");
-                    string hStr = await GetPropertySafeAsync(player, "video-params/h");
-
-                    if (long.TryParse(wStr, out long width) && long.TryParse(hStr, out long height) && width > 0 && height > 0)
-                    {
-                        string res = $"{width}x{height}";
-                        string fpsStr = await GetPropertySafeAsync(player, "estimated-fps");
-                        double.TryParse(fpsStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double fpsVal);
-                        string fps = $"{fpsVal:F2}";
-                        
-                        string codec = (await GetPropertySafeAsync(player, "video-codec"))?.ToUpper() ?? "Unknown";
-                        string brStr = await GetPropertySafeAsync(player, "video-bitrate");
-                        if (string.IsNullOrEmpty(brStr)) brStr = await GetPropertySafeAsync(player, "bitrate");
-                        long.TryParse(brStr, out long bitrate);
- 
-                        // HDR Detection
-                        string primaries = await GetPropertySafeAsync(player, "video-params/primaries");
-                        string trc = await GetPropertySafeAsync(player, "video-params/trc");
-                        bool isHdr = (primaries == "bt.2020") || (trc == "pq" || trc == "hlg");
- 
-                        return (res, fps, codec, bitrate, true, isHdr);
-                    }
-
-                    await Task.Delay(250, ct);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[StreamProberService] ExtractProbeData error: {ex.Message}");
-            }
-
-            return (null, null, null, 0, false, false);
-        }
-
-        private static async Task<string> GetPropertySafeAsync(MpvWinUI.MpvPlayer player, string name)
-        {
-            try { return await player.GetPropertyAsync(name); }
-            catch (Exception ex)
-            {
-                if (ex.Message.Contains("PropertyUnavailable")) return null;
-                Debug.WriteLine($"[StreamProberService] SafeGet (UI) failed for {name}: {ex.Message}");
-                return null;
-            }
-        }
-
         private static async Task<string> GetPropertySafeAsync(MpvClientNative client, string name)
         {
-            // MpvClient from Mpv.Core typically uses synchronous string access or Task-wrapped
-            // We use Task.Run for the synchronous call to keep the API consistent
             return await Task.Run(() =>
             {
                 try { return client.GetPropertyToString(name); }
-                catch (Exception ex)
-                {
-                    if (ex.Message.Contains("PropertyUnavailable")) return null;
-                    // Debug.WriteLine($"[StreamProberService] SafeGet (Core) failed for {name}: {ex.Message}");
-                    return null;
-                }
+                catch { return null; }
             });
         }
 
         private static string ExtractCookiesForProber(string url)
         {
-            string header = "";
             try
             {
                 if (string.IsNullOrEmpty(url)) return "";
-
                 var targetUri = new Uri(url);
                 var cookies = HttpHelper.CookieContainer.GetCookies(targetUri);
-                
-                if (cookies != null && cookies.Count > 0)
+                var header = "";
+                if (cookies != null)
                 {
-                    foreach (System.Net.Cookie c in cookies)
-                    {
-                         header += $"{c.Name}={c.Value}; ";
-                    }
+                    foreach (System.Net.Cookie c in cookies) header += $"{c.Name}={c.Value}; ";
                 }
-
                 return header.TrimEnd(' ', ';');
             }
             catch { return ""; }
+        }
+
+        private static string SimplifyCodec(string codec)
+        {
+            if (string.IsNullOrEmpty(codec)) return null;
+            codec = codec.ToUpper();
+            if (codec == "UNKNOWN") return "UNKNOWN";
+
+            if (codec.Contains("H265") || codec.Contains("HEVC")) return "H265";
+            if (codec.Contains("H264") || codec.Contains("AVC")) return "H264";
+            if (codec.Contains("H263")) return "H.263";
+            if (codec.Contains("VP9")) return "VP9";
+            if (codec.Contains("VP8")) return "VP8";
+            if (codec.Contains("AV1")) return "AV1";
+            if (codec.Contains("MJPEG")) return "MJPEG";
+            if (codec.Contains("MPEG2")) return "MPEG2";
+            if (codec.Contains("MPEG4")) return "MPEG4";
+            if (codec.Contains("AAC")) return "AAC";
+            if (codec.Contains("AC3")) return "AC3";
+            if (codec.Contains("MP3")) return "MP3";
+            if (codec.Contains("DTS")) return "DTS";
+            if (codec.Contains("OPUS")) return "OPUS";
+
+            // Default fallback: take the first segment and truncate if too long
+            string first = codec.Split('/')[0].Split(' ')[0].Trim();
+            return first.Length > 8 ? first.Substring(0, 6) + ".." : first;
         }
 
         public void Dispose()
@@ -378,22 +416,43 @@ namespace ModernIPTVPlayer.Services
                 _isDisposed = true;
             }
         }
-
-        private static string FormatFallbackCodec(string rawCodec)
+        /// <summary>
+        /// LEGACY/HELPER: Extracts probe data from an existing player instance.
+        /// Useful when a player is already active and we don't want to start a new prober.
+        /// </summary>
+        public static async Task<ProbeResult> ExtractProbeDataAsync(MpvWinUI.MpvPlayer player, CancellationToken ct)
         {
-            if (string.IsNullOrEmpty(rawCodec) || rawCodec == "UNKNOWN") return "UNKNOWN";
-            
-            // Try to extract the first part before '/'
-            string firstPart = rawCodec.Split('/').FirstOrDefault()?.Trim();
-            if (string.IsNullOrEmpty(firstPart)) firstPart = rawCodec;
-            
-            // Truncate long codec names to keep badge readable
-            if (firstPart.Length > 10)
+            try
             {
-                return firstPart.Substring(0, 8).ToUpper() + "..";
+                var stopwatch = Stopwatch.StartNew();
+                while (stopwatch.ElapsedMilliseconds < 5000 && !ct.IsCancellationRequested)
+                {
+                    string wStr = await player.GetPropertyAsync("video-params/w");
+                    string hStr = await player.GetPropertyAsync("video-params/h");
+
+                    if (!string.IsNullOrEmpty(wStr) && !string.IsNullOrEmpty(hStr))
+                    {
+                        var result = new ProbeResult
+                        {
+                            Resolution = $"{wStr}x{hStr}",
+                            Fps = await player.GetPropertyAsync("estimated-fps"),
+                            Codec = SimplifyCodec(await player.GetPropertyAsync("video-codec")),
+                            Success = true
+                        };
+                        
+                        string brStr = await player.GetPropertyAsync("video-bitrate");
+                        if (long.TryParse(brStr, out long br)) result.Bitrate = br;
+
+                        string primaries = await player.GetPropertyAsync("video-params/primaries");
+                        result.IsHdr = primaries == "bt.2020";
+                        
+                        return result;
+                    }
+                    await Task.Delay(250, ct);
+                }
+                return new ProbeResult { Success = false };
             }
-            
-            return firstPart.ToUpper();
+            catch { return new ProbeResult { Success = false }; }
         }
     }
 }

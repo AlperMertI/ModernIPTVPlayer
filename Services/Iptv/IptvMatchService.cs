@@ -27,7 +27,8 @@ namespace ModernIPTVPlayer.Services.Iptv
         private static readonly IptvMatchService _instance = new();
         public static IptvMatchService Instance => _instance;
 
-        private readonly StreamMatchIndexer _vodSeriesIndexer = new();
+        private readonly StreamMatchIndexer _vodIndexer = new();
+        private readonly StreamMatchIndexer _seriesIndexer = new();
         private readonly FastSearchIndex _liveSearchIndex = new();
         
         // Internal cache for loaded streams. 
@@ -36,6 +37,13 @@ namespace ModernIPTVPlayer.Services.Iptv
         private IReadOnlyList<VodStream>? _vodCache;
         private IReadOnlyList<SeriesStream>? _seriesCache;
         private IReadOnlyList<LiveStream>? _liveCache;
+
+        public StreamMatchIndexer GetIndexer(string tag) => tag.ToLowerInvariant() switch
+        {
+            "vod" => _vodIndexer,
+            "series" => _seriesIndexer,
+            _ => throw new ArgumentException($"Unknown indexer tag: {tag}")
+        };
 
         private static readonly CompositeFormat PerfFormat = CompositeFormat.Parse("[PERF] [IptvMatchService] {0} indexing: {1}ms (Hash: {2})");
 
@@ -78,13 +86,13 @@ namespace ModernIPTVPlayer.Services.Iptv
             if (vod != null) 
             {
                 _vodCache = (vod is IReadOnlyList<VodStream> rl) ? rl : vod.ToList();
-                tasks.Add(RunUpdate("VOD", _vodCache, vodFp, (s, fp) => _vodSeriesIndexer.RebuildAsync(s, fp, clear: false)));
+                tasks.Add(RunUpdate("VOD", _vodCache, vodFp, (s, fp) => _vodIndexer.RebuildAsync(s, fp, clear: false)));
             }
 
             if (series != null) 
             {
                 _seriesCache = (series is IReadOnlyList<SeriesStream> rl) ? rl : series.ToList();
-                tasks.Add(RunUpdate("Series", _seriesCache, seriesFp, (s, fp) => _vodSeriesIndexer.RebuildAsync(s, fp, clear: false)));
+                tasks.Add(RunUpdate("Series", _seriesCache, seriesFp, (s, fp) => _seriesIndexer.RebuildAsync(s, fp, clear: false)));
             }
 
             // Await all internal operations to ensure logs are fully flushed before sync finishes
@@ -106,30 +114,32 @@ namespace ModernIPTVPlayer.Services.Iptv
             try 
             {
                 string folder = Windows.Storage.ApplicationData.Current.LocalFolder.Path;
-                string sidecarPath = Path.Combine(folder, $"{tag}_{fp}.idx.bin");
+                string versionedFp = "v7_" + fp;
+                string sidecarPath = Path.Combine(folder, $"{tag}_{versionedFp}.idx.bin");
 
                 AppLogger.Info($"[IptvMatchService] {tag} checking sidecar: {sidecarPath}");
                 bool restored = false;
                 
-                if (tag == "Live") restored = await _liveSearchIndex.TryLoadFromDiskAsync(sidecarPath, fp);
-                else restored = await _vodSeriesIndexer.TryLoadFromDiskAsync(sidecarPath, fp);
+                if (tag == "Live") restored = await _liveSearchIndex.TryLoadFromDiskAsync(sidecarPath, versionedFp);
+                else restored = await GetIndexer(tag).TryLoadFromDiskAsync(sidecarPath, versionedFp);
 
                 if (!restored)
                 {
                     AppLogger.Info($"[IptvMatchService] {tag} sidecar MISSING or INVALID. Starting FULL REBUILD...");
-                    await action(items, fp).ConfigureAwait(false);
+                    await action(items, versionedFp).ConfigureAwait(false);
                     
                     AppLogger.Info($"[IptvMatchService] {tag} rebuild finished. Persisting to disk...");
                     
                     if (tag == "Live") 
                     {
                         await _liveSearchIndex.SaveToDiskAsync(sidecarPath);
-                        await _liveSearchIndex.TryLoadFromDiskAsync(sidecarPath, fp); // HOT-SWAP TO MMF
+                        await _liveSearchIndex.TryLoadFromDiskAsync(sidecarPath, versionedFp); // HOT-SWAP TO MMF
                     }
                     else 
                     {
-                        await _vodSeriesIndexer.SaveToDiskAsync(sidecarPath);
-                        await _vodSeriesIndexer.TryLoadFromDiskAsync(sidecarPath, fp); // HOT-SWAP TO MMF
+                        var indexer = GetIndexer(tag);
+                        await indexer.SaveToDiskAsync(sidecarPath);
+                        await indexer.TryLoadFromDiskAsync(sidecarPath, versionedFp); // HOT-SWAP TO MMF
                     }
                     
                     // Explicit async GC to forcefully reclaim the 30MB+ FrozenDictionary from the rebuild
@@ -195,6 +205,11 @@ namespace ModernIPTVPlayer.Services.Iptv
         {
             if (string.IsNullOrEmpty(id) || !int.TryParse(id, out int targetId)) return null;
 
+            if (candidates.Count > 1000 && candidates is ModernIPTVPlayer.Models.IVirtualStreamList)
+            {
+                AppLogger.Warn($"[PERF] MatchByIdGeneric: Linear scan detected on LARGE virtual list ({candidates.Count} items). This will cause mass hydration!");
+            }
+
             for (int i = 0; i < candidates.Count; i++)
             {
                 var item = candidates[i];
@@ -213,7 +228,8 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             if (category == "live")
             {
-                return _liveSearchIndex.GetMatchingIndices(query);
+                var source = (IReadOnlyList<IMediaStream>?)_liveCache;
+                return source == null ? Array.Empty<int>() : _liveSearchIndex.GetMatchingIndices(query, source);
             }
 
             return Array.Empty<int>(); // VOD/Series use a different indexing model for now
@@ -243,7 +259,7 @@ namespace ModernIPTVPlayer.Services.Iptv
             var candidateMap = new Dictionary<int, int>();
             foreach (var token in TitleHelper.GetTokens(query))
             {
-                var indices = _vodSeriesIndexer.FindByToken(token);
+                var indices = GetIndexer(category).FindByToken(token);
                 foreach (int idx in indices)
                 {
                     ref int count = ref CollectionsMarshal.GetValueRefOrAddDefault(candidateMap, idx, out _);
@@ -295,9 +311,10 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             if (best.Score > 0.4f)
             {
-                if (!string.IsNullOrEmpty(year) && !string.IsNullOrEmpty(best.Stream.Year) && year != best.Stream.Year)
+                if (!string.IsNullOrEmpty(year) && !string.IsNullOrEmpty(best.Stream.Year))
                 {
-                    if (best.Score < 0.9f) return null;
+                    if (!year.AsSpan().SequenceEqual(best.Stream.Year.AsSpan()) && best.Score < 0.9f)
+                        return null;
                 }
                 return best.Stream;
             }
@@ -309,13 +326,15 @@ namespace ModernIPTVPlayer.Services.Iptv
         {
             if (string.IsNullOrEmpty(query) || candidates == null || candidates.Count == 0) return [];
 
-            string q = TitleHelper.Normalize(query);
-            var queryTokens = TitleHelper.GetSignificantTokens(q.AsSpan());
+            Span<char> normalized = stackalloc char[query.Length + 16];
+            int normLen = TitleHelper.NormalizeToBuffer(query, normalized);
+            var qSpan = normalized[..normLen];
+            
             var candidateMap = new Dictionary<int, int>();
 
-            foreach (var token in queryTokens)
+            foreach (var token in TitleHelper.GetTokens(qSpan))
             {
-                var indices = _vodSeriesIndexer.FindByToken(token);
+                var indices = GetIndexer(typeof(T) == typeof(SeriesStream) ? "series" : "vod").FindByToken(token);
                 foreach (int idx in indices)
                 {
                     ref int score = ref CollectionsMarshal.GetValueRefOrAddDefault(candidateMap, idx, out _);
@@ -344,7 +363,7 @@ namespace ModernIPTVPlayer.Services.Iptv
                     if (idx >= 0 && idx < candidates.Count)
                     {
                         var itemTitleSpan = virtualList != null ? virtualList.GetTitleSpan(idx, threadTitleBuffer) : candidates[idx].Title.AsSpan();
-                        double sim = TitleHelper.CalculateSimilarity(itemTitleSpan, q.AsSpan());
+                        double sim = TitleHelper.CalculateSimilarity(itemTitleSpan, query.AsSpan());
                         sim += (kvp.Value * 0.1);
 
                         if (sim > 0.1) concurrentResults.Add(new MatchResult { Stream = candidates[idx], Score = (float)sim });
@@ -362,7 +381,7 @@ namespace ModernIPTVPlayer.Services.Iptv
                     if (idx < 0 || idx >= candidates.Count) continue;
 
                     var itemTitleSpan = virtualList != null ? virtualList.GetTitleSpan(idx, titleBuffer) : candidates[idx].Title.AsSpan();
-                    double sim = TitleHelper.CalculateSimilarity(itemTitleSpan, q.AsSpan());
+                    double sim = TitleHelper.CalculateSimilarity(itemTitleSpan, qSpan);
                     sim += (kvp.Value * 0.1);
 
                     if (sim > 0.1) results.Add(new MatchResult { Stream = candidates[idx], Score = (float)sim });
@@ -394,7 +413,8 @@ namespace ModernIPTVPlayer.Services.Iptv
 
         public void Clear() 
         { 
-            _vodSeriesIndexer.Clear(); 
+            _vodIndexer.Clear();
+            _seriesIndexer.Clear(); 
             _liveSearchIndex.Clear(); 
             _vodCache = null; _seriesCache = null; _liveCache = null;
         }
@@ -411,8 +431,16 @@ namespace ModernIPTVPlayer.Services.Iptv
                 {
                     if (file.Name.Equals(currentFile, StringComparison.OrdinalIgnoreCase)) continue;
                     
-                    try { file.Delete(); AppLogger.Info($"[Vacuum] Deleted orphaned sidecar: {file.Name}"); }
-                    catch { /* File might be in use, ignore */ }
+                    try 
+                    { 
+                        if (File.Exists(file.FullName))
+                        {
+                            file.Delete(); 
+                            AppLogger.Info($"[Vacuum] Deleted orphaned sidecar: {file.Name}"); 
+                        }
+                    }
+                    catch (IOException) { /* File in use, common with MMF, skip silently */ }
+                    catch (Exception ex) { AppLogger.Warn($"[Vacuum] Failed to delete {file.Name}: {ex.Message}"); }
                 }
             }
             catch (Exception ex) { AppLogger.Warn($"[Vacuum] Sidecar cleanup failed: {ex.Message}"); }

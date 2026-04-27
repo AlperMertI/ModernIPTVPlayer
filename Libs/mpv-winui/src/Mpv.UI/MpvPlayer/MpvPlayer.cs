@@ -7,6 +7,7 @@ using Mpv.Core.Enums.Player;
 using MpvWinUI.Common;
 using System;
 using System.Diagnostics;
+using System.Threading;
 using System.Threading.Tasks;
 using Mpv.Core.Args;
 using Windows.Storage;
@@ -18,9 +19,18 @@ namespace MpvWinUI;
 
 public sealed partial class MpvPlayer : Control
 {
+    private static long _nextInstanceId;
+    private static long _liveInstances;
+    private readonly long _instanceId;
+
+    public static long LiveInstanceCount => Interlocked.Read(ref _liveInstances);
+
     public MpvPlayer()
     {
+        _instanceId = Interlocked.Increment(ref _nextInstanceId);
+        Interlocked.Increment(ref _liveInstances);
         DefaultStyleKey = typeof(MpvPlayer);
+        LogMemory("ctor");
     }
 
     private bool _mpvGpuIsDirty = false;
@@ -430,8 +440,6 @@ public sealed partial class MpvPlayer : Control
     public async Task CleanupAsync()
     {
         if (_isDisposed) return;
-        
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [MPV_CLEANUP] CleanupAsync STARTED");
         _isDisposed = true;
 
         // 1. Unsubscribe from all events IMMEDIATELY to prevent "echo" tasks 
@@ -447,6 +455,13 @@ public sealed partial class MpvPlayer : Control
             Player.PlaybackStateChanged -= OnStateChanged;
             Player.PropertyChanged -= OnPropertyChanged;
             Player.LogMessageReceived -= OnLogMessageReceived;
+
+            // Stop live demuxing/cache fill before the render loop and D3D resources go away.
+            // Exiting during buffering otherwise leaves noticeably more native memory behind.
+            try { await Player.Client.ExecuteAsync("stop"); } catch { }
+            try { await Player.Client.ExecuteAsync("playlist-clear"); } catch { }
+            try { await Player.Client.ExecuteAsync("set cache no"); } catch { }
+            try { await Task.Delay(75); } catch { }
             
             // 2. Stop the Render Loop
             if (_renderControl != null)
@@ -461,7 +476,6 @@ public sealed partial class MpvPlayer : Control
                 try
                 {
                     await Player.DisposeAsync();
-                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [MPV_CLEANUP] Player.DisposeAsync SUCCESS");
                 }
                 catch (Exception ex) 
                 { 
@@ -474,17 +488,23 @@ public sealed partial class MpvPlayer : Control
         // 4. Cleanup native control resources
         if (_renderControl != null)
         {
-            _renderControl.DisconnectSwapChain();
+            _renderControl.ClearRenderCallbacks();
+            await _renderControl.DetachUiResourcesAsync();
             _renderControl.FlushContext();
             
             if (!_renderControl.PreserveStateOnUnload)
             {
                 _renderControl.DestroyResources();
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [MPV_CLEANUP] DestroyResources SUCCESS");
             }
+            // [LEAK_FIX] Null out the render control reference to allow it to be GC'd independently of the player control
+            _renderControl = null!;
         }
 
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [MPV_CLEANUP] CleanupAsync FINISHED");
+        Interlocked.Decrement(ref _liveInstances);
+    }
+
+    private void LogMemory(string stage, string? detail = null)
+    {
     }
 
     public void SetDisplayFps(double fps)

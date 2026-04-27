@@ -49,7 +49,8 @@ namespace ModernIPTVPlayer
         // Phase A/B: Pre-computed search structures
         private ushort[] _channelFlags = Array.Empty<ushort>();  // Bit field for quality/health/tech filters
         private int[] _allChannelIndices = Array.Empty<int>();
-        private readonly Dictionary<string, int[]> _categoryChannelIndices = new(StringComparer.Ordinal);
+        private int[] _masterCategoryIndices = Array.Empty<int>();
+        private readonly Dictionary<string, (int Offset, int Count)> _categoryIndexMap = new(StringComparer.Ordinal);
         
         // State
         private LiveCategory? _selectedCategory;
@@ -67,13 +68,17 @@ namespace ModernIPTVPlayer
 
         private LiveStream? _activeChannel;
 
-        // Auto-Probe Queue
-        private readonly ConcurrentQueue<LiveStream> _probingQueue = new();
+        // Auto-Probe (Modernized with Channels)
+        private readonly ConcurrentStack<LiveStream> _probingStack = new();
+        private readonly SemaphoreSlim _probingSemaphore = new(0);
         private readonly HashSet<string> _queuedUrls = new();
+        private readonly HashSet<int> _visibleIndices = new(); 
         private readonly System.Threading.Lock _probingLock = new();
         private CancellationTokenSource _workerCts = new();
         private bool _isWorkerRunning = false;
         private bool _canAutoProbe = false;
+        private bool _isScrolling = false;
+        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<FrameworkElement, Image> _elementImageMap = new();
 
         // Win32 Cursor Overrides
         [DllImport("user32.dll", SetLastError = true)]
@@ -93,12 +98,18 @@ namespace ModernIPTVPlayer
         {
             this.InitializeComponent();
             
-            if (_arrowCursor == IntPtr.Zero)
+            // Cleanup on navigation away
+            this.Unloaded += (s, e) => 
             {
-                _arrowCursor = LoadCursor(IntPtr.Zero, IDC_ARROW);
-            }
+                Services.ProbeCacheService.Instance.CacheCleared -= OnCacheCleared;
+                _workerCts?.Cancel();
+                _loadCts?.Cancel();
+                _clockTimer?.Stop();
+            };
 
             this.Loaded += LiveTVPage_Loaded;
+            this.SizeChanged += (s, e) => UpdateIconCacheCapacity();
+            
             this.PointerEntered += (s, e) => { if (_arrowCursor != IntPtr.Zero) SetCursor(_arrowCursor); };
             this.PointerPressed += (s, e) => { if (_arrowCursor != IntPtr.Zero) SetCursor(_arrowCursor); };
 
@@ -110,9 +121,27 @@ namespace ModernIPTVPlayer
             // Start Worker
             _ = StartProbingWorker();
 
-
             // Subscribe to Cache clearing
             Services.ProbeCacheService.Instance.CacheCleared += OnCacheCleared;
+        }
+
+        private void UpdateIconCacheCapacity()
+        {
+            if (ChannelRepeater == null || _channelScrollViewer == null) return;
+
+            // DYNAMIC SLIDING WINDOW CALCULATION
+            // Calculate how many items fit in the current viewport
+            double viewportHeight = _channelScrollViewer.ViewportHeight;
+            double gridWidth = Math.Max(1, ChannelRepeater.ActualWidth - 48);
+            double itemWidth = _itemsWrapGrid?.ItemWidth ?? 300;
+            double itemHeight = 80; 
+
+            int itemsPerRow = Math.Max(1, (int)(gridWidth / itemWidth));
+            int visibleRows = Math.Max(1, (int)(viewportHeight / itemHeight)) + 1;
+            
+            // CAPACITY = (Visible Page + 1 Above + 1 Below)
+            int capacity = (visibleRows * itemsPerRow) * 3;
+            ChannelIconConverter.MaxCacheSize = Math.Max(100, capacity);
         }
 
         // ==========================================
@@ -139,6 +168,7 @@ namespace ModernIPTVPlayer
             {
                 _channelScrollViewer.ViewChanged += ChannelScrollViewer_ViewChanged;
                 _canAutoProbe = true;
+                UpdateIconCacheCapacity();
             }
             // Initial probe for items visible on first load
             QueueVisibleItems();
@@ -146,66 +176,82 @@ namespace ModernIPTVPlayer
 
         private void ChannelScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
         {
-            // Only act when scrolling STOPS (natural debounce)
-            if (!e.IsIntermediate)
+            if (e.IsIntermediate)
             {
-                QueueVisibleItems();
+                _isScrolling = true;
+            }
+            else
+            {
+                _isScrolling = false;
+                // Only queue probing for visible items when scrolling stops
+                _ = Task.Delay(150).ContinueWith(_ => {
+                    DispatcherQueue.TryEnqueue(() => QueueVisibleItems());
+                });
             }
         }
 
         private void QueueVisibleItems()
         {
             if (!_canAutoProbe || _channelScrollViewer == null) return;
-            if (_visibleChannels.Count == 0) return; var list = _visibleChannels;
+            
+            IReadOnlyList<LiveStream> list = _allChannels;
+            if (_visibleChannels.Count > 0) list = _visibleChannels;
+            else if (ChannelRepeater.ItemsSource is VirtualizedView<LiveStream> vv) list = vv;
+
+            if (list.Count == 0) return;
 
             double offset = _channelScrollViewer.VerticalOffset;
             double viewportHeight = _channelScrollViewer.ViewportHeight;
 
-            // Get dimensions
-            double itemHeight = 80; // Template Height (68) + margins
-            double itemWidth = _itemsWrapGrid?.ItemWidth ?? 300;
-            double gridWidth = Math.Max(1, ChannelRepeater.ActualWidth - 48); // minus padding
+            // PINNACLE: Precise Layout Math
+            // XAML: MinItemWidth="300", MinRowSpacing="12", MinColumnSpacing="12"
+            double minItemWidth = 300;
+            double spacing = 12;
+            double itemHeight = 68 + spacing; // 80px total row height
+            
+            double gridWidth = Math.Max(1, ChannelRepeater.ActualWidth);
+            if (gridWidth < 40) gridWidth = _channelScrollViewer.ActualWidth - 48; // Fallback if repeater not yet measured
 
-            int itemsPerRow = Math.Max(1, (int)(gridWidth / itemWidth));
-
-            // Calculate visible row range
+            // UniformGridLayout math: how many items of minWidth + spacing fit in gridWidth?
+            int itemsPerRow = Math.Max(1, (int)((gridWidth + spacing) / (minItemWidth + spacing)));
+            
             int firstRow = (int)(offset / itemHeight);
-            int lastRow = (int)((offset + viewportHeight) / itemHeight) + 1; // +1 for partial
+            int lastRow = (int)((offset + viewportHeight) / itemHeight) + 1;
 
-            // Calculate item index range
             int firstIndex = Math.Max(0, firstRow * itemsPerRow);
-            int lastIndex = Math.Min(list.Count, (lastRow + 1) * itemsPerRow);
+            int lastIndex = Math.Min(list.Count, (lastRow + 2) * itemsPerRow); // +2 rows buffer for smoothness
 
-            // Queue items in visible range
             lock (_probingLock)
             {
+                _visibleIndices.Clear();
+                
+                // PROJECT ZERO: Forced Refresh
+                // This loop handles both icon poking and probing queueing
                 for (int i = firstIndex; i < lastIndex; i++)
                 {
-                    var stream = list[i];
+                    var stream = list[i]; 
+                    _visibleIndices.Add(stream.RecordIndex);
+
                     if (stream.IsOnline == null && !stream.IsProbing && !_queuedUrls.Contains(stream.StreamUrl))
                     {
-                        _probingQueue.Enqueue(stream);
+                        _probingStack.Push(stream);
+                        _probingSemaphore.Release();
                         _queuedUrls.Add(stream.StreamUrl);
                     }
                 }
             }
         }
 
-
         private void OnCacheCleared(object? sender, EventArgs e)
         {
-            // Reset metadata for all loaded channels so UI updates immediately
             DispatcherQueue.TryEnqueue(() => 
             {
-                _probingQueue.Clear();
                 _queuedUrls.Clear();
-
                 foreach (var s in _allChannels)
                 {
                     s.IsOnline = null; 
+                    s.NotifyTechnicalUpdate();
                 }
-                
-                // Re-trigger probing for the current view
                 QueueVisibleItems();
             });
         }
@@ -224,6 +270,11 @@ namespace ModernIPTVPlayer
         protected override async void OnNavigatedTo(NavigationEventArgs e)
         {
             base.OnNavigatedTo(e);
+
+            if (e.NavigationMode == NavigationMode.Back && Frame?.ForwardStack?.Count > 0)
+            {
+                Frame.ForwardStack.Clear();
+            }
             
             // 1. Initialize History FIRST
             await HistoryManager.Instance.InitializeAsync();
@@ -232,14 +283,24 @@ namespace ModernIPTVPlayer
             // 2. Handle Login Parameters
             if (e.Parameter is LoginParams loginParams)
             {
-                if (_loginInfo != null && _loginInfo.PlaylistUrl != loginParams.PlaylistUrl)
+            if (loginParams != null)
+            {
+                bool isSamePlaylist = _loginInfo != null && 
+                                     string.Equals(_loginInfo.PlaylistUrl, loginParams.PlaylistUrl, StringComparison.OrdinalIgnoreCase);
+
+                if (!isSamePlaylist && _loginInfo != null)
                 {
+                    // PROACTIVE DISPOSAL: Release MMF and binary session of the old playlist
+                    if (_allChannels is IDisposable oldList) oldList.Dispose();
+
                     _allCategories = Array.Empty<LiveCategory>();
                     _allChannels = Array.Empty<LiveStream>();
                     CategoryListView.ItemsSource = null;
+                    ChannelRepeater.ItemsSource = null; // Force element clearing
                     VisibleChannels.Clear();
                 }
                 _loginInfo = loginParams;
+            }
             }
             else
             {
@@ -554,12 +615,29 @@ namespace ModernIPTVPlayer
             return result;
         }
 
-        // ==========================================
-        // REPEATER INTERACTION & LOGIC
-        // ==========================================
-
-        private void ChannelRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args) { }
-        private void ChannelRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args) { }
+        private void ChannelRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args) 
+        {
+            if (args.Element is FrameworkElement fe)
+            {
+                // Cache the image reference once to avoid recursive walks during fast scrolls
+                var img = FindChildOfType<Image>(fe);
+                if (img != null) _elementImageMap.AddOrUpdate(fe, img);
+            }
+        }
+        
+        private void ChannelRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args) 
+        {
+            if (args.Element is FrameworkElement fe)
+            {
+                // PROJECT ZERO: Surgical Cleanup. 
+                // Using the O(1) map instead of a recursive walk.
+                if (_elementImageMap.TryGetValue(fe, out var img))
+                {
+                    img.Source = null;
+                }
+                fe.DataContext = null;
+            }
+        }
 
 
 
@@ -888,7 +966,7 @@ namespace ModernIPTVPlayer
         {
             try
             {
-                _categoryChannelIndices.Clear();
+                _categoryIndexMap.Clear();
                 _allChannelIndices = new int[_allChannels.Count];
                 for (int i = 0; i < _allChannels.Count; i++) _allChannelIndices[i] = i;
 
@@ -901,7 +979,7 @@ namespace ModernIPTVPlayer
                 }
                 else
                 {
-                    // Fallback for non-virtualized lists (rare)
+                    // Fallback for non-virtualized lists
                     Parallel.ForEach(Partitioner.Create(0, _allChannels.Count), range =>
                     {
                         for (int i = range.Item1; i < range.Item2; i++)
@@ -913,23 +991,33 @@ namespace ModernIPTVPlayer
                     });
                 }
 
-                foreach (var pair in grouped)
+                // PINNACLE: Master Index Consolidation (Zero Fragmentation)
+                var sortedCategories = grouped.Keys.OrderBy(k => k).ToList();
+                _masterCategoryIndices = new int[_allChannels.Count];
+                int currentOffset = 0;
+
+                foreach (var catId in sortedCategories)
                 {
-                    _categoryChannelIndices[pair.Key] = pair.Value.OrderBy(x => x).ToArray();
+                    var indices = grouped[catId];
+                    indices.Sort();
+                    
+                    _categoryIndexMap[catId] = (currentOffset, indices.Count);
+                    indices.CopyTo(_masterCategoryIndices, currentOffset);
+                    currentOffset += indices.Count;
                 }
 
-                AppLogger.Info($"[LiveTV] Category index built (Zero-Allocation) | channels={_allChannels.Count} | categories={_categoryChannelIndices.Count}");
+                AppLogger.Info($"[LiveTV] Compact Indexing active | channels={_allChannels.Count} | categories={_categoryIndexMap.Count}");
             }
             catch (Exception ex)
             {
                 AppLogger.Error("[LiveTV] Category index build failed", ex);
-                _categoryChannelIndices.Clear();
+                _categoryIndexMap.Clear();
                 _allChannelIndices = Array.Empty<int>();
                 throw;
             }
         }
 
-        private int[] GetSelectedCategoryIndices()
+        private IList<int> GetSelectedCategoryIndices()
         {
             string? categoryId = _selectedCategory?.CategoryId;
             if (string.IsNullOrEmpty(categoryId))
@@ -937,19 +1025,19 @@ namespace ModernIPTVPlayer
                 return Array.Empty<int>();
             }
 
-            return _categoryChannelIndices.TryGetValue(categoryId, out var indices)
-                ? indices
+            return _categoryIndexMap.TryGetValue(categoryId, out var info)
+                ? new ArraySegment<int>(_masterCategoryIndices, info.Offset, info.Count)
                 : Array.Empty<int>();
         }
 
-        private static int[] IntersectSortedIndices(int[] left, int[] right)
+        private static IList<int> IntersectSortedIndices(IList<int> left, IList<int> right)
         {
-            if (left == null || right == null || left.Length == 0 || right.Length == 0) return Array.Empty<int>();
+            if (left == null || right == null || left.Count == 0 || right.Count == 0) return Array.Empty<int>();
 
-            var result = new List<int>(Math.Min(left.Length, right.Length));
+            var result = new List<int>(Math.Min(left.Count, right.Count));
             int i = 0, j = 0;
 
-            while (i < left.Length && j < right.Length)
+            while (i < left.Count && j < right.Count)
             {
                 if (left[i] == right[j]) { result.Add(left[i]); i++; j++; }
                 else if (left[i] < right[j]) i++;
@@ -1009,8 +1097,7 @@ namespace ModernIPTVPlayer
 
             if (_selectedCategory == null || _allChannels.Count == 0) return;
 
-            // Clear Queue on View Change to prioritize new items
-            _probingQueue.Clear();
+            // Clear pending URL tracking on View Change to prioritize new items in the channel
             _queuedUrls.Clear();
 
             bool isGlobal = _selectedCategory.CategoryId == "-1";
@@ -1025,8 +1112,17 @@ namespace ModernIPTVPlayer
 
             HeaderCount.Text = $"({filteredList.Count})";
 
-            // ATOMIC PATCH (The Performance Way)
-            await UICollectionPatcher.PatchAsync(_visibleChannels, filteredList, this.DispatcherQueue, s => s.Id);
+            // PINNACLE: Avoid bulk hydration for large lists.
+            if (filteredList.Count > 1000)
+            {
+                _visibleChannels.Clear();
+                ChannelRepeater.ItemsSource = filteredList;
+            }
+            else
+            {
+                await UICollectionPatcher.PatchAsync(_visibleChannels, filteredList, this.DispatcherQueue, s => s.Id);
+                ChannelRepeater.ItemsSource = _visibleChannels;
+            }
 
             // Auto-Probe is now always enabled (Viewport based)
             _canAutoProbe = AppSettings.IsAutoProbeEnabled;
@@ -1037,6 +1133,7 @@ namespace ModernIPTVPlayer
             {
                 DispatcherQueue.TryEnqueue(() => QueueVisibleItems());
             }
+
         }
 
         /// <summary>
@@ -1048,7 +1145,7 @@ namespace ModernIPTVPlayer
             if (_allChannels == null || _channelFlags == null) return Array.Empty<LiveStream>();
 
             // 1. Determine candidate indices via Unified Indexing
-            int[] candidateIndices;
+            IList<int> candidateIndices;
             
             if (!string.IsNullOrWhiteSpace(_searchQuery))
             {
@@ -1066,10 +1163,10 @@ namespace ModernIPTVPlayer
             }
             else
             {
-                candidateIndices = isGlobal ? _allChannelIndices : GetSelectedCategoryIndices();
+                candidateIndices = isGlobal ? (IList<int>)_allChannelIndices : GetSelectedCategoryIndices();
             }
 
-            if (candidateIndices.Length == 0) return Array.Empty<LiveStream>();
+            if (candidateIndices.Count == 0) return Array.Empty<LiveStream>();
 
             // 2. Compute filter masks
             ushort requiredFlags = 0;
@@ -1087,7 +1184,7 @@ namespace ModernIPTVPlayer
             if (FilterHighFPS.IsChecked ?? false) requiredFlags |= CF_HIGH_FPS;
 
             // Single-pass filter over indices (Zero-Allocation)
-            var resultIndices = new List<int>(Math.Min(candidateIndices.Length, 5000));
+            var resultIndices = new List<int>(Math.Min(candidateIndices.Count, 5000));
 
             foreach (int idx in candidateIndices)
             {
@@ -1339,19 +1436,30 @@ namespace ModernIPTVPlayer
             _recentChannels.Clear();
             foreach (var item in historyItems)
             {
-                // CRITICAL FIX: Find the matching channel in the main list to use the CORRECT MetadataBuffer offsets
-                var match = _allChannels?.FirstOrDefault(c => c.StreamId.ToString() == item.Id || c.Name == item.Title);
-                
+                // PROJECT ZERO: Use O(1) ID-to-Index map in VirtualLiveList
+                // Safe parsing to prevent 0xc000027b crash
+                int sId = int.TryParse(item.Id, out var parsedId) ? parsedId : -1;
+                int index = (sId >= 0 && _allChannels is VirtualLiveList vList) 
+                    ? vList.FindIndexByStreamId(sId) 
+                    : -1;
+
+                LiveStream? match = (index >= 0) ? _allChannels[index] : null;
+
+                if (match == null && _allChannels.Count < 5000)
+                {
+                    match = _allChannels.FirstOrDefault(c => c.Name == item.Title);
+                }
+
                 if (match != null)
                 {
                     _recentChannels.Add(match);
                 }
                 else
                 {
-                    // Fallback to orphaned object if not found (names might be broken)
+                    // Fallback to orphaned object
                     _recentChannels.Add(new LiveStream
                     {
-                        StreamId = int.TryParse(item.Id, out var id) ? id : 0,
+                        StreamId = sId >= 0 ? sId : 0,
                         Name = item.Title,
                         StreamUrl = item.StreamUrl,
                         StreamIcon = item.PosterUrl
@@ -1405,7 +1513,8 @@ namespace ModernIPTVPlayer
                     // Queue for analysis (Worker will now pick them up)
                     if (!_queuedUrls.Contains(stream.StreamUrl))
                     {
-                        _probingQueue.Enqueue(stream);
+                        _probingStack.Push(stream);
+                        _probingSemaphore.Release();
                         _queuedUrls.Add(stream.StreamUrl);
                     }
                 }
@@ -1442,103 +1551,70 @@ namespace ModernIPTVPlayer
 
         private async Task ProbingWorkerLoop(CancellationToken ct)
         {
-            while (!ct.IsCancellationRequested)
+            while (true)
             {
-                LiveStream? item = null;
-                bool hasItem = false;
-
-                lock (_probingQueue)
+                await _probingSemaphore.WaitAsync(ct);
+                
+                // Pause while scrolling to prioritize UI thread and avoid late-logo race conditions
+                if (_isScrolling)
                 {
-                    hasItem = _probingQueue.TryDequeue(out item);
+                    await Task.Delay(200, ct);
+                    _probingSemaphore.Release(); // Put back if we didn't consume
+                    continue;
                 }
 
-                if (hasItem && item != null)
+                if (_probingStack.TryPop(out var item))
                 {
-                    _queuedUrls.Remove(item.StreamUrl); 
-
-                    // Check if auto-probing is globally disabled 
-                    // (BUT we allow it if the queue was manually filled via ScanCategory)
-                    // Actually, if it's in the queue, we generally process it.
-                    // Let's just check the setting if we are NOT in a ScanCategory context? 
-                    // No, usually if user toggles it OFF, they want it to stop.
-                    if (!AppSettings.IsAutoProbeEnabled) 
+                    if (item == null) continue;
+                    
+                    lock (_probingLock)
                     {
-                        // Minor hack: if the item was just reset (IsOnline == null), 
-                        // it might be a manual ScanCategory request, so we let it through.
-                        if (item.IsOnline != null) 
-                        {
-                            await Task.Delay(500, ct); 
-                            continue;
-                        }
+                        _queuedUrls.Remove(item.StreamUrl);
+                        // O(1) Check: Is the item (by global index) still visible?
+                        if (!_visibleIndices.Contains(item.RecordIndex)) continue;
                     }
 
-                    // Double check before processing:
-                    // 2. CHECK: Basic validation
-                    // If metadata arrived while queued, skip.
+                    if (!AppSettings.IsAutoProbeEnabled && item.IsOnline != null) continue;
                     if (item.HasMetadata || item.IsProbing) continue;
-
-                    var currentList = _visibleChannels;
-                    if (currentList == null || !currentList.Contains(item)) continue;
 
                     try
                     {
                         DispatcherQueue.TryEnqueue(() => item.IsProbing = true);
 
-                        // OPTIMIZATION: Check ID-Based Cache explicitly to skip throttle (v2.4)
-                        if (Services.ProbeCacheService.Instance.Get(item.StreamId) is Services.ProbeData cached)
+                        var probeCache = Services.ProbeCacheService.Instance;
+                        var cached = probeCache.Get(item.StreamId);
+
+                        if (cached != null)
                         {
-                            // BATCHED: All property updates in single DispatcherQueue call + IsLoading suppress
+                            // SENIOR: Batch property updates to reduce DispatcherQueueHandler overhead
                             DispatcherQueue.TryEnqueue(() =>
                             {
-                                item.IsLoading = true;
-                                item.Resolution = cached.Resolution;
-                                item.Fps = cached.Fps;
-                                item.Codec = cached.Codec;
-                                item.Bitrate = cached.Bitrate;
-                                item.IsOnline = true; // Cached implies success
-                                item.IsHdr = cached.IsHdr;
+                                item.ApplyProbeData(cached); // Modernized batch applier
                                 item.IsProbing = false;
-                                item.IsLoading = false;
                             });
-                            continue; // Valid cache hit: Process next item IMMEDIATELY (No Delay)
+                            continue;
                         }
 
-                        // Process (This takes ~0.5s - 1.5s)
-                        var result = await Services.StreamProberService.Instance.ProbeAsync(item.StreamId, item.StreamUrl, ct);
+                        var result = await Services.StreamProberService.Instance.ProbeAsync(item.StreamId, item.StreamUrl, null, ct);
 
-                        // BATCHED: All property updates in single DispatcherQueue call + IsLoading suppress
-                        DispatcherQueue.TryEnqueue(() =>
+                        if (result != null)
                         {
-                            item.IsLoading = true;
-                            item.Resolution = result.Resolution;
-                            item.Fps = result.Fps;
-                            item.Codec = result.Codec;
-                            item.Bitrate = result.Bitrate;
-                            item.IsOnline = result.Success;
-                            item.IsHdr = result.IsHdr;
-                            item.IsProbing = false;
-                            item.IsLoading = false;
-                        });
-
-                        // Small delay only for REAL probes to prevent CPU choking
-                        await Task.Delay(250, ct);
-                    }
-                    catch
-                    {
-                        DispatcherQueue.TryEnqueue(() =>
+                            DispatcherQueue.TryEnqueue(() =>
+                            {
+                                item.ApplyProbeData(result);
+                                item.IsProbing = false;
+                            });
+                        }
+                        else
                         {
-                            item.IsProbing = false;
-                            item.IsLoading = false;
-                        });
+                            DispatcherQueue.TryEnqueue(() => item.IsProbing = false);
+                        }
                     }
-                }
-                else
-                {
-                    // Queue empty, sleep for a bit
-                    try { await Task.Delay(1000, ct); } catch { break; }
+                    catch (Exception ex) { AppLogger.Warn($"[Probing] Failed for {item.Name}: {ex.Message}"); }
                 }
             }
         }
+
 
         private async Task ShowMessageDialog(string title, string content)
         {
@@ -1555,9 +1631,14 @@ namespace ModernIPTVPlayer
 
         private async void RefreshButton_Click(object sender, RoutedEventArgs e)
         {
+            // PROACTIVE DISPOSAL: Release MMF before re-fetching
+            if (_allChannels is IDisposable oldList) oldList.Dispose();
+
             // Reload Data - Forcing network fetch
             _allCategories = Array.Empty<LiveCategory>();
             _allChannels = Array.Empty<LiveStream>();
+            ChannelRepeater.ItemsSource = null; // Force element clearing
+            VisibleChannels.Clear();
             
             if (_loginInfo != null)
             {
@@ -1574,6 +1655,36 @@ namespace ModernIPTVPlayer
 
 
 
+        private async void AdvancedInfo_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is MenuFlyoutItem menu && menu.Tag is LiveStream stream)
+            {
+                if (stream.IsProbing) return;
+
+                try
+                {
+                    // 1. Prepare UI
+                    stream.IsProbing = true;
+                    StreamInfoOverlay.Visibility = Visibility.Visible;
+                    StreamInfoOverlay.Tag = stream.StreamId; // Store for the event handler
+
+                    // 2. Start Progressive Probe inside the overlay
+                    await StreamInfoOverlay.ShowAsync(stream.StreamId, stream.StreamUrl);
+                    
+                    // Final refresh
+                    stream.NotifyTechnicalUpdate();
+                }
+                catch (Exception ex)
+                {
+                    CacheLogger.Error(CacheLogger.Category.Probe, "Advanced Info Trigger Failed", ex.Message);
+                }
+                finally
+                {
+                    stream.IsProbing = false;
+                }
+            }
+        }
+
         private async void CheckQuality_Click(object sender, RoutedEventArgs e)
         {
             if (sender is MenuFlyoutItem item && item.Tag is LiveStream stream)
@@ -1583,6 +1694,7 @@ namespace ModernIPTVPlayer
                 try
                 {
                     stream.IsProbing = true;
+                    // Standard probe (no overlay)
                     var result = await Services.StreamProberService.Instance.ProbeAsync(stream.StreamId, stream.StreamUrl, ct: default);
                     
                     stream.Resolution = result.Resolution;
@@ -1634,6 +1746,46 @@ namespace ModernIPTVPlayer
         {
             Frame.Navigate(typeof(LoginPage));
         }
+
+        private void Page_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            UpdateViewportCapacities();
+        }
+
+        /// <summary>
+        /// PINNACLE: Dynamic Viewport-Aware Capacity Tuning.
+        /// Calculates how many items are visible and adjusts caches accordingly.
+        /// Prevents "Magic Number" bottlenecks on 4K or ultra-wide setups.
+        /// </summary>
+        private void UpdateViewportCapacities()
+        {
+            if (ChannelScrollViewer == null) return;
+
+            double width = ChannelScrollViewer.ActualWidth;
+            double height = ChannelScrollViewer.ActualHeight;
+
+            if (width <= 0 || height <= 0) return;
+
+            // XAML Constants: MinItemWidth=300, ItemHeight=68
+            int cols = (int)Math.Max(1, width / 300);
+            int rows = (int)Math.Max(1, height / 68);
+
+            int visibleCount = cols * rows;
+            
+            // Multiplier = 3x safety margin (Visible + Upper Buffer + Lower Buffer)
+            int dynamicCapacity = Math.Max(150, visibleCount * 3);
+
+            // Update Global Converter Capacity
+            ChannelIconConverter.MaxCacheSize = dynamicCapacity;
+
+            // Update Virtual List Flyweight Capacity
+            if (_allChannels is VirtualLiveList vList)
+            {
+                vList.MaxCacheItems = dynamicCapacity;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[Pinnacle] Dynamic Capacity Tuned: {dynamicCapacity} (Visible: {visibleCount})");
+        }
     }
 
     // ==========================================
@@ -1641,37 +1793,32 @@ namespace ModernIPTVPlayer
     // Converts channel icon URL to BitmapImage with DecodePixelWidth=48.
     // Prevents full-resolution image loading for 48x48 display area.
     // ==========================================
+    /// <summary>
+    /// SLIDING WINDOW ICON MANAGER
+    /// Implements a dynamic LRU (Least Recently Used) cache to keep only visible 
+    /// and near-visible icons in RAM. Automatically scales with window size.
+    /// </summary>
     [Microsoft.UI.Xaml.Data.Bindable]
     public class ChannelIconConverter : Microsoft.UI.Xaml.Data.IValueConverter
     {
-        private static readonly ConcurrentDictionary<string, BitmapImage> _cache = new();
-        private const int MAX_CACHE_SIZE = 500;
+        /// <summary>
+        /// Dynamic capacity based on window/viewport size. 
+        /// Updated by LiveTVPage.SizeChanged.
+        /// </summary>
+        public static int MaxCacheSize { get; set; } = 150; 
 
         public object Convert(object value, Type targetType, object parameter, string language)
         {
             var url = value as string;
             if (string.IsNullOrEmpty(url)) return null;
 
-            if (_cache.TryGetValue(url, out var cached)) return cached;
-
-            try
-            {
-                var bitmap = new BitmapImage();
-                bitmap.DecodePixelWidth = 48; // Matches the 48x48 Border in the template
-                bitmap.DecodePixelType = DecodePixelType.Logical;
-                bitmap.UriSource = new Uri(url);
-
-                if (_cache.Count > MAX_CACHE_SIZE) _cache.Clear();
-                _cache.TryAdd(url, bitmap);
-                return bitmap;
-            }
-            catch { return null; }
+            // PINNACLE: Centralized DPI-Aware Decoding Engine
+            // This returns a shell immediately and loads the content on the next UI cycle
+            // to ensure absolute smoothness during rapid scrolls.
+            return SharedImageManager.GetOptimizedImage(url, 48, 48, App.MainWindow?.Content?.XamlRoot);
         }
 
-        public object ConvertBack(object value, Type targetType, object parameter, string language)
-        {
-            throw new NotImplementedException();
-        }
+        public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotImplementedException();
     }
 }
 

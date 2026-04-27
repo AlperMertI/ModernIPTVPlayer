@@ -131,6 +131,7 @@ namespace ModernIPTVPlayer
         private long _activeNativePlayerSessionId = 0;
         private readonly System.Threading.Lock _nativeTeardownLock = new();
         private Task _nativeTeardownTask = Task.CompletedTask;
+        private MemoryTelemetryService.Snapshot? PlayerMemoryBaseline { get; set; }
         
         // Auto-Hide Logic
         private DispatcherTimer? _cursorTimer;
@@ -360,11 +361,6 @@ namespace ModernIPTVPlayer
                 // [LEAK_HUNT] Memory tracking every 10 seconds (Improved labels)
                 if (DateTime.Now.Second % 10 == 0)
                 {
-                    var proc = System.Diagnostics.Process.GetCurrentProcess();
-                    long managedHeap = GC.GetTotalMemory(false);
-                    long cumulativeAlloc = AppDomain.CurrentDomain.MonitoringTotalAllocatedMemorySize;
-                    Debug.WriteLine($"[MEM_DEBUG] WS={proc.WorkingSet64/1024/1024}MB | Private={proc.PrivateMemorySize64/1024/1024}MB | Heap={managedHeap/1024/1024}MB | Cumulative_Alloc={cumulativeAlloc/1024/1024}MB");
-
                     // Periodic telemetry that isn't event-based or high frequency (container specs)
                     try {
                         if (_mpvPlayer != null)
@@ -1063,7 +1059,14 @@ namespace ModernIPTVPlayer
 
                 if (_navArgs != null && int.TryParse(_navArgs.Id, out int streamId))
                 {
-                    Services.ProbeCacheService.Instance.Update(streamId, _cachedResolution, simpleFps, _cachedCodec, bitrate, isHdr);
+                    Services.ProbeCacheService.Instance.Update(streamId, new Services.ProbeData 
+                    { 
+                        Resolution = _cachedResolution, 
+                        Fps = simpleFps, 
+                        Codec = _cachedCodec, 
+                        Bitrate = bitrate, 
+                        IsHdr = isHdr 
+                    });
                     Debug.WriteLine($"[PlayerPage] Metadata Updated in Global Cache for ID {streamId} ({_cachedResolution})");
                 }
             }
@@ -1265,6 +1268,7 @@ namespace ModernIPTVPlayer
         {
 
             base.OnNavigatedTo(e);
+            BeginPlayerMemoryTrace("ctor");
             _startupStopwatch = Stopwatch.StartNew();
 
             if (e.Parameter is string url)
@@ -1333,6 +1337,23 @@ namespace ModernIPTVPlayer
         }
 
         private bool IsNativeTeardownRequested => System.Threading.Volatile.Read(ref _nativeTeardownState) != 0;
+
+        private void BeginPlayerMemoryTrace(string stage)
+        {
+            PlayerMemoryBaseline = MemoryTelemetryService.LogCheckpoint($"[Memory] Player.{stage}", "session-start");
+        }
+
+        private string BuildPlayerMemoryTraceDetail(string stage, string extra = "")
+        {
+            var detail = $"memSession=1 stage={stage} firstMpvSession=True";
+            if (_mpvPlayer != null) detail += $" liveMpv=1 eventLoops=1";
+            if (_nativeMediaPlayer != null) detail += $" d3dLiveControls=1 d3dLiveDevices=1 d3dLiveSwapChains=1 d3dLiveBackBuffers=1";
+            if (!string.IsNullOrEmpty(extra)) detail += $" {extra}";
+            return detail;
+        }
+
+        private long _currentNativeSessionId = 0;
+        private System.Threading.CancellationTokenSource? _backgroundTasksCts;
 
         private long CurrentNativeSessionId => System.Threading.Interlocked.Read(ref _nativeSessionId);
 
@@ -1496,10 +1517,14 @@ namespace ModernIPTVPlayer
             // 1. Stop timer IMMEDIATELY
             _statsTimer?.Stop();
             _logoLoadingTimer?.Stop();
+            _backgroundTasksCts?.Cancel();
+            _backgroundTasksCts?.Dispose();
+            _backgroundTasksCts = null;
             StopCursorTimer();
             if (_isCursorHidden) { SetCursorVisible(true); }
             RemoveCursorHook();
             _seekDebounceTimer?.Stop();
+            _resizeDebounceTimer?.Stop();
             _isPageLoaded = false;
             
             // Save Progress
@@ -1530,6 +1555,10 @@ namespace ModernIPTVPlayer
                     if (PlayerContainer != null && PlayerContainer.Children.Contains(_mpvPlayer))
                         PlayerContainer.Children.Remove(_mpvPlayer);
                 } catch { }
+                MemoryTelemetryService.LogCheckpoint(
+                    "Player.OnNavigatedFrom.after-visual-detach",
+                    BuildPlayerMemoryTraceDetail("after-visual-detach", $"children={PlayerContainer?.Children?.Count ?? -1}"),
+                    PlayerMemoryBaseline);
 
                 if (_isHandoff)
                 {
@@ -1550,15 +1579,49 @@ namespace ModernIPTVPlayer
                         // [UI_PERF] Offload CleanupAsync to background thread
                         // This allows navigation to proceed instantly without waiting for libmpv shutdown
                         var playerToCleanup = _mpvPlayer;
+                        var playerWeakRef = new WeakReference(playerToCleanup);
+                        playerToCleanup.PropertyChanged -= OnMpvPropertyChanged;
                         _mpvPlayer = null; // Nullify immediately to stop all UI-thread interactions
+                        MemoryTelemetryService.LogCheckpoint(
+                            "Player.OnNavigatedFrom.cleanup-queued",
+                            BuildPlayerMemoryTraceDetail("cleanup-queued", $"mpvAlive={playerWeakRef.IsAlive}"),
+                            PlayerMemoryBaseline);
                         
                         _ = Task.Run(async () => 
                         {
                             try 
                             {
                                 Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Background Cleanup STARTED");
+                                
+                                // Kill ALL active proxy requests.
+                                Services.StreamProxyService.Instance.StopAllRequests();
+                                _currentNativePlaybackUrl = null;
+
                                 await playerToCleanup.CleanupAsync();
-                                playerToCleanup.PropertyChanged -= OnMpvPropertyChanged;
+                                playerToCleanup = null;
+                                MemoryTelemetryService.ForceFullCollectionAndLog(
+                                    "Player.cleanup.after-gc",
+                                    BuildPlayerMemoryTraceDetail($"after-gc", $"mpvAlive={playerWeakRef.IsAlive} proxyTasks={Services.StreamProxyService.ActiveTaskCount}"),
+                                    PlayerMemoryBaseline);
+                                _ = Task.Run(async () =>
+                                {
+                                    try
+                                    {
+                                        await Task.Delay(2000);
+                                        MemoryTelemetryService.ForceFullCollectionAndLog(
+                                            "Player.cleanup.delayed-2s",
+                                            BuildPlayerMemoryTraceDetail($"delayed-2s", $"mpvAlive={playerWeakRef.IsAlive} proxyTasks={Services.StreamProxyService.ActiveTaskCount}"),
+                                            PlayerMemoryBaseline);
+
+                                        await Task.Delay(8000);
+                                        // [FINAL_CLEANUP] One last forced compaction to ensure native driver threads/buffers are evicted
+                                        MemoryTelemetryService.ForceFullCollectionAndLog(
+                                            "Player.cleanup.delayed-10s",
+                                            BuildPlayerMemoryTraceDetail($"delayed-10s", $"mpvAlive={playerWeakRef.IsAlive} proxyTasks={Services.StreamProxyService.ActiveTaskCount}"),
+                                            PlayerMemoryBaseline);
+                                    }
+                                    catch { }
+                                });
                                 Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Background Cleanup COMPLETED");
                             }
                             catch (Exception ex) 
@@ -1569,13 +1632,24 @@ namespace ModernIPTVPlayer
                     }
                     catch (Exception ex) { Debug.WriteLine($"[LIFECYCLE] Cleanup Setup Error: {ex}"); }
                 }
-                _mpvPlayer = null;
             }
             else
             {
                 BeginNativeTeardown(collapseNativeSurface: false, reason: "navigation");
             }
 
+            // 3. Cleanup Native Player
+            if (_nativeMediaPlayer != null)
+            {
+                try
+                {
+                    Debug.WriteLine("[LIFECYCLE] Disposing Native MediaPlayer...");
+                    _nativeMediaPlayer.Source = null;
+                    _nativeMediaPlayer.Dispose();
+                    _nativeMediaPlayer = null;
+                }
+                catch { }
+            }
         }
 
         private async Task ShowMessageDialog(string title, string content)
@@ -2482,6 +2556,13 @@ namespace ModernIPTVPlayer
                     else
                     {
                         LogPlayerTrace($"[PlayerPage] AdaptiveMediaSource failed ({adaptiveResult.Status}); falling back to Header-Aware Local Proxy...");
+                        // [LEAK_FIX] Stop previous proxy session before starting a new one
+                        if (!string.IsNullOrEmpty(_currentNativePlaybackUrl))
+                        {
+                            Services.StreamProxyService.Instance.StopRequest(_currentNativePlaybackUrl);
+                            _currentNativePlaybackUrl = null;
+                        }
+
                         string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString());
                         var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(proxyUrl));
                         var item = new Windows.Media.Playback.MediaPlaybackItem(source);
@@ -2496,6 +2577,13 @@ namespace ModernIPTVPlayer
                     LogPlayerTrace("[PlayerPage] Direct live/TS URL detected; using Header-Aware Local Proxy immediately.");
                     LogStartupTiming("Native proxy path");
                     LogLaunchTiming("Native proxy path");
+                    // [LEAK_FIX] Stop previous proxy session before starting a new one
+                    if (!string.IsNullOrEmpty(_currentNativePlaybackUrl))
+                    {
+                        Services.StreamProxyService.Instance.StopRequest(_currentNativePlaybackUrl);
+                        _currentNativePlaybackUrl = null;
+                    }
+
                     string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString());
                     var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(proxyUrl));
                     var item = new Windows.Media.Playback.MediaPlaybackItem(source);
@@ -6361,11 +6449,21 @@ namespace ModernIPTVPlayer
                 if (url.Contains("127.0.0.1") || url.Contains("localhost"))
                     return;
 
+                // [LEAK_FIX] Fully dispose previous CTS to ensure background task threads are released
+                if (_backgroundTasksCts != null)
+                {
+                    try { _backgroundTasksCts.Cancel(); } catch { }
+                    try { _backgroundTasksCts.Dispose(); } catch { }
+                }
+                _backgroundTasksCts = new System.Threading.CancellationTokenSource();
+                var ct = _backgroundTasksCts.Token;
+
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
+                using var linkedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
                 using var response = await HttpHelper.Client.SendAsync(
-                    request, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
+                    request, HttpCompletionOption.ResponseHeadersRead, linkedCts.Token);
 
                 var contentType = response.Content.Headers.ContentType?.MediaType;
 

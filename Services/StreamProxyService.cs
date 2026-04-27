@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Diagnostics;
 using System.Collections.Generic;
@@ -31,6 +32,9 @@ namespace ModernIPTVPlayer.Services
         private readonly HttpClient _httpClient;
         private readonly int _port;
         private bool _isRunning;
+        private static int _activeTaskCount = 0;
+        public static int ActiveTaskCount => _activeTaskCount;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, CancellationTokenSource> _activeRequests = new();
 
         private StreamProxyService()
         {
@@ -77,9 +81,49 @@ namespace ModernIPTVPlayer.Services
         public string GetProxyUrl(string targetUrl)
         {
             if (string.IsNullOrEmpty(targetUrl)) return null;
-            // Use URI escaping instead of HttpUtility for WinUI 3 compatibility
+            
+            var sessionId = Guid.NewGuid().ToString();
             var encodedUrl = Uri.EscapeDataString(targetUrl);
-            return $"http://127.0.0.1:{_port}/stream/?url={encodedUrl}";
+            return $"http://127.0.0.1:{_port}/stream/{sessionId}/?url={encodedUrl}";
+        }
+
+        public void StopAllRequests()
+        {
+            var sessions = _activeRequests.Keys.ToList();
+            foreach (var session in sessions)
+            {
+                if (_activeRequests.TryRemove(session, out var cts))
+                {
+                    try { cts.Cancel(); cts.Dispose(); } catch { }
+                }
+            }
+        }
+
+        public void StopRequest(string proxyUrl)
+        {
+            if (string.IsNullOrEmpty(proxyUrl)) return;
+            
+            try
+            {
+                // Extract session ID from the proxy URL
+                // Format: http://127.0.0.1:PORT/stream/{sessionId}/?url=...
+                var uri = new Uri(proxyUrl);
+                var segments = uri.Segments;
+                if (segments.Length >= 3 && segments[1].Equals("stream/", StringComparison.OrdinalIgnoreCase))
+                {
+                    var sessionId = segments[2].TrimEnd('/');
+                    if (_activeRequests.TryRemove(sessionId, out var cts))
+                    {
+                        cts.Cancel();
+                        cts.Dispose();
+                        Debug.WriteLine($"[StreamProxy] Session {sessionId} CANCELLED by request.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[StreamProxy] Failed to stop request: {ex.Message}");
+            }
         }
 
         private async Task ListenLoop()
@@ -89,7 +133,25 @@ namespace ModernIPTVPlayer.Services
                 try
                 {
                     var context = await _listener.GetContextAsync();
-                    _ = Task.Run(() => HandleRequest(context));
+                    
+                    // Extract session ID from path
+                    var segments = context.Request.Url.Segments;
+                    string sessionId = null;
+                    if (segments.Length >= 3 && segments[1].Equals("stream/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        sessionId = segments[2].TrimEnd('/');
+                    }
+
+                Interlocked.Increment(ref _activeTaskCount);
+                _ = Task.Run(async () => 
+                {
+                    try {
+                        await HandleRequest(context, sessionId);
+                    }
+                    finally {
+                        Interlocked.Decrement(ref _activeTaskCount);
+                    }
+                });
                 }
                 catch (Exception ex)
                 {
@@ -98,12 +160,21 @@ namespace ModernIPTVPlayer.Services
             }
         }
 
-        private async Task HandleRequest(HttpListenerContext context)
+        private async Task HandleRequest(HttpListenerContext context, string sessionId)
         {
             Stopwatch sw = Stopwatch.StartNew();
             string targetUrl = "Unknown";
+            CancellationTokenSource? cts = null;
+
+            if (!string.IsNullOrEmpty(sessionId))
+            {
+                cts = new CancellationTokenSource();
+                _activeRequests[sessionId] = cts;
+            }
+
             try
             {
+                var ct = cts?.Token ?? default;
                 // Robust URL extraction using QueryString collection
                 targetUrl = context.Request.QueryString["url"];
                 if (string.IsNullOrEmpty(targetUrl))
@@ -114,7 +185,7 @@ namespace ModernIPTVPlayer.Services
                     return;
                 }
 
-                Debug.WriteLine($"[StreamProxy] New Request: {targetUrl}");
+                // Debug.WriteLine($"[StreamProxy] New Request: {targetUrl}");
                 ColorInfo = null;
 
                 using (var request = new HttpRequestMessage(HttpMethod.Get, targetUrl))
@@ -124,9 +195,9 @@ namespace ModernIPTVPlayer.Services
                         request.Headers.Add("Range", context.Request.Headers["Range"]);
                     }
 
-                    using (var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
+                    using (var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct))
                     {
-                        Debug.WriteLine($"[StreamProxy] Provider Response: {response.StatusCode} (Fetched in {sw.ElapsedMilliseconds}ms)");
+                        // Debug.WriteLine($"[StreamProxy] Provider Response: {response.StatusCode} (Fetched in {sw.ElapsedMilliseconds}ms)");
 
                         context.Response.StatusCode = (int)response.StatusCode;
 
@@ -161,7 +232,7 @@ namespace ModernIPTVPlayer.Services
                             byte[] buffer = new byte[128 * 1024];
                             int bytesRead;
 
-                            while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                            while ((bytesRead = await responseStream.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
                             {
                                 int currentOffset = 0;
                                 int currentLength = bytesRead;
@@ -294,11 +365,11 @@ namespace ModernIPTVPlayer.Services
                                 int bytesToOutput = packetsAvailable * 188;
                                 if (bytesToOutput > 0)
                                 {
-                                    await outputStream.WriteAsync(toProcess, 0, bytesToOutput);
+                                    await outputStream.WriteAsync(toProcess, 0, bytesToOutput, ct);
                                     if (!firstBytesForwarded)
                                     {
                                         firstBytesForwarded = true;
-                                        Debug.WriteLine($"[StreamProxy] First bytes forwarded in {sw.ElapsedMilliseconds}ms");
+                                        // Debug.WriteLine($"[StreamProxy] First bytes forwarded in {sw.ElapsedMilliseconds}ms");
                                     }
                                     totalBytesPiped += bytesToOutput;
                                 }
@@ -311,8 +382,17 @@ namespace ModernIPTVPlayer.Services
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[StreamProxy] CRITICAL ERROR for {targetUrl}: {ex.Message}");
+                if (ex is not OperationCanceledException)
+                    Debug.WriteLine($"[StreamProxy] CRITICAL ERROR for {targetUrl}: {ex.Message}");
                 try { context.Response.Abort(); } catch { }
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(sessionId))
+                {
+                    _activeRequests.TryRemove(sessionId, out _);
+                    cts?.Dispose();
+                }
             }
         }
 
@@ -338,6 +418,12 @@ namespace ModernIPTVPlayer.Services
         public void Dispose()
         {
             _isRunning = false;
+            foreach (var cts in _activeRequests.Values)
+            {
+                try { cts.Cancel(); cts.Dispose(); } catch { }
+            }
+            _activeRequests.Clear();
+
             try { _listener.Stop(); } catch { }
             _httpClient?.Dispose();
         }

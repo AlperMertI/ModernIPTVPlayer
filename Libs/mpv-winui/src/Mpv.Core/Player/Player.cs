@@ -26,29 +26,42 @@ public sealed partial class Player
             return;
         }
 
+        // Stop playback and FORCE detach from the video output to release driver threads.
+        // This is a critical step to ensure the D3D11 device reference count drops to 0.
+        try { await Client.ExecuteAsync(new[] { "set", "vo", "null" }); } catch { }
+        try { await Client.ExecuteAsync("stop"); } catch { }
+        try { await Client.ExecuteAsync("playlist-clear"); } catch { }
+        try { Client.SetProperty("cache", false); } catch { }
+
         _isDisposed = true;
+        try { _eventLoopCancellationTokenSource?.Cancel(); } catch { }
 
-        // 1. Send quit command to trigger Shutdown event in the event loop
-        try { Client.SetProperty("quit", true); } catch { }
-
-        // 2. Wake up event loop so it processes the quit command
+        // 1. Wake up event loop so it exits promptly.
         try { Client.Wakeup(); } catch { }
 
-        // 3. Wait for event loop task to finish
+        // 2. Wait for event loop task to finish.
         if (_eventLoopTask != null)
         {
             try 
             {
                 var timeoutTask = Task.Delay(1000);
-                var completedTask = await Task.WhenAny(_eventLoopTask, timeoutTask);
+                await Task.WhenAny(_eventLoopTask, timeoutTask);
             } 
             catch { }
         }
 
-        // 4. Clean up native resources
+        try { _eventLoopCancellationTokenSource?.Dispose(); } catch { }
+        _eventLoopCancellationTokenSource = null;
+        _eventLoopTask = null;
+
+        // 3. Clean up native resources.
         try { Client.UnObserveProperties(); } catch { }
         
-        try { Client.WaitEvent(0); } catch { }
+        // [GRACEFUL_QUIT] Tell libmpv to stop internal threads before we force destroy it
+        try { await Client.ExecuteAsync("quit"); } catch { }
+        
+        // [DRAIN_EVENTS] Flush any remaining native events
+        try { for(int i=0; i<5; i++) Client.WaitEvent(0); } catch { }
 
         if (RenderContext != null)
         {
@@ -61,6 +74,8 @@ public sealed partial class Player
 #if DEBUG
                 Debug.WriteLine("[PLAYER] RenderContext destroyed.");
 #endif
+                RenderContext = null;
+                LogCoreMemory("dispose.after-render-context-destroy");
             } 
             catch (Exception ex)
             {
@@ -69,6 +84,7 @@ public sealed partial class Player
         }
         
         await Client.DestroyAsync();
+        LogCoreMemory("dispose.after-client-destroy");
     }
 
     public async Task TerminateAsync()
@@ -128,8 +144,6 @@ public sealed partial class Player
         {
             return;
         }
-
-        Debug.WriteLine($"[LOG] InitializeAsync (API: {api}) - Using Persistent D3D11 Handles (Dev: {device:X})");
         
         // 1. Core Pre-Init Options
         Client.SetOption("load-scripts", !skipScripts);
@@ -144,7 +158,10 @@ public sealed partial class Player
         Client.SetOption("gpu-api", "d3d11");
         Client.SetOption("gpu-context", "d3d11");
         Client.SetOption("d3d11-output-mode", "composition");
-        Client.SetOption("d3d11-adapter", adapterName ?? "auto");
+        if (!string.IsNullOrEmpty(adapterName) && adapterName != "auto")
+        {
+            Client.SetOption("d3d11-adapter", adapterName);
+        }
         Client.SetOption("d3d11-flip", "yes");
         
         await Client.InitializeAsync();
@@ -182,7 +199,6 @@ public sealed partial class Player
         }
         
         RerunEventLoop();
-        RerunEventLoop();
 
         // [STRICT_RENDERER_INIT] 
         // We must strictly separate legacy (dxgi) and modern (gpu-next/d3d11) params.
@@ -194,45 +210,43 @@ public sealed partial class Player
         bool isModern = api != "dxgi";
         string internalApiName = isModern ? "d3d11" : "dxgi";
 
-        var apiStringPtr = Marshal.StringToCoTaskMemUTF8(internalApiName);
-        var advControlPtr = Marshal.AllocHGlobal(sizeof(int));
-        Marshal.WriteInt32(advControlPtr, 1); 
-
-        parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = apiStringPtr });
-        parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.AdvancedControl, Data = advControlPtr });
-
+        IntPtr apiStringPtr = IntPtr.Zero;
+        IntPtr advControlPtr = IntPtr.Zero;
+        IntPtr cspPtr = IntPtr.Zero;
         IntPtr dxgiParamsPtr = IntPtr.Zero;
-        IntPtr d3d11DevPtr = IntPtr.Zero;
-        IntPtr d3d11CtxPtr = IntPtr.Zero;
-
-        if (isModern)
-        {
-            // Modern Path (gpu-next/libplacebo)
-            // PASS ID3D11Device* (Type 24) and ID3D11DeviceContext* (Type 25) directly.
-            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.D3D11Device, Data = device });
-            parameters.Add(new MpvRenderParam { Type = (Enums.Render.MpvRenderParamType)25, Data = context });
-            
-            // Pass DXGI colorspace for proper HDR tone mapping (Type 27)
-            var cspPtr = Marshal.AllocHGlobal(sizeof(int));
-            Marshal.WriteInt32(cspPtr, colorspace);
-            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIColorspace, Data = cspPtr });
-            
-            Debug.WriteLine($"[MpvCore] Renderer Init: FORCING MODERN (gpu-next) via '{internalApiName}' | DevPtr: {device:X} | Colorspace: {colorspace}");
-        }
-        else
-        {
-            // Legacy Path (vo_gpu/dxgi)
-            // MUST pass mpv_dxgi_init_params* (Type 21).
-            dxgiParamsPtr = Marshal.AllocHGlobal(16);
-            Marshal.WriteIntPtr(dxgiParamsPtr, device);
-            Marshal.WriteIntPtr(dxgiParamsPtr + 8, context);
-            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIInitParams, Data = dxgiParamsPtr });
-            Debug.WriteLine($"[MpvCore] Renderer Init: USING LEGACY (vo_gpu/dxgi) via '{internalApiName}'");
-        }
-
-        parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero });
 
         try {
+            apiStringPtr = Marshal.StringToCoTaskMemUTF8(internalApiName);
+            advControlPtr = Marshal.AllocHGlobal(sizeof(int));
+            Marshal.WriteInt32(advControlPtr, 1); 
+
+            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.ApiType, Data = apiStringPtr });
+            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.AdvancedControl, Data = advControlPtr });
+
+            if (isModern)
+            {
+                // Modern Path (gpu-next/libplacebo)
+                // PASS ID3D11Device* (Type 24) and ID3D11DeviceContext* (Type 25) directly.
+                parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.D3D11Device, Data = device });
+                parameters.Add(new MpvRenderParam { Type = (Enums.Render.MpvRenderParamType)25, Data = context });
+                
+                // Pass DXGI colorspace for proper HDR tone mapping (Type 27)
+                cspPtr = Marshal.AllocHGlobal(sizeof(int));
+                Marshal.WriteInt32(cspPtr, colorspace);
+                parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIColorspace, Data = cspPtr });
+            }
+            else
+            {
+                // Legacy Path (vo_gpu/dxgi)
+                // MUST pass mpv_dxgi_init_params* (Type 21).
+                dxgiParamsPtr = Marshal.AllocHGlobal(16);
+                Marshal.WriteIntPtr(dxgiParamsPtr, device);
+                Marshal.WriteIntPtr(dxgiParamsPtr + 8, context);
+                parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.DXGIInitParams, Data = dxgiParamsPtr });
+            }
+
+            parameters.Add(new MpvRenderParam { Type = Enums.Render.MpvRenderParamType.Invalid, Data = IntPtr.Zero });
+
             // [DETECTIVE_MODE] 
             // Force gpu-api to d3d11 before initializing the render context.
             if (isModern)
@@ -242,21 +256,14 @@ public sealed partial class Player
             }
             
             RenderContext = new MpvRenderContextNative(Client.Handle, parameters.ToArray());
-            
-            // Post-Init Check
-            var actualVo = Client.GetPropertyToString("vo");
-            Debug.WriteLine($"[DETECTIVE] RenderContext created for {internalApiName}. Actual Core VO: {actualVo}");
-            
-            if (isModern && actualVo != "libmpv") {
-                 Debug.WriteLine($"[DETECTIVE_WARNING] Modern renderer (gpu-next) might have failed! core vo is {actualVo}");
-            }
         } catch (Exception ex) {
             Debug.WriteLine($"[FATAL] {internalApiName} failed: {ex.Message}");
             throw;
         } finally {
             // Cleanup native memory
-            Marshal.FreeCoTaskMem(apiStringPtr);
-            Marshal.FreeHGlobal(advControlPtr);
+            if (apiStringPtr != IntPtr.Zero) Marshal.FreeCoTaskMem(apiStringPtr);
+            if (advControlPtr != IntPtr.Zero) Marshal.FreeHGlobal(advControlPtr);
+            if (cspPtr != IntPtr.Zero) Marshal.FreeHGlobal(cspPtr);
             if (dxgiParamsPtr != IntPtr.Zero) Marshal.FreeHGlobal(dxgiParamsPtr);
         }
     }
@@ -329,21 +336,29 @@ public sealed partial class Player
     private static int _rerunCount = 0;
     public void RerunEventLoop()
     {
-        Debug.WriteLine($"[LEAK_DEBUG] RerunEventLoop called #{++_rerunCount} | StackTrace: {new System.Diagnostics.StackTrace(1, false)}");
-
-        if (_eventLoopCancellationTokenSource != null)
+        if (_eventLoopTask != null && !_eventLoopTask.IsCompleted)
         {
-            _eventLoopCancellationTokenSource.Cancel();
-            _eventLoopCancellationTokenSource.Dispose();
+            Client.UnObserveProperties();
+            Client.ObserveProperty(PauseProperty, Enums.Client.MpvFormat.Flag);
+            Client.ObserveProperty(DurationProperty, Enums.Client.MpvFormat.Int64);
+            Client.ObserveProperty(PositionProperty, Enums.Client.MpvFormat.Int64);
+            Client.ObserveProperty(PausedForCacheProperty, Enums.Client.MpvFormat.Flag);
+            return;
         }
 
+        _eventLoopCancellationTokenSource?.Dispose();
         Client.UnObserveProperties();
         _eventLoopCancellationTokenSource = new CancellationTokenSource();
-        _eventLoopTask = Task.Run(EventLoop, _eventLoopCancellationTokenSource.Token);
+        var token = _eventLoopCancellationTokenSource.Token;
+        _eventLoopTask = Task.Run(() => EventLoop(token), token);
         Client.ObserveProperty(PauseProperty, Enums.Client.MpvFormat.Flag);
         Client.ObserveProperty(DurationProperty, Enums.Client.MpvFormat.Int64);
         Client.ObserveProperty(PositionProperty, Enums.Client.MpvFormat.Int64);
         Client.ObserveProperty(PausedForCacheProperty, Enums.Client.MpvFormat.Flag);
+    }
+
+    private static void LogCoreMemory(string stage)
+    {
     }
 
     public bool IsMediaLoaded()

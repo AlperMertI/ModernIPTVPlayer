@@ -18,16 +18,19 @@ namespace ModernIPTVPlayer.Helpers
     public class VirtualVodList : ReadOnlyVirtualListBase<VodStream>, IDisposable, IVirtualStreamList
     {
         private readonly BinaryCacheSession _session;
-        private readonly WeakReference<VodStream>[] _identityMap;
         private readonly int _count;
         public long Fingerprint { get; }
+
+        // PINNACLE: Dynamic LRU cache capacity to prevent memory bloat
+        private readonly ConcurrentDictionary<int, VodStream> _itemCache = new();
+        private readonly ConcurrentQueue<int> _lruQueue = new();
+        public int MaxCacheItems { get; set; } = 150; 
 
         public VirtualVodList(BinaryCacheSession session, long fingerprint = 0)
         {
             _session = session;
             _count = session.RecordCount;
             Fingerprint = fingerprint;
-            _identityMap = new WeakReference<VodStream>[_count];
         }
 
         public override int Count => _count;
@@ -84,35 +87,29 @@ namespace ModernIPTVPlayer.Helpers
             {
                 if (index < 0 || index >= _count) throw new IndexOutOfRangeException();
 
-                // 1. Identity Check (Double-Checked Locking with WeakReference)
-                var weakRef = Volatile.Read(ref _identityMap[index]);
-                if (weakRef != null && weakRef.TryGetTarget(out var existing))
+                // 1. Fast Path: Check LRU Cache
+                if (_itemCache.TryGetValue(index, out var cached)) return cached;
+
+                // 2. Slow Path: Hydrate new object (Flyweight View)
+                var stream = new VodStream();
+                if (_session.TryReadRecord<VodRecord>(index, out var record))
                 {
-                    return existing;
+                    stream.LoadFromRecord(record);
+                    stream.SetCacheSession(_session, index);
                 }
 
-                lock (_identityMap)
+                // 3. LRU Management
+                if (_itemCache.TryAdd(index, stream))
                 {
-                    weakRef = _identityMap[index];
-                    if (weakRef != null && weakRef.TryGetTarget(out var existing2))
+                    _lruQueue.Enqueue(index);
+                    while (_itemCache.Count > MaxCacheItems)
                     {
-                        return existing2;
+                        if (_lruQueue.TryDequeue(out int oldestIndex))
+                            _itemCache.TryRemove(oldestIndex, out _);
                     }
-
-                    // 2. Just-In-Time Hydration (Flyweight)
-                    var stream = new VodStream();
-                    if (_session.TryReadRecord<VodRecord>(index, out var record))
-                    {
-                        // Fixup offsets for this specific session context
-                        stream.LoadFromRecord(record);
-                        
-                        // Link stream to the session for string/poke access
-                        stream.SetCacheSession(_session, index);
-                    }
-
-                    _identityMap[index] = new WeakReference<VodStream>(stream);
-                    return stream;
                 }
+
+                return stream;
             }
         }
 

@@ -94,6 +94,7 @@ namespace ModernIPTVPlayer
         private const double TrailerDefaultWidth = 1000;
         private const double TrailerDefaultHeight = 562;
         private CancellationTokenSource _trailerCts;
+        private CancellationTokenSource? _heroCts;
 
         private string ResolveBestContentId(string? rawId)
         {
@@ -315,6 +316,10 @@ namespace ModernIPTVPlayer
                 _trailerCts?.Cancel();
                 _trailerCts?.Dispose();
                 _trailerCts = null;
+
+                _heroCts?.Cancel();
+                _heroCts?.Dispose();
+                _heroCts = null;
 
                 // 5. Unsubscribe from manual event handlers
                 this.SizeChanged -= MediaInfoPage_SizeChanged;
@@ -7330,21 +7335,12 @@ namespace ModernIPTVPlayer
                 {
                     Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "SMART PROBE: Reusing prebuffer player", url);
                     // Wait for the active player to get metadata
-                    var extracted = await Services.StreamProberService.ExtractProbeDataAsync(MediaInfoPlayer, token);
-                    probeResult = new Services.ProbeResult
-                    {
-                        Resolution = extracted.Res,
-                        Fps = extracted.Fps,
-                        Codec = extracted.Codec,
-                        Bitrate = extracted.Bitrate,
-                        IsHdr = extracted.IsHdr,
-                        Success = extracted.Success
-                    };
+                    probeResult = await Services.StreamProberService.ExtractProbeDataAsync(MediaInfoPlayer, token);
                 }
                 else
                 {
                     Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "DEDICATED PROBE: Starting prober service", url);
-                    probeResult = await Services.StreamProberService.Instance.ProbeAsync(_item.Id, url, token);
+                    probeResult = await Services.StreamProberService.Instance.ProbeAsync(_item.Id, url, progress: null, token);
                 }
 
                 if (token.IsCancellationRequested) return;
@@ -7354,7 +7350,14 @@ namespace ModernIPTVPlayer
                     // Manual cache update for SMART PROBE if needed
                     if (MediaInfoPlayer != null && _prebufferUrl == url)
                     {
-                        Services.ProbeCacheService.Instance.Update(_item.Id, probeResult.Resolution, probeResult.Fps, probeResult.Codec, probeResult.Bitrate, probeResult.IsHdr);
+                        Services.ProbeCacheService.Instance.Update(_item.Id, new Services.ProbeData 
+                        { 
+                            Resolution = probeResult.Resolution, 
+                            Fps = probeResult.Fps, 
+                            Codec = probeResult.Codec, 
+                            Bitrate = probeResult.Bitrate, 
+                            IsHdr = probeResult.IsHdr 
+                        });
                     }
 
                     var probeData = new Services.ProbeData
@@ -8144,6 +8147,12 @@ namespace ModernIPTVPlayer
             {
                 _isHeroTransitionInProgress = true;
 
+                // [PROJECT ZERO] Manage Cancellation
+                _heroCts?.Cancel();
+                _heroCts?.Dispose();
+                _heroCts = new CancellationTokenSource();
+                var ct = _heroCts.Token;
+
                 // Ensure compositor is ready
                 if (_compositor == null) EnsureHeroVisuals();
 
@@ -8165,13 +8174,15 @@ namespace ModernIPTVPlayer
 
                 openedHandler = async (s, e) =>
                 {
-                    if (isResolved) return;
+                    if (isResolved || ct.IsCancellationRequested) return;
                     isResolved = true;
 
                     // Execute custom logic while image is loaded but still invisible
                     if (onOpenedAsync != null) await onOpenedAsync(incoming);
 
                     cleanup();
+
+                    if (ct.IsCancellationRequested) return;
 
                     // Ensure it is still hidden before we start the animation
                     visualIncoming.Opacity = 0;
@@ -8198,27 +8209,20 @@ namespace ModernIPTVPlayer
 
                     // Update State
                     _isHeroImage1Active = !_isHeroImage1Active;
-                    int transitionEpoch = Volatile.Read(ref _ambienceNavigationEpoch);
-                    _ = Task.Delay(TimeSpan.FromSeconds(durationSeconds) + TimeSpan.FromMilliseconds(80)).ContinueWith(t =>
+                    
+                    // Finalize after transition
+                    _ = Task.Delay(TimeSpan.FromSeconds(durationSeconds) + TimeSpan.FromMilliseconds(80), ct).ContinueWith(t =>
                     {
+                        if (t.IsCanceled) return;
                         DispatcherQueue.TryEnqueue(() =>
                         {
-                            if (transitionEpoch != Volatile.Read(ref _ambienceNavigationEpoch))
-                            {
-                                System.Diagnostics.Debug.WriteLine(
-                                    $"[SLIDESHOW][CROSSFADE] skipped finalize because navigation changed | url={GetImageSourceUrl(incoming) ?? "<null>"}");
-                                return;
-                            }
-
                             _isHeroTransitionInProgress = false;
-                            System.Diagnostics.Debug.WriteLine(
-                                $"[SLIDESHOW][CROSSFADE] complete active={GetImageSourceUrl(GetActiveHeroImage()) ?? "<null>"} incomingOpacity={incoming.Opacity:F2} outgoingOpacity={outgoing.Opacity:F2}");
                         });
                     }, TaskScheduler.Default);
                 };
 
                 failedHandler = (s, e) => {
-                    if (isResolved) return;
+                    if (isResolved || ct.IsCancellationRequested) return;
                     isResolved = true;
                     cleanup();
                     _isHeroTransitionInProgress = false;
@@ -8227,13 +8231,11 @@ namespace ModernIPTVPlayer
 
                 incoming.ImageOpened += openedHandler;
                 incoming.ImageFailed += failedHandler;
-                // [LAZY VALIDATION] Increment index and allow natural crossfade.
-                // The ImageOpened handler (triggered by incoming.Source assignment)
-                // handles the ambience extraction and future signature deduplication.
                 incoming.Source = new BitmapImage(new Uri(imageUrl));
 
                 // Guard against hanging
-                _ = Task.Delay(10000).ContinueWith(t => {
+                _ = Task.Delay(10000, ct).ContinueWith(t => {
+                    if (t.IsCanceled) return;
                     if (!isResolved) { 
                         isResolved = true; 
                         DispatcherQueue.TryEnqueue(() => {

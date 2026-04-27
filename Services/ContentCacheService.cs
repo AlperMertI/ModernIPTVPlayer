@@ -49,8 +49,6 @@ namespace ModernIPTVPlayer.Services
         private ConcurrentDictionary<string, object> _streamListsCache = new();
 
         private CancellationTokenSource _syncCts;
-        private readonly StreamMatchIndexer _vodMatchIndex = new();
-        private readonly StreamMatchIndexer _seriesMatchIndex = new();
 
         private ConcurrentDictionary<string, byte> _pendingSaveCategories = new();
         private Timer _throttledSaveTimer;
@@ -823,9 +821,23 @@ namespace ModernIPTVPlayer.Services
                     (oldSession as IDisposable)?.Dispose();
                 }
 
-                // Atomic Swap
-                var tempFile = await folder.GetFileAsync(tempName);
-                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+                // SHADOW SWAP: Rename existing to .old, move temp to existing.
+                // This works even if the file is open (with FileShare.Delete).
+                string currentPath = Path.Combine(folder.Path, fileName);
+                string tempPath = Path.Combine(folder.Path, tempName);
+                string oldPath = currentPath + ".old";
+ 
+                try 
+                {
+                    if (File.Exists(currentPath)) File.Move(currentPath, oldPath, true);
+                    File.Move(tempPath, currentPath, true);
+                    try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { /* In use, will delete on close */ }
+                }
+                catch (IOException ex)
+                {
+                    AppLogger.Warn($"[BinarySave] Live direct move failed, attempting secondary swap: {ex.Message}");
+                    File.Copy(tempPath, currentPath, true);
+                }
             }
             catch (Exception ex) { AppLogger.Error("[BinarySave] LIVE FAILED", ex); }
         }
@@ -1728,11 +1740,16 @@ namespace ModernIPTVPlayer.Services
 
             if (record.YearOff < 0)
             {
-                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? released ?? name);
-                var stored = heap.Add(extractedYear);
+                var yearSpan = TitleHelper.ExtractYear(year.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(releaseDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(airDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(released.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(name.AsSpan());
+
+                var stored = heap.Add(yearSpan);
                 record.YearOff = stored.Off;
                 record.YearLen = stored.Len;
-                year = extractedYear;
+                if (!yearSpan.IsEmpty) year = yearSpan.ToString();
             }
 
             if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
@@ -1855,11 +1872,16 @@ namespace ModernIPTVPlayer.Services
 
             if (record.YearOff < 0)
             {
-                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? released ?? name);
-                var stored = heap.Add(extractedYear);
+                var yearSpan = TitleHelper.ExtractYear(year.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(releaseDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(airDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(released.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(name.AsSpan());
+
+                var stored = heap.Add(yearSpan);
                 record.YearOff = stored.Off;
                 record.YearLen = stored.Len;
-                year = extractedYear;
+                if (!yearSpan.IsEmpty) year = yearSpan.ToString();
             }
 
             if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
@@ -1951,10 +1973,14 @@ namespace ModernIPTVPlayer.Services
 
             if (record.YearOff < 0)
             {
-                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? name);
-                var stored = heap.Add(extractedYear);
+                var yearSpan = TitleHelper.ExtractYear(year.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(releaseDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(airDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(name.AsSpan());
+
+                var stored = heap.Add(yearSpan);
                 record.YearOff = stored.Off; record.YearLen = stored.Len;
-                year = extractedYear;
+                if (!yearSpan.IsEmpty) year = yearSpan.ToString();
             }
 
             if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r)) record.RatingScaled = (short)(r * 100);
@@ -2004,10 +2030,14 @@ namespace ModernIPTVPlayer.Services
 
             if (record.YearOff < 0)
             {
-                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? name);
-                var stored = heap.Add(extractedYear);
+                var yearSpan = TitleHelper.ExtractYear(year.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(releaseDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(airDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(name.AsSpan());
+
+                var stored = heap.Add(yearSpan);
                 record.YearOff = stored.Off; record.YearLen = stored.Len;
-                year = extractedYear;
+                if (!yearSpan.IsEmpty) year = yearSpan.ToString();
             }
 
             if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r)) record.RatingScaled = (short)(r * 100);
@@ -2122,11 +2152,15 @@ namespace ModernIPTVPlayer.Services
 
             if (record.YearOff < 0)
             {
-                string extractedYear = TitleHelper.ExtractYear(year ?? releaseDate ?? airDate ?? name);
-                var stored = heap.Add(extractedYear);
+                var yearSpan = TitleHelper.ExtractYear(year.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(releaseDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(airDate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(name.AsSpan());
+
+                var stored = heap.Add(yearSpan);
                 record.YearOff = stored.Off;
                 record.YearLen = stored.Len;
-                year = extractedYear;
+                if (!yearSpan.IsEmpty) year = yearSpan.ToString();
             }
 
             if (double.TryParse(rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
@@ -2555,10 +2589,11 @@ namespace ModernIPTVPlayer.Services
                 _currentOffset = startOffset;
             }
 
-            /// <summary>Standard managed string append. Used for calculated fields like extracted years.</summary>
-            public (int Off, int Len) Add(string? s)
+            public (int Off, int Len) Add(string? s) => Add(s.AsSpan());
+
+            public (int Off, int Len) Add(ReadOnlySpan<char> s)
             {
-                if (string.IsNullOrEmpty(s)) return (-1, 0);
+                if (s.IsEmpty) return (-1, 0);
 
                 int off = (int)_stream.Position - _currentOffset;
                 int max = Encoding.UTF8.GetMaxByteCount(s.Length);
@@ -2813,8 +2848,23 @@ namespace ModernIPTVPlayer.Services
                 string cacheKey = $"{safeId}_vod";
                 if (_streamListsCache.TryRemove(cacheKey, out var oldSession)) { (oldSession as IDisposable)?.Dispose(); }
 
-                var tempFile = await folder.GetFileAsync(tempName);
-                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+                // SHADOW SWAP: Rename existing to .old, move temp to existing.
+                // This works even if the file is open (with FileShare.Delete).
+                string currentPath = Path.Combine(folder.Path, fileName);
+                string tempPath = Path.Combine(folder.Path, tempName);
+                string oldPath = currentPath + ".old";
+
+                try 
+                {
+                    if (File.Exists(currentPath)) File.Move(currentPath, oldPath, true);
+                    File.Move(tempPath, currentPath, true);
+                    try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { /* In use, will delete on close */ }
+                }
+                catch (IOException ex)
+                {
+                    AppLogger.Warn($"[BinarySave] Direct move failed, attempting secondary swap: {ex.Message}");
+                    File.Copy(tempPath, currentPath, true);
+                }
                 atomicSwapCompleted = true;
 
                 using (var finalSession = new BinaryCacheSession(Path.Combine(folder.Path, fileName), 0, 0, 0, streams.Count, 0, readOnlySession: false))
@@ -2943,8 +2993,23 @@ namespace ModernIPTVPlayer.Services
                 string cacheKey = $"{safeId}_series";
                 if (_streamListsCache.TryRemove(cacheKey, out var oldSession)) { (oldSession as IDisposable)?.Dispose(); }
 
-                var tempFile = await folder.GetFileAsync(tempName);
-                await tempFile.MoveAsync(folder, fileName, NameCollisionOption.ReplaceExisting);
+                // SHADOW SWAP: Rename existing to .old, move temp to existing.
+                // This works even if the file is open (with FileShare.Delete).
+                string currentPath = Path.Combine(folder.Path, fileName);
+                string tempPath = Path.Combine(folder.Path, tempName);
+                string oldPath = currentPath + ".old";
+
+                try 
+                {
+                    if (File.Exists(currentPath)) File.Move(currentPath, oldPath, true);
+                    File.Move(tempPath, currentPath, true);
+                    try { if (File.Exists(oldPath)) File.Delete(oldPath); } catch { /* In use, will delete on close */ }
+                }
+                catch (IOException ex)
+                {
+                    AppLogger.Warn($"[BinarySave] Series direct move failed, attempting secondary swap: {ex.Message}");
+                    File.Copy(tempPath, currentPath, true);
+                }
                 atomicSwapCompleted = true;
 
                 using (var finalSession = new BinaryCacheSession(Path.Combine(folder.Path, fileName), 0, 0, 0, streams.Count, 0, readOnlySession: false))
@@ -3277,7 +3342,7 @@ namespace ModernIPTVPlayer.Services
             if (!string.IsNullOrEmpty(imdbId))
             {
                 // Check VOD ID Index
-                var vodIndicesFound = _vodMatchIndex.FindById(imdbId);
+                var vodIndicesFound = IptvMatchService.Instance.GetIndexer("vod").FindById(imdbId);
                 if (vodIndicesFound.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_vod", out var vodList) && vodList is VirtualVodList vvl)
                 {
                     foreach (var index in vodIndicesFound)
@@ -3287,7 +3352,7 @@ namespace ModernIPTVPlayer.Services
                 }
 
                 // Check Series ID Index
-                var serIndicesFound = _seriesMatchIndex.FindById(imdbId);
+                var serIndicesFound = IptvMatchService.Instance.GetIndexer("series").FindById(imdbId);
                 if (serIndicesFound.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_series", out var serList) && serList is VirtualSeriesList vsl)
                 {
                     foreach (var index in serIndicesFound)
@@ -3301,11 +3366,8 @@ namespace ModernIPTVPlayer.Services
             }
 
             // --- STAGE 2: TOKEN MATCHING (Alternative Fallback) ---
-            var tokens = TitleHelper.GetSignificantTokens(title);
-            if (tokens.Count == 0) return results;
-
-            // Check VOD Token Index
-            var vodIndices = _vodMatchIndex.FindByTokens(tokens);
+            // Pinnacle: Pass title directly, indexer will tokenize without allocations
+            var vodIndices = IptvMatchService.Instance.GetIndexer("vod").FindByTokens(title);
             if (vodIndices.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_vod", out var vodList2) && vodList2 is VirtualVodList vvl2)
             {
                 foreach (var index in vodIndices)
@@ -3315,7 +3377,7 @@ namespace ModernIPTVPlayer.Services
             }
 
             // Check Series Token Index
-            var serIndices = _seriesMatchIndex.FindByTokens(tokens);
+            var serIndices = IptvMatchService.Instance.GetIndexer("series").FindByTokens(title);
             if (serIndices.Length > 0 && _streamListsCache.TryGetValue($"{AppSettings.LastPlaylistId}_series", out var serList2) && serList2 is VirtualSeriesList vsl2)
             {
                 foreach (var index in serIndices)

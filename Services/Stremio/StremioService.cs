@@ -434,8 +434,17 @@ namespace ModernIPTVPlayer.Services.Stremio
                             foreach (var item in results)
                             {
                                 cancellationToken.ThrowIfCancellationRequested();
-                                string normTitle = NormalizeTitle(item.Title);
-                                var existing = allResults.FirstOrDefault(x => IsMatch(x, item, normTitle, query));
+                                string normTitle = TitleHelper.Normalize(item.Title);
+                                StremioMediaStream? existing = null;
+                                foreach (var x in allResults)
+                                {
+                                    if (IsMatch(x, item, normTitle.AsSpan(), query))
+                                    {
+                                        existing = x;
+                                        break;
+                                    }
+                                }
+                                
                                 if (existing != null)
                                 {
                                     if (!string.IsNullOrEmpty(existing.IMDbId) && !string.IsNullOrEmpty(item.IMDbId))
@@ -732,19 +741,37 @@ namespace ModernIPTVPlayer.Services.Stremio
             var uniqueItems = new List<StremioMediaStream>();
             var orderedRaw = results.OrderByDescending(x => !string.IsNullOrEmpty(x.IMDbId) && x.IMDbId.StartsWith("tt")).ThenByDescending(x => !string.IsNullOrEmpty(x.Year)).ThenBy(x => x.SourceIndex).ToList();
 
+            Span<char> queryNormBuf = stackalloc char[query.Length + 16];
+            int queryNormLen = TitleHelper.NormalizeToBuffer(query.AsSpan(), queryNormBuf);
+            ReadOnlySpan<char> normQuery = queryNormBuf[..queryNormLen];
+
             // [OPTIMIZATION] IPTV Matching is now "Lazy". 
             // We only match for items that are actually being displayed to the user.
             // This loop now only handles metadata deduplication.
             foreach (var item in orderedRaw)
             {
                 ct.ThrowIfCancellationRequested();
-                string normTitle = NormalizeTitle(item.Title);
-                var existing = uniqueItems.FirstOrDefault(x => IsMatch(x, item, normTitle, query));
+                
+                Span<char> titleNormBuf = stackalloc char[item.Title.Length + 16];
+                int titleNormLen = TitleHelper.NormalizeToBuffer(item.Title.AsSpan(), titleNormBuf);
+                ReadOnlySpan<char> normTitle = titleNormBuf[..titleNormLen];
+
+                StremioMediaStream? existing = null;
+                foreach (var x in uniqueItems)
+                {
+                    if (IsMatch(x, item, normTitle, query))
+                    {
+                        existing = x;
+                        break;
+                    }
+                }
+
                 if (existing != null) MergeItems(existing, item);
                 else uniqueItems.Add(item);
             }
 
-            var final = uniqueItems.OrderByDescending(x => CalculateRankWeight(x, query)).ThenByDescending(x => GetYearDigits(x.Year)).ToList();
+            string normQueryStr = normQuery.ToString();
+            var final = uniqueItems.OrderByDescending(x => CalculateRankWeight(x, normQueryStr.AsSpan())).ThenByDescending(x => GetYearDigits(x.Year)).ToList();
 
             // [LOGGING] Rank Breakdown for Top 20
             try
@@ -762,13 +789,14 @@ namespace ModernIPTVPlayer.Services.Stremio
             return final;
         }
 
-        private double CalculateRankWeight(StremioMediaStream x, string query, bool log = false)
+        private double CalculateRankWeight(StremioMediaStream x, ReadOnlySpan<char> normQ, bool log = false)
         {
-            double similarity = GetScore(x, query); // 0-100
+            double similarity = GetScore(x, normQ); // 0-100
             double score = similarity * 9.0; // DEFINITIVE Weight for similarity (max 900)
             
-            string normQ = NormalizeTitle(query);
-            string normT = NormalizeTitle(x.Title);
+            Span<char> normTBuf = stackalloc char[x.Title.Length + 16];
+            int normTLen = TitleHelper.NormalizeToBuffer(x.Title.AsSpan(), normTBuf);
+            ReadOnlySpan<char> normT = normTBuf[..normTLen];
             
             // Length Penalty: Penalize titles that are much longer than the query
             // But be very lenient if similarity is a perfect/near-perfect match (98+)
@@ -816,19 +844,20 @@ namespace ModernIPTVPlayer.Services.Stremio
             return final;
         }
 
+        private void AddToIndex(string? id, StremioMediaStream stream) {
+            if (string.IsNullOrWhiteSpace(id)) return;
+            string key = id.Trim().ToLowerInvariant();
+            if (!_globalMetaIndex.TryGetValue(key, out var set)) _globalMetaIndex[key] = set = new HashSet<StremioMediaStream>();
+            set.Add(stream);
+        }
+
         private void IndexStreamInternal(StremioMediaStream stream)
         {
             if (stream?.Meta == null) return;
-            void AddToIndex(string? id) {
-                if (string.IsNullOrWhiteSpace(id)) return;
-                string key = id.Trim().ToLowerInvariant();
-                if (!_globalMetaIndex.TryGetValue(key, out var set)) _globalMetaIndex[key] = set = new HashSet<StremioMediaStream>();
-                set.Add(stream);
-            }
-            AddToIndex(stream.Meta.Id);
-            AddToIndex(stream.Meta.ImdbId);
-            AddToIndex(stream.IMDbId);
-            if (stream.Meta.MoviedbId != null) AddToIndex($"tmdb:{stream.Meta.MoviedbId}");
+            AddToIndex(stream.Meta.Id, stream);
+            AddToIndex(stream.Meta.ImdbId, stream);
+            AddToIndex(stream.IMDbId, stream);
+            if (stream.Meta.MoviedbId != null) AddToIndex($"tmdb:{stream.Meta.MoviedbId}", stream);
         }
 
         public List<StremioMediaStream> GetGlobalMetaCache(string id)
@@ -838,9 +867,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             lock (_indexLock) { return _globalMetaIndex.TryGetValue(key, out var set) ? set.ToList() : new List<StremioMediaStream>(); }
         }
 
-        private string NormalizeTitle(string title) => TitleHelper.Normalize(title);
-
-        private bool IsMatch(StremioMediaStream existing, StremioMediaStream current, string currentNormTitle, string? query = null)
+        private bool IsMatch(StremioMediaStream existing, StremioMediaStream current, ReadOnlySpan<char> currentNormTitle, string? query = null)
         {
             if (existing.Type != current.Type) return false;
             
@@ -924,18 +951,19 @@ namespace ModernIPTVPlayer.Services.Stremio
             return 0;
         }
 
-        private double GetScore(StremioMediaStream x, string query)
+        private double GetScore(StremioMediaStream x, ReadOnlySpan<char> normQ)
         {
-            string normQ = NormalizeTitle(query);
-            string normT = NormalizeTitle(x.Title);
+            Span<char> normTBuf = stackalloc char[x.Title.Length + 16];
+            int normTLen = TitleHelper.NormalizeToBuffer(x.Title.AsSpan(), normTBuf);
+            ReadOnlySpan<char> normT = normTBuf[..normTLen];
             
-            if (normT == normQ) return 100;
-            if (normT.StartsWith(normQ)) return 85; 
+            if (normT.SequenceEqual(normQ)) return 100;
+            if (normT.StartsWith(normQ, StringComparison.OrdinalIgnoreCase)) return 85; 
             
-            double sim = TitleHelper.CalculateSimilarity(x.Title, query);
+            double sim = TitleHelper.CalculateSimilarity(x.Title, normQ.ToString());
             // DEBUG LOGGING (Temporarily)
-            if (query.Contains("no") || x.Title.Contains("no")) {
-                AppLogger.Info($"[RankDebug] Q='{query}'(norm:{normQ}) | T='{x.Title}'(norm:{normT}) | Sim={sim:F2}");
+            if (normQ.ToString().Contains("no") || x.Title.Contains("no")) {
+                AppLogger.Info($"[RankDebug] Q='{normQ.ToString()}' | T='{x.Title}' | Sim={sim:F2}");
             }
             return sim * 85; 
         }

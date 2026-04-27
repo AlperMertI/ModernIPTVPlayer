@@ -12,6 +12,7 @@
     xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
     mc:Ignorable="d"
     NavigationCacheMode="Enabled"
+    SizeChanged="Page_SizeChanged"
     Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
 
     <Page.Resources>
@@ -409,6 +410,7 @@
                                                   ViewChanged="ChannelScrollViewer_ViewChanged">
                                         <ItemsRepeater x:Name="ChannelRepeater"
                                                       ItemsSource="{x:Bind VisibleChannels, Mode=OneWay}"
+                                                      VerticalCacheLength="1.5"
                                                       ElementPrepared="ChannelRepeater_ElementPrepared"
                                                       ElementClearing="ChannelRepeater_ElementClearing">
                                             <ItemsRepeater.Layout>
@@ -442,7 +444,7 @@
                                                                 Margin="8,0,0,0"
                                                                 IsHitTestVisible="False">
                                                             <Grid>
-                                                                <Image Source="{x:Bind StreamIcon, Mode=OneTime, Converter={StaticResource ChannelIconConverter}}"
+                                                                <Image Source="{x:Bind StreamIcon, Mode=OneWay, Converter={StaticResource ChannelIconConverter}}"
                                                                        Stretch="Uniform"
                                                                        HorizontalAlignment="Center"
                                                                        VerticalAlignment="Center"
@@ -455,31 +457,41 @@
                                                                          HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                                                          Margin="0,0,4,4"
                                                                          Visibility="{x:Bind ShowStatusDot, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}"
-                                                                         ToolTipService.ToolTip="{x:Bind StatusToolTip, Mode=OneWay}"/>
+                                                                         ToolTipService.ToolTip="{x:Bind StatusToolTip, Mode=OneWay}"
+                                                                         x:Phase="2"/>
                                                             </Grid>
                                                         </Border>
             
                                                         <!-- Info -->
                                                         <Grid Grid.Column="1" Margin="14,0,8,0" VerticalAlignment="Center" IsHitTestVisible="False">
-                                                            <TextBlock Text="{x:Bind Name, Mode=OneTime}"
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto"/>
+                                                                <RowDefinition Height="Auto"/>
+                                                            </Grid.RowDefinitions>
+                                                            
+                                                            <TextBlock Grid.Row="0" Text="{x:Bind Name, Mode=OneTime}"
                                                                        Foreground="#F0F0F0"
                                                                        FontSize="14"
                                                                        FontWeight="SemiBold"
                                                                        TextTrimming="CharacterEllipsis"
-                                                                       MaxLines="1"/>
+                                                                       MaxLines="1"
+                                                                       x:Phase="0"/>
             
                                                             <!-- BADGES -->
-                                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" Margin="0,2,0,0" Spacing="4">
-                                                                <ProgressRing IsActive="{x:Bind IsProbing, Mode=OneWay}" Width="14" Height="14" 
+                                                            <StackPanel Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,4,0,0" Spacing="4" x:Phase="1" Tag="{x:Bind}">
+                                                                <ProgressRing IsActive="{x:Bind IsProbing, Mode=OneWay}" Width="12" Height="12" 
                                                                               Visibility="{x:Bind IsProbing, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}"/>
-                                                                <Border Background="#CC00B7C3" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
-                                                                    <TextBlock Text="{x:Bind Resolution, Mode=OneWay}" FontSize="9" FontWeight="Bold" Foreground="White"/>
+                                                                <Border Background="#CC00B7C3" CornerRadius="4" Padding="4,1" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
+                                                                    <TextBlock Text="{x:Bind Resolution, Mode=OneWay}" FontSize="8" FontWeight="Bold" Foreground="White"/>
                                                                 </Border>
-                                                                <Border Background="#CC333333" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
-                                                                    <TextBlock Text="{x:Bind Fps, Mode=OneWay}" FontSize="9" Foreground="#BBB"/>
+                                                                <Border Background="#CC673AB7" CornerRadius="4" Padding="4,1" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
+                                                                    <TextBlock Text="{x:Bind Codec, Mode=OneWay}" FontSize="8" FontWeight="Bold" Foreground="White"/>
                                                                 </Border>
-                                                                <Border Background="#FFFFD700" CornerRadius="4" Padding="4,2" Visibility="{x:Bind ShowHdrBadge, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
-                                                                    <TextBlock Text="HDR" FontSize="9" FontWeight="Bold" Foreground="Black"/>
+                                                                <Border Background="#CC333333" CornerRadius="4" Padding="4,1" Visibility="{x:Bind ShowTechnicalBadges, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
+                                                                    <TextBlock Text="{x:Bind Fps, Mode=OneWay}" FontSize="8" Foreground="#BBB"/>
+                                                                </Border>
+                                                                <Border Background="#FFFFD700" CornerRadius="4" Padding="4,1" Visibility="{x:Bind ShowHdrBadge, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}">
+                                                                    <TextBlock Text="HDR" FontSize="8" FontWeight="Bold" Foreground="Black"/>
                                                                 </Border>
                                                             </StackPanel>
                                                         </Grid>
@@ -489,7 +501,7 @@
                                                                 <MenuFlyoutItem Text="Kanalı Oynat" Icon="Play" Click="ChannelItem_Click" Tag="{x:Bind}"/>
                                                                 <MenuFlyoutItem Text="Analiz Et" Icon="Video" Click="CheckQuality_Click" Tag="{x:Bind}"/>
                                                                 <MenuFlyoutSeparator/>
-                                                                <MenuFlyoutItem Text="Gelişmiş Bilgiler" Click="CheckQuality_Click" Tag="{x:Bind}">
+                                                                <MenuFlyoutItem Text="Gelişmiş Bilgiler" Click="AdvancedInfo_Click" Tag="{x:Bind}">
                                                                     <MenuFlyoutItem.Icon>
                                                                         <FontIcon Glyph="&#xE946;"/>
                                                                     </MenuFlyoutItem.Icon>
@@ -604,5 +616,7 @@
                       VerticalAlignment="Top" 
                       HorizontalAlignment="Stretch" 
                       Canvas.ZIndex="9999"/>
+        <!-- Stream Details Overlay (Modern MediaInfo) -->
+        <controls:StreamDetailsOverlay x:Name="StreamInfoOverlay" Visibility="Collapsed" Canvas.ZIndex="999"/>
     </Grid>
 </Page>

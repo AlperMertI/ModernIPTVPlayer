@@ -73,6 +73,8 @@ namespace ModernIPTVPlayer.Services.Iptv
         [SkipLocalsInit]
         private IndexSnapshot BuildIndexInternal<T>(IReadOnlyList<T> streams, string fingerprint, IndexSnapshot? existing) where T : IMediaStream
         {
+            if (streams == null || streams.Count == 0) return new IndexSnapshot(FrozenDictionary<string, int[]>.Empty, FrozenDictionary<string, int[]>.Empty, fingerprint, DateTime.UtcNow);
+
             var tokenRegistry = new ConcurrentDictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
             var idRegistry = new ConcurrentDictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
             var pool = StringPool.Shared;
@@ -87,7 +89,7 @@ namespace ModernIPTVPlayer.Services.Iptv
                         var titleSpan = virtualList.GetTitleSpan(i, titleBuffer);
                         if (!titleSpan.IsEmpty)
                         {
-                            foreach (var token in TitleHelper.GetSignificantTokens(titleSpan))
+                            foreach (var token in TitleHelper.GetTokens(titleSpan))
                             {
                                 var list = tokenRegistry.GetOrAdd(pool.GetOrAdd(token), _ => new List<int>());
                                 lock (list) { list.Add(i); }
@@ -106,6 +108,9 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             var frozenTokens = tokenRegistry.ToDictionary(k => k.Key, v => v.Value.ToArray()).ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
             var frozenIds = idRegistry.ToDictionary(k => k.Key, v => v.Value.ToArray()).ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
+            
+            // Reclaim StringPool memory as it's no longer needed after FrozenDictionary creation
+            StringPool.Shared.Reset();
 
             return new IndexSnapshot(frozenTokens, frozenIds, fingerprint, DateTime.UtcNow);
         }
@@ -153,7 +158,7 @@ namespace ModernIPTVPlayer.Services.Iptv
                     int indicesHeapOff = tokenTableOff + (tokenRecords.Length * Marshal.SizeOf<IndexTokenRecord>());
                     int stringHeapOff = indicesHeapOff + (int)indexStream.Length;
 
-                    var header = new IndexHeader(tokenRecords.Length, tokenTableOff, indicesHeapOff, stringHeapOff);
+                    var header = new IndexHeader(tokenRecords.Length, tokenTableOff, 0, 0, indicesHeapOff, stringHeapOff);
                     
                     // Direct pointer write for header
                     byte[] headerBuf = new byte[64];
@@ -216,49 +221,46 @@ namespace ModernIPTVPlayer.Services.Iptv
 
         
 
-        public int[] FindByTokens(IEnumerable<string> tokens)
+        /// <summary>
+        /// Performs an AND-based token lookup for a title string with ZERO memory overhead.
+        /// </summary>
+        public int[] FindByTokens(ReadOnlySpan<char> title)
         {
-            if (tokens == null) return Array.Empty<int>();
+            if (title.IsEmpty) return Array.Empty<int>();
 
-            List<int>? results = null;
+            var bitset = new SearchBitset();
+            var tokenBitset = new SearchBitset();
+            bool first = true;
 
-            foreach (var token in tokens)
+            foreach (var token in TitleHelper.GetTokens(title))
             {
                 var tokenIndices = FindByToken(token);
-                if (tokenIndices.IsEmpty) return Array.Empty<int>(); // AND logic
+                if (tokenIndices.IsEmpty) return Array.Empty<int>();
 
-                if (results == null)
+                if (first)
                 {
-                    results = new List<int>(tokenIndices.Length);
-                    foreach (var idx in tokenIndices) results.Add(idx);
+                    bitset.SetRange(tokenIndices);
+                    first = false;
                 }
                 else
                 {
-                    // MANUAL INTERSECTION (Avoids Span capture in lambda)
-                    for (int i = results.Count - 1; i >= 0; i--)
-                    {
-                        int r = results[i];
-                        bool found = false;
-                        foreach (var tIdx in tokenIndices)
-                        {
-                            if (tIdx == r)
-                            {
-                                found = true;
-                                break;
-                            }
-                        }
-
-                        if (!found)
-                        {
-                            results.RemoveAt(i);
-                        }
-                    }
-
-                    if (results.Count == 0) return Array.Empty<int>();
+                    tokenBitset.Clear();
+                    tokenBitset.SetRange(tokenIndices);
+                    bitset.Intersect(ref tokenBitset);
                 }
+
+                if (bitset.IsEmpty()) return Array.Empty<int>();
             }
-            return results?.ToArray() ?? Array.Empty<int>();
+
+            if (first) return Array.Empty<int>();
+            
+            int[] results = new int[bitset.CountSetBits()];
+            bitset.FillIndices(results);
+            return results;
         }
+
+        // Compatibility overload
+        public int[] FindByTokens(string title) => FindByTokens(title.AsSpan());
 
         public ReadOnlySpan<int> FindByToken(ReadOnlySpan<char> token)
         {

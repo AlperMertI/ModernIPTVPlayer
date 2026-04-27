@@ -10,7 +10,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.IO;
 using System.Text;
-using CommunityToolkit.HighPerformance.Buffers;
 using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Metadata;
@@ -18,14 +17,8 @@ using ModernIPTVPlayer.Models.Metadata;
 namespace ModernIPTVPlayer.Services.Iptv
 {
     /// <summary>
-    /// A high-performance prefix search index for IPTV streams.
-    /// Implements lock-free reads using immutable snapshots and StringPool for memory efficiency.
-    /// Fully NativeAOT compatible.
-    /// </summary>
-    /// <summary>
-    /// A high-performance prefix search index for IPTV streams.
-    /// Implements lock-free reads/writes using immutable snapshots and sorted-array BinarySearch for memory efficiency.
-    /// Fully NativeAOT compatible and optimized for large datasets.
+    /// PINNACLE: High-performance Search Index Manager.
+    /// Manages MMF V4 indexing and zero-allocation search execution.
     /// </summary>
     public sealed class FastSearchIndex
     {
@@ -42,7 +35,14 @@ namespace ModernIPTVPlayer.Services.Iptv
             string Fingerprint,
             DateTime CreatedAt);
 
-        public string Fingerprint => _session?.Fingerprint ?? Volatile.Read(ref _snapshot).Fingerprint;
+        public string Fingerprint
+        {
+            get
+            {
+                var fp = _session?.Fingerprint ?? Volatile.Read(ref _snapshot).Fingerprint;
+                return string.IsNullOrEmpty(fp) ? string.Empty : "v8_" + fp;
+            }
+        }
 
         public async Task RebuildAsync<T>(IReadOnlyList<T> streams, string newFingerprint) where T : IMediaStream
         {
@@ -72,22 +72,26 @@ namespace ModernIPTVPlayer.Services.Iptv
         private IndexSnapshot BuildIndexInternal<T>(IReadOnlyList<T> streams, string fingerprint) where T : IMediaStream
         {
             var tokenRegistry = new ConcurrentDictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
-            var pool = StringPool.Shared;
 
             if (streams is IVirtualStreamList virtualList)
             {
                 Parallel.ForEach(Partitioner.Create(0, virtualList.Count), range =>
                 {
                     Span<char> titleBuffer = stackalloc char[512];
+                    Span<char> normBuffer = stackalloc char[512];
+
                     for (int i = range.Item1; i < range.Item2; i++)
                     {
                         var titleSpan = virtualList.GetTitleSpan(i, titleBuffer);
                         if (!titleSpan.IsEmpty)
                         {
-                            foreach (var token in TitleHelper.GetTokens(titleSpan))
+                            int normLen = TitleHelper.NormalizeForSearch(titleSpan, normBuffer);
+                            var normalized = normBuffer.Slice(0, normLen);
+
+                            foreach (var token in TitleHelper.GetTokens(normalized))
                             {
                                 if (token.Length < 2) continue;
-                                var list = tokenRegistry.GetOrAdd(pool.GetOrAdd(token), _ => new List<int>());
+                                var list = tokenRegistry.GetOrAdd(token.ToString(), _ => new List<int>());
                                 lock (list) { list.Add(i); }
                             }
                         }
@@ -102,89 +106,72 @@ namespace ModernIPTVPlayer.Services.Iptv
             return new IndexSnapshot(finalMap, sortedTokens, fingerprint, DateTime.UtcNow);
         }
 
-        public int[] GetMatchingIndices(string query)
+        /// <summary>
+        /// Performs a Pinnacle Zero-Allocation search.
+        /// </summary>
+        public int[] GetMatchingIndices<T>(string query, IReadOnlyList<T> source) where T : IMediaStream
         {
             if (string.IsNullOrWhiteSpace(query)) return Array.Empty<int>();
-            string q = TitleHelper.Normalize(query);
-            if (string.IsNullOrEmpty(q)) return Array.Empty<int>();
-
-            var results = new List<int>();
+            
             if (_session != null)
             {
-                _session.FindByPrefix(q.AsSpan(), results);
-                return results.ToArray();
+                Span<int> sink = stackalloc int[1000]; // Max 1000 results
+                int count = _session.Search(query.AsSpan(), sink, source.Count);
+                if (count == 0) return Array.Empty<int>();
+                return sink.Slice(0, count).ToArray();
             }
 
+            // Fallback to legacy snapshot search if MMF is not loaded
+            return GetSnapshotIndices(query);
+        }
+
+        private int[] GetSnapshotIndices(string query)
+        {
             var snap = Volatile.Read(ref _snapshot);
-            var lookup = snap.TokenMap.GetAlternateLookup<ReadOnlySpan<char>>();
-            if (lookup.TryGetValue(q, out int[]? exactIndices)) return exactIndices;
+            if (snap.TokenMap.Count == 0) return Array.Empty<int>();
 
-            int index = Array.BinarySearch(snap.SortedTokens, q, StringComparer.OrdinalIgnoreCase);
-            if (index < 0) index = ~index;
+            var terms = query.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            HashSet<int>? intersectSet = null;
 
-            var aggregatedIndices = new HashSet<int>();
-            for (int i = index; i < snap.SortedTokens.Length; i++)
+            foreach (var term in terms)
             {
-                var token = snap.SortedTokens[i];
-                if (!token.StartsWith(q, StringComparison.OrdinalIgnoreCase)) break;
-                if (snap.TokenMap.TryGetValue(token, out int[]? prefixIndices))
+                var termSet = new HashSet<int>();
+                foreach (var kvp in snap.TokenMap)
                 {
-                    for (int j = 0; j < prefixIndices.Length; j++) aggregatedIndices.Add(prefixIndices[j]);
+                    if (kvp.Key.Contains(term, StringComparison.OrdinalIgnoreCase))
+                    {
+                        foreach (var idx in kvp.Value) termSet.Add(idx);
+                    }
                 }
-                if (aggregatedIndices.Count > 500) break;
+
+                if (intersectSet == null) intersectSet = termSet;
+                else intersectSet.IntersectWith(termSet);
+
+                if (intersectSet.Count == 0) break;
             }
-            return aggregatedIndices.ToArray();
+
+            return intersectSet?.ToArray() ?? Array.Empty<int>();
         }
 
         public IEnumerable<T> Search<T>(string query, IReadOnlyList<T> source) where T : IMediaStream
         {
             if (string.IsNullOrWhiteSpace(query)) return Enumerable.Empty<T>();
-            string q = TitleHelper.Normalize(query);
-            if (string.IsNullOrEmpty(q)) return Enumerable.Empty<T>();
-
-            var indices = new List<int>();
-            if (_session != null)
-            {
-                _session.FindByPrefix(q.AsSpan(), indices);
-            }
-            else
-            {
-                var indicesArr = GetMatchingIndices(query);
-                indices.AddRange(indicesArr);
-            }
-
-            if (indices.Count > 0) return MaterializeResults(indices.Distinct(), source);
-            return SubstringSearchFallback(q, source);
+            
+            var indices = GetMatchingIndices(query, source);
+            if (indices.Length == 0) return Enumerable.Empty<T>();
+            
+            return MaterializeResults(indices, source);
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private IEnumerable<T> MaterializeResults<T>(IEnumerable<int> indices, IReadOnlyList<T> source) where T : IMediaStream
+        private IEnumerable<T> MaterializeResults<T>(int[] indices, IReadOnlyList<T> source) where T : IMediaStream
         {
-            var result = new List<T>();
             foreach (var idx in indices)
             {
-                if (idx >= 0 && idx < source.Count) result.Add(source[idx]);
-            }
-            return result;
-        }
-
-        private IEnumerable<T> SubstringSearchFallback<T>(string q, IReadOnlyList<T> source) where T : IMediaStream
-        {
-            var results = new List<T>();
-            if (source is IVirtualStreamList vList)
-            {
-                Span<char> buffer = stackalloc char[256];
-                for (int i = 0; i < vList.Count; i++)
+                if (idx >= 0 && idx < source.Count)
                 {
-                    var title = vList.GetTitleSpan(i, buffer);
-                    if (!title.IsEmpty && title.Contains(q, StringComparison.OrdinalIgnoreCase))
-                    {
-                        results.Add(source[i]);
-                        if (results.Count > 50) break;
-                    }
+                    yield return source[idx];
                 }
             }
-            return results;
         }
 
         public async Task SaveToDiskAsync(string path)
@@ -196,17 +183,38 @@ namespace ModernIPTVPlayer.Services.Iptv
             {
                 await Task.Run(() =>
                 {
+                    // 1. Prepare Data
+                    var sortedTokens = snap.TokenMap.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase).ToList();
+                    
+                    // Trigrams: trigramHash -> list of indices
+                    var trigramMap = new Dictionary<uint, HashSet<int>>();
+                    Span<uint> trigramBuf = stackalloc uint[128];
+
+                    foreach (var kvp in snap.TokenMap)
+                    {
+                        int len = TitleHelper.GetTrigrams(kvp.Key.AsSpan(), trigramBuf);
+                        for (int i = 0; i < len; i++)
+                        {
+                            if (!trigramMap.TryGetValue(trigramBuf[i], out var set))
+                            {
+                                set = new HashSet<int>();
+                                trigramMap[trigramBuf[i]] = set;
+                            }
+                            foreach (var idx in kvp.Value) set.Add(idx);
+                        }
+                    }
+                    var sortedTrigrams = trigramMap.OrderBy(x => x.Key).ToList();
+
+                    // 2. Write to MMF Format
                     using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None);
                     using var writer = new BinaryWriter(fs, Encoding.UTF8);
-
-                    var sortedTokens = snap.TokenMap.Select(kvp => new { Key = kvp.Key, Indices = kvp.Value })
-                                                 .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase).ToList();
 
                     using var indexStream = new MemoryStream();
                     using var stringStream = new MemoryStream();
                     using var indexWriter = new BinaryWriter(indexStream);
                     using var stringWriter = new BinaryWriter(stringStream);
 
+                    // Tokens
                     var tokenRecords = new IndexTokenRecord[sortedTokens.Count];
                     for (int i = 0; i < sortedTokens.Count; i++)
                     {
@@ -216,27 +224,52 @@ namespace ModernIPTVPlayer.Services.Iptv
                         stringStream.Write(utf8);
 
                         int indicesOff = (int)indexStream.Position / 4;
-                        foreach (var idx in t.Indices) indexWriter.Write(idx);
+                        foreach (var idx in t.Value) indexWriter.Write(idx);
 
-                        tokenRecords[i] = new IndexTokenRecord(stringOff, (ushort)utf8.Length, indicesOff, (ushort)t.Indices.Length);
+                        tokenRecords[i] = new IndexTokenRecord(stringOff, (ushort)utf8.Length, indicesOff, (ushort)t.Value.Length);
                     }
 
-                    int tokenTableOff = 64;
-                    int indicesHeapOff = tokenTableOff + (tokenRecords.Length * Marshal.SizeOf<IndexTokenRecord>());
+                    // Trigrams
+                    var trigramRecords = new TrigramRecord[sortedTrigrams.Count];
+                    for (int i = 0; i < sortedTrigrams.Count; i++)
+                    {
+                        var t = sortedTrigrams[i];
+                        int indicesOff = (int)indexStream.Position / 4;
+                        var idxArray = t.Value.ToArray();
+                        Array.Sort(idxArray);
+                        foreach (var idx in idxArray) indexWriter.Write(idx);
+
+                        trigramRecords[i] = new TrigramRecord(t.Key, indicesOff, (ushort)idxArray.Length);
+                    }
+
+                    // Layout offsets
+                    int headerSize = 64;
+                    int tokenTableOff = headerSize;
+                    int trigramTableOff = tokenTableOff + (tokenRecords.Length * 16);
+                    int indicesHeapOff = trigramTableOff + (trigramRecords.Length * 12);
                     int stringHeapOff = indicesHeapOff + (int)indexStream.Length;
 
-                    var header = new IndexHeader(tokenRecords.Length, tokenTableOff, indicesHeapOff, stringHeapOff);
+                    // Header
+                    var header = new IndexHeader(tokenRecords.Length, tokenTableOff, trigramRecords.Length, trigramTableOff, indicesHeapOff, stringHeapOff);
                     byte[] headerBuf = new byte[64];
                     unsafe { fixed (byte* p = headerBuf) { *(IndexHeader*)p = header; } }
                     writer.Write(headerBuf);
 
-                    foreach (var record in tokenRecords)
+                    // Tables
+                    foreach (var rec in tokenRecords) 
                     {
-                        byte[] recordBuf = new byte[Marshal.SizeOf<IndexTokenRecord>()];
-                        unsafe { fixed (byte* p = recordBuf) { *(IndexTokenRecord*)p = record; } }
-                        writer.Write(recordBuf);
+                        byte[] buf = new byte[16];
+                        unsafe { fixed (byte* p = buf) { *(IndexTokenRecord*)p = rec; } }
+                        writer.Write(buf);
+                    }
+                    foreach (var rec in trigramRecords) 
+                    {
+                        byte[] buf = new byte[12];
+                        unsafe { fixed (byte* p = buf) { *(TrigramRecord*)p = rec; } }
+                        writer.Write(buf);
                     }
 
+                    // Heaps
                     writer.Write(indexStream.ToArray());
                     writer.Write(stringStream.ToArray());
                 });
@@ -255,19 +288,14 @@ namespace ModernIPTVPlayer.Services.Iptv
                     _session?.Dispose();
                     _session = session;
                     Volatile.Write(ref _snapshot, new IndexSnapshot(FrozenDictionary<string, int[]>.Empty, Array.Empty<string>(), string.Empty, DateTime.MinValue));
-                    AppLogger.Info($"[FastSearchIndex] Native MMF Session Activated: {path} (Tokens: {session.TokenCount})");
+                    AppLogger.Info($"[FastSearchIndex] Pinnacle MMF Session Activated: {path} (Tokens: {session.TokenCount}, Trigrams: {session.TrigramCount})");
                     return true;
-                }
-                else
-                {
-                    AppLogger.Warn($"[FastSearchIndex] Sidecar INVALID (Magic mismatch). Deleting {path}");
-                    try { if (File.Exists(path)) File.Delete(path); } catch { }
                 }
             }
             catch (Exception ex) 
             { 
-                AppLogger.Warn($"[FastSearchIndex] MMF load FAILED (Corrupted?): {ex.Message}. Deleting sidecar to trigger rebuild."); 
-                try { if (File.Exists(path)) File.Delete(path); } catch { /* Ignore delete errors */ }
+                AppLogger.Warn($"[FastSearchIndex] MMF load FAILED: {ex.Message}"); 
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
             }
             return false;
         }

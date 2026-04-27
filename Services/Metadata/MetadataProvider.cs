@@ -839,7 +839,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                     string? year = (sourceStream as Models.IMediaStream)?.Year;
                     if (string.IsNullOrEmpty(year)) year = metadata.Year;
 
-                    string cleanSearchTitle = TitleHelper.NormalizeForSearch(metadata.Title);
+                    Span<char> searchBuf = stackalloc char[metadata.Title.Length + 16];
+                    int searchLen = TitleHelper.NormalizeForSearch(metadata.Title.AsSpan(), searchBuf);
+                    string cleanSearchTitle = searchBuf[..searchLen].ToString();
                     if (string.IsNullOrWhiteSpace(cleanSearchTitle)) cleanSearchTitle = metadata.Title;
 
                     var discoveredId = await ResolveIdByTitleDiscoveryAsync(cleanSearchTitle, type, year, trace);
@@ -2740,7 +2742,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (tmdb == null)
                 {
                     System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Trying title search = \"{metadata.Title}\", year = \"{metadata.Year}\"");
-                    var titleSearch = await TmdbHelper.SearchTvAsync(metadata.Title, TitleHelper.ExtractYear(metadata.Year));
+                    var titleSearch = await TmdbHelper.SearchTvAsync(metadata.Title, TitleHelper.ExtractYear(metadata.Year.AsSpan()).ToString());
                     if (titleSearch != null)
                     {
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Title search found ID = {titleSearch.Id}, fetching full details...");
@@ -2749,7 +2751,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     else if (!string.IsNullOrEmpty(metadata.SubTitle))
                     {
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: Primary title failed. Trying SubTitle fallback = \"{metadata.SubTitle}\"");
-                        var subTitleSearch = await TmdbHelper.SearchTvAsync(metadata.SubTitle, TitleHelper.ExtractYear(metadata.Year));
+                        var subTitleSearch = await TmdbHelper.SearchTvAsync(metadata.SubTitle, TitleHelper.ExtractYear(metadata.Year.AsSpan()).ToString());
                         if (subTitleSearch != null)
                         {
                             System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] SERIES: SubTitle search found ID = {subTitleSearch.Id}");
@@ -2793,7 +2795,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 if (tmdb == null)
                 {
-                    var searchResult = await TmdbHelper.SearchMovieAsync(metadata.Title, TitleHelper.ExtractYear(metadata.Year));
+                    var searchResult = await TmdbHelper.SearchMovieAsync(metadata.Title, TitleHelper.ExtractYear(metadata.Year.AsSpan()).ToString());
                     if (searchResult != null)
                     {
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Search found ID = {searchResult.Id}, fetching full details...");
@@ -2802,7 +2804,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     else if (!string.IsNullOrEmpty(metadata.SubTitle))
                     {
                         System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: Primary title failed. Trying SubTitle fallback = \"{metadata.SubTitle}\"");
-                        var subSearchResult = await TmdbHelper.SearchMovieAsync(metadata.SubTitle, TitleHelper.ExtractYear(metadata.Year));
+                        var subSearchResult = await TmdbHelper.SearchMovieAsync(metadata.SubTitle, TitleHelper.ExtractYear(metadata.Year.AsSpan()).ToString());
                         if (subSearchResult != null)
                         {
                             System.Diagnostics.Debug.WriteLine($"[TMDB-Enrich] MOVIE: SubTitle Search found ID = {subSearchResult.Id}");

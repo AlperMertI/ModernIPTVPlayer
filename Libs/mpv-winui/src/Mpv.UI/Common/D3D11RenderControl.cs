@@ -16,18 +16,33 @@ using System.Collections.Generic;
 using Microsoft.Win32;
 using Microsoft.UI.Xaml.Hosting;
 using System.Numerics;
+using Windows.Foundation;
 
 namespace MpvWinUI.Common;
 
 public partial class D3D11RenderControl : ContentControl
 {
+    private static long _nextInstanceId;
+    private static long _liveControls;
+    private static long _liveDevices;
+    private static long _liveSwapChains;
+    private static long _liveBackBuffers;
+    private readonly long _instanceId;
+
+    public static string LiveResourceSummary =>
+        $"d3dLiveControls={Interlocked.Read(ref _liveControls)}"
+        + $" d3dLiveDevices={Interlocked.Read(ref _liveDevices)}"
+        + $" d3dLiveSwapChains={Interlocked.Read(ref _liveSwapChains)}"
+        + $" d3dLiveBackBuffers={Interlocked.Read(ref _liveBackBuffers)}";
+
     private SwapChainPanel _swapChainPanel = default!;
-    private ComPtr<ID3D11Device1> _device;
-    private ComPtr<ID3D11DeviceContext1> _context;
+    private static ComPtr<ID3D11Device1> _device;
+    private static ComPtr<ID3D11DeviceContext1> _context;
+    private static int _globalDeviceRefCount = 0;
     private ComPtr<IDXGISwapChain2> _swapChain; 
     
-    private D3D11 _d3d11 = default!;
-    private DXGI _dxgi = default!;
+    private static D3D11? _d3d11;
+    private static DXGI? _dxgi;
     
     // Threading & Synchronization
     private Task _renderTask = default!;
@@ -43,6 +58,7 @@ public partial class D3D11RenderControl : ContentControl
     private bool _resizePending = false;
     private bool _pendingResizeForce = false;
     private bool _disposed = false;
+    private bool _resourcesDestroyed = false;
     private double _targetWidth, _targetHeight;
     private double _targetScaleX = 1.0, _targetScaleY = 1.0;
     private long _lastPhysicalResizeTicks = 0; // Throttle for animations
@@ -141,7 +157,19 @@ public partial class D3D11RenderControl : ContentControl
     public Func<TimeSpan, bool> RenderFrame = default!; 
     public Action SwapChainPresented = default!;
     
-    public void SignalUpdate() => _mpvUpdateEvent.Set();
+    public void SignalUpdate()
+    {
+        if (_disposed || _resourcesDestroyed) return;
+
+        try { _mpvUpdateEvent.Set(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    public void ClearRenderCallbacks()
+    {
+        RenderFrame = _ => false;
+        SwapChainPresented = () => { };
+    }
 
     public IntPtr DeviceHandle { get; private set; }
     public IntPtr ContextHandle { get; private set; }
@@ -162,11 +190,15 @@ public partial class D3D11RenderControl : ContentControl
     
     private IntPtr _cachedNativePanel = IntPtr.Zero;
     private IntPtr _lastLinkedHandle = IntPtr.Zero;
+    private TypedEventHandler<SwapChainPanel, object>? _compositionScaleChangedHandler;
+    private TypedEventHandler<Microsoft.Graphics.Display.DisplayInformation, object>? _advancedColorInfoChangedHandler;
+    private TypedEventHandler<XamlRoot, XamlRootChangedEventArgs>? _xamlRootChangedHandler;
+    private XamlRoot? _subscribedXamlRoot;
 
     [LibraryImport("user32.dll")]
     private static partial IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
 
-    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    [LibraryImport("user32.dll", EntryPoint = "EnumDisplaySettingsW", StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static partial bool EnumDisplaySettings(string? lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
 
@@ -176,7 +208,7 @@ public partial class D3D11RenderControl : ContentControl
     [LibraryImport("user32.dll")]
     private static partial IntPtr GetActiveWindow();
 
-    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW", StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static partial bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
 
@@ -204,7 +236,7 @@ public partial class D3D11RenderControl : ContentControl
 
     private static readonly Guid IID_IDisplayInformation = Guid.Parse("bed11288-c17d-4dc9-bc77-1d167f0d6536");
 
-    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    [LibraryImport("user32.dll", EntryPoint = "EnumDisplayDevicesW", StringMarshalling = StringMarshalling.Utf16)]
     [return: MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
     private static partial bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
 
@@ -270,17 +302,21 @@ public partial class D3D11RenderControl : ContentControl
 
     public D3D11RenderControl()
     {
-        try {
-            var logPath = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\control_debug.log";
-            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [CONTROL] Constructor Start\n");
-        } catch { }
+        _instanceId = Interlocked.Increment(ref _nextInstanceId);
+        Interlocked.Increment(ref _liveControls);
+
         
-        this.Loaded += (s, e) => { };
+        this.Loaded += OnLoaded;
         this.SizeChanged += OnSizeChanged;
         this.DefaultStyleKey = typeof(D3D11RenderControl);
         Unloaded += OnUnloaded;
         UpdateHdrStatus();
         UpdateRefreshRate();
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        SubscribeXamlRootChanged();
     }
 
     private unsafe void UpdateHdrStatus()
@@ -415,6 +451,7 @@ public partial class D3D11RenderControl : ContentControl
         catch { /* Fallback to 60 */ }
     }
 
+
     public unsafe void Initialize()
     {
         if (_disposed) return;
@@ -428,86 +465,120 @@ public partial class D3D11RenderControl : ContentControl
             try
             {
                 LogControl("Loading D3D11 API...");
-#pragma warning disable CS0618 // Type or member is obsolete in 2.23.0 but required for context-free loading
+#pragma warning disable CS0618 
                 _d3d11 ??= Silk.NET.Direct3D11.D3D11.GetApi();
                 LogControl("Loading DXGI API...");
                 _dxgi ??= Silk.NET.DXGI.DXGI.GetApi();
 #pragma warning restore CS0618
-                LogControl("APIs Loaded Successfully");
             }
             catch (Exception ex)
             {
                 LogControl($"FATAL API LOAD ERROR: {ex.Message}");
-                Debug.WriteLine($"[FATAL] Gateway API Load Failure: {ex}");
                 throw;
             }
 
             CreateDevice();
-            _swapChainPanel = new SwapChainPanel();
-            _swapChainPanel.CompositionScaleChanged += (s, e) => RequestResize(force: true);
-            this.Loaded += (s, e) => 
-            {
-                if (this.XamlRoot != null)
-                {
-                    this.XamlRoot.Changed += (r, args) => RequestResize(force: true);
-                }
-            };
-            HorizontalContentAlignment = HorizontalAlignment.Stretch;
-            VerticalContentAlignment = VerticalAlignment.Stretch;
-            Content = _swapChainPanel;
+        }
+        else
+        {
+            LogControl("REUSING Static D3D11 Device.");
+        }
 
-            _targetWidth = ActualWidth;
-            _targetHeight = ActualHeight;
-            // [CRITICAL FIX] WinUI 3 SwapChainPanel.CompositionScaleX always returns 1.0.
-            _targetScaleX = this.XamlRoot?.RasterizationScale ?? 1.0;
-            _targetScaleY = this.XamlRoot?.RasterizationScale ?? 1.0;
+        // [CRITICAL] Always assign handles for every instance, even if device is reused
+        DeviceHandle = (IntPtr)_device.Handle;
+        ContextHandle = (IntPtr)_context.Handle;
+        Interlocked.Increment(ref _globalDeviceRefCount);
+        Interlocked.Increment(ref _liveDevices);
 
-            // Initialize SwapChain AFTER we have a chance to sync HDR metadata 
-            // (PerformResize will call UpdateHdrStatus but we'll call it again below)
-            
-            // UI-Thread HDR Synchronization
-            try
-            {
-                IntPtr hwnd = GetActiveWindow();
-                var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
-                if (windowId.Value != 0)
-                {
-                    _displayInfo = Microsoft.Graphics.Display.DisplayInformation.CreateForWindowId(windowId);
-                    SyncHdrMetadata();
-                    UpdateHdrStatus(); // Ensure colorspace is updated after metadata sync
-                    _displayInfo.AdvancedColorInfoChanged += (s, e) => { SyncHdrMetadata(); UpdateHdrStatus(); };
-                }
-                else
-                {
-                    // Fallback signaling if window is not ready
-                    _hdrInitTcs.TrySetResult(true);
-                }
-            }
-            catch (Exception ex)
-            {
-                LogSync($"[HDR_UI_ERR] UI Thread metadata tracking failed: {ex.Message}");
-                _hdrInitTcs.TrySetResult(true);
-            }
+        _swapChainPanel = new SwapChainPanel();
+        _compositionScaleChangedHandler = OnCompositionScaleChanged;
+        _swapChainPanel.CompositionScaleChanged += _compositionScaleChangedHandler;
+        SubscribeXamlRootChanged();
+        HorizontalContentAlignment = HorizontalAlignment.Stretch;
+        VerticalContentAlignment = VerticalAlignment.Stretch;
+        Content = _swapChainPanel;
 
-            // Initialize SwapChain ONLY if we have a valid size. 
-            // If the control is 1x1 (initial state), we'll defer to OnSizeChanged.
-            if (_targetWidth > 8 && _targetHeight > 8)
+        _targetWidth = ActualWidth;
+        _targetHeight = ActualHeight;
+        // [CRITICAL FIX] WinUI 3 SwapChainPanel.CompositionScaleX always returns 1.0.
+        _targetScaleX = this.XamlRoot?.RasterizationScale ?? 1.0;
+        _targetScaleY = this.XamlRoot?.RasterizationScale ?? 1.0;
+
+        // Initialize SwapChain AFTER we have a chance to sync HDR metadata 
+        // (PerformResize will call UpdateHdrStatus but we'll call it again below)
+        
+        // UI-Thread HDR Synchronization
+        try
+        {
+            IntPtr hwnd = GetActiveWindow();
+            var windowId = Microsoft.UI.Win32Interop.GetWindowIdFromWindow(hwnd);
+            if (windowId.Value != 0)
             {
-                UpdateSwapChain(); 
-                Ready?.Invoke(this, EventArgs.Empty);
-                StartRenderLoop();
+                _displayInfo = Microsoft.Graphics.Display.DisplayInformation.CreateForWindowId(windowId);
+                SyncHdrMetadata();
+                UpdateHdrStatus(); // Ensure colorspace is updated after metadata sync
+                _advancedColorInfoChangedHandler = OnAdvancedColorInfoChanged;
+                _displayInfo.AdvancedColorInfoChanged += _advancedColorInfoChangedHandler;
             }
             else
             {
-                LogControl($"Deferred Initialization: Current Size {_targetWidth}x{_targetHeight} is too small.");
+                // Fallback signaling if window is not ready
+                _hdrInitTcs.TrySetResult(true);
             }
-
-            // [RESIZE OPTIMIZATION] Initialize debounce timer for resize start/end detection
-            _resizeDebounceTimer = DispatcherQueue.CreateTimer();
-            _resizeDebounceTimer.Interval = TimeSpan.FromMilliseconds(RESIZE_DEBOUNCE_MS);
-            _resizeDebounceTimer.Tick += OnResizeDebounceTimerTick;
-            _resizeDebounceTimer.Stop();
         }
+        catch (Exception ex)
+        {
+            _hdrInitTcs.TrySetResult(true);
+        }
+
+        // Initialize SwapChain ONLY if we have a valid size. 
+        // If the control is 1x1 (initial state), we'll defer to OnSizeChanged.
+        if (_targetWidth > 8 && _targetHeight > 8)
+        {
+            UpdateSwapChain(); 
+            Ready?.Invoke(this, EventArgs.Empty);
+            StartRenderLoop();
+        }
+        else
+        {
+            LogControl($"Deferred Initialization: Current Size {_targetWidth}x{_targetHeight} is too small.");
+        }
+
+        // [RESIZE OPTIMIZATION] Initialize debounce timer for resize start/end detection
+        _resizeDebounceTimer = DispatcherQueue.CreateTimer();
+        _resizeDebounceTimer.Interval = TimeSpan.FromMilliseconds(RESIZE_DEBOUNCE_MS);
+        _resizeDebounceTimer.Tick += OnResizeDebounceTimerTick;
+        _resizeDebounceTimer.Stop();
+    }
+
+    private void OnCompositionScaleChanged(SwapChainPanel sender, object args)
+    {
+        RequestResize(force: true);
+    }
+
+    private void SubscribeXamlRootChanged()
+    {
+        if (XamlRoot == null || _subscribedXamlRoot == XamlRoot) return;
+
+        if (_subscribedXamlRoot != null && _xamlRootChangedHandler != null)
+        {
+            try { _subscribedXamlRoot.Changed -= _xamlRootChangedHandler; } catch { }
+        }
+
+        _xamlRootChangedHandler ??= OnXamlRootChanged;
+        _subscribedXamlRoot = XamlRoot;
+        _subscribedXamlRoot.Changed += _xamlRootChangedHandler;
+    }
+
+    private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args)
+    {
+        RequestResize(force: true);
+    }
+
+    private void OnAdvancedColorInfoChanged(Microsoft.Graphics.Display.DisplayInformation sender, object args)
+    {
+        SyncHdrMetadata();
+        UpdateHdrStatus();
     }
 
     private void SyncHdrMetadata()
@@ -519,7 +590,6 @@ public partial class D3D11RenderControl : ContentControl
             _isHdrEnabled = colorInfo.CurrentAdvancedColorKind == Microsoft.Graphics.Display.DisplayAdvancedColorKind.HighDynamicRange;
             _sdrWhiteLevel = (float)colorInfo.SdrWhiteLevelInNits;
             _osMaxLuminance = (float)colorInfo.MaxLuminanceInNits;
-            LogSync($"[HDR_UI_SYNC] ColorKind: {colorInfo.CurrentAdvancedColorKind} | SdrWhite: {_sdrWhiteLevel:F1} | OsMaxLum: {_osMaxLuminance:F1}");
             _hdrInitTcs.TrySetResult(true);
         }
         else
@@ -634,7 +704,6 @@ public partial class D3D11RenderControl : ContentControl
                          {
                              Debug.WriteLine("[CTRL] Skip: No BackBuffer | ATTEMPTING RECOVERY...");
                              // Use Task.Run to avoid deadlocking the render thread on _renderLock (which UpdateSwapChain takes)
-                             _ = Task.Run(() => { try { UpdateSwapChain(); } catch { } });
                          }
                          continue;
                     }
@@ -716,7 +785,9 @@ public partial class D3D11RenderControl : ContentControl
     private unsafe void PresentFrame()
     {
         if (_swapChain.Handle == null) return;
-        try {
+
+        try
+        {
             _swapChain.Handle->SetSourceSize((uint)_swapChainWidth, (uint)_swapChainHeight);
 
             bool exactMatch = _swapChainWidth == (int)_targetWidth && _swapChainHeight == (int)_targetHeight;
@@ -781,24 +852,10 @@ public partial class D3D11RenderControl : ContentControl
         var hr = _d3d11.CreateDevice(null, D3DDriverType.Hardware, 0, flags, null, 0, D3D11.SdkVersion, &device, null, &context);
         if (hr < 0) throw new Exception($"Core Device Failure (HR: {hr})");
 
-        _device = new ComPtr<ID3D11Device>(device).QueryInterface<ID3D11Device1>();
-        _context = new ComPtr<ID3D11DeviceContext>(context).QueryInterface<ID3D11DeviceContext1>();
-        
-        DeviceHandle = (IntPtr)_device.Handle;
-        ContextHandle = (IntPtr)_context.Handle;
-
-        try
-        {
-            using var dxgiDevice = _device.QueryInterface<IDXGIDevice1>();
-            IDXGIAdapter* adapter;
-            dxgiDevice.Handle->GetAdapter(&adapter);
-            using var dxgiAdapter = new ComPtr<IDXGIAdapter>(adapter);
-            AdapterDesc desc;
-            dxgiAdapter.Handle->GetDesc(&desc);
-            AdapterName = SilkMarshal.PtrToString((IntPtr)desc.Description) ?? "unknown";
-            LogSync($"Device Context Ready (VideoSupport=0x800). Adapter: {AdapterName}");
-        }
-        catch { AdapterName = "auto"; }
+        using var baseDevice = new ComPtr<ID3D11Device>(device);
+        using var baseContext = new ComPtr<ID3D11DeviceContext>(context);
+        _device = baseDevice.QueryInterface<ID3D11Device1>();
+        _context = baseContext.QueryInterface<ID3D11DeviceContext1>();
     }
 
     private void UpdateSwapChain()
@@ -811,9 +868,7 @@ public partial class D3D11RenderControl : ContentControl
     {
         if (_disposed || _device.Handle == null) return;
         int callId = ++_resizeCallCount;
-        Debug.WriteLine($"[LEAK_DEBUG] PerformResize #{callId} force={force} | Current={CurrentWidth}x{CurrentHeight} | SwapChain={_swapChainWidth}x{_swapChainHeight} | isResizing={_isResizing}");
         long t0 = Stopwatch.GetTimestamp();
-        double freq = Stopwatch.Frequency;
 
         int width, height;
         double logW, logH, scaleX, scaleY;
@@ -915,6 +970,8 @@ public partial class D3D11RenderControl : ContentControl
                 if (oldBuffer != IntPtr.Zero)
                 {
                     ((IUnknown*)oldBuffer)->Release();
+                    Interlocked.Decrement(ref _liveBackBuffers);
+                    LogMemory("backbuffer.release-old");
                 }
                 long tRelease = Stopwatch.GetTimestamp();
 
@@ -928,10 +985,13 @@ public partial class D3D11RenderControl : ContentControl
                     _swapChainHeight = stableHeight;
 
                     Debug.WriteLine($"[LEAK_DEBUG] ResizeBuffers #{callId}: {_swapChainWidth}x{_swapChainHeight} -> {stableWidth}x{stableHeight} (format={_swapChainFormat})");
-                    var hr = _swapChain.Handle->ResizeBuffers(2, (uint)stableWidth, (uint)stableHeight, _swapChainFormat, 0);
+                    // [FIX] Must pass the same flags used during creation (WaitableObject) to ResizeBuffers
+                    var hr = _swapChain.Handle->ResizeBuffers(2, (uint)stableWidth, (uint)stableHeight, _swapChainFormat, (uint)SwapChainFlag.FrameLatencyWaitableObject);
                     
                     if (hr < 0) {
                         _swapChain.Dispose();
+                        Interlocked.Decrement(ref _liveSwapChains);
+                        LogMemory("swapchain.dispose-after-resize-fail", $"hr=0x{hr:X}");
                         _swapChain = default;
                         CreateSwapChain(stableWidth, stableHeight);
                     }
@@ -952,8 +1012,17 @@ public partial class D3D11RenderControl : ContentControl
                     var bhr = _swapChain.Handle->GetBuffer(0, SilkMarshal.GuidPtrOf<ID3D11Texture2D>(), (void**)&bufferRaw);
                     
                     if (bhr >= 0 && bufferRaw != null) {
-                        Interlocked.Exchange(ref _atomicBackBuffer, (IntPtr)bufferRaw);
-                        ((IUnknown*)bufferRaw)->AddRef();
+                        IntPtr displacedBuffer = Interlocked.Exchange(ref _atomicBackBuffer, (IntPtr)bufferRaw);
+                        if (displacedBuffer != IntPtr.Zero)
+                        {
+                            ((IUnknown*)displacedBuffer)->Release();
+                            Interlocked.Decrement(ref _liveBackBuffers);
+                        }
+                        else
+                        {
+                            Interlocked.Increment(ref _liveBackBuffers);
+                        }
+                        LogMemory("backbuffer.acquire", $"size={_swapChainWidth}x{_swapChainHeight} approxBytes={ApproxBackBufferBytes(_swapChainWidth, _swapChainHeight) / 1024 / 1024}MB");
                     }
                 }
                 long tRecover = Stopwatch.GetTimestamp();
@@ -1113,6 +1182,8 @@ public partial class D3D11RenderControl : ContentControl
         var sc1 = new ComPtr<IDXGISwapChain1>(sc1Raw);
         _swapChain = sc1.QueryInterface<IDXGISwapChain2>();
         sc1.Dispose();
+        Interlocked.Increment(ref _liveSwapChains);
+        LogMemory("swapchain.create", $"size={width}x{height} approxBytes={ApproxSwapChainBytes(width, height) / 1024 / 1024}MB");
         LogControl($"[DXGI_SC_SUCCESS] Handle: {(IntPtr)_swapChain.Handle}");
     }
     
@@ -1141,9 +1212,9 @@ public partial class D3D11RenderControl : ContentControl
         void Act()
         {
             var uiStartTicks = Stopwatch.GetTimestamp();
-            try {
-                if (_swapChainPanel == null || _disposed || currentVersion < _swapChainVersion) {
-                    Marshal.Release(handle);
+            try
+            {
+                if (_swapChainPanel == null || _disposed) {
                     return;
                 }
 
@@ -1151,11 +1222,18 @@ public partial class D3D11RenderControl : ContentControl
                 {
                     // [AOT FIX] Use MarshalInspectable to safely get the ABI pointer for SwapChainPanel
                     IntPtr pBase = WinRT.MarshalInspectable<Microsoft.UI.Xaml.Controls.SwapChainPanel>.FromManaged(_swapChainPanel);
-                     Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
-                     if (Marshal.QueryInterface(pBase, in g1w, out _cachedNativePanel) != 0) {
-                         Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
-                         Marshal.QueryInterface(pBase, in g1u, out _cachedNativePanel);
-                     }
+                    try
+                    {
+                        Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
+                        if (Marshal.QueryInterface(pBase, in g1w, out _cachedNativePanel) != 0) {
+                            Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
+                            Marshal.QueryInterface(pBase, in g1u, out _cachedNativePanel);
+                        }
+                    }
+                    finally
+                    {
+                        if (pBase != IntPtr.Zero) Marshal.Release(pBase);
+                    }
                 }
 
                 if (_cachedNativePanel != IntPtr.Zero) {
@@ -1176,13 +1254,82 @@ public partial class D3D11RenderControl : ContentControl
         }
 
         if (DispatcherQueue.HasThreadAccess) Act();
-        else DispatcherQueue.TryEnqueue(DispatcherQueuePriority.High, Act);
+        else if (!DispatcherQueue.TryEnqueue(DispatcherQueuePriority.High, Act))
+        {
+            Marshal.Release(handle);
+        }
     }
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
     private delegate int SetSwapChainDelegate(IntPtr thisPtr, IntPtr swapChain);
 
-    public unsafe void DisconnectSwapChain()
+    private Task RunOnUiThreadAsync(Action action)
+    {
+        if (DispatcherQueue == null || DispatcherQueue.HasThreadAccess)
+        {
+            action();
+            return Task.CompletedTask;
+        }
+
+        var tcs = new TaskCompletionSource<object?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!DispatcherQueue.TryEnqueue(DispatcherQueuePriority.High, () =>
+        {
+            try
+            {
+                action();
+                tcs.TrySetResult(null);
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        }))
+        {
+            tcs.TrySetResult(null);
+        }
+
+        return tcs.Task;
+    }
+
+    public Task DetachUiResourcesAsync()
+    {
+        return RunOnUiThreadAsync(() =>
+        {
+            try
+            {
+                if (_resizeDebounceTimer != null)
+            {
+                _resizeDebounceTimer = null;
+            }
+
+
+            if (_swapChainPanel != null && _compositionScaleChangedHandler != null)
+            {
+                _compositionScaleChangedHandler = null;
+            }
+
+            if (_subscribedXamlRoot != null && _xamlRootChangedHandler != null)
+            {
+                _subscribedXamlRoot = null;
+            }
+
+            if (_displayInfo != null && _advancedColorInfoChangedHandler != null)
+            {
+                _advancedColorInfoChangedHandler = null;
+            }
+
+            DisconnectSwapChainOnUiThread();
+
+            _swapChainPanel = null!;
+            }
+            catch (Exception ex)
+            {
+                LogSync($"[FATAL] UI Detach Error: {ex.Message}");
+            }
+        });
+    }
+
+    private unsafe void DisconnectSwapChainOnUiThread()
     {
         if (_swapChainPanel == null) return;
 
@@ -1190,31 +1337,37 @@ public partial class D3D11RenderControl : ContentControl
 
         try
         {
+            if (_cachedNativePanel == IntPtr.Zero)
+            {
+                IntPtr pBase = WinRT.MarshalInspectable<Microsoft.UI.Xaml.Controls.SwapChainPanel>.FromManaged(_swapChainPanel);
+                try
+                {
+                    Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
+                    if (Marshal.QueryInterface(pBase, in g1w, out _cachedNativePanel) != 0)
+                    {
+                        Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
+                        Marshal.QueryInterface(pBase, in g1u, out _cachedNativePanel);
+                    }
+                }
+                finally
+                {
+                    if (pBase != IntPtr.Zero) Marshal.Release(pBase);
+                }
+            }
+
             if (_cachedNativePanel != IntPtr.Zero)
             {
-                var pBase = ((WinRT.IWinRTObject)_swapChainPanel).NativeObject.ThisPtr;
-                Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
-                IntPtr nativePanel = IntPtr.Zero;
+                IntPtr vtable = Marshal.ReadIntPtr(_cachedNativePanel);
+                IntPtr methodPtr = Marshal.ReadIntPtr(vtable, NSwapChainPanelNative.Slot_SetSwapChain * IntPtr.Size);
+                var setSc = Marshal.GetDelegateForFunctionPointer<SetSwapChainDelegate>(methodPtr);
 
-                if (Marshal.QueryInterface(pBase, in g1w, out nativePanel) != 0)
-                {
-                    Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
-                    Marshal.QueryInterface(pBase, in g1u, out nativePanel);
-                }
+                int hr = setSc(_cachedNativePanel, IntPtr.Zero);
+                Marshal.Release(_cachedNativePanel);
+                _cachedNativePanel = IntPtr.Zero;
 
-                if (nativePanel != IntPtr.Zero)
-                {
-                    IntPtr vtable = Marshal.ReadIntPtr(nativePanel);
-                    IntPtr methodPtr = Marshal.ReadIntPtr(vtable, NSwapChainPanelNative.Slot_SetSwapChain * IntPtr.Size);
-                    var setSc = Marshal.GetDelegateForFunctionPointer<SetSwapChainDelegate>(methodPtr);
-
-                    int hr = setSc(nativePanel, IntPtr.Zero);
-                    Marshal.Release(nativePanel);
-
-                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DisconnectSwapChain: SetSwapChain(NULL) HR=0x{hr:X}");
-                    _lastLinkedHandle = IntPtr.Zero;
-                    _needsFirstFrameLink = true;
-                }
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DisconnectSwapChain: SetSwapChain(NULL) HR=0x{hr:X}");
+                _lastLinkedHandle = IntPtr.Zero;
+                _needsFirstFrameLink = true;
             }
         }
         catch (Exception ex)
@@ -1254,8 +1407,8 @@ public partial class D3D11RenderControl : ContentControl
         _cts.Cancel();
         
         // 2. Signal all events to wake up the RenderLoop from WaitForMultipleObjects
-        _resizeEvent.Set();
-        _mpvUpdateEvent.Set();
+        try { _resizeEvent.Set(); } catch (ObjectDisposedException) { }
+        try { _mpvUpdateEvent.Set(); } catch (ObjectDisposedException) { }
 
         if (_renderTask != null)
         {
@@ -1292,25 +1445,85 @@ public partial class D3D11RenderControl : ContentControl
 
         Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] OnUnloaded TRIGGERED");
         _disposed = true;
-        try { _cts?.Cancel(); } catch { }
         try { _resizeEvent.Set(); } catch { }
     }
 
     public unsafe void DestroyResources()
     {
         lock (_renderLock) {
+            if (_resourcesDestroyed) return;
+
             _disposed = true;
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DestroyResources STARTED");
+            _resourcesDestroyed = true;
+
+            IntPtr backBuffer = Interlocked.Exchange(ref _atomicBackBuffer, IntPtr.Zero);
+            if (backBuffer != IntPtr.Zero)
+            {
+                ((IUnknown*)backBuffer)->Release();
+                Interlocked.Decrement(ref _liveBackBuffers);
+            }
+
+            FlushContext();
+
+            if (_swapChain.Handle != null) { _swapChain.Dispose(); _swapChain = default; Interlocked.Decrement(ref _liveSwapChains); }
+            if (_context.Handle != null) 
+            { 
+                _context.Handle->ClearState();
+                _context.Handle->Flush();
+            }
+            if (_device.Handle != null) 
+            { 
+                Interlocked.Decrement(ref _globalDeviceRefCount);
+                Interlocked.Decrement(ref _liveDevices); 
+            }
             
+            DeviceHandle = IntPtr.Zero;
+            ContextHandle = IntPtr.Zero;
+            AdapterName = "auto";
             
-            Interlocked.Exchange(ref _atomicBackBuffer, IntPtr.Zero);
-            if (_swapChain.Handle != null) _swapChain.Dispose();
-            if (_context.Handle != null) _context.Dispose();
-            if (_device.Handle != null) _device.Dispose();
             if (_cachedNativePanel != IntPtr.Zero) { Marshal.Release(_cachedNativePanel); _cachedNativePanel = IntPtr.Zero; }
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DestroyResources COMPLETED");
+
+            if (_displayInfo != null)
+            {
+                if (_advancedColorInfoChangedHandler != null)
+                {
+                    _advancedColorInfoChangedHandler = null;
+                }
+                _displayInfo = null;
+            }
+            if (_swapChainPanel != null && _compositionScaleChangedHandler != null)
+            {
+                _compositionScaleChangedHandler = null;
+            }
+            if (_subscribedXamlRoot != null && _xamlRootChangedHandler != null)
+            {
+                _subscribedXamlRoot = null;
+            }
+
+            if (_resizeDebounceTimer != null)
+            {
+                _resizeDebounceTimer.Stop();
+                _resizeDebounceTimer = null;
+            }
+
+            _lastLinkedHandle = IntPtr.Zero;
+            _needsFirstFrameLink = false;
+            _frameLatencyWaitHandle = IntPtr.Zero;
+
+            _cts = null!;
+
+            try { _mpvUpdateEvent.Dispose(); } catch { }
+            Interlocked.Decrement(ref _liveControls);
         }
-        _resizeEvent.Dispose();
+        try { _resizeEvent.Dispose(); } catch { }
+    }
+
+    private static long ApproxBackBufferBytes(int width, int height) => Math.Max(0L, (long)width * height * 4);
+
+    private static long ApproxSwapChainBytes(int width, int height) => ApproxBackBufferBytes(width, height) * 2;
+
+    private void LogMemory(string stage, string? detail = null)
+    {
     }
 
     private void RequestResize(bool force = false)
@@ -1594,14 +1807,9 @@ public partial class D3D11RenderControl : ContentControl
 
     private void LogControl(string msg)
     {
-        try
-        {
-            var logPath = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\control_debug.log";
-            System.IO.File.AppendAllText(logPath, $"[{DateTime.Now:HH:mm:ss.fff}] [CONTROL] {msg}\n");
-        }
-        catch { }
-        Debug.WriteLine($"[CONTROL] {msg}");
     }
 
-    private void LogSync(string message) => Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SYNC] [Thread:{Environment.CurrentManagedThreadId}] {message}");
+    private void LogSync(string message)
+    {
+    }
 }

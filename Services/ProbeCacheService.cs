@@ -9,16 +9,58 @@ using Windows.Storage;
 
 namespace ModernIPTVPlayer.Services
 {
+    /// <summary>
+    /// Represents comprehensive technical metadata for a media stream.
+    /// Used for both main UI badges and advanced technical analysis.
+    /// </summary>
     public class ProbeData
     {
+        // Basic Info (Main Badges)
         public string Resolution { get; set; }
         public string Fps { get; set; }
         public string Codec { get; set; }
         public long Bitrate { get; set; }
         public bool IsHdr { get; set; }
+
+        // Advanced Video Info
+        public string AspectRatio { get; set; }
+        public string PixelFormat { get; set; }
+        public string ColorSpace { get; set; }
+        public string ColorRange { get; set; }
+        public string ChromaSubsampling { get; set; }
+        public string ScanType { get; set; } // "p" (Progressive) or "i" (Interlaced)
+        public string Encoder { get; set; }
+        
+        // Audio Info
+        public string AudioCodec { get; set; }
+        public string AudioChannels { get; set; }
+        public string AudioSampleRate { get; set; }
+        public string AudioLanguages { get; set; }
+
+        // Metadata & Network
+        public string Container { get; set; }
+        public string Protocol { get; set; }
+        public string Server { get; set; }
+        public string MimeType { get; set; }
+        public int Latency { get; set; }
+
+        // Performance & Buffer
+        public long BufferSize { get; set; }
+        public double BufferDuration { get; set; }
+        public double AvSync { get; set; }
+
+        // Security & Tracks
+        public bool IsEncrypted { get; set; }
+        public string DrmType { get; set; }
+        public string SubtitleTracks { get; set; }
+
         public DateTime LastUpdated { get; set; }
     }
 
+    /// <summary>
+    /// High-performance binary cache service for stream analysis data.
+    /// Uses Zstandard compression and binary serialization for minimal I/O overhead.
+    /// </summary>
     public class ProbeCacheService
     {
         private static ProbeCacheService _instance;
@@ -33,6 +75,11 @@ namespace ModernIPTVPlayer.Services
         private System.Threading.Timer _saveTimer;
         
         public event EventHandler CacheCleared;
+        public int CacheVersion { get; private set; } = 0;
+
+        // Magic Constants for binary versioning
+        private const int MAGIC_PRB1 = 0x50524231; // Legacy
+        private const int MAGIC_PRB3 = 0x50524233; // Latest Schema
 
         // PROJECT ZERO: UI Filter Bitmask Constants (Synchronized with LiveTVPage)
         public const ushort CF_RES_4K = 1 << 0;
@@ -48,16 +95,15 @@ namespace ModernIPTVPlayer.Services
         public const ushort CF_HIGH_FPS = 1 << 10;
 
         /// <summary>
-        /// PROJECT ZERO: Computes UI filter flags directly from cached probe data.
-        /// Bypasses managed object hydration for 50k+ items.
+        /// Computes UI filter flags directly from cached probe data.
+        /// Optimized for large collections (50k+ items).
         /// </summary>
         public ushort GetFlags(int streamId)
         {
             if (!_cache.TryGetValue(streamId, out var data)) return 0;
 
-            ushort flags = CF_ONLINE; // Assume online if we have probe data
+            ushort flags = CF_ONLINE; 
             
-            // Resolution
             if (data.Resolution != null)
             {
                 var res = data.Resolution;
@@ -67,7 +113,6 @@ namespace ModernIPTVPlayer.Services
                 else if (res.Contains("576") || res.Contains("480") || res.Contains("SD")) flags |= CF_RES_SD;
             }
 
-            // Tech & Codec
             if (data.Codec != null)
             {
                 var codec = data.Codec;
@@ -78,8 +123,7 @@ namespace ModernIPTVPlayer.Services
             if (data.IsHdr) flags |= CF_HDR;
             if (data.Bitrate > 0) flags |= CF_HAS_BITRATE;
 
-            // FPS (High FPS = 50+)
-            if (data.Fps != null && data.Fps.Contains("50") || data.Fps.Contains("60"))
+            if (data.Fps != null && (data.Fps.Contains("50") || data.Fps.Contains("60")))
             {
                 flags |= CF_HIGH_FPS;
             }
@@ -87,10 +131,8 @@ namespace ModernIPTVPlayer.Services
             return flags;
         }
 
-        // Initialization
         private TaskCompletionSource<bool> _initTcs = new TaskCompletionSource<bool>();
         private bool _isLoaded = false;
-        private bool _warnedBeforeLoad = false;
 
         private ProbeCacheService()
         {
@@ -101,7 +143,7 @@ namespace ModernIPTVPlayer.Services
         {
             if (_currentPlaylistId == playlistId && _isLoaded) return;
             
-            await SaveIfDirtyAsync(); // Save old one before switching
+            await SaveIfDirtyAsync(); 
             _currentPlaylistId = playlistId;
             _cache.Clear();
             await LoadCacheAsync();
@@ -119,37 +161,34 @@ namespace ModernIPTVPlayer.Services
 
             if (_cache.TryGetValue(streamId, out var data))
             {
-                // Check TTL
                 if ((DateTime.Now - data.LastUpdated).TotalDays > TTL_DAYS)
                 {
                     _cache.TryRemove(streamId, out _);
                     _isDirty = true;
                     return null;
                 }
-                
                 return data;
             }
             return null;
         }
 
-        public void Update(int streamId, string res, string fps, string codec, long bitrate, bool isHdr)
+        public void Update(int streamId, ProbeData data)
         {
-            var data = new ProbeData
-            {
-                Resolution = res,
-                Fps = fps,
-                Codec = codec,
-                Bitrate = bitrate,
-                IsHdr = isHdr,
-                LastUpdated = DateTime.Now
-            };
+            if (data == null) return;
+            
+            // PROJECT ZERO: Intern technical strings during update
+            data.Resolution = Helpers.StringInterner.Intern(data.Resolution);
+            data.Fps = Helpers.StringInterner.Intern(data.Fps);
+            data.Codec = Helpers.StringInterner.Intern(data.Codec);
+            data.ScanType = Helpers.StringInterner.Intern(data.ScanType);
+            data.AudioCodec = Helpers.StringInterner.Intern(data.AudioCodec);
+
+            data.LastUpdated = DateTime.Now;
 
             _cache[streamId] = data;
             _isDirty = true;
             
-            CacheLogger.Success(CacheLogger.Category.Probe, "Cache Updated", $"{res} | ID: {streamId}");
-
-            // Debounce save: Reset timer to fire in 5 seconds
+            CacheLogger.Success(CacheLogger.Category.Probe, "Cache Updated", $"{data.Resolution} | ID: {streamId}");
             _saveTimer.Change(5000, -1);
         }
 
@@ -168,9 +207,9 @@ namespace ModernIPTVPlayer.Services
                 using var reader = new BinaryReader(decompressor, System.Text.Encoding.UTF8);
                 
                 int magic = reader.ReadInt32();
-                if (magic != 0x50524231) // Magic: PRB1
+                if (magic != MAGIC_PRB3)
                 {
-                    CacheLogger.Warning(CacheLogger.Category.Probe, "Invalid magic, skipping cache load.");
+                    CacheLogger.Warning(CacheLogger.Category.Probe, "Unknown cache version or old format. Ignoring.");
                     return;
                 }
 
@@ -180,17 +219,40 @@ namespace ModernIPTVPlayer.Services
                     int id = reader.ReadInt32();
                     var data = new ProbeData
                     {
-                        Resolution = reader.ReadString(),
-                        Fps = reader.ReadString(),
-                        Codec = reader.ReadString(),
+                        // PROJECT ZERO: Intern technical strings during binary load
+                        Resolution = Helpers.StringInterner.Intern(reader.ReadString()),
+                        Fps = Helpers.StringInterner.Intern(reader.ReadString()),
+                        Codec = Helpers.StringInterner.Intern(reader.ReadString()),
                         Bitrate = reader.ReadInt64(),
                         IsHdr = reader.ReadBoolean(),
+                        AspectRatio = Helpers.StringInterner.Intern(reader.ReadString()),
+                        PixelFormat = Helpers.StringInterner.Intern(reader.ReadString()),
+                        ColorSpace = Helpers.StringInterner.Intern(reader.ReadString()),
+                        ColorRange = Helpers.StringInterner.Intern(reader.ReadString()),
+                        ChromaSubsampling = Helpers.StringInterner.Intern(reader.ReadString()),
+                        ScanType = Helpers.StringInterner.Intern(reader.ReadString()),
+                        Encoder = Helpers.StringInterner.Intern(reader.ReadString()),
+                        AudioCodec = Helpers.StringInterner.Intern(reader.ReadString()),
+                        AudioChannels = Helpers.StringInterner.Intern(reader.ReadString()),
+                        AudioSampleRate = Helpers.StringInterner.Intern(reader.ReadString()),
+                        AudioLanguages = Helpers.StringInterner.Intern(reader.ReadString()),
+                        Container = Helpers.StringInterner.Intern(reader.ReadString()),
+                        Protocol = Helpers.StringInterner.Intern(reader.ReadString()),
+                        Server = Helpers.StringInterner.Intern(reader.ReadString()),
+                        MimeType = Helpers.StringInterner.Intern(reader.ReadString()),
+                        Latency = reader.ReadInt32(),
+                        BufferSize = reader.ReadInt64(),
+                        BufferDuration = reader.ReadDouble(),
+                        AvSync = reader.ReadDouble(),
+                        IsEncrypted = reader.ReadBoolean(),
+                        DrmType = Helpers.StringInterner.Intern(reader.ReadString()),
+                        SubtitleTracks = Helpers.StringInterner.Intern(reader.ReadString()),
                         LastUpdated = DateTime.FromBinary(reader.ReadInt64())
                     };
                     _cache[id] = data;
                 }
                 
-                CacheLogger.Info(CacheLogger.Category.Probe, "Loaded Binary Cache", $"{_cache.Count} entries for {_currentPlaylistId}");
+                CacheLogger.Info(CacheLogger.Category.Probe, "Loaded Technical Cache (PRB2)", $"{_cache.Count} entries.");
             }
             catch (Exception ex)
             {
@@ -212,23 +274,46 @@ namespace ModernIPTVPlayer.Services
                 using var compressor = new ZstandardStream(buffered, CompressionLevel.Optimal);
                 using var writer = new BinaryWriter(compressor, System.Text.Encoding.UTF8);
                 
-                writer.Write(0x50524231); // Magic: PRB1
+                writer.Write(MAGIC_PRB3);
                 writer.Write(_cache.Count);
                 
                 foreach (var kvp in _cache)
                 {
+                    var v = kvp.Value;
                     writer.Write(kvp.Key);
-                    writer.Write(kvp.Value.Resolution ?? "");
-                    writer.Write(kvp.Value.Fps ?? "");
-                    writer.Write(kvp.Value.Codec ?? "");
-                    writer.Write(kvp.Value.Bitrate);
-                    writer.Write(kvp.Value.IsHdr);
-                    writer.Write(kvp.Value.LastUpdated.ToBinary());
+                    writer.Write(v.Resolution ?? "");
+                    writer.Write(v.Fps ?? "");
+                    writer.Write(v.Codec ?? "");
+                    writer.Write(v.Bitrate);
+                    writer.Write(v.IsHdr);
+                    writer.Write(v.AspectRatio ?? "");
+                    writer.Write(v.PixelFormat ?? "");
+                    writer.Write(v.ColorSpace ?? "");
+                    writer.Write(v.ColorRange ?? "");
+                    writer.Write(v.ChromaSubsampling ?? "");
+                    writer.Write(v.ScanType ?? "");
+                    writer.Write(v.Encoder ?? "");
+                    writer.Write(v.AudioCodec ?? "");
+                    writer.Write(v.AudioChannels ?? "");
+                    writer.Write(v.AudioSampleRate ?? "");
+                    writer.Write(v.AudioLanguages ?? "");
+                    writer.Write(v.Container ?? "");
+                    writer.Write(v.Protocol ?? "");
+                    writer.Write(v.Server ?? "");
+                    writer.Write(v.MimeType ?? "");
+                    writer.Write(v.Latency);
+                    writer.Write(v.BufferSize);
+                    writer.Write(v.BufferDuration);
+                    writer.Write(v.AvSync);
+                    writer.Write(v.IsEncrypted);
+                    writer.Write(v.DrmType ?? "");
+                    writer.Write(v.SubtitleTracks ?? "");
+                    writer.Write(v.LastUpdated.ToBinary());
                 }
                 
                 _isDirty = false;
                 _lastSaveTime = DateTime.Now;
-                CacheLogger.Info(CacheLogger.Category.Probe, "Persistent Binary Save", $"{_cache.Count} entries.");
+                CacheLogger.Info(CacheLogger.Category.Probe, "Persistent Binary Save (PRB2)", $"{_cache.Count} entries.");
             }
             catch (Exception ex)
             {
@@ -236,7 +321,6 @@ namespace ModernIPTVPlayer.Services
             }
         }
         
-        // Manual Flush
         public async Task FlushAsync() => await SaveIfDirtyAsync();
 
         public void Remove(int streamId)
@@ -263,16 +347,14 @@ namespace ModernIPTVPlayer.Services
                     }
                 }
             }
-            if (removed > 0)
-            {
-                CacheLogger.Info(CacheLogger.Category.Probe, "Pruned Orphans", $"{removed} entries removed.");
-            }
+            if (removed > 0) CacheLogger.Info(CacheLogger.Category.Probe, "Pruned Orphans", $"{removed} entries.");
         }
         
         public async Task ClearCacheAsync()
         {
             _cache.Clear();
             _isDirty = true;
+            CacheVersion++;
             await SaveIfDirtyAsync();
             CacheCleared?.Invoke(this, EventArgs.Empty);
             CacheLogger.Info(CacheLogger.Category.Probe, "Cache Cleared");

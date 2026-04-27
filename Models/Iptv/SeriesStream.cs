@@ -292,9 +292,11 @@ namespace ModernIPTVPlayer.Models.Iptv
                     stored = _year;
                 if (!string.IsNullOrEmpty(stored)) return stored;
 
-                string? dateYear = Helpers.TitleHelper.ExtractYear(Releasedate ?? Airdate);
-                if (!string.IsNullOrEmpty(dateYear)) return dateYear;
-                return Helpers.TitleHelper.ExtractYear(Name) ?? "";
+                var yearSpan = Helpers.TitleHelper.ExtractYear(Releasedate.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = Helpers.TitleHelper.ExtractYear(Airdate.AsSpan());
+                if (!yearSpan.IsEmpty) return yearSpan.ToString();
+                
+                return Helpers.TitleHelper.ExtractYear(Name.AsSpan()).ToString();
             }
             set 
             { 
@@ -461,11 +463,14 @@ namespace ModernIPTVPlayer.Models.Iptv
 
         public uint CalculateFingerprint()
         {
-            string cleanTitle = Helpers.TitleHelper.Normalize(Name ?? "");
-            string cleanYear = Year ?? "";
-            string cleanImdb = ImdbId ?? "";
+            Span<char> normBuf = stackalloc char[(Name?.Length ?? 0) + 16];
+            int normLen = Helpers.TitleHelper.NormalizeToBuffer(Name.AsSpan(), normBuf);
+            ReadOnlySpan<char> cleanTitle = normBuf[..normLen];
             
-            // Simple robust hash for cross-sync verification
+            ReadOnlySpan<char> cleanYear = Year.AsSpan();
+            ReadOnlySpan<char> cleanImdb = ImdbId.AsSpan();
+            
+            // FNV-1a like hash
             uint hash = 2166136261;
             foreach (char c in cleanTitle) hash = (hash ^ c) * 16777619;
             foreach (char c in cleanYear) hash = (hash ^ c) * 16777619;

@@ -27,7 +27,7 @@ namespace ModernIPTVPlayer.Helpers
         private static readonly ConcurrentDictionary<(int Offset, int Length), string> _stringCache = new();
         private const int MAX_INTERN_LENGTH = 16;
         private const int MAX_INTERN_KEYS = 50000;
-        private const int MAX_CACHE_SIZE = 10000;
+        private const int MAX_CACHE_SIZE = 4000;
          
         private static int _internKeysCount = 0;
         private static int _stringCacheCount = 0;

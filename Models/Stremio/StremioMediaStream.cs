@@ -244,8 +244,13 @@ namespace ModernIPTVPlayer.Models.Stremio
             get 
             {
                 if (Meta == null) return "";
-                string y = TitleHelper.ExtractYear(Meta.Year) ?? TitleHelper.ExtractYear(Meta.Releaseinfo) ?? TitleHelper.ExtractYear(Meta.Released) ?? TitleHelper.ExtractYear(Meta.Name) ?? "";
-                return y;
+                
+                var yearSpan = TitleHelper.ExtractYear(Meta.Year.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(Meta.Releaseinfo.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(Meta.Released.AsSpan());
+                if (yearSpan.IsEmpty) yearSpan = TitleHelper.ExtractYear(Meta.Name.AsSpan());
+                
+                return yearSpan.IsEmpty ? "" : yearSpan.ToString();
             }
             set { if (Meta != null) { Meta.Year = value; OnPropertyChanged(); } }
         }

@@ -9,6 +9,7 @@ namespace MpvWinUI;
 public sealed partial class MpvPlayer
 {
     private D3D11RenderControl? _renderControl;
+    public D3D11RenderControl? RenderControl => _renderControl;
 
     public Player? Player { get; private set; }
 }

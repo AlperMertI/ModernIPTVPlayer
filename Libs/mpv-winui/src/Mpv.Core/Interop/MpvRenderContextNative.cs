@@ -151,7 +151,9 @@ public partial class MpvRenderContextNative
             // [PERF] Run on background thread to prevent UI thread deadlock during GPU/Driver sync.
             // Returning the Task allows the caller to await full release of native resources.
             return Task.Run(() => {
+                Debug.WriteLine("[NATIVE_RC] Calling mpv_render_context_free...");
                 mpv_render_context_free(Handle.Handle);
+                Debug.WriteLine("[NATIVE_RC] mpv_render_context_free COMPLETED.");
             });
         }
         catch (Exception ex)

@@ -111,6 +111,8 @@ namespace ModernIPTVPlayer.Controls
                         var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                         _allChannels = JsonSerializer.Deserialize(json, AppJsonContext.Default.ListLiveStream) ?? new List<LiveStream>();
                         
+                        // DIAGNOSTIC: Track mass hydration in dialog
+                        ModernIPTVPlayer.Services.AppLogger.Warn($"[PERF] ChannelSelectionDialog: Hydrated {_allChannels.Count} objects from JSON. This is a potential memory leak source!");
                         
                         foreach (var ch in _allChannels)
                         {

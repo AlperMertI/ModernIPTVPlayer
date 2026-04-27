@@ -4,72 +4,96 @@ using Mpv.Core.Args;
 using Mpv.Core.Enums.Client;
 using Mpv.Core.Enums.Player;
 using Mpv.Core.Structs.Client;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace Mpv.Core;
 
 public sealed partial class Player
 {
-    private void EventLoop()
-    {
-        while (!_isDisposed)
-        {
-            var clientEvent = Client.WaitEvent();
-            switch (clientEvent.EventId)
-            {
-                case MpvEventId.Shutdown:
-                    Destroyed?.Invoke(this, EventArgs.Empty);
-                    return;
-                case MpvEventId.LogMessage:
-                    {
-                        if (!IsLoggingEnabled)
-                        {
-                            break;
-                        }
+    private static int _liveEventLoops;
 
-                        var logMessage = clientEvent.GetData<MpvEventLogMessage>();
-                        var args = new LogMessageReceivedEventArgs(logMessage.Prefix, logMessage.Text, logMessage.Level.ToLogLevel());
-                        TranslateLogMessage(logMessage);
-                        LogMessageReceived?.Invoke(this, args);
-                    }
+    public static int LiveEventLoopCount => Volatile.Read(ref _liveEventLoops);
+
+    private void EventLoop(CancellationToken cancellationToken)
+    {
+        var live = Interlocked.Increment(ref _liveEventLoops);
+        Debug.WriteLine($"[LEAK_DEBUG] EventLoop START live={live}");
+
+        try
+        {
+            while (!_isDisposed && !cancellationToken.IsCancellationRequested)
+            {
+                var clientEvent = Client.WaitEvent(0.25);
+                if (cancellationToken.IsCancellationRequested)
+                {
                     break;
-                case MpvEventId.StartFile:
-                    {
-                        // var startFileData = clientEvent.GetData<MpvEventStartFile>();
-                        ChangeState(PlaybackState.Opening);
-                    }
-                    break;
-                case MpvEventId.FileLoaded:
-                    _isLoaded = true;
-                    ChangeState(PlaybackState.Decoding);
-                    break;
-                case MpvEventId.EndFile:
-                    {
-                        _isLoaded = false;
-                        var endFileData = clientEvent.GetData<MpvEventEndFile>();
-                        if (endFileData.Reason == MpvEndFileReason.Error)
+                }
+
+                switch (clientEvent.EventId)
+                {
+                    case MpvEventId.None:
+                        break;
+                    case MpvEventId.Shutdown:
+                        Destroyed?.Invoke(this, EventArgs.Empty);
+                        return;
+                    case MpvEventId.LogMessage:
                         {
-                            ChangeState(PlaybackState.Failed);
+                            if (!IsLoggingEnabled)
+                            {
+                                break;
+                            }
+
+                            var logMessage = clientEvent.GetData<MpvEventLogMessage>();
+                            var args = new LogMessageReceivedEventArgs(logMessage.Prefix, logMessage.Text, logMessage.Level.ToLogLevel());
+                            TranslateLogMessage(logMessage);
+                            LogMessageReceived?.Invoke(this, args);
                         }
-                        else
+                        break;
+                    case MpvEventId.StartFile:
                         {
-                            ChangeState(PlaybackState.None);
-                            RaiseEnd(endFileData);
+                            // var startFileData = clientEvent.GetData<MpvEventStartFile>();
+                            ChangeState(PlaybackState.Opening);
                         }
-                    }
-                    break;
-                case MpvEventId.PlaybackRestart:
-                    {
-                        ChangeState(PlaybackState.Playing);
-                    }
-                    break;
-                case MpvEventId.PropertyChange:
-                    {
-                        var propData = clientEvent.GetData<MpvEventProperty>();
-                        TranslateProperty(propData);
-                    }
-                    break;
+                        break;
+                    case MpvEventId.FileLoaded:
+                        _isLoaded = true;
+                        ChangeState(PlaybackState.Decoding);
+                        break;
+                    case MpvEventId.EndFile:
+                        {
+                            _isLoaded = false;
+                            var endFileData = clientEvent.GetData<MpvEventEndFile>();
+                            if (endFileData.Reason == MpvEndFileReason.Error)
+                            {
+                                ChangeState(PlaybackState.Failed);
+                            }
+                            else
+                            {
+                                ChangeState(PlaybackState.None);
+                                RaiseEnd(endFileData);
+                            }
+                        }
+                        break;
+                    case MpvEventId.PlaybackRestart:
+                        {
+                            ChangeState(PlaybackState.Playing);
+                        }
+                        break;
+                    case MpvEventId.PropertyChange:
+                        {
+                            var propData = clientEvent.GetData<MpvEventProperty>();
+                            TranslateProperty(propData);
+                        }
+                        break;
+                }
             }
+        }
+        finally
+        {
+            live = Interlocked.Decrement(ref _liveEventLoops);
+            Debug.WriteLine($"[LEAK_DEBUG] EventLoop EXIT live={live}");
         }
     }
 
