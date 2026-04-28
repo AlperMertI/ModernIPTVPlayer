@@ -980,15 +980,18 @@ namespace ModernIPTVPlayer
                 else
                 {
                     // Fallback for non-virtualized lists
-                    Parallel.ForEach(Partitioner.Create(0, _allChannels.Count), range =>
+                    if (_allChannels.Count > 0)
                     {
-                        for (int i = range.Item1; i < range.Item2; i++)
+                        Parallel.ForEach(Partitioner.Create(0, _allChannels.Count), range =>
                         {
-                            string catId = _allChannels[i].CategoryId ?? "Genel";
-                            var list = grouped.GetOrAdd(catId, _ => new List<int>());
-                            lock (list) { list.Add(i); }
-                        }
-                    });
+                            for (int i = range.Item1; i < range.Item2; i++)
+                            {
+                                string catId = _allChannels[i].CategoryId ?? "Genel";
+                                var list = grouped.GetOrAdd(catId, _ => new List<int>());
+                                lock (list) { list.Add(i); }
+                            }
+                        });
+                    }
                 }
 
                 // PINNACLE: Master Index Consolidation (Zero Fragmentation)

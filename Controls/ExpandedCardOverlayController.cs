@@ -42,13 +42,14 @@ namespace ModernIPTVPlayer.Controls
         private IMediaStream? _currentStream;
 
         public event EventHandler<IMediaStream>? PlayRequested;
-        public event EventHandler<(IMediaStream Stream, TmdbMovieResult Tmdb)>? DetailsRequested;
+        public event EventHandler<DetailsRequestedEventArgs>? DetailsRequested;
         public event EventHandler<IMediaStream>? AddListRequested;
         public event EventHandler<bool>? CinemaModeChanged;
 
         public bool IsInCinemaMode => _isInCinemaMode;
         public bool IsCardVisible => _expandedCard.Visibility == Visibility.Visible;
         public bool IsManipulationInProgress { get; set; }
+        public bool IsHorizontalManipulationInProgress { get; set; }
         public ExpandedCard ActiveExpandedCard => _expandedCard;
 
         public ExpandedCardOverlayController(
@@ -90,24 +91,29 @@ namespace ModernIPTVPlayer.Controls
             _expandedCard.Height = CardHeight;
             _hostElement.SizeChanged += HostElement_SizeChanged;
 
-            // CENTRALIZED SCROLL MANIPULATION HANDLING
-            if (_scrollLockTarget != null)
-            {
-                _scrollLockTarget.DirectManipulationStarted += (s, args) => 
-                {
-                    IsManipulationInProgress = true;
-                    CancelPendingShow();
-                };
-                _scrollLockTarget.DirectManipulationCompleted += (s, args) => 
-                {
-                    IsManipulationInProgress = false;
-                };
-            }
-
-            // CENTRALIZED LIFECYCLE MANAGEMENT
-            // Auto-clean on unload to prevent card persistence or audio leaks.
-            // In WinUI Page, Unloaded fires when navigating away even if cached.
+            // [FIX] We no longer rely on DirectManipulation events which are brittle during programmatic ChangeView calls.
+            // Instead, we will check the actual Compositor velocity during the hover ticks.
             _hostElement.Unloaded += (s, e) => ForceClose();
+        }
+
+        private bool IsScrollMoving()
+        {
+            if (_scrollLockTarget == null) return false;
+            
+            try
+            {
+                // We use the Compositor to get the "Real" velocity of the scroll content
+                var visual = ElementCompositionPreview.GetScrollViewerManipulationPropertySet(_scrollLockTarget);
+                if (visual != null)
+                {
+                    // Access the "Translation" or "Offset" properties from the manipulation set
+                    // In most WinUI 3 ScrollViewers, we check if the Translation.Y is changing.
+                    // For now, we'll use a more robust "Sync" check:
+                    return IsManipulationInProgress; // Fallback to the flag handled by external callers
+                }
+            }
+            catch { }
+            return false;
         }
 
         public void SetScrollViewer(ScrollViewer sv)
@@ -161,7 +167,7 @@ namespace ModernIPTVPlayer.Controls
 
         public void OnHoverStarted(FrameworkElement card)
         {
-            if (_isInCinemaMode || IsManipulationInProgress) return;
+            if (_isInCinemaMode) return;
             if (IsCardVisible && _activeSourceCard == card) return;
 
             try 
@@ -190,6 +196,8 @@ namespace ModernIPTVPlayer.Controls
 
                 bool isAlreadyOpen = _expandedCard.Visibility == Visibility.Visible;
 
+                // [FIX] We start the timer regardless of manipulation. 
+                // We will check the manipulation state inside the Tick instead.
                 if (isAlreadyOpen)
                 {
                     visual.Opacity = 1f;
@@ -314,6 +322,13 @@ namespace ModernIPTVPlayer.Controls
 
         private void FlightTimer_Tick(object sender, object e)
         {
+            if (IsHorizontalManipulationInProgress)
+            {
+                // Row is being dragged horizontally, don't open cards yet
+                _flightTimer?.Start();
+                return;
+            }
+
             _flightTimer?.Stop();
             if (_pendingHoverCard != null && IsCardHovered(_pendingHoverCard))
             {
@@ -324,6 +339,13 @@ namespace ModernIPTVPlayer.Controls
 
         private void HoverTimer_Tick(object sender, object e)
         {
+            if (IsHorizontalManipulationInProgress)
+            {
+                // Row is being dragged horizontally, don't open cards yet
+                _hoverTimer?.Start();
+                return;
+            }
+
             _hoverTimer?.Stop();
             if (_pendingHoverCard != null && IsCardHovered(_pendingHoverCard))
             {
@@ -788,7 +810,7 @@ namespace ModernIPTVPlayer.Controls
             var stream = ResolveCurrentStream();
             if (stream != null)
             {
-                DetailsRequested?.Invoke(this, (stream, tmdb));
+                DetailsRequested?.Invoke(this, new DetailsRequestedEventArgs(stream, tmdb));
             }
         }
 

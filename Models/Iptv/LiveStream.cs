@@ -66,6 +66,9 @@ namespace ModernIPTVPlayer.Models.Iptv
         }
         [JsonIgnore]
         public bool IsLoading { get; set; } = false;
+
+        public void Pin() { }
+        public void Unpin() { }
         
         // IMediaStream Implementation
         public int Id => StreamId;
@@ -380,6 +383,8 @@ namespace ModernIPTVPlayer.Models.Iptv
         public string SourceBadgeText => "IPTV";
         public bool ShowSourceBadge => true;
         public bool IsAvailableOnIptv { get; set; } = true;
+        public bool IsContinueWatching { get; set; }
+        public string? EpisodeSubtext { get; set; }
         
         // ==========================================
         // PROBING METADATA (Lazy Hydration)

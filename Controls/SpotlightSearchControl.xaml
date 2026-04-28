@@ -231,7 +231,7 @@
                           Visibility="Collapsed"
                           ScrollViewer.VerticalScrollBarVisibility="Auto">
                     <ListView.ItemTemplate>
-                        <DataTemplate x:DataType="stremio:StremioMediaStream">
+                        <DataTemplate x:DataType="models:IMediaStream">
                             <Grid Height="64">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="42"/> <!-- Poster -->

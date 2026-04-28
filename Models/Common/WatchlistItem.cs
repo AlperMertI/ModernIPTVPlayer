@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Text.Json.Serialization;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
@@ -55,6 +55,11 @@ namespace ModernIPTVPlayer.Models
         public string SourceBadgeText { get; set; }
         public bool ShowSourceBadge { get; set; }
         public bool IsAvailableOnIptv { get; set; }
+        public bool IsContinueWatching { get; set; }
+        public string? EpisodeSubtext { get; set; }
+
+        public void Pin() { }
+        public void Unpin() { }
 
         [JsonIgnore]
         public TmdbMovieResult TmdbInfo { get; set; }

@@ -11,6 +11,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services;
@@ -19,6 +20,7 @@ using ModernIPTVPlayer.Services.Stremio;
 using ModernIPTVPlayer.Services.Metadata;
 using ModernIPTVPlayer.Models.Metadata;
 using Microsoft.UI.Xaml.Data;
+using Microsoft.UI.Xaml.Input;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -78,20 +80,23 @@ namespace ModernIPTVPlayer.Controls
     public sealed partial class StremioDiscoveryControl : UserControl
     {
         // Public Events
-        public event EventHandler<(IMediaStream Stream, UIElement SourceElement, Microsoft.UI.Xaml.Media.ImageSource PreloadedLogo)> ItemClicked;
-        public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> TrailerExpandRequested;
+        public event EventHandler<SpotlightItemClickedEventArgs> ItemClicked;
+        public event EventHandler<TrailerExpandRequestedEventArgs> TrailerExpandRequested;
         public event EventHandler<IMediaStream> PlayAction;
-        public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> BackdropColorChanged;
+        public event EventHandler<ColorExtractedEventArgs> BackdropColorChanged;
         public event EventHandler<ScrollViewerViewChangedEventArgs> ViewChanged;
         public event EventHandler<CatalogRowViewModel> HeaderClicked;
 
+        public static bool ShowIptvBadgeGlobal { get; private set; } = true;
+
         public static readonly DependencyProperty ShowIptvBadgeProperty =
-            DependencyProperty.Register("ShowIptvBadge", typeof(bool), typeof(StremioDiscoveryControl), new PropertyMetadata(true));
+            DependencyProperty.Register("ShowIptvBadge", typeof(bool), typeof(StremioDiscoveryControl), 
+                new PropertyMetadata(true, (d, e) => ShowIptvBadgeGlobal = (bool)e.NewValue));
 
         public bool ShowIptvBadge
         {
             get => (bool)GetValue(ShowIptvBadgeProperty);
-            set => SetValue(ShowIptvBadgeProperty, value);
+            set { SetValue(ShowIptvBadgeProperty, value); ShowIptvBadgeGlobal = value; }
         }
         
         // Expanded Card Event Bridges
@@ -113,8 +118,10 @@ namespace ModernIPTVPlayer.Controls
         private string _currentContentType;
         private int _discoveryVersion = 0; // Monotonic counter to invalidate stale runs
         private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _lastHeroColors;
-        private DispatcherTimer? _heroDebounceTimer;
         private bool _isSourceActive = true;
+        private double _targetVerticalOffset = 0;
+        private DateTime _lastWheelTime = DateTime.MinValue;
+        private DispatcherTimer? _heroDebounceTimer;
 
         // Hero Priority Logic
         public enum RowState { Pending, Success, Failed }
@@ -200,10 +207,10 @@ namespace ModernIPTVPlayer.Controls
             
             // Hero Events
             HeroControl.PlayAction += (s, e) => PlayAction?.Invoke(this, e);
-            HeroControl.ColorExtracted += (s, c) => 
+            HeroControl.ColorExtracted += (s, e) => 
             {
-                _lastHeroColors = c;
-                BackdropColorChanged?.Invoke(this, c);
+                _lastHeroColors = (e.Primary, e.Secondary);
+                BackdropColorChanged?.Invoke(this, e);
             };
 
             DiscoveryRepeater.ItemsSource = _discoveryRows;
@@ -243,7 +250,6 @@ namespace ModernIPTVPlayer.Controls
             if (_historyInitTask == null || _historyInitTask.IsFaulted)
                 _historyInitTask = HistoryManager.Instance.InitializeAsync();
             
-            // Pre-load layout from disk
             _ = LoadLayoutCacheFromDiskAsync();
 
             this.Unloaded += StremioDiscoveryControl_Unloaded;
@@ -272,7 +278,7 @@ namespace ModernIPTVPlayer.Controls
                         {
                             // [SENIOR ARCHITECTURE] Staggered Parallelism
                             // .NET 11 prioritized channel ensures 'task' is the highest priority item currently available.
-                            _ = Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(task.Item, task.Context);
+                            _ = Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(task.Item, task.Context, ct: _loadCts?.Token ?? default);
 
                             // Small breather before starting the next parallel task
                             await Task.Delay(STAGGER_DELAY_MS);
@@ -466,7 +472,62 @@ namespace ModernIPTVPlayer.Controls
             {
                 MainScroll.ViewChanged -= ScrollViewer_ViewChanged;
                 MainScroll.ViewChanged += ScrollViewer_ViewChanged;
+                _targetVerticalOffset = MainScroll.VerticalOffset;
+
+                // [NATIVE GLIDE] Nuclear Intercept to create smooth targets
+                MainScroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler(MainScroll_PointerWheelChanged), true);
             }
+        }
+
+        private void MainScroll_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+        {
+            var pointerPoint = e.GetCurrentPoint(MainScroll);
+            if (!pointerPoint.Properties.IsHorizontalMouseWheel)
+            {
+                var now = DateTime.Now;
+                double timeSinceLast = (now - _lastWheelTime).TotalMilliseconds;
+                
+                // [SYNC] If idle for too long, sync to reality
+                if (timeSinceLast > 500)
+                {
+                    _targetVerticalOffset = MainScroll.VerticalOffset;
+                }
+
+                int delta = pointerPoint.Properties.MouseWheelDelta;
+                
+                // [BURST DAMPENING]
+                // Single notch (> 150ms idle) gets a 2.4x glide.
+                // Fast burst (< 150ms) gets a 1.2x precision move.
+                double multiplier = (timeSinceLast > 150) ? 2.4 : 1.2;
+                
+                _targetVerticalOffset -= delta * multiplier;
+                _lastWheelTime = now;
+
+                // Clamp to bounds
+                _targetVerticalOffset = Math.Max(0, Math.Min(_targetVerticalOffset, MainScroll.ScrollableHeight));
+
+                // [GPU-NATIVE] Native Glide
+                MainScroll.ChangeView(null, _targetVerticalOffset, null, false);
+                
+                e.Handled = true;
+            }
+        }
+
+        public void AddScrollVelocity(double delta)
+        {
+            var now = DateTime.Now;
+            double timeSinceLast = (now - _lastWheelTime).TotalMilliseconds;
+
+            if (timeSinceLast > 500)
+            {
+                _targetVerticalOffset = MainScroll.VerticalOffset;
+            }
+
+            double multiplier = (timeSinceLast > 150) ? 2.4 : 1.2;
+            _targetVerticalOffset -= delta * multiplier;
+            _lastWheelTime = now;
+            _targetVerticalOffset = Math.Max(0, Math.Min(_targetVerticalOffset, MainScroll.ScrollableHeight));
+            MainScroll.ChangeView(null, _targetVerticalOffset, null, false);
         }
 
         private void StremioDiscoveryControl_Unloaded(object sender, RoutedEventArgs e)
@@ -615,8 +676,9 @@ namespace ModernIPTVPlayer.Controls
             // Asynchronously enrich items that have no poster
             _ = EnrichItemsBatchAsync(cwItems);
         }
-        private void ApplyMetadataToStream(StremioMediaStream stream, UnifiedMetadata meta)
+        private void ApplyMetadataToStream(IMediaStream stream, Models.Metadata.UnifiedMetadata meta)
         {
+            if (this == null) return;
             if (stream == null || meta == null) return;
             stream.UpdateFromUnified(meta);
         }
@@ -626,7 +688,7 @@ namespace ModernIPTVPlayer.Controls
         // storm that occurred when this class and HeroSectionControl both tried to own the log file.
         private static void HeroPerfLog(string msg) => Helpers.HeroTracer.Log(msg);
 
-        private async Task EnrichItemsBatchAsync(IEnumerable<StremioMediaStream> items, MetadataContext context = MetadataContext.Discovery)
+        private async Task EnrichItemsBatchAsync(IEnumerable<IMediaStream> items, MetadataContext context = MetadataContext.Discovery)
         {
             if (items == null) return;
             var itemList = items.ToList();
@@ -635,7 +697,7 @@ namespace ModernIPTVPlayer.Controls
             {
                 try
                 {
-                    var meta = await MetadataProvider.Instance.GetMetadataAsync(item, context);
+                    var meta = await MetadataProvider.Instance.GetMetadataAsync(item, context, ct: _loadCts?.Token ?? default);
                     if (meta != null)
                     {
                         var tcs = new TaskCompletionSource<bool>();
@@ -675,9 +737,11 @@ namespace ModernIPTVPlayer.Controls
             else if (row.RowStyle == "Spotlight") targetContext = Models.Metadata.MetadataContext.Spotlight;
             else if (row.RowStyle == "Hero") targetContext = Models.Metadata.MetadataContext.Hero;
 
+            if (row.Items == null) return Task.CompletedTask;
+
             var streams = (row.RowStyle == "Spotlight" || row.RowStyle == "Hero") 
-                ? row.Items.Cast<StremioMediaStream>().Take(5) 
-                : row.Items.Cast<StremioMediaStream>();
+                ? row.Items.OfType<StremioMediaStream>().Take(5) 
+                : row.Items.OfType<StremioMediaStream>();
 
             int priority = 999;
             if (_discoveryRows != null)
@@ -795,7 +859,7 @@ namespace ModernIPTVPlayer.Controls
                     // [RESTORE COLOR] Instantly update backdrop color from cache
                     _lastHeroColors = cachedState.HeroColors;
                     if (_lastHeroColors.HasValue)
-                        BackdropColorChanged?.Invoke(this, _lastHeroColors.Value);
+                        BackdropColorChanged?.Invoke(this, new ColorExtractedEventArgs(_lastHeroColors.Value.Primary, _lastHeroColors.Value.Secondary));
 
                     // --- [EARLY PREWARM] ---
                     // Don't wait for Step 4! Start downloading high-res assets IMMEDIATELY from cache.
@@ -804,7 +868,7 @@ namespace ModernIPTVPlayer.Controls
                     {
                         if (_rowItemsBuffer.TryGetValue(rid, out var rowItems))
                         {
-                            foreach(var item in rowItems.Cast<StremioMediaStream>()) cachedHeroItems.Add(item);
+                            foreach(var item in rowItems.OfType<StremioMediaStream>()) cachedHeroItems.Add(item);
                             if (cachedHeroItems.Count >= 5) break;
                         }
                     }
@@ -1111,6 +1175,15 @@ namespace ModernIPTVPlayer.Controls
                 row.HoverStarted += CatalogRow_HoverStarted;
                 row.HoverEnded -= CatalogRow_HoverEnded;
                 row.HoverEnded += CatalogRow_HoverEnded;
+
+                // [SMART PREFETCH] Only pre-warm the GPU cache for rows entering the 
+                // virtual viewport (plus the 3.5-screen buffer). This replaces 
+                // the eager 'all-rows' pre-fetching to save RAM.
+                if (row.DataContext is CatalogRowViewModel vm)
+                {
+                    PrefetchRowImages(vm);
+                }
+
                 row.ScrollStarted -= CatalogRow_ScrollStarted;
                 row.ScrollStarted += CatalogRow_ScrollStarted;
                 row.ScrollEnded -= CatalogRow_ScrollEnded;
@@ -1283,32 +1356,41 @@ namespace ModernIPTVPlayer.Controls
         private int _lastItemIndex = -1;
         private string _lastItemId = "";
 
-        private void CatalogRow_ItemClicked(object sender, (IMediaStream Stream, UIElement SourceElement) e)
+        private void CatalogRow_ItemClicked(object sender, CatalogItemClickedEventArgs e)
         {
             if (sender is CatalogRow row && DiscoveryRows.ItemsSource is ObservableCollection<CatalogRowViewModel> rows)
             {
                 if (row.DataContext is CatalogRowViewModel vm)
                 {
                     _lastRowIndex = rows.IndexOf(vm);
-                    if (vm.Items != null && e.Stream is StremioMediaStream sms)
+                    var stream = e.Stream as IMediaStream;
+                    if (vm.Items != null && stream != null)
                     {
-                        _lastItemIndex = vm.Items.IndexOf(sms);
-                        _lastItemId = sms.IMDbId ?? sms.Id.ToString();
+                        _lastItemIndex = vm.Items.IndexOf(stream);
+                        _lastItemId = stream.IMDbId ?? stream.Id.ToString();
                     }
                 }
             }
-            ItemClicked?.Invoke(this, (e.Stream, e.SourceElement, null));
+            ItemClicked?.Invoke(this, new SpotlightItemClickedEventArgs(e.Stream, e.SourceElement, null));
         }
 
         private void CatalogRow_HoverStarted(object sender, FrameworkElement e) 
         {
-            if (e.DataContext is StremioMediaStream stream) stream.Pin();
+            IMediaStream stream = null;
+            if (e is PosterCard poster) stream = poster.MediaStream;
+            else if (e is LandscapeCard landscape) stream = landscape.MediaStream;
+
+            if (stream != null) stream.Pin();
             CardHoverStarted?.Invoke(this, e);
         }
 
         private void CatalogRow_HoverEnded(object sender, FrameworkElement e) 
         {
-            if (e.DataContext is StremioMediaStream stream) stream.Unpin();
+            IMediaStream stream = null;
+            if (e is PosterCard poster) stream = poster.MediaStream;
+            else if (e is LandscapeCard landscape) stream = landscape.MediaStream;
+
+            if (stream != null) stream.Unpin();
             CardHoverEnded?.Invoke(this, e);
         }
         private void CatalogRow_ScrollStarted(object sender, EventArgs e) => RowScrollStarted?.Invoke(this, e);
@@ -1370,12 +1452,12 @@ namespace ModernIPTVPlayer.Controls
             if (sender is LandscapeCard card) CardHoverEnded?.Invoke(this, card);
         }
 
-        private void SpotlightInjectRow_ItemClicked(object sender, (IMediaStream Stream, UIElement SourceElement, Microsoft.UI.Xaml.Media.ImageSource PreloadedLogo) e)
+        private void SpotlightInjectRow_ItemClicked(object sender, SpotlightItemClickedEventArgs e)
         {
             ItemClicked?.Invoke(this, e);
         }
 
-        private void SpotlightInjectRow_TrailerExpandRequested(object sender, (IMediaStream Stream, UIElement SourceElement) e)
+        private void SpotlightInjectRow_TrailerExpandRequested(object sender, TrailerExpandRequestedEventArgs e)
         {
             TrailerExpandRequested?.Invoke(this, e);
         }
@@ -1388,11 +1470,11 @@ namespace ModernIPTVPlayer.Controls
                 
                 if (sender is PosterCard card)
                 {
-                    ItemClicked?.Invoke(this, (stream, card.ImageElement, null));
+                    ItemClicked?.Invoke(this, new SpotlightItemClickedEventArgs(stream, card.ImageElement, null));
                 }
                 else if (sender is LandscapeCard lCard)
                 {
-                    ItemClicked?.Invoke(this, (stream, lCard.ImageElement, null));
+                    ItemClicked?.Invoke(this, new SpotlightItemClickedEventArgs(stream, lCard.ImageElement, null));
                 }
             }
         }
@@ -1501,7 +1583,7 @@ namespace ModernIPTVPlayer.Controls
             CatalogRowViewModel targetRow = null;
             foreach (var row in rows)
             {
-                if (row.Items.Cast<StremioMediaStream>().Any(x => (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == item.IMDbId) || x.Id == item.Id))
+                if (row.Items.OfType<StremioMediaStream>().Any(x => (!string.IsNullOrEmpty(x.IMDbId) && x.IMDbId == item.IMDbId) || x.Id == item.Id))
                 {
                     targetRow = row;
                     break;
@@ -1597,7 +1679,7 @@ namespace ModernIPTVPlayer.Controls
                 // [FIX] Don't trigger hero transitions if we are hidden
                 if (this.Visibility != Visibility.Visible) return;
 
-                var heroItems = items.Cast<StremioMediaStream>().Take(5).ToList();
+                var heroItems = items.OfType<StremioMediaStream>().Take(5).ToList();
                 var newIds = heroItems.Select(i => i.IMDbId ?? i.Id.ToString()).ToList();
                 
                 bool isMatch = _currentHeroIds.SequenceEqual(newIds);
@@ -1774,9 +1856,10 @@ namespace ModernIPTVPlayer.Controls
                                     }
                                     else
                                     {
-                                        row.Items = new ObservableCollection<StremioMediaStream>(items);
+                                    row.Items = new ObservableCollection<StremioMediaStream>(items);
                                     }
                                     row.IsLoading = false;
+                                    if (isHeroRow) UpdateHeroState(skipShimmer: true);
                                     HeroPerfLog($"[UI-UPD] Row {rid} (Phase 0) hydrated from cache.");
 
                                     // [ARCHITECTURAL FIX] Trigger enrichment IMMEDIATELY for Spotlight rows
@@ -1871,6 +1954,24 @@ namespace ModernIPTVPlayer.Controls
             finally
             {
                 if (acquired) _catalogSemaphore.Release();
+            }
+        }
+
+        private void PrefetchRowImages(CatalogRowViewModel row)
+        {
+            if (row.Items == null || row.Items.Count == 0) return;
+            
+            // Prefetch up to 8 items to fill the horizontal viewport (safely pre-warming GPU cache)
+            int count = System.Math.Min(row.Items.Count, 8);
+            for (int i = 0; i < count; i++)
+            {
+                if (row.Items[i] is IMediaStream stream)
+                {
+                    if (row.RowStyle == "Landscape")
+                        Helpers.SharedImageManager.GetOptimizedImage(stream.LandscapeImageUrl, 480);
+                    else
+                        Helpers.SharedImageManager.GetOptimizedImage(stream.PosterUrl, 170);
+                }
             }
         }
     }

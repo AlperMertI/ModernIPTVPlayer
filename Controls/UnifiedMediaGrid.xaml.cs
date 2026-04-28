@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Input;
 using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -17,7 +18,7 @@ namespace ModernIPTVPlayer.Controls
         public event EventHandler<MediaNavigationArgs>? PlayAction;
         public event EventHandler<MediaNavigationArgs>? DetailsAction;
         public event EventHandler<IMediaStream>? AddListAction;
-        public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)>? ColorExtracted;
+        public event EventHandler<ColorExtractedEventArgs>? ColorExtracted;
         public event EventHandler<FrameworkElement>? HoverEnded;
 
         public static readonly DependencyProperty ItemClickCommandProperty =
@@ -58,7 +59,8 @@ namespace ModernIPTVPlayer.Controls
                     var wrapped = new List<UnifiedMediaItemContext>();
                     foreach (var item in _items)
                     {
-                        if (item is IMediaStream stream)
+                        var stream = WinRTHelpers.AsMediaStream(item);
+                        if (stream != null)
                         {
                             wrapped.Add(new UnifiedMediaItemContext(stream, this));
                         }
@@ -249,9 +251,9 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void PosterCard_ColorsExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) colors)
+        private void PosterCard_ColorsExtracted(object sender, ColorExtractedEventArgs e)
         {
-            ColorExtracted?.Invoke(this, colors);
+            ColorExtracted?.Invoke(this, e);
         }
 
         private async void Card_HoverStarted(object sender, EventArgs e)
@@ -263,7 +265,7 @@ namespace ModernIPTVPlayer.Controls
                 var colors = await ImageHelper.GetOrExtractColorAsync(pc.ImageUrl);
                 if (colors.HasValue)
                 {
-                    ColorExtracted?.Invoke(this, colors.Value);
+                    ColorExtracted?.Invoke(this, new ColorExtractedEventArgs(colors.Value.Primary, colors.Value.Secondary));
                 }
             }
 

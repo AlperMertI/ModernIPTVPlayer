@@ -44,7 +44,7 @@ namespace ModernIPTVPlayer.Services.Iptv
             }
         }
 
-        public async Task RebuildAsync<T>(IReadOnlyList<T> streams, string newFingerprint) where T : IMediaStream
+        public async Task RebuildAsync<T>(IReadOnlyList<T> streams, string newFingerprint, CancellationToken ct = default) where T : IMediaStream
         {
             if (string.IsNullOrEmpty(newFingerprint)) return;
 
@@ -57,7 +57,7 @@ namespace ModernIPTVPlayer.Services.Iptv
             var sw = Stopwatch.StartNew();
             try
             {
-                var result = await Task.Run(() => BuildIndexInternal(streams, newFingerprint)).ConfigureAwait(false);
+                var result = await Task.Run(() => BuildIndexInternal(streams, newFingerprint, ct), ct).ConfigureAwait(false);
                 
                 _session?.Dispose();
                 _session = null;
@@ -69,13 +69,15 @@ namespace ModernIPTVPlayer.Services.Iptv
         }
 
         [SkipLocalsInit]
-        private IndexSnapshot BuildIndexInternal<T>(IReadOnlyList<T> streams, string fingerprint) where T : IMediaStream
+        private IndexSnapshot BuildIndexInternal<T>(IReadOnlyList<T> streams, string fingerprint, CancellationToken ct) where T : IMediaStream
         {
             var tokenRegistry = new ConcurrentDictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
 
             if (streams is IVirtualStreamList virtualList)
             {
-                Parallel.ForEach(Partitioner.Create(0, virtualList.Count), range =>
+                if (virtualList.Count == 0) return new IndexSnapshot(FrozenDictionary<string, int[]>.Empty, Array.Empty<string>(), fingerprint, DateTime.UtcNow);
+
+                Parallel.ForEach(Partitioner.Create(0, virtualList.Count), new ParallelOptions { CancellationToken = ct }, range =>
                 {
                     Span<char> titleBuffer = stackalloc char[512];
                     Span<char> normBuffer = stackalloc char[512];

@@ -5,6 +5,7 @@ using System;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
 using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -108,6 +109,31 @@ namespace ModernIPTVPlayer.Controls
             set { SetValue(ShowMetaProperty, value); }
         }
 
+        public static readonly DependencyProperty MediaStreamProperty =
+            DependencyProperty.Register("MediaStream", typeof(IMediaStream), typeof(LandscapeCard), new PropertyMetadata(null, OnMediaStreamChanged));
+
+        public IMediaStream MediaStream
+        {
+            get { return (IMediaStream)GetValue(MediaStreamProperty); }
+            set { SetValue(MediaStreamProperty, value); }
+        }
+
+        private static void OnMediaStreamChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is LandscapeCard card && e.NewValue is IMediaStream stream)
+            {
+                // [ROOT FIX] Self-hydrate all display properties from the managed stream.
+                card.ImageUrl = stream.LandscapeImageUrl;
+                card.Title = stream.Title;
+                card.Subtext = stream.DisplaySubtext;
+                card.Year = stream.Year;
+                card.RatingText = stream.Rating;
+                card.ShowProgress = stream.ShowProgress;
+                card.ShowMeta = stream.IsNotContinueWatching;
+                card.ProgressValue = stream.ProgressValue;
+            }
+        }
+
         public Visibility GetVisibility(string text) => string.IsNullOrEmpty(text) ? Visibility.Collapsed : Visibility.Visible;
         public Visibility GetVisibility(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
 
@@ -124,15 +150,11 @@ namespace ModernIPTVPlayer.Controls
             this.InitializeComponent();
         }
 
-
-
         private void UpdateImage()
         {
             if (string.IsNullOrEmpty(ImageUrl))
             {
                 PosterImage.Source = null;
-                PosterImage.Opacity = 0;
-                PosterShimmer.Visibility = Visibility.Visible;
             }
             else
             {
@@ -140,41 +162,18 @@ namespace ModernIPTVPlayer.Controls
                 if (PosterImage.Source is Microsoft.UI.Xaml.Media.Imaging.BitmapImage current && current.UriSource?.ToString() == ImageUrl)
                     return;
 
-                PosterImage.Opacity = 0; // Prepare for fade in
-                PosterShimmer.Visibility = Visibility.Visible;
-
-                var bitmapImage = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                bitmapImage.DecodePixelWidth = 480; // Higher quality for landscape
-                bitmapImage.UriSource = new Uri(ImageUrl);
-                
+                var bitmapImage = Helpers.SharedImageManager.GetOptimizedImage(ImageUrl, 480);
                 PosterImage.Source = bitmapImage;
             }
         }
 
         private void Image_ImageOpened(object sender, RoutedEventArgs e)
         {
-            PosterShimmer.Visibility = Visibility.Collapsed;
-            
-            var anim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation
-            {
-                To = 1.0,
-                Duration = new Duration(TimeSpan.FromMilliseconds(400)),
-                EasingFunction = new Microsoft.UI.Xaml.Media.Animation.CubicEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut }
-            };
-            
-            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(anim, PosterImage);
-            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(anim, "Opacity");
-            
-            var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
-            sb.Children.Add(anim);
-            sb.Begin();
         }
 
         private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
         {
-            // If the background or banner is a 404, stop the shimmer and just show whatever fallback (or nothing)
-            PosterShimmer.Visibility = Visibility.Collapsed;
-            PosterImage.Opacity = 0.1; // Or leave it 0
+            // Optional fallback
         }
 
         private void Card_Loaded(object sender, RoutedEventArgs e)
@@ -243,16 +242,9 @@ namespace ModernIPTVPlayer.Controls
         private void OnTapped(object sender, TappedRoutedEventArgs e)
         {
             e.Handled = true;
-            object ctx = DataContext;
-            IMediaStream? stream = ctx as IMediaStream;
-            if (stream == null && ctx is UnifiedMediaItemContext contextWrap)
+            if (MediaStream != null)
             {
-                stream = contextWrap.Data;
-            }
-
-            if (stream != null)
-            {
-                Clicked?.Invoke(this, stream);
+                Clicked?.Invoke(this, MediaStream);
             }
         }
     }

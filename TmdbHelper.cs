@@ -29,7 +29,7 @@ namespace ModernIPTVPlayer
 
         // Caching is now handled by TmdbCacheService (Persistent)
 
-        public static async Task<List<string>> GetMovieImagesAsync(string tmdbId)
+        public static async Task<List<string>> GetMovieImagesAsync(string tmdbId, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || string.IsNullOrEmpty(tmdbId)) return new List<string>();
             try
@@ -40,7 +40,7 @@ namespace ModernIPTVPlayer
                 var language = AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
                 var url = $"{BASE_URL}/movie/{tmdbId}/images?api_key={API_KEY}&include_image_language={shortLang},en,null";
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Movie Images Request ({shortLang}): {url}");
                 
                 using var doc = JsonDocument.Parse(json);
@@ -66,7 +66,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<List<string>> GetTvImagesAsync(string tmdbId)
+        public static async Task<List<string>> GetTvImagesAsync(string tmdbId, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || string.IsNullOrEmpty(tmdbId)) return new List<string>();
             try
@@ -77,7 +77,7 @@ namespace ModernIPTVPlayer
                 var language = AppSettings.TmdbLanguage;
                 var shortLang = language.Split('-')[0];
                 var url = $"{BASE_URL}/tv/{tmdbId}/images?api_key={API_KEY}&include_image_language={shortLang},en,null";
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] TV Images Request ({shortLang}): {url}");
                 
                 using var doc = JsonDocument.Parse(json);
@@ -103,7 +103,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<TmdbMovieResult?> SearchMovieAsync(string title, string year = null, string language = null)
+        public static async Task<TmdbMovieResult?> SearchMovieAsync(string title, string year = null, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -132,7 +132,7 @@ namespace ModernIPTVPlayer
                     url += $"&year={year}";
                 }
 
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Movie Search Request: {url}");
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Movie Search Found: {result?.Results?.Count ?? 0} results");
@@ -172,7 +172,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<TmdbMovieResult?> SearchTvAsync(string title, string year = null, string language = null)
+        public static async Task<TmdbMovieResult?> SearchTvAsync(string title, string year = null, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -200,7 +200,7 @@ namespace ModernIPTVPlayer
                     url += $"&first_air_date_year={year}";
                 }
                 
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] TV Search Request: {url}");
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                 System.Diagnostics.Debug.WriteLine($"[TMDB] TV Search Found: {result?.Results?.Count ?? 0} results");
@@ -239,7 +239,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<string?> GetTrailerKeyAsync(int tmdbId, bool isTv = false, string? language = null)
+        public static async Task<string?> GetTrailerKeyAsync(int tmdbId, bool isTv = false, string? language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -258,7 +258,7 @@ namespace ModernIPTVPlayer
                 }
 
                 var url = $"{BASE_URL}/{type}/{tmdbId}/videos?api_key={API_KEY}&language={language}";
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbVideosResponse);
 
                 string? trailerKey = null;
@@ -345,9 +345,9 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<TmdbCreditsResponse?> GetCreditsAsync(int id, bool isTv = false, string language = null)
+        public static async Task<TmdbCreditsResponse?> GetCreditsAsync(int id, bool isTv = false, string language = null, CancellationToken ct = default)
         {
-            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
+            if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || ct.IsCancellationRequested) return null;
             try
             {
                 language ??= AppSettings.TmdbLanguage;
@@ -357,7 +357,12 @@ namespace ModernIPTVPlayer
 
                 var url = $"{BASE_URL}/{type}/{id}/credits?api_key={API_KEY}&language={language}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Fetching Credits ({language}): {url}");
-                var json = await _client.GetStringAsync(url);
+                
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                using var response = await _client.SendAsync(request, ct);
+                if (!response.IsSuccessStatusCode) return null;
+                
+                var json = await response.Content.ReadAsStringAsync(ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbCreditsResponse);
                 if (result != null) TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbCreditsResponse);
                 return result;
@@ -379,7 +384,7 @@ namespace ModernIPTVPlayer
                 var encoded = Uri.EscapeDataString(name);
                 var url = $"{BASE_URL}/search/person?api_key={API_KEY}&query={encoded}&language={lang}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Person Search: {url}");
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbPersonSearchResponse);
                 if (result?.Results?.Count > 0)
                 {
@@ -403,7 +408,7 @@ namespace ModernIPTVPlayer
 
                 var url = $"{BASE_URL}/person/{personId}?api_key={API_KEY}&language={lang}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Person Details: {url}");
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbPersonDetails);
                 if (result != null) TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbPersonDetails);
                 return result;
@@ -423,7 +428,7 @@ namespace ModernIPTVPlayer
 
                 var url = $"{BASE_URL}/person/{personId}/combined_credits?api_key={API_KEY}&language={lang}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Person Credits: {url}");
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbPersonCreditsResponse);
                 if (result != null) TmdbCacheService.Instance.Set(cacheKey, result, AppJsonContext.Default.TmdbPersonCreditsResponse);
                 return result;
@@ -492,7 +497,7 @@ namespace ModernIPTVPlayer
             catch { return new List<StremioMediaStream>(); }
         }
 
-        public static async Task<TmdbMovieDetails?> GetDetailsAsync(int id, bool isTv = false, string language = null)
+        public static async Task<TmdbMovieDetails?> GetDetailsAsync(int id, bool isTv = false, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -505,7 +510,7 @@ namespace ModernIPTVPlayer
                 var url = $"{BASE_URL}/{type}/{id}?api_key={API_KEY}&language={language}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Details Request ({language}): {url}");
 
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbMovieDetails);
                 
                 if (result != null)
@@ -527,7 +532,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<TmdbSeasonDetails?> GetSeasonDetailsAsync(int tvId, int seasonNumber, string language = null)
+        public static async Task<TmdbSeasonDetails?> GetSeasonDetailsAsync(int tvId, int seasonNumber, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -539,7 +544,7 @@ namespace ModernIPTVPlayer
 
                 var url = $"{BASE_URL}/tv/{tvId}/season/{seasonNumber}?api_key={API_KEY}&language={language}&include_image_language={shortLang},en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Season Details Request ({language}): {url}");
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSeasonDetails);
                 if (result?.Episodes != null)
                 {
@@ -555,7 +560,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<TmdbMovieResult?> GetMovieByIdAsync(int movieId, string language = null)
+        public static async Task<TmdbMovieResult?> GetMovieByIdAsync(int movieId, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -572,7 +577,7 @@ namespace ModernIPTVPlayer
                 }
                 var url = $"{BASE_URL}/movie/{movieId}?api_key={API_KEY}&language={language}&append_to_response=images,external_ids&include_image_language={shortLang},en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] GetMovieById Request: {url}");
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbMovieResult);
                 if (result != null) 
                 {
@@ -588,7 +593,7 @@ namespace ModernIPTVPlayer
             catch { return null; }
         }
 
-        public static async Task<TmdbMovieResult?> GetTvByIdAsync(int tvId, string language = null)
+        public static async Task<TmdbMovieResult?> GetTvByIdAsync(int tvId, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -605,7 +610,7 @@ namespace ModernIPTVPlayer
                 }
                 var url = $"{BASE_URL}/tv/{tvId}?api_key={API_KEY}&language={language}&append_to_response=images,external_ids&include_image_language={shortLang},en,null";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] GetTvById Request: {url}");
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbMovieResult);
                 if (result != null) 
                 {
@@ -621,7 +626,7 @@ namespace ModernIPTVPlayer
             catch { return null; }
         }
 
-        public static async Task<List<TmdbMovieResult>> GetRecommendationsAsync(int id, bool isTv = false, string language = null)
+        public static async Task<List<TmdbMovieResult>> GetRecommendationsAsync(int id, bool isTv = false, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return new List<TmdbMovieResult>();
             try
@@ -632,7 +637,7 @@ namespace ModernIPTVPlayer
                 if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.ListTmdbMovieResult) is List<TmdbMovieResult> cached) return cached;
 
                 var url = $"{BASE_URL}/{type}/{id}/recommendations?api_key={API_KEY}&language={language}";
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var result = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
  
                 var recommendations = result?.Results ?? new List<TmdbMovieResult>();
@@ -646,7 +651,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        public static async Task<TmdbMovieResult?> GetTvByExternalIdAsync(string externalId, string language = null)
+        public static async Task<TmdbMovieResult?> GetTvByExternalIdAsync(string externalId, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -658,7 +663,7 @@ namespace ModernIPTVPlayer
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language={language}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Find ID: {url}");
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
@@ -696,7 +701,7 @@ namespace ModernIPTVPlayer
             catch { return null; }
         }
 
-        public static async Task<TmdbMovieResult?> GetMovieByExternalIdAsync(string externalId, string language = null)
+        public static async Task<TmdbMovieResult?> GetMovieByExternalIdAsync(string externalId, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY)) return null;
             try
@@ -708,7 +713,7 @@ namespace ModernIPTVPlayer
                 // Use /find/ endpoint
                 var url = $"{BASE_URL}/find/{externalId}?api_key={API_KEY}&external_source=imdb_id&language={language}";
                 System.Diagnostics.Debug.WriteLine($"[TMDB] Find ID: {url}");
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 
                 // We need a specific response model for Find, or use dynamic/JsonElement
                 using var doc = JsonDocument.Parse(json);
@@ -818,7 +823,7 @@ namespace ModernIPTVPlayer
             return $"https://image.tmdb.org/t/p/{size}{path}";
         }
 
-        public static async Task<List<TmdbMovieResult>> GetMovieRecommendationsAsync(string tmdbId, string language = null)
+        public static async Task<List<TmdbMovieResult>> GetMovieRecommendationsAsync(string tmdbId, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || string.IsNullOrEmpty(tmdbId)) return new List<TmdbMovieResult>();
             try
@@ -828,7 +833,7 @@ namespace ModernIPTVPlayer
                 if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.ListTmdbMovieResult) is List<TmdbMovieResult> cached) return cached;
 
                 var url = $"{BASE_URL}/movie/{tmdbId}/recommendations?api_key={API_KEY}&language={language}";
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var response = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                 var results = response?.Results ?? new List<TmdbMovieResult>();
 
@@ -838,7 +843,7 @@ namespace ModernIPTVPlayer
             catch { return new List<TmdbMovieResult>(); }
         }
 
-        public static async Task<List<TmdbMovieResult>> GetTvRecommendationsAsync(string tmdbId, string language = null)
+        public static async Task<List<TmdbMovieResult>> GetTvRecommendationsAsync(string tmdbId, string language = null, CancellationToken ct = default)
         {
             if (!AppSettings.IsTmdbEnabled || string.IsNullOrEmpty(API_KEY) || string.IsNullOrEmpty(tmdbId)) return new List<TmdbMovieResult>();
             try
@@ -848,7 +853,7 @@ namespace ModernIPTVPlayer
                 if (TmdbCacheService.Instance.Get(cacheKey, AppJsonContext.Default.ListTmdbMovieResult) is List<TmdbMovieResult> cached) return cached;
 
                 var url = $"{BASE_URL}/tv/{tmdbId}/recommendations?api_key={API_KEY}&language={language}";
-                var json = await _client.GetStringAsync(url);
+                var json = await _client.GetStringAsync(url, ct);
                 var response = JsonSerializer.Deserialize(json, AppJsonContext.Default.TmdbSearchResponse);
                 var results = response?.Results ?? new List<TmdbMovieResult>();
 

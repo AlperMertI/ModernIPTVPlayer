@@ -180,7 +180,7 @@ namespace ModernIPTVPlayer.Pages
                     if (results != null && results.Any())
                     {
                         GlobalShimmer.Visibility = Visibility.Collapsed;
-                        _allRawResults = results.Cast<IMediaStream>().ToList();
+                        _allRawResults = results.OfType<IMediaStream>().ToList();
                         UpdateYearList();
                         await ApplyFiltersAndSortAsync();
 
@@ -212,7 +212,7 @@ namespace ModernIPTVPlayer.Pages
                     if (results != null && results.Any())
                     {
                         GlobalShimmer.Visibility = Visibility.Collapsed;
-                        _allRawResults = results.Cast<IMediaStream>().ToList();
+                        _allRawResults = results.OfType<IMediaStream>().ToList();
                         UpdateYearList();
                         await ApplyFiltersAndSortAsync();
 
@@ -249,7 +249,7 @@ namespace ModernIPTVPlayer.Pages
 
                         this.DispatcherQueue.TryEnqueue(() =>
                         {
-                            _allRawResults = partialResults.Cast<IMediaStream>().ToList();
+                            _allRawResults = partialResults.OfType<IMediaStream>().ToList();
                             
                             // [THROTTLE] Only update UI smoothly
                             var now = DateTime.Now;
@@ -268,7 +268,7 @@ namespace ModernIPTVPlayer.Pages
                                         StremioSectionTitle.Text = searchScope == "library" ? "Kütüphane" : (searchScope == "iptv" ? "IPTV Sonuçları" : "Arama Sonuçları");
                                         StremioSectionTitle.Visibility = Visibility.Visible;
                                         EmptyPanel.Visibility = Visibility.Collapsed;
-                                        _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(15).Cast<StremioMediaStream>(), _args.Query);
+                                        _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(15).OfType<StremioMediaStream>(), _args.Query, token);
                                     });
                                 });
                             }
@@ -635,7 +635,7 @@ namespace ModernIPTVPlayer.Pages
             // [NEW] Trigger Lazy IPTV Matching for the currently filtered/sorted top items
             if (_args != null && !string.IsNullOrEmpty(_args.Query))
             {
-                _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(25).Cast<StremioMediaStream>(), _args.Query);
+                _ = StremioService.Instance.MatchVisibleIptvAsync(_stremioCollection.Take(25).OfType<StremioMediaStream>(), _args.Query, _pageSearchCts?.Token ?? default);
             }
 
             TxtStremioCount.Text = _stremioCollection.Count.ToString();
@@ -744,11 +744,10 @@ namespace ModernIPTVPlayer.Pages
             _ = _expandedCardController.CloseExpandedCardAsync();
         }
 
-        private void PosterCard_ColorsExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) e)
+        private void PosterCard_ColorsExtracted(object sender, ColorExtractedEventArgs e)
         {
             // Only update backdrop from the first few items to keep it stable
-            var card = sender as PosterCard;
-            if (_stremioCollection.Take(5).Any(x => x.Title == card.Title))
+            if (sender is PosterCard card && _stremioCollection.Take(5).Any(x => x.Title == card.Title))
             {
                  BackdropControl.TransitionTo(e.Primary, e.Secondary);
             }

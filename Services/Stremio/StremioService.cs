@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Threading;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Helpers;
@@ -68,7 +69,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         // ==========================================
         // 1. MANIFEST (Addon Info)
         // ==========================================
-        public async Task<StremioManifest> GetManifestAsync(string baseUrl)
+        public async Task<StremioManifest> GetManifestAsync(string baseUrl, CancellationToken ct = default)
         {
             string url = baseUrl.Trim();
             try
@@ -83,7 +84,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                     url = $"{url.TrimEnd('/')}/manifest.json";
                 }
 
-                string json = await _client.GetStringAsync(url);
+                string json = await _client.GetStringAsync(url, ct);
                 return JsonSerializer.Deserialize(json, AppJsonContext.Default.StremioManifest);
             }
             catch (Exception ex)
@@ -96,7 +97,7 @@ namespace ModernIPTVPlayer.Services.Stremio
         // ==========================================
         // 2. CATALOGS (Discovery)
         // ==========================================
-        public async Task<List<StremioMediaStream>> GetCatalogItemsAsync(string baseUrl, string type, string id, string extra = "", int skip = 0)
+        public async Task<List<StremioMediaStream>> GetCatalogItemsAsync(string baseUrl, string type, string id, string extra = "", int skip = 0, CancellationToken ct = default)
         {
             string cacheKey = $"{baseUrl}|{type}|{id}|{extra}|{skip}";
             if (_catalogCache.TryGetValue(cacheKey, out var cachedData)) return cachedData;
@@ -113,7 +114,7 @@ namespace ModernIPTVPlayer.Services.Stremio
 
             try
             {
-                var root = await GetCatalogAsync(url);
+                var root = await GetCatalogAsync(url, ct);
                 
                 if (root?.Metas != null)
                 {
@@ -157,16 +158,17 @@ namespace ModernIPTVPlayer.Services.Stremio
         // ==========================================
         // 3. META (Details)
         // ==========================================
-        public async Task<StremioMeta> GetMetaAsync(string baseUrl, string type, string id, string? correlationId = null)
+        public async Task<StremioMeta> GetMetaAsync(string baseUrl, string type, string id, string? correlationId = null, CancellationToken ct = default)
         {
             string url = $"{baseUrl.TrimEnd('/')}/meta/{type}/{id}.json";
             string idPrefix = correlationId != null ? $"[{correlationId}] " : "";
             System.Diagnostics.Debug.WriteLine($"{idPrefix}[StremioService] Fetching metadata URL: {url}");
             try
             {
-                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                using var response = await _client.SendAsync(request, cts.Token);
+                using var response = await _client.SendAsync(request, linkedCts.Token);
                 
                 response.EnsureSuccessStatusCode();
                 string json = await response.Content.ReadAsStringAsync();
@@ -894,7 +896,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             return id.Trim();
         }
 
-        public async Task MatchVisibleIptvAsync(IEnumerable<StremioMediaStream> items, string query)
+        public async Task MatchVisibleIptvAsync(IEnumerable<StremioMediaStream> items, string query, CancellationToken ct = default)
         {
             if (items == null || string.IsNullOrEmpty(query)) return;
             
@@ -906,9 +908,14 @@ namespace ModernIPTVPlayer.Services.Stremio
             {
                 foreach (var item in targets)
                 {
+                    if (ct.IsCancellationRequested) break;
+                    
                     item.IsIptvChecked = true;
                     // [Senior] Optimized lazy check against smart indices
                     var iptvMatch = IptvMatchService.Instance.MatchToIptv(item.Title, item.Year, item.Type ?? "movie");
+                    
+                    if (ct.IsCancellationRequested) break;
+
                     if (iptvMatch != null)
                     {
                         string itemYear = GetYearDigits(item.Year);
@@ -921,7 +928,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         }
                     }
                 }
-            });
+            }, ct);
         }
 
         private void MergeItems(StremioMediaStream existing, StremioMediaStream incoming)

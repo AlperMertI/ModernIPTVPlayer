@@ -13,30 +13,15 @@
     d:DesignHeight="1000"
     d:DesignWidth="1200">
     <UserControl.Resources>
-        <DataTemplate x:Key="StandardCardTemplate" x:DataType="stremioModels:StremioMediaStream">
-            <local:PosterCard DataContext="{x:Bind}"
-                              ImageUrl="{x:Bind PosterUrl, Mode=OneWay}" 
-                              ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
-                              ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
-                              IsAvailableOnIptv="{x:Bind IsAvailableOnIptv, Mode=OneWay}"
-                              ShowIptvBadge="{Binding ShowIptvBadge, ElementName=DiscoveryRoot}"
-                              Width="172" Height="252" 
+        <DataTemplate x:Key="StandardCardTemplate">
+            <local:PosterCard Width="172" Height="252" 
                               HoverStarted="PosterCard_HoverStarted" 
                               HoverEnded="PosterCard_HoverEnded"
                               Clicked="Card_Clicked"
                               ElementSoundMode="Off"/>
         </DataTemplate>
-        <DataTemplate x:Key="LandscapeCardTemplate" x:DataType="stremioModels:StremioMediaStream">
-            <local:LandscapeCard DataContext="{x:Bind}"
-                                  ImageUrl="{x:Bind LandscapeImageUrl, Mode=OneWay}" 
-                                  Title="{x:Bind Title, Mode=OneWay}"
-                                  Subtext="{x:Bind DisplaySubtext, Mode=OneWay}"
-                                  Year="{x:Bind Year, Mode=OneWay}"
-                                  RatingText="{x:Bind Rating, Mode=OneWay}"
-                                  ShowProgress="{x:Bind ShowProgress, Mode=OneWay}"
-                                  ShowMeta="{x:Bind IsNotContinueWatching, Mode=OneWay}"
-                                  ProgressValue="{x:Bind ProgressValue, Mode=OneWay}"
-                                  Width="296" Height="176" 
+        <DataTemplate x:Key="LandscapeCardTemplate">
+            <local:LandscapeCard Width="296" Height="176" 
                                   HoverStarted="LandscapeCard_HoverStarted" 
                                   HoverEnded="LandscapeCard_HoverEnded"
                                   Clicked="Card_Clicked"
@@ -81,8 +66,10 @@
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollMode="Auto"
                       VerticalScrollBarVisibility="Hidden"
-                      Loaded="MainScroll_Loaded">
-            <StackPanel x:Name="DiscoveryStack" Spacing="48" Background="Transparent">
+                      Loaded="MainScroll_Loaded"
+                      IsHorizontalRailEnabled="True"
+                      IsVerticalRailEnabled="True">
+            <StackPanel x:Name="DiscoveryStack" Spacing="36" Background="Transparent">
                 <local:HeroSectionControl x:Name="HeroControl" />
                 
                 <ItemsRepeater x:Name="DiscoveryRepeater" 
@@ -91,7 +78,7 @@
                                VerticalCacheLength="3.5"
                                ElementPrepared="DiscoveryRepeater_ElementPrepared">
                     <ItemsRepeater.Layout>
-                        <StackLayout Orientation="Vertical" Spacing="48"/>
+                        <StackLayout Orientation="Vertical" Spacing="36"/>
                     </ItemsRepeater.Layout>
                 </ItemsRepeater>
             </StackPanel>

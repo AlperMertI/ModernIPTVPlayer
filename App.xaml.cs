@@ -94,7 +94,12 @@ namespace ModernIPTVPlayer
                         else if (kv.Value is int i) sb.Append(i);
                         else if (kv.Value is long l) sb.Append(l);
                         else if (kv.Value is bool b) sb.Append(b ? "true" : "false");
-                        else sb.Append('\"').Append(JsonEscape(kv.Value.ToString() ?? string.Empty)).Append('\"');
+                        else 
+                        {
+                            string valStr = "";
+                            try { valStr = kv.Value?.ToString() ?? ""; } catch { valStr = "[Unprintable]"; }
+                            sb.Append('\"').Append(JsonEscape(valStr)).Append('\"');
+                        }
                     }
                     sb.Append('}');
                 }

@@ -152,8 +152,10 @@ namespace ModernIPTVPlayer.Services
 
                 unsafe
                 {
-                    Parallel.ForEach(Partitioner.Create(0, count), range => 
+                    if (count > 0)
                     {
+                        Parallel.ForEach(Partitioner.Create(0, count), range => 
+                        {
                         int localUpdateCount = 0;
                         for (int i = range.Item1; i < range.Item2; i++)
                         {
@@ -234,6 +236,7 @@ namespace ModernIPTVPlayer.Services
                         }
                         if (localUpdateCount > 0) Interlocked.Add(ref totalUpdateCount, localUpdateCount);
                     });
+                    }
                 }
 
 
@@ -3430,7 +3433,7 @@ namespace ModernIPTVPlayer.Services
             });
         }
         // SERIES INFO CACHING
-        public async Task<SeriesInfoResult> GetSeriesInfoAsync(int seriesId, LoginParams login)
+        public async Task<SeriesInfoResult> GetSeriesInfoAsync(int seriesId, LoginParams login, CancellationToken ct = default)
         {
             SeriesInfoResult binarySeed = null;
             try {
@@ -3494,7 +3497,7 @@ namespace ModernIPTVPlayer.Services
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 string url = $"{login.Host.TrimEnd('/')}/player_api.php?username={login.Username}&password={login.Password}&action=get_series_info&series_id={seriesId}";
                 using var client = new System.Net.Http.HttpClient();
-                var json = await client.GetStringAsync(url);
+                var json = await client.GetStringAsync(url, ct);
                 
                 // [NEW] Robust RAW Debug Log
                 await WriteDebugJsonAsync($"series_{seriesId}_raw.json", json);
@@ -3530,7 +3533,7 @@ namespace ModernIPTVPlayer.Services
 
 
         // VOD INFO CACHING
-        public async Task<MovieInfoResult> GetMovieInfoAsync(int streamId, LoginParams login)
+        public async Task<MovieInfoResult> GetMovieInfoAsync(int streamId, LoginParams login, CancellationToken ct = default)
         {
             try {
                 // [PHASE 4] Binary-First Optimization: If already in our high-speed index, skip JSON load.
@@ -3588,7 +3591,7 @@ namespace ModernIPTVPlayer.Services
             {
                 string url = $"{login.Host.TrimEnd('/')}/player_api.php?username={login.Username}&password={login.Password}&action=get_vod_info&vod_id={streamId}";
                 using var client = new System.Net.Http.HttpClient();
-                var json = await client.GetStringAsync(url);
+                var json = await client.GetStringAsync(url, ct);
                 
                 // [NEW] Robust RAW Debug Log
                 await WriteDebugJsonAsync($"vod_{streamId}_raw.json", json);

@@ -176,10 +176,10 @@ namespace ModernIPTVPlayer
             // IPTV Grid Events
             MediaGrid.ItemClicked += (s, e) => NavigationService.NavigateToDetails(Frame, e, e.SourceElement);
             MediaGrid.PlayAction += (s, e) => NavigationService.NavigateToDetailsDirect(Frame, e);
-            MediaGrid.ColorExtracted += (s, colors) => 
+            MediaGrid.ColorExtracted += (s, e) => 
             {
-                _heroColorsCache[_mediaType] = colors;
-                BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+                _heroColorsCache[_mediaType] = (e.Primary, e.Secondary);
+                BackdropControl.TransitionTo(e.Primary, e.Secondary);
             };
             MediaGrid.HoverEnded += (s, card) => 
             {
@@ -190,11 +190,11 @@ namespace ModernIPTVPlayer
             // Stremio Control Events
             StremioControl.ItemClicked += (s, e) => NavigationService.NavigateToDetails(Frame, new MediaNavigationArgs(e.Stream, preloadedImage: (e.SourceElement is PosterCard pc) ? pc.ImageElement.Source : null, preloadedLogo: e.PreloadedLogo), e.SourceElement);
             StremioControl.PlayAction += (s, stream) => NavigationService.NavigateToDetailsDirect(Frame, stream);
-            StremioControl.BackdropColorChanged += (s, colors) => 
+            StremioControl.BackdropColorChanged += (s, e) => 
             {
-                _heroColors = colors;
-                _heroColorsCache[_mediaType] = colors;
-                BackdropControl.TransitionTo(colors.Primary, colors.Secondary);
+                _heroColors = (e.Primary, e.Secondary);
+                _heroColorsCache[_mediaType] = (e.Primary, e.Secondary);
+                BackdropControl.TransitionTo(e.Primary, e.Secondary);
             };
             StremioControl.ViewChanged += (s, e) => 
             {
@@ -204,7 +204,8 @@ namespace ModernIPTVPlayer
             { 
                 if (_stremioExpandedCardOverlay != null) 
                 {
-                    _stremioExpandedCardOverlay.IsManipulationInProgress = true; 
+                    _stremioExpandedCardOverlay.IsHorizontalManipulationInProgress = true; 
+                    _ = _stremioExpandedCardOverlay.CloseExpandedCardAsync(force: true);
                     _stremioExpandedCardOverlay.UpdatePositions();
                 }
             };
@@ -229,7 +230,7 @@ namespace ModernIPTVPlayer
             };
             StremioControl.RowScrollEnded += (s, e) => 
             { 
-                if (_stremioExpandedCardOverlay != null) _stremioExpandedCardOverlay.IsManipulationInProgress = false; 
+                if (_stremioExpandedCardOverlay != null) _stremioExpandedCardOverlay.IsHorizontalManipulationInProgress = false; 
             };
 
             // Overlay Controller
@@ -729,6 +730,12 @@ namespace ModernIPTVPlayer
 
         private void RebuildCategoryIndexMap()
         {
+            if (_allIptvItems == null || _allIptvItems.Count == 0)
+            {
+                _itemsByNormalizedCategoryId = new Dictionary<string, IReadOnlyList<IMediaStream>>(StringComparer.Ordinal);
+                return;
+            }
+
             var map = new ConcurrentDictionary<string, List<int>>(StringComparer.Ordinal);
             
             // ARCHITECTURAL FIX: Use Zero-Lock Parallel Scan (Index-only) to avoid object hydration

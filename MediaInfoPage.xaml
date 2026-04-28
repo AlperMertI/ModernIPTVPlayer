@@ -1339,8 +1339,7 @@
                     <CompositeTransform x:Name="TrailerTransform" ScaleX="0.1" ScaleY="0.1"/>
                 </Grid.RenderTransform>
                 
-                <Border CornerRadius="12" Background="Black" BorderBrush="#33FFFFFF" BorderThickness="1">
-                    <muxc:WebView2 x:Name="TrailerWebView" HorizontalAlignment="Stretch" VerticalAlignment="Stretch" Visibility="Visible" Opacity="0"/>
+                <Border x:Name="TrailerContainer" CornerRadius="12" Background="Black" BorderBrush="#33FFFFFF" BorderThickness="1">
                 </Border>
 
                 <!-- Loading State -->

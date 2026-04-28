@@ -37,9 +37,9 @@ namespace ModernIPTVPlayer.Controls
         private CompositionClip? _borderClip;
         private ContainerVisual? _videoVisual;
 
-        public event EventHandler<(IMediaStream Stream, UIElement SourceElement, Microsoft.UI.Xaml.Media.ImageSource PreloadedLogo)> ItemClicked;
+        public event EventHandler<SpotlightItemClickedEventArgs> ItemClicked;
         public event EventHandler HeaderClicked;
-        public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> TrailerExpandRequested;
+        public event EventHandler<TrailerExpandRequestedEventArgs> TrailerExpandRequested;
 
         public static readonly DependencyProperty IsExpandedProperty =
             DependencyProperty.Register("IsExpanded", typeof(bool), typeof(SpotlightInjectRow), new PropertyMetadata(false, OnIsExpandedChanged));
@@ -532,7 +532,7 @@ namespace ModernIPTVPlayer.Controls
         {
             if (vm.Items != null && vm.Items.Count > 0)
             {
-                var newItems = vm.Items.Cast<StremioMediaStream>().Take(5).ToList();
+                var newItems = vm.Items.OfType<StremioMediaStream>().Take(5).ToList();
                 
                 // [PERF] Skip if items are identical (prevents double-update during Discovery hydration)
                 if (_items != null && _items.Count == newItems.Count)
@@ -855,7 +855,7 @@ namespace ModernIPTVPlayer.Controls
 
                 var currentItem = _items[_currentIndex];
                 string rawTrailer = currentItem.TrailerUrl;
-                string ytId = ExtractYouTubeId(rawTrailer);
+                string ytId = TrailerPoolService.ExtractYouTubeId(rawTrailer);
 
                 System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_TRACE] TryLoad: {currentItem.Title} | Raw: {rawTrailer ?? "null"} | Extracted: {ytId ?? "null"} | Owner: {TrailerPoolService.Instance.CurrentContainer == VideoContainer}");
 
@@ -1032,36 +1032,6 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private string ExtractYouTubeId(string source)
-        {
-            if (string.IsNullOrEmpty(source)) return null;
-            if (!source.Contains("/") && !source.Contains(".")) return source;
-
-            try
-            {
-                if (source.Contains("v="))
-                {
-                    var split = source.Split("v=");
-                    if (split.Length > 1) return split[1].Split('&')[0];
-                }
-                else if (source.Contains("be/"))
-                {
-                    var split = source.Split("be/");
-                    if (split.Length > 1) return split[1].Split('?')[0];
-                }
-                else if (source.Contains("embed/"))
-                {
-                    var split = source.Split("embed/");
-                    if (split.Length > 1) return split[1].Split('?')[0];
-                }
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[Spotlight] ExtractYouTubeId error: {ex.Message}");
-            }
-
-            return source;
-        }
 
         private void OnTrailerMessageReceived(string msg)
         {
@@ -1078,12 +1048,15 @@ namespace ModernIPTVPlayer.Controls
                         return;
                     }
 
-                    bool isWebViewReady = _webView != null && _webView.Parent == VideoContainer;
+                    // [FIX] Race Condition: Check ownership via pool instead of local _webView variable
+                    var shared = TrailerPoolService.Instance.SharedWebView;
+                    bool isWebViewReady = shared != null && TrailerPoolService.Instance.CurrentContainer == VideoContainer;
+                    
                     System.Diagnostics.Debug.WriteLine($"[SPOTLIGHT_VIEW_DEBUG] Message: {msg} | WebV: {isWebViewReady} | Container: {VideoContainer != null}");
 
                     if (!isWebViewReady) 
                     {
-                        System.Diagnostics.Debug.WriteLine("[SPOTLIGHT_VIEW_DEBUG] READY Aborted: WebView not attached to this container.");
+                        System.Diagnostics.Debug.WriteLine("[SPOTLIGHT_VIEW_DEBUG] READY Aborted: WebView not attached to this container or owner changed.");
                         return;
                     }
 
@@ -1096,6 +1069,14 @@ namespace ModernIPTVPlayer.Controls
                         UpdateClips();
                         
                         VideoContainer.Visibility = Visibility.Visible;
+                        
+                        // [FIX] Ensure the shared WebView itself is opaque and visible
+                        if (shared != null)
+                        {
+                            shared.Opacity = 1;
+                            shared.Visibility = Visibility.Visible;
+                        }
+
                         UpdateMuteButtonIcon();
 
                         // Project Zero: Smooth Fade-In Reveal
@@ -1181,7 +1162,7 @@ namespace ModernIPTVPlayer.Controls
             if (_currentIndex >= 0 && _currentIndex < _items.Count)
             {
                 var item = _items[_currentIndex];
-                ItemClicked?.Invoke(this, (item, FallbackImage, LogoImage.Source));
+                ItemClicked?.Invoke(this, new SpotlightItemClickedEventArgs(item, FallbackImage, LogoImage.Source));
             }
         }
 

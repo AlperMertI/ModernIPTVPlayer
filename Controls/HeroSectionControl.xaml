@@ -110,6 +110,11 @@
                     </Border>
                     <Grid x:Name="HeroLogoContainer" HorizontalAlignment="Left" Visibility="Collapsed">
                         <Border x:Name="HeroLogoHost" Height="100" Width="500" HorizontalAlignment="Left"/>
+                        <Image x:Name="HeroLogoFallback" Height="100" Width="500" Stretch="Uniform" HorizontalAlignment="Left" Visibility="Collapsed" RenderTransformOrigin="0.5,0.5">
+                            <Image.RenderTransform>
+                                <ScaleTransform ScaleX="1" ScaleY="1"/>
+                            </Image.RenderTransform>
+                        </Image>
                         <local:ShimmerControl x:Name="HeroLogoShimmer" Width="300" Height="60" CornerRadius="8" Opacity="0.5" Visibility="Collapsed"/>
                     </Grid>
                     <TextBlock x:Name="HeroTitle" Text="" FontSize="56" FontWeight="Black" Foreground="White" TextWrapping="Wrap" MaxWidth="800" LineHeight="60"/>

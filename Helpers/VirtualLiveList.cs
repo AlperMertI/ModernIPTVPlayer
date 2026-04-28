@@ -164,6 +164,12 @@ namespace ModernIPTVPlayer.Helpers
         /// </summary>
         public void ParallelScanInto(ConcurrentDictionary<string, List<int>> indexMap)
         {
+            if (_count == 0)
+            {
+                _idToIndexMap = FrozenDictionary<int, int>.Empty;
+                return;
+            }
+
             var partitioner = Partitioner.Create(0, _count, Math.Max(1, _count / (Environment.ProcessorCount * 2)));
             var tempIdMap = new ConcurrentDictionary<int, int>(Environment.ProcessorCount * 2, _count);
 

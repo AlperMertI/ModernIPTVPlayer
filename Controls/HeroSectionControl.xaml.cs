@@ -14,6 +14,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Runtime.InteropServices.WindowsRuntime;
 using ModernIPTVPlayer.Models;
+using ModernIPTVPlayer.Models.Iptv;
+using ModernIPTVPlayer.Models.Metadata;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services;
 using ModernIPTVPlayer.Services.Stremio;
@@ -25,7 +27,7 @@ namespace ModernIPTVPlayer.Controls
     {
         // Events
         public event EventHandler<IMediaStream> PlayAction;
-        public event EventHandler<(Windows.UI.Color Primary, Windows.UI.Color Secondary)> ColorExtracted;
+        public event EventHandler<ColorExtractedEventArgs> ColorExtracted;
 
         private static void HeroLog(string msg) => Helpers.HeroTracer.Log(msg);
         private enum HeroPhase { Loading, Ready, TrailerPlaying }
@@ -34,6 +36,7 @@ namespace ModernIPTVPlayer.Controls
         {
             public LoadedImageSurface? Backdrop;
             public LoadedImageSurface? Logo;
+            public byte[]? SvgBytes;
             public bool HasLogoUrl;
         }
 
@@ -224,6 +227,7 @@ namespace ModernIPTVPlayer.Controls
                 if (_heroItems.Count == 0) continue;
                 _currentHeroIndex = NormalizeIndex(_currentHeroIndex + step, _heroItems.Count);
                 _currentHeroId = _heroItems[_currentHeroIndex].IMDbId ?? _heroItems[_currentHeroIndex].Id.ToString();
+                _activeTrailerIndex = -1;
                 await ReconcileAsync();
             }
         }
@@ -258,15 +262,26 @@ namespace ModernIPTVPlayer.Controls
                 _heroLogoBrush.Stretch = Microsoft.UI.Composition.CompositionStretch.Uniform;
                 _heroLogoVisual = compositor.CreateSpriteVisual();
                 _heroLogoVisual.Brush = _heroLogoBrush;
-                _heroLogoVisual.Size = new Vector2(500f, 120f);
+                _heroLogoVisual.Size = new Vector2(500f, 100f);
                 ElementCompositionPreview.SetElementChildVisual(HeroLogoHost, _heroLogoVisual);
                 _compositionReadyTcs.TrySetResult();
             } catch (Exception ex) { HeroLog($"Composition Error: {ex.Message}"); }
         }
 
         private const int HERO_EXIT_DURATION_MS = 300;
-        private const int MIN_REVEAL_HOLD_MS = 650;
         private const int SHIMMER_REVEAL_THRESHOLD_MS = 500;
+        private const int MIN_REVEAL_HOLD_MS = 650;
+
+        private static async Task SafeDelayAsync(int ms, CancellationToken token)
+        {
+            if (ms <= 0) return;
+            var tcs = new TaskCompletionSource<bool>();
+            using (token.Register(() => tcs.TrySetResult(true)))
+            {
+                if (token.IsCancellationRequested) return;
+                await Task.WhenAny(Task.Delay(ms), tcs.Task).ConfigureAwait(true);
+            }
+        }
 
         private async Task ApplyTransitionInternalAsync(bool forceHardReset = false) {
             await _compositionReadyTcs.Task;
@@ -282,6 +297,7 @@ namespace ModernIPTVPlayer.Controls
                 long ticket = ++_currentSessionTicket;
                 _currentHeroIndex = targetIndex;
                 _currentHeroId = item.IMDbId ?? item.Id.ToString();
+                _activeTrailerIndex = -1;
                 _currentBgUrl = newBg; _currentLogoUrl = item.LogoUrl;
                 var assets = new HeroAssets { HasLogoUrl = !string.IsNullOrEmpty(item.LogoUrl) };
                 _activeAssets = assets; _phase = HeroPhase.Loading; StopAutoRotation();
@@ -290,9 +306,13 @@ namespace ModernIPTVPlayer.Controls
                 var exitTask = PlayExitAsync(ticket);
                 var backdropTask = _assetManager.GetBackdropSurfaceAsync(_currentBgUrl, token);
                 var logoTask = assets.HasLogoUrl ? _assetManager.GetLogoSurfaceAsync(_currentLogoUrl, token) : Task.FromResult<LoadedImageSurface?>(null);
-                var assetsTask = Task.WhenAll(backdropTask, logoTask);
+                var svgBytesTask = (assets.HasLogoUrl && _currentLogoUrl!.EndsWith(".svg", StringComparison.OrdinalIgnoreCase)) 
+                                   ? _assetManager.GetLogoBytesAsync(_currentLogoUrl) 
+                                   : Task.FromResult<byte[]?>(null);
+
+                var assetsTask = Task.WhenAll(backdropTask, logoTask, svgBytesTask);
                 _ = ShowShimmerIfSlowAsync(ticket, assetsTask);
-                var budget = Task.Delay(BACKDROP_BUDGET_MS, token);
+                var budget = SafeDelayAsync(BACKDROP_BUDGET_MS, token);
                 await Task.WhenAny(assetsTask, budget).ConfigureAwait(true);
                 await exitTask.ConfigureAwait(true);
                 if (ticket != _currentSessionTicket) return;
@@ -300,9 +320,15 @@ namespace ModernIPTVPlayer.Controls
                 if (!assetsTask.IsCompleted) { try { await assetsTask.ConfigureAwait(true); } catch { return; } if (ticket != _currentSessionTicket) return; }
                 assets.Backdrop = backdropTask.IsCompletedSuccessfully ? backdropTask.Result : null;
                 assets.Logo = logoTask.IsCompletedSuccessfully ? logoTask.Result : null;
+                assets.SvgBytes = svgBytesTask.IsCompletedSuccessfully ? svgBytesTask.Result : null;
                 await CommitRevealAsync(ticket, assets, item, token).ConfigureAwait(true);
                 UpdateNavigationVisibility();
-            } finally { _reconcilerLock.Release(); }
+            }
+            catch (Exception ex)
+            {
+                HeroLog($"[CRITICAL-TRANSITION] ERROR: {ex.GetType().Name}: {ex.Message} at {ex.StackTrace}");
+            }
+            finally { _reconcilerLock.Release(); }
         }
 
         private int ResolveTargetIndex(bool force) {
@@ -317,6 +343,7 @@ namespace ModernIPTVPlayer.Controls
             if (liveC) HeroAnimationHelper.AnimateTextOut(HeroRealContent);
             if (_heroVisual != null) HeroAnimationHelper.FadeVisualOpacity(_heroVisual, 0f, 300);
             if (_heroLogoVisual != null) HeroAnimationHelper.FadeVisualOpacity(_heroLogoVisual, 0f, 300);
+            HeroAnimationHelper.FadeElement(HeroLogoFallback, 0, 300);
             await Task.Delay(300).ConfigureAwait(true);
             if (ticket == _currentSessionTicket) ResetOutgoingStateSync();
         }
@@ -327,6 +354,8 @@ namespace ModernIPTVPlayer.Controls
             if (_heroLogoBrush != null) _heroLogoBrush.Surface = null;
             if (_heroVisual != null) _heroVisual.Opacity = 0f;
             if (_heroLogoVisual != null) _heroLogoVisual.Opacity = 0f;
+            HeroLogoFallback.Source = null;
+            HeroLogoFallback.Visibility = Visibility.Collapsed;
         }
 
         private async Task ShowShimmerIfSlowAsync(long t, Task a) {
@@ -342,6 +371,61 @@ namespace ModernIPTVPlayer.Controls
             if (t !=_currentSessionTicket) return; _phase = HeroPhase.Ready;
             if (_heroImageBrush != null) _heroImageBrush.Surface = a.Backdrop;
             if (_heroLogoBrush != null) _heroLogoBrush.Surface = a.Logo;
+            
+            // [SVG SUPPORT] LoadedImageSurface doesn't support SVGs, so we use SvgImageSource as a fallback.
+            if (!string.IsNullOrEmpty(item.LogoUrl) && item.LogoUrl.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+            {
+                if (a.SvgBytes != null)
+                {
+                    try
+                    {
+                        using var ms = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+                        using (var writer = new Windows.Storage.Streams.DataWriter(ms.GetOutputStreamAt(0)))
+                        {
+                            writer.WriteBytes(a.SvgBytes);
+                            await writer.StoreAsync();
+                            await writer.FlushAsync();
+                            writer.DetachStream();
+                        }
+                        ms.Seek(0);
+                        
+                        var svgSource = new SvgImageSource();
+                        svgSource.RasterizePixelHeight = 120;
+                        await svgSource.SetSourceAsync(ms);
+                        
+                        HeroLogoFallback.Source = svgSource;
+                        HeroLogoFallback.Visibility = Visibility.Visible;
+                        HeroLogoHost.Visibility = Visibility.Collapsed;
+                        
+                        // Use AnimateTextIn for the fallback to ensure both XAML and Composition 
+                        // opacity are handled correctly and in sync with the other content.
+                        HeroAnimationHelper.AnimateTextIn(HeroLogoFallback, 600);
+                        
+                        HeroLog($"[SVG-LOAD] Stream-based load OK: {item.LogoUrl}");
+                    }
+                    catch (Exception ex)
+                    {
+                        HeroLog($"[SVG-LOAD] Stream-based load FAILED: {ex.Message} | {item.LogoUrl}");
+                        HeroTitle.Visibility = Visibility.Visible;
+                        HeroTitle.Text = item.Title;
+                        HeroLogoContainer.Visibility = Visibility.Collapsed;
+                    }
+                }
+                else
+                {
+                    HeroLog($"[SVG-LOAD] No bytes available for SVG: {item.LogoUrl}");
+                    HeroTitle.Visibility = Visibility.Visible;
+                    HeroTitle.Text = item.Title;
+                    HeroLogoContainer.Visibility = Visibility.Collapsed;
+                }
+            }
+            else
+            {
+                HeroLogoFallback.Source = null;
+                HeroLogoFallback.Visibility = Visibility.Collapsed;
+                HeroLogoHost.Visibility = Visibility.Visible;
+            }
+
             PopulateHeroData(item); SubscribeToItemChanges(item);
 
             if (!string.IsNullOrEmpty(_currentBgUrl)) {
@@ -363,8 +447,13 @@ namespace ModernIPTVPlayer.Controls
             }));
 
             UpdateNavigationVisibility(); StartHeroAutoRotation();
+            
+            // Eagerly warm up the trailer control as soon as the hero is revealed.
+            // This ensures it's ready for instant playback when the user clicks.
+            TrailerView.WarmUpIfIdle();
+
             if (_heroItems.Count > 1) _ = _assetManager.ProcessSecondaryHeroAssetsAsync(_heroItems.Skip(1).Take(4).ToList(), tok);
-            try { await Task.Delay(MIN_REVEAL_HOLD_MS, tok).ConfigureAwait(true); } catch { }
+            await SafeDelayAsync(MIN_REVEAL_HOLD_MS, tok).ConfigureAwait(true);
         }
 
         public void SetItems(IEnumerable<StremioMediaStream>? items, bool animate = false) => ReconcileAsync(items?.ToList() ?? new List<StremioMediaStream>(), animate);
@@ -383,7 +472,7 @@ namespace ModernIPTVPlayer.Controls
         }
 
         private void ResetHeroAutoTimer() { _heroAutoTimer?.Stop(); _heroAutoTimer?.Start(); }
-        private void NotifyColorChanged(Windows.UI.Color p, Windows.UI.Color s) { if (this.XamlRoot != null && this.Visibility == Visibility.Visible) ColorExtracted?.Invoke(this, (p, s)); }
+        private void NotifyColorChanged(Windows.UI.Color p, Windows.UI.Color s) { if (this.XamlRoot != null && this.Visibility == Visibility.Visible) ColorExtracted?.Invoke(this, new ColorExtractedEventArgs(p, s)); }
 
         public void SetLoading(bool isLoading, bool silent = false, bool reset = true) {
             if (!isLoading || silent) return;
@@ -421,19 +510,24 @@ namespace ModernIPTVPlayer.Controls
             }
 
             SetText(HeroOverview, !string.IsNullOrEmpty(item.Description) ? item.Description : "Sinematik bir serüven sizi bekliyor.");
-            SetVisibility(HeroLogoContainer, !string.IsNullOrEmpty(item.LogoUrl) ? Visibility.Visible : Visibility.Collapsed);
-            SetVisibility(HeroTitle, string.IsNullOrEmpty(item.LogoUrl) ? Visibility.Visible : Visibility.Collapsed);
-            if (string.IsNullOrEmpty(item.LogoUrl)) SetText(HeroTitle, item.Title);
+            bool hasLogo = !string.IsNullOrEmpty(item.LogoUrl);
+            bool isSvg = hasLogo && item.LogoUrl!.EndsWith(".svg", StringComparison.OrdinalIgnoreCase);
+
+            SetVisibility(HeroLogoContainer, hasLogo ? Visibility.Visible : Visibility.Collapsed);
+            SetVisibility(HeroTitle, hasLogo ? Visibility.Collapsed : Visibility.Visible);
+            if (!hasLogo) SetText(HeroTitle, item.Title);
+
+            if (hasLogo)
+            {
+                SetVisibility(HeroLogoHost, isSvg ? Visibility.Collapsed : Visibility.Visible);
+                SetVisibility(HeroLogoFallback, isSvg ? Visibility.Visible : Visibility.Collapsed);
+            }
             SetText(HeroGenres, item.Genres);
             SetVisibility(HeroGenres, !string.IsNullOrEmpty(item.Genres) ? Visibility.Visible : Visibility.Collapsed);
 
-            // [RESTORATION FIX] Ensure trailer button is visible if ANY metadata indicates a trailer exists.
-            // Some items might only have the TrailerUrl field populated after background enrichment.
-            bool hasTrailer = !string.IsNullOrEmpty(item.TrailerUrl) || 
-                              (item.Meta?.Trailers != null && item.Meta.Trailers.Count > 0) ||
-                              !string.IsNullOrEmpty(item.IMDbId); // Fallback: Assume IMDb items might have trailers
-
-            SetVisibility(HeroTrailerButton, hasTrailer ? Visibility.Visible : Visibility.Collapsed);
+            // Toggle trailer button based on availability. 
+            // TrailerUrl property already includes fallbacks to Catalog Trailers and AppExtras.
+            SetVisibility(HeroTrailerButton, !string.IsNullOrEmpty(item.TrailerUrl) ? Visibility.Visible : Visibility.Collapsed);
         }
 
         private void HeroPlayButton_Click(object sender, RoutedEventArgs e) { if (_heroItems.Count > _currentHeroIndex) PlayAction?.Invoke(this, _heroItems[_currentHeroIndex]); }
@@ -447,14 +541,20 @@ namespace ModernIPTVPlayer.Controls
             // [OPTIMIZATION] Eagerly warm up the trailer control
             TrailerView.WarmUpIfIdle();
 
+            _activeTrailerIndex = -1;
             _activeTrailerCandidates = BuildTrailerCandidates(_heroItems[_currentHeroIndex]);
             if (!_activeTrailerCandidates.Any()) 
             {
                  // Try one last-ditch effort: get detailed metadata if not enriched
-                 var detail = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(_heroItems[_currentHeroIndex]);
+                 var detail = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(_heroItems[_currentHeroIndex], MetadataContext.Hero);
                  if (detail != null && !string.IsNullOrEmpty(detail.TrailerUrl))
                  {
                      _activeTrailerCandidates.Add(detail.TrailerUrl);
+                 }
+                 else
+                 {
+                     // Still no trailer after enrichment? Hide the button to prevent future clicks
+                     SetVisibility(HeroTrailerButton, Visibility.Collapsed);
                  }
             }
 
@@ -465,32 +565,13 @@ namespace ModernIPTVPlayer.Controls
         private async Task<bool> TryPlayNextTrailerCandidateAsync() {
             while (_activeTrailerIndex + 1 < _activeTrailerCandidates.Count) {
                 _activeTrailerIndex++; 
-                string id = ExtractYouTubeId(_activeTrailerCandidates[_activeTrailerIndex]);
+                string id = TrailerPoolService.ExtractYouTubeId(_activeTrailerCandidates[_activeTrailerIndex]);
                 await TrailerView.PlayTrailerAsync(id); 
                 return true;
             }
             return false;
         }
 
-        private string ExtractYouTubeId(string source)
-        {
-            if (string.IsNullOrEmpty(source)) return source;
-            if (!source.Contains("/") && !source.Contains(".")) return source; // Already an ID
-
-            try {
-                if (source.Contains("v=")) {
-                    var split = source.Split("v=");
-                    if (split.Length > 1) return split[1].Split('&')[0];
-                } else if (source.Contains("be/")) {
-                    var split = source.Split("be/");
-                    if (split.Length > 1) return split[1].Split('?')[0];
-                } else if (source.Contains("embed/")) {
-                    var split = source.Split("embed/");
-                    if (split.Length > 1) return split[1].Split('?')[0];
-                }
-            } catch { }
-            return source;
-        }
 
         private List<string> BuildTrailerCandidates(StremioMediaStream item) {
             var l = new List<string>();

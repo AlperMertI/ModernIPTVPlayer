@@ -290,5 +290,12 @@ namespace ModernIPTVPlayer
                 Settings.Values[PlayerSettingsKey] = json;
             }
         }
+        // Trailer Settings
+        private const string TrailerQualityKey = "TrailerQuality";
+        public static int TrailerQuality
+        {
+            get => (Settings.Values[TrailerQualityKey] as int?) ?? 1; // Default to 1 (Balanced/720p)
+            set => Settings.Values[TrailerQualityKey] = value;
+        }
     }
 }

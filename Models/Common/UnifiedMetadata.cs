@@ -110,6 +110,8 @@ namespace ModernIPTVPlayer.Models.Metadata
 
         private string _primaryAddonUrl; private int _pmaOff, _pmaLen;
         public string PrimaryMetadataAddonUrl { get => _primaryAddonUrl ?? MetadataBuffer.GetString(_pmaOff, _pmaLen); set { var r = MetadataBuffer.Store(value); _pmaOff = r.Offset; _pmaLen = r.Length; _primaryAddonUrl = value; } }
+        
+        [JsonIgnore] public MetadataField CheckedFields { get; set; } = MetadataField.None;
 
         [JsonIgnore] public HashSet<string> ProbedAddons { get; set; } = new HashSet<string>();
         [JsonIgnore] public string DurationFormatted => Runtime;

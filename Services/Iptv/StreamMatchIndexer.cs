@@ -44,7 +44,7 @@ namespace ModernIPTVPlayer.Services.Iptv
 
         public string Fingerprint => _session?.Fingerprint ?? Volatile.Read(ref _snapshot).Fingerprint;
 
-        public async Task RebuildAsync<T>(IReadOnlyList<T> streams, string newFingerprint, bool clear = false) where T : IMediaStream
+        public async Task RebuildAsync<T>(IReadOnlyList<T> streams, string newFingerprint, bool clear = false, CancellationToken ct = default) where T : IMediaStream
         {
             if (string.IsNullOrEmpty(newFingerprint)) return;
 
@@ -58,7 +58,7 @@ namespace ModernIPTVPlayer.Services.Iptv
             try
             {
                 var current = Volatile.Read(ref _snapshot);
-                var result = await Task.Run(() => BuildIndexInternal(streams, newFingerprint, clear ? null : current)).ConfigureAwait(false);
+                var result = await Task.Run(() => BuildIndexInternal(streams, newFingerprint, clear ? null : current, ct), ct).ConfigureAwait(false);
                 
                 // Clear active session to force reload from disk in next TryLoad
                 _session?.Dispose();
@@ -71,7 +71,7 @@ namespace ModernIPTVPlayer.Services.Iptv
         }
 
         [SkipLocalsInit]
-        private IndexSnapshot BuildIndexInternal<T>(IReadOnlyList<T> streams, string fingerprint, IndexSnapshot? existing) where T : IMediaStream
+        private IndexSnapshot BuildIndexInternal<T>(IReadOnlyList<T> streams, string fingerprint, IndexSnapshot? existing, CancellationToken ct) where T : IMediaStream
         {
             if (streams == null || streams.Count == 0) return new IndexSnapshot(FrozenDictionary<string, int[]>.Empty, FrozenDictionary<string, int[]>.Empty, fingerprint, DateTime.UtcNow);
 
@@ -81,7 +81,9 @@ namespace ModernIPTVPlayer.Services.Iptv
 
             if (streams is IVirtualStreamList virtualList)
             {
-                Parallel.ForEach(Partitioner.Create(0, virtualList.Count), range =>
+                if (virtualList.Count == 0) return new IndexSnapshot(FrozenDictionary<string, int[]>.Empty, FrozenDictionary<string, int[]>.Empty, fingerprint, DateTime.UtcNow);
+
+                Parallel.ForEach(Partitioner.Create(0, virtualList.Count), new ParallelOptions { CancellationToken = ct }, range =>
                 {
                     Span<char> titleBuffer = stackalloc char[1024];
                     for (int i = range.Item1; i < range.Item2; i++)

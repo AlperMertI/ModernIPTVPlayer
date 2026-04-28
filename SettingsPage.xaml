@@ -74,6 +74,14 @@
                             <ComboBoxItem Content="GPU-Next (Modern - HDR Desteği)" Tag="GpuNext"/>
                             <ComboBoxItem Content="GPU (Klasik - Daha Kararlı)" Tag="Gpu"/>
                         </ComboBox>
+                        
+                        <ComboBox x:Name="TrailerQualityCombo" Header="Fragman Kalitesi (Hedeflenen)" HorizontalAlignment="Stretch" SelectionChanged="TrailerQualityCombo_SelectionChanged" Margin="0,4,0,0">
+                            <ComboBoxItem Content="Otomatik (Dinamik)" Tag="0"/>
+                            <ComboBoxItem Content="720p (HD)" Tag="1"/>
+                            <ComboBoxItem Content="1080p (Full HD)" Tag="2"/>
+                            <ComboBoxItem Content="2160p (4K Ultra HD)" Tag="3"/>
+                        </ComboBox>
+                        <TextBlock Text="Fragmanlar için hedeflenen çözünürlüğü belirler. Seçilen kalite mevcut değilse, mümkün olan en yüksek çözünürlük kullanılır." Foreground="{ThemeResource TextFillColorSecondaryBrush}" FontSize="12" TextWrapping="Wrap"/>
                     </StackPanel>
 
                     <!-- GROUP 3: ÖLÇEKELEME & HDR -->

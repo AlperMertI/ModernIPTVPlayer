@@ -33,6 +33,9 @@ namespace ModernIPTVPlayer.Models.Iptv
         private Helpers.BinaryCacheSession? _session;
         [JsonIgnore]
         public bool IsLoading { get; set; } = false;
+
+        public void Pin() { }
+        public void Unpin() { }
         public int RecordIndex { get => _recordIndex; set => _recordIndex = value; }
         private int _recordIndex = -1;
 
@@ -355,6 +358,9 @@ namespace ModernIPTVPlayer.Models.Iptv
             get => (_bitFlags & 16) != 0; 
             set { if (value) _bitFlags |= 16; else _bitFlags &= 239; } 
         }
+
+        public bool IsContinueWatching { get; set; }
+        public string? EpisodeSubtext { get; set; }
         
         [JsonIgnore]
         public string? Genre 

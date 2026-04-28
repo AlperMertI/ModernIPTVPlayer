@@ -59,7 +59,7 @@ namespace ModernIPTVPlayer.Helpers
                     if (targetHeight > 0) bitmap.DecodePixelHeight = (int)(targetHeight * scale);
                 }
 
-                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+                bitmap.CreateOptions = BitmapCreateOptions.None;
 
                 lock (_cacheLock)
                 {
@@ -68,33 +68,34 @@ namespace ModernIPTVPlayer.Helpers
                     _strongCache[cacheKey] = bitmap;
                     _evictionQueue.Enqueue(cacheKey);
 
-                    // Reduced capacity for "Zero-Trace" - keep only the active working set
-                    while (_strongCache.Count > 100 && _evictionQueue.TryDequeue(out var oldKey))
+                    // Reduced capacity to 300 to keep RAM usage lean (~100MB image overhead)
+                    while (_strongCache.Count > 300 && _evictionQueue.TryDequeue(out var oldKey))
                     {
                         _strongCache.Remove(oldKey);
                     }
 
                     // PROJECT ZERO: Proactive Weak Pool Pruning (Prevent WeakReference leak)
-                    if (_weakPool.Count > 1000)
+                    if (_weakPool.Count > 2000)
                     {
                         PeriodicCleanup();
                     }
                 }
 
-                // PROJECT ZERO V3: Zero-Trace Async Loading
-                // Use a weak reference to the bitmap inside the task.
-                // If the UI has already cleared the image (due to scrolling away), 
-                // and it was evicted from strong cache, the WeakReference will fail 
-                // and the task will abort, saving RAM and CPU.
-                var weakBitmap = new WeakReference<BitmapImage>(bitmap);
-
-                queue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+                if (queue != null && queue.HasThreadAccess)
                 {
-                    if (weakBitmap.TryGetTarget(out var b))
+                    try { bitmap.UriSource = new Uri(url); } catch { }
+                }
+                else if (queue != null)
+                {
+                    var weakBitmap = new WeakReference<BitmapImage>(bitmap);
+                    queue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Normal, () =>
                     {
-                        try { b.UriSource = new Uri(url); } catch { }
-                    }
-                });
+                        if (weakBitmap.TryGetTarget(out var b))
+                        {
+                            try { b.UriSource = new Uri(url); } catch { }
+                        }
+                    });
+                }
 
                 return bitmap;
             }

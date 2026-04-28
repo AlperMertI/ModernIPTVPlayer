@@ -10,6 +10,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using ModernIPTVPlayer.Pages;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -137,7 +138,7 @@ namespace ModernIPTVPlayer.Controls
                         var topItems = partialResults.Take(8).ToList();
                         
                         // [NEW] Trigger Lazy IPTV Matching for the visible top 8 items
-                        _ = StremioService.Instance.MatchVisibleIptvAsync(topItems, query);
+                        _ = StremioService.Instance.MatchVisibleIptvAsync(topItems, query, token);
 
                         // [SMOOTH SYNC] Avoid clearing the list to prevent catastrophic flicker.
                         // Replace existing matching spots natively retaining container refs, and trim tails.
@@ -194,7 +195,8 @@ namespace ModernIPTVPlayer.Controls
 
         private void ResultsList_ItemClick(object sender, ItemClickEventArgs e)
         {
-            if (e.ClickedItem is IMediaStream item)
+            var item = WinRTHelpers.AsMediaStream(e.ClickedItem);
+            if (item != null)
             {
                 ItemClicked?.Invoke(this, item);
                 Hide();

@@ -7,10 +7,5 @@
     mc:Ignorable="d">
 
     <Grid x:Name="RootGrid">
-        <WebView2 x:Name="WebView" 
-                  Visibility="Visible"
-                  Opacity="0"
-                  HorizontalAlignment="Stretch"
-                  VerticalAlignment="Stretch"/>
     </Grid>
 </UserControl>

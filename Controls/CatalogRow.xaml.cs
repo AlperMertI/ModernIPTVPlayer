@@ -113,13 +113,19 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private bool? _lastLoadingState = null;
+        private bool _isUpdatingHeroState = false;
+
         private void UpdateLoadingState()
         {
             if (ShimmerPanel == null || ItemsScrollViewer == null) return;
 
+            bool useTransition = _lastLoadingState == true && !IsLoading;
+            _lastLoadingState = IsLoading;
+
             // 1. Lifecycle State (Loading vs Content)
             string loadingState = IsLoading ? "Loading" : "ContentReady";
-            VisualStateManager.GoToState(this, loadingState, true);
+            VisualStateManager.GoToState(this, loadingState, useTransition);
 
             // 2. Structural State (Standard vs Landscape)
             VisualStateManager.GoToState(this, RowStyle ?? "Standard", true);
@@ -135,7 +141,7 @@ namespace ModernIPTVPlayer.Controls
 
 
 
-        public event EventHandler<(IMediaStream Stream, UIElement SourceElement)> ItemClicked;
+        public event EventHandler<CatalogItemClickedEventArgs> ItemClicked;
         public event EventHandler HeaderClicked;
         public event EventHandler<FrameworkElement> HoverStarted;
         public event EventHandler<FrameworkElement> HoverEnded;
@@ -160,37 +166,22 @@ namespace ModernIPTVPlayer.Controls
         {
             EnsureScrollViewer();
             
-            // [SYNC] Ensure initial loading state is correctly reflected (Essential for Pre-loaded Phase 0 rows)
+            // [SYNC] Ensure initial loading state is correctly reflected
             UpdateLoadingState();
-
-            // Simple entrance animation
-            var sb = new Microsoft.UI.Xaml.Media.Animation.Storyboard();
-            var opacityAnim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation { To = 1, Duration = TimeSpan.FromMilliseconds(600) };
-            var translateAnim = new Microsoft.UI.Xaml.Media.Animation.DoubleAnimation { To = 0, Duration = TimeSpan.FromMilliseconds(600) };
-            translateAnim.EasingFunction = new Microsoft.UI.Xaml.Media.Animation.CubicEase { EasingMode = Microsoft.UI.Xaml.Media.Animation.EasingMode.EaseOut };
-
-            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(opacityAnim, RootPanel);
-            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(opacityAnim, "Opacity");
-            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTarget(translateAnim, EntranceTranslation);
-            Microsoft.UI.Xaml.Media.Animation.Storyboard.SetTargetProperty(translateAnim, "Y");
-
-            sb.Children.Add(opacityAnim);
-            sb.Children.Add(translateAnim);
-            sb.Begin();
         }
 
         private void PosterCard_Tapped(object sender, TappedRoutedEventArgs e)
         {
-            if (sender is PosterCard card && card.DataContext is IMediaStream stream)
+            if (sender is PosterCard card && card.MediaStream is IMediaStream stream)
             {
                 ElementSoundPlayer.Play(ElementSoundKind.Invoke);
                 // Pass the internal ImageElement for ConnectedAnimation
-                ItemClicked?.Invoke(this, (stream, card.ImageElement));
+                ItemClicked?.Invoke(this, new CatalogItemClickedEventArgs(stream, card.ImageElement));
             }
-            else if (sender is LandscapeCard lCard && lCard.DataContext is IMediaStream lStream)
+            else if (sender is LandscapeCard lCard && lCard.MediaStream is IMediaStream lStream)
             {
                 ElementSoundPlayer.Play(ElementSoundKind.Invoke);
-                ItemClicked?.Invoke(this, (lStream, lCard.ImageElement));
+                ItemClicked?.Invoke(this, new CatalogItemClickedEventArgs(lStream, lCard.ImageElement));
             }
         }
 
@@ -225,6 +216,25 @@ namespace ModernIPTVPlayer.Controls
         private ScrollViewer _scrollViewer;
         private DispatcherTimer _scrollEndTimer;
         private bool _isScrolling = false;
+
+        private void Repeater_ManipulationStarted(object sender, ManipulationStartedRoutedEventArgs e)
+        {
+            ScrollStarted?.Invoke(this, EventArgs.Empty);
+        }
+
+        private void Repeater_ManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
+        {
+            if (ItemsScrollViewer != null)
+            {
+                // [NATIVE FIX] Using ManipulationDelta ensures proper gesture railing
+                ItemsScrollViewer.ChangeView(ItemsScrollViewer.HorizontalOffset - e.Delta.Translation.X, null, null, true);
+            }
+        }
+
+        private void Repeater_ManipulationCompleted(object sender, ManipulationCompletedRoutedEventArgs e)
+        {
+            ScrollEnded?.Invoke(this, EventArgs.Empty);
+        }
 
         private void ScrollLeft_Click(object sender, RoutedEventArgs e)
         {
@@ -314,13 +324,60 @@ namespace ModernIPTVPlayer.Controls
         private void ItemsScrollViewer_Loaded(object sender, RoutedEventArgs e)
         {
             EnsureScrollViewer();
+            if (ItemsScrollViewer != null)
+            {
+                // [FIX] Manually bubble vertical wheel events. 
+                ItemsScrollViewer.PointerWheelChanged += (s, args) =>
+                {
+                    var props = args.GetCurrentPoint(ItemsScrollViewer).Properties;
+                    if (!props.IsHorizontalMouseWheel)
+                    {
+                        args.Handled = false;
+                    }
+                };
+
+                ItemsScrollViewer.ViewChanged += (s, args) => UpdateButtonVisibility();
+            }
+        }
+
+        private void UpdateButtonVisibility()
+        {
+            if (ItemsScrollViewer == null) return;
+            
+            // We use Opacity or Visibility here to complement the VisualStateManager
+            // Actually, we'll just set IsEnabled or a separate Visibility flag 
+            // but since we have a Storyboard, let's just adjust the target visibility.
+            bool canScrollLeft = ItemsScrollViewer.HorizontalOffset > 10;
+            bool canScrollRight = ItemsScrollViewer.HorizontalOffset < (ItemsScrollViewer.ScrollableWidth - 10);
+
+            ScrollLeftButton.IsEnabled = canScrollLeft;
+            ScrollRightButton.IsEnabled = canScrollRight;
+            
+            // Optional: Hard hide if they aren't usable
+            ScrollLeftButton.Visibility = canScrollLeft ? Visibility.Visible : Visibility.Collapsed;
+            ScrollRightButton.Visibility = canScrollRight ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void Repeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
         {
-            // Connect events to the created element if it's a known card type
+            // [ROOT FIX] Set MediaStream directly from the managed ItemsSource using the index.
+            // The DataTemplate is now "thin" (no x:DataType, no {x:Bind} property bindings),
+            // so this is the single point where cards receive their data.
+            // This completely bypasses XAML-generated interface casts and WinRT proxy issues.
+            IMediaStream stream = null;
+            if (sender.ItemsSource is System.Collections.IList list && args.Index >= 0 && args.Index < list.Count)
+            {
+                stream = list[args.Index] as IMediaStream;
+            }
+
+            // Connect events and set data on the created element
             if (args.Element is PosterCard poster)
             {
+                if (stream != null) 
+                {
+                    poster.MediaStream = stream;
+                    poster.DataContext = stream; // [DEEPER FIX] ExpandedCard relies on DataContext
+                }
                 poster.Tapped -= PosterCard_Tapped;
                 poster.Tapped += PosterCard_Tapped;
                 poster.HoverStarted -= PosterCard_HoverStarted;
@@ -330,6 +387,11 @@ namespace ModernIPTVPlayer.Controls
             }
             else if (args.Element is LandscapeCard landscape)
             {
+                if (stream != null) 
+                {
+                    landscape.MediaStream = stream;
+                    landscape.DataContext = stream; // [DEEPER FIX]
+                }
                 landscape.Tapped -= PosterCard_Tapped;
                 landscape.Tapped += PosterCard_Tapped;
                 landscape.HoverStarted -= LandscapeCard_HoverStarted;
@@ -360,13 +422,7 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private void Repeater_ManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
-        {
-            if (ItemsScrollViewer != null)
-            {
-                ItemsScrollViewer.ChangeView(ItemsScrollViewer.HorizontalOffset - e.Delta.Translation.X, null, null, true);
-            }
-        }
+
 
         private void RootPanel_PointerEntered(object sender, PointerRoutedEventArgs e)
         {

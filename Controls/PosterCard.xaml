@@ -45,18 +45,6 @@
                     </DoubleAnimation.EasingFunction>
                 </DoubleAnimation>
             </Storyboard>
-            <Storyboard x:Name="FadeInStoryboard">
-                <DoubleAnimation Storyboard.TargetName="PosterImage" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.65">
-                    <DoubleAnimation.EasingFunction>
-                        <ExponentialEase EasingMode="EaseOut" Exponent="5"/>
-                    </DoubleAnimation.EasingFunction>
-                </DoubleAnimation>
-                <DoubleAnimation Storyboard.TargetName="PosterShimmer" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.5">
-                    <DoubleAnimation.EasingFunction>
-                        <ExponentialEase EasingMode="EaseIn" Exponent="5"/>
-                    </DoubleAnimation.EasingFunction>
-                </DoubleAnimation>
-            </Storyboard>
         </Grid.Resources>
 
         <!-- Controls scaling on internal elements to avoid cropping -->
@@ -78,8 +66,7 @@
                 <PlaneProjection x:Name="TiltProjection"/>
             </Border.Projection>
             <Grid>
-                <local:ShimmerCard x:Name="PosterShimmer" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
-                <Image x:Name="PosterImage" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened" ImageFailed="Image_ImageFailed"/>
+                <Image x:Name="PosterImage" Stretch="UniformToFill" ImageOpened="Image_ImageOpened" ImageFailed="Image_ImageFailed"/>
                 
                 <!-- IPTV Badge (Premium Glassmorphic) -->
                 <Border x:Name="IptvBadge" 

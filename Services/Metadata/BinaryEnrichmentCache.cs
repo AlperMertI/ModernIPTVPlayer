@@ -37,7 +37,7 @@ namespace ModernIPTVPlayer.Services.Metadata
         }
 
         private const string CACHE_FILE_NAME = "enriched_metadata.bin";
-        private const int VERSION = 3; // Incremented for MaxEnrichmentContext support
+        private const int VERSION = 4; // Incremented for CheckedFields and ProbedAddons persistence
         private readonly string _cachePath;
         
         // String interning for sources (RAM optimization)
@@ -181,6 +181,28 @@ namespace ModernIPTVPlayer.Services.Metadata
                         target.MetadataSourceInfo = GetSourceName(br.ReadByte());
                         target.PriorityScore = br.ReadInt32();
                         target.MaxEnrichmentContext = (MetadataContext)br.ReadInt32();
+
+                        // Additional fields for full hydration
+                        target.Genres = ReadStringSafe(br);
+                        target.Year = ReadStringSafe(br);
+                        target.Certification = ReadStringSafe(br);
+                        target.Writers = ReadStringSafe(br);
+                        
+                        // Gallery (BackdropUrls)
+                        int galleryCount = br.ReadInt32();
+                        for (int i = 0; i < galleryCount; i++)
+                        {
+                            target.BackdropUrls.Add(br.ReadString());
+                        }
+
+                        // Memory: CheckedFields and ProbedAddons
+                        target.CheckedFields = (ModernIPTVPlayer.Models.Metadata.MetadataField)br.ReadInt64();
+                        
+                        int probedCount = br.ReadInt32();
+                        for (int i = 0; i < probedCount; i++)
+                        {
+                            target.ProbedAddons.Add(br.ReadString());
+                        }
                         
                         return true;
                     }
@@ -220,6 +242,24 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 bw.Write(GetSourceIndex(entry.Metadata.MetadataSourceInfo));
                                 bw.Write(entry.Metadata.PriorityScore);
                                 bw.Write((int)entry.Metadata.MaxEnrichmentContext);
+
+                                // Additional fields
+                                bw.Write(entry.Metadata.Genres ?? "");
+                                bw.Write(entry.Metadata.Year ?? "");
+                                bw.Write(entry.Metadata.Certification ?? "");
+                                bw.Write(entry.Metadata.Writers ?? "");
+
+                                // Gallery
+                                var backdrops = entry.Metadata.BackdropUrls?.ToList() ?? new List<string>();
+                                bw.Write(backdrops.Count);
+                                foreach (var b in backdrops) bw.Write(b);
+
+                                // Memory: CheckedFields and ProbedAddons
+                                bw.Write((long)entry.Metadata.CheckedFields);
+                                
+                                var probed = entry.Metadata.ProbedAddons?.ToList() ?? new List<string>();
+                                bw.Write(probed.Count);
+                                foreach (var p in probed) bw.Write(p);
                             }
                             data = ms.ToArray();
                         }

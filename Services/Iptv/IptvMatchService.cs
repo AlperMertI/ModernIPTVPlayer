@@ -67,7 +67,8 @@ namespace ModernIPTVPlayer.Services.Iptv
         public async Task UpdateIndexers(
             IEnumerable<LiveStream>? live = null, string? liveFp = null,
             IEnumerable<VodStream>? vod = null, string? vodFp = null,
-            IEnumerable<SeriesStream>? series = null, string? seriesFp = null)
+            IEnumerable<SeriesStream>? series = null, string? seriesFp = null,
+            CancellationToken ct = default)
         {
             var sw = Stopwatch.StartNew();
             var tasks = new List<Task>();
@@ -79,20 +80,20 @@ namespace ModernIPTVPlayer.Services.Iptv
                 _liveCache = (live is IReadOnlyList<LiveStream> rl) ? rl : live.ToList();
                 tasks.Add(RunUpdate("Live", _liveCache, liveFp, async (s, fp) => 
                 {
-                    await _liveSearchIndex.RebuildAsync<LiveStream>(s, fp);
-                }));
+                    await _liveSearchIndex.RebuildAsync<LiveStream>(s, fp, ct);
+                }, ct));
             }
 
             if (vod != null) 
             {
                 _vodCache = (vod is IReadOnlyList<VodStream> rl) ? rl : vod.ToList();
-                tasks.Add(RunUpdate("VOD", _vodCache, vodFp, (s, fp) => _vodIndexer.RebuildAsync(s, fp, clear: false)));
+                tasks.Add(RunUpdate("VOD", _vodCache, vodFp, (s, fp) => _vodIndexer.RebuildAsync(s, fp, clear: false, ct: ct), ct));
             }
 
             if (series != null) 
             {
                 _seriesCache = (series is IReadOnlyList<SeriesStream> rl) ? rl : series.ToList();
-                tasks.Add(RunUpdate("Series", _seriesCache, seriesFp, (s, fp) => _seriesIndexer.RebuildAsync(s, fp, clear: false)));
+                tasks.Add(RunUpdate("Series", _seriesCache, seriesFp, (s, fp) => _seriesIndexer.RebuildAsync(s, fp, clear: false, ct: ct), ct));
             }
 
             // Await all internal operations to ensure logs are fully flushed before sync finishes
@@ -100,7 +101,7 @@ namespace ModernIPTVPlayer.Services.Iptv
             AppLogger.Info($"[PERF] [IptvMatchService] Total indexing cycle completed in {sw.ElapsedMilliseconds}ms.");
         }
 
-        private async Task RunUpdate<T>(string tag, IReadOnlyList<T> items, string? fp, Func<IReadOnlyList<T>, string, Task> action)
+        private async Task RunUpdate<T>(string tag, IReadOnlyList<T> items, string? fp, Func<IReadOnlyList<T>, string, Task> action, CancellationToken ct)
         {
             if (items == null || string.IsNullOrEmpty(fp))
             {
@@ -125,9 +126,13 @@ namespace ModernIPTVPlayer.Services.Iptv
 
                 if (!restored)
                 {
+                    if (ct.IsCancellationRequested) return;
+
                     AppLogger.Info($"[IptvMatchService] {tag} sidecar MISSING or INVALID. Starting FULL REBUILD...");
                     await action(items, versionedFp).ConfigureAwait(false);
                     
+                    if (ct.IsCancellationRequested) return;
+
                     AppLogger.Info($"[IptvMatchService] {tag} rebuild finished. Persisting to disk...");
                     
                     if (tag == "Live") 
@@ -313,7 +318,11 @@ namespace ModernIPTVPlayer.Services.Iptv
             {
                 if (!string.IsNullOrEmpty(year) && !string.IsNullOrEmpty(best.Stream.Year))
                 {
-                    if (!year.AsSpan().SequenceEqual(best.Stream.Year.AsSpan()) && best.Score < 0.9f)
+                    // [SENIOR] Normalized year comparison (handles "2023-" or "2023-2024" vs "2023")
+                    var y1 = year.AsSpan().Slice(0, Math.Min(year.Length, 4));
+                    var y2 = best.Stream.Year.AsSpan().Slice(0, Math.Min(best.Stream.Year.Length, 4));
+
+                    if (!y1.SequenceEqual(y2) && best.Score < 0.9f)
                         return null;
                 }
                 return best.Stream;

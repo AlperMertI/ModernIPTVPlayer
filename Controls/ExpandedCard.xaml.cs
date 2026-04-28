@@ -6,6 +6,7 @@ using Microsoft.UI.Xaml.Media.Imaging;
 using System;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using System.Collections.Generic;
 using Windows.UI;
 using ModernIPTVPlayer;
@@ -44,6 +45,7 @@ namespace ModernIPTVPlayer.Controls
 
         // Project Zero: Shared Engine Reference
         private WebView2? _webView;
+        private CancellationTokenSource? _cts;
 
         // Mouse Drag-to-Scroll State
         private bool _isDataDragging = false;
@@ -81,8 +83,12 @@ namespace ModernIPTVPlayer.Controls
             // Mouse Wheel Fix: Prevent bubbling to main page
             ContentScrollViewer.PointerWheelChanged += ContentScrollViewer_PointerWheelChanged;
 
-            // Project Zero: Shared event listener
-            TrailerPoolService.Instance.TrailerMessageReceived += Instance_TrailerMessageReceived;
+            this.Loaded += (s, e) => 
+            {
+                // Re-subscribe every time we are loaded into the UI tree
+                TrailerPoolService.Instance.TrailerMessageReceived -= Instance_TrailerMessageReceived;
+                TrailerPoolService.Instance.TrailerMessageReceived += Instance_TrailerMessageReceived;
+            };
 
             // Project Zero: Mandatory Cleanup Registration
             this.Unloaded += (s, e) => Cleanup();
@@ -96,11 +102,10 @@ namespace ModernIPTVPlayer.Controls
 
         private void Instance_TrailerMessageReceived(object? sender, string e)
         {
-            // Only process if we are the current owner of the WebView
-            if (_webView != null)
-            {
-                OnTrailerMessageReceived(e);
-            }
+            // [OWNERSHIP GUARD] Only process if we are the current owner in the pool
+            if (TrailerPoolService.Instance.CurrentContainer != TrailerContainer) return;
+            
+            OnTrailerMessageReceived(e);
         }
 
         /// <summary>
@@ -122,12 +127,19 @@ namespace ModernIPTVPlayer.Controls
                     TrailerPoolService.Instance.Release(TrailerContainer);
                     _webView = null;
                 }
+                _isTrailerRevealed = false;
+                TrailerContainer.Visibility = Visibility.Collapsed;
+                BackdropContainer.Visibility = Visibility.Visible;
 
                 // 3. Clear Managed Collections (Breaks reference chains)
                 CastList?.Clear();
                 DirectorList?.Clear();
 
                 // 4. Cancel pending tasks
+                _cts?.Cancel();
+                _cts?.Dispose();
+                _cts = null;
+                
                 TrailerPoolService.Instance.TrailerMessageReceived -= Instance_TrailerMessageReceived;
 
                 // 5. Break Interop Facades
@@ -137,6 +149,12 @@ namespace ModernIPTVPlayer.Controls
 
                 // 6. Unsubscribe from manual handlers 
                 ContentScrollViewer.PointerWheelChanged -= ContentScrollViewer_PointerWheelChanged;
+
+                // 7. Cancel all background tasks (Probes, Metadata, etc.)
+                var oldCts = _cts;
+                _cts = null; // Prevent re-use
+                oldCts?.Cancel();
+                oldCts?.Dispose();
             }
             catch (Exception ex)
             {
@@ -420,7 +438,7 @@ namespace ModernIPTVPlayer.Controls
         /// <summary>
         /// Resets the card to initial state before loading new data
         /// </summary>
-        private void ResetState(bool isMorphing = false, bool isStopping = false, bool forceSkeleton = true, long sessionNonce = -1)
+        private void ResetState(bool isMorphing = false, bool isStopping = false, bool forceSkeleton = true, long sessionNonce = -1, CancellationToken ct = default)
         {
             // Transactional Guard: If a reset arrives from an old session (e.g. a late StopTrailer), ignore it.
             if (sessionNonce != -1 && sessionNonce != _loadNonce)
@@ -444,6 +462,9 @@ namespace ModernIPTVPlayer.Controls
                     _isRevealed = false;
                 }
             }
+
+            // [FIX] No longer re-creating _cts here as it's handled by the caller (LoadDataAsync)
+            // or Cleanup/StopTrailer. This prevents accidental cancellation of the session being initialized.
             
             // 3. UNIVERSAL CLEANUP: Reset layout, trailers, and progress
             ResetUniversalUi(shouldProtectIdentity);
@@ -660,6 +681,16 @@ namespace ModernIPTVPlayer.Controls
             // 1. Transactional Update
             _loadNonce++;
             long loadNonce = _loadNonce;
+            
+            _cts?.Cancel();
+            _cts?.Dispose();
+            _cts = new CancellationTokenSource();
+            var ct = _cts.Token;
+            var token = ct; // For methods that use 'token'
+
+            try
+            {
+
 
             // 2. High-Fidelity Seeding (Architectural Improvement)
             // Immediately extract all available local data from the stream.
@@ -678,11 +709,11 @@ namespace ModernIPTVPlayer.Controls
             // [FIX] Perform seed update AFTER setting the stream to ensure all UI components have context
             if (seed != null)
             {
-                UpdateUiFromUnified(seed);
+                UpdateUiFromUnified(seed, ct: ct);
             }
 
             // 4. Session-Locked Reset (Shielded if smart swapping)
-            ResetState(isMorphing, forceSkeleton: !isEligibleForSmartSwap, sessionNonce: loadNonce);
+            ResetState(isMorphing, forceSkeleton: !isEligibleForSmartSwap, sessionNonce: loadNonce, ct: ct);
 
             // [FIX] If we are smart-swapping with seed data, ensure we don't re-trigger the reveal stagger
             if (seed != null && isEligibleForSmartSwap)
@@ -691,7 +722,7 @@ namespace ModernIPTVPlayer.Controls
             }
 
             // Minimal delay for layout settlement, then start enrichment tasks
-            await Task.Delay(10);
+            await Task.Delay(10, ct);
             System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Post-delay checkpoint. loadNonce matching: {loadNonce == _loadNonce}");
             if (loadNonce != _loadNonce) return; 
             
@@ -727,8 +758,6 @@ namespace ModernIPTVPlayer.Controls
             // Check Watchlist State (non-blocking - IsOnWatchlist returns false if not initialized yet)
             UpdateWatchlistIcon(Services.WatchlistManager.Instance.IsOnWatchlist(stream), animate: false);
 
-            try
-            {
                 var metadataTask = Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream, Models.Metadata.MetadataContext.ExpandedCard, onUpdate: (partial) => 
                 {
                     this.DispatcherQueue.TryEnqueue(() => 
@@ -742,11 +771,11 @@ namespace ModernIPTVPlayer.Controls
                         lock (partial.SyncRoot)
                         {
                              System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] onUpdate Dispatching: {partial.Title} | DataSource: {partial.DataSource}");
-                             UpdateUiFromUnified(partial);
+                             UpdateUiFromUnified(partial, ct: ct);
                         }
                     });
-                });
-                var timeoutTask = Task.Delay(15000);
+                }, ct: ct);
+                var timeoutTask = Task.Delay(15000, ct);
                 var completedTask = await Task.WhenAny(metadataTask, timeoutTask);
                 System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Wait complete. metadataTask status: {metadataTask.Status} | Timing out: {completedTask == timeoutTask}");
                 if (completedTask == timeoutTask)
@@ -862,14 +891,14 @@ namespace ModernIPTVPlayer.Controls
 
                     // Update UI IMMEDIATELY
                     System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Authoritative Result Arrived for: {unified.Title}");
-                    UpdateUiFromUnified(unified, displayTitle, displaySubtitle, displayOverview, displayBackdrop);
+                    UpdateUiFromUnified(unified, displayTitle, displaySubtitle, displayOverview, displayBackdrop, ct);
 
                     // NOW Fetch Trailer (Provider might have pre-filled this from TMDB if enabled)
                     string trailerKey = unified.TrailerUrl;
 
                     if (string.IsNullOrEmpty(trailerKey) && unified.TmdbInfo != null)
                     {
-                         trailerKey = await TmdbHelper.GetTrailerKeyAsync(unified.TmdbInfo.Id, unified.IsSeries);
+                         trailerKey = await TmdbHelper.GetTrailerKeyAsync(unified.TmdbInfo.Id, unified.IsSeries, ct: ct);
                          if (!string.IsNullOrEmpty(trailerKey))
                          {
                              unified.TrailerUrl = trailerKey;
@@ -916,7 +945,7 @@ namespace ModernIPTVPlayer.Controls
                 
                 // Run Probe in Background - Do NOT await it to block the UI interaction
                 // BadgeSkeleton remains Visible until this finishes
-                _ = ProbeStreamInternal(stream, loadNonce);
+                _ = ProbeStreamInternal(stream, loadNonce, ct);
 
             }
             catch (OperationCanceledException)
@@ -950,7 +979,7 @@ namespace ModernIPTVPlayer.Controls
             }
         }
         
-        private async Task ProbeStreamInternal(IMediaStream stream, long loadNonce)
+        private async Task ProbeStreamInternal(IMediaStream stream, long loadNonce, CancellationToken ct = default)
         {
             if (stream == null) return;
             
@@ -976,7 +1005,7 @@ namespace ModernIPTVPlayer.Controls
                 {
                     try
                     {
-                        var info = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, App.CurrentLogin);
+                        var info = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, App.CurrentLogin, ct);
                         if (info != null && info.Episodes != null && info.Episodes.Count > 0)
                         {
                              // Find First Season
@@ -1092,7 +1121,7 @@ namespace ModernIPTVPlayer.Controls
                 // 3. Probe Network (v2.4: ID-based)
                 SetProbing(stream, true);
                 Services.CacheLogger.Info(Services.CacheLogger.Category.Probe, "Probing Network (ExpandedCard - libmpv)", url);
-                var result = await Services.StreamProberService.Instance.ProbeAsync(stream.Id, url);
+                var result = await Services.StreamProberService.Instance.ProbeAsync(stream.Id, url, ct: ct);
                 System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Probe COMPLETED for {url}. Success: {result.Success}, Res: {result.Resolution}");
                 
                 if (result.Success)
@@ -1237,14 +1266,19 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Requested via Pool: {videoKey}");
-                _webView = await TrailerPoolService.Instance.AcquireAsync(TrailerContainer, videoKey);
+                string ytId = TrailerPoolService.ExtractYouTubeId(videoKey);
+                System.Diagnostics.Debug.WriteLine($"[ExpandedCard] PlayTrailer Requested via Pool: {ytId} (Source: {videoKey})");
+                _webView = await TrailerPoolService.Instance.AcquireAsync(TrailerContainer);
                 
-                // Mute state setup
-                _isMuted = true;
-                UpdateMuteIcon();
                 if (_webView != null)
+                {
+                    await TrailerPoolService.Instance.PlayTrailerAsync(_webView, ytId);
+                    
+                    // Mute state setup
+                    _isMuted = true;
+                    UpdateMuteIcon();
                     _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
+                }
             }
             catch (Exception ex)
             {
@@ -1264,7 +1298,15 @@ namespace ModernIPTVPlayer.Controls
             AmbienceGrid.Visibility = Visibility.Collapsed;
 
             TrailerContainer.Visibility = Visibility.Visible;
-            if (_webView != null) _webView.Opacity = 1;
+            
+            // [FIX] Race Condition: Use the pool instance directly instead of local _webView
+            // which might not be assigned yet when the READY message arrives.
+            var sharedView = TrailerPoolService.Instance.SharedWebView;
+            if (sharedView != null) 
+            {
+                sharedView.Opacity = 1;
+                sharedView.Visibility = Visibility.Visible;
+            }
 
             MuteButton.Visibility = Visibility.Visible;
             ExpandButton.Visibility = Visibility.Visible;
@@ -1333,7 +1375,7 @@ namespace ModernIPTVPlayer.Controls
                 }
             }
         }
-        private void UpdateUiFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified, string? overrideTitle = null, string? overrideSubtitle = null, string? overrideOverview = null, string? overrideBackdrop = null)
+        private void UpdateUiFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified, string? overrideTitle = null, string? overrideSubtitle = null, string? overrideOverview = null, string? overrideBackdrop = null, CancellationToken ct = default)
         {
             if (unified == null) 
             {
@@ -1402,7 +1444,7 @@ namespace ModernIPTVPlayer.Controls
             if (StaticMetadataPanel != null)
                 StaticMetadataPanel.Visibility = (hasAge || hasCountry) ? Visibility.Visible : Visibility.Collapsed;
             
-            _ = UpdateCreditsAsync(unified);
+            _ = UpdateCreditsAsync(unified, ct);
 
             // 4. State & Background
             MainSkeleton.Visibility = Visibility.Collapsed;
@@ -1504,9 +1546,9 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private async Task UpdateCreditsAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified)
+        private async Task UpdateCreditsAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified, CancellationToken ct = default)
         {
-            if (unified == null) return;
+            if (unified == null || ct.IsCancellationRequested) return;
             
             try
             {
@@ -1533,7 +1575,7 @@ namespace ModernIPTVPlayer.Controls
                 // 3. TMDB Fallback for Missing Information
                 if ((castItems.Count == 0 || directorItems.Count == 0) && unified.TmdbInfo != null && ModernIPTVPlayer.AppSettings.IsTmdbEnabled)
                 {
-                    var credits = await TmdbHelper.GetCreditsAsync(unified.TmdbInfo.Id, unified.IsSeries);
+                    var credits = await TmdbHelper.GetCreditsAsync(unified.TmdbInfo.Id, unified.IsSeries, ct: ct);
                     if (credits != null)
                     {
                         if (castItems.Count == 0 && credits.Cast != null)

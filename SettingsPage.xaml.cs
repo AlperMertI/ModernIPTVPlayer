@@ -101,6 +101,17 @@ namespace ModernIPTVPlayer
                 }
             }
 
+            // Set Trailer Quality
+            var currentTrailerQ = AppSettings.TrailerQuality;
+            foreach (ComboBoxItem item in TrailerQualityCombo.Items)
+            {
+                if (int.Parse(item.Tag.ToString()) == currentTrailerQ)
+                {
+                    TrailerQualityCombo.SelectedItem = item;
+                    break;
+                }
+            }
+
             LoadPlayerSettings();
             LoadAioMetadataSettings();
         }
@@ -118,6 +129,21 @@ namespace ModernIPTVPlayer
                 {
                     AppSettings.CacheIntervalMinutes = minutes;
                     ShowStatus("Güncelleme sıklığı değiştirildi.");
+                }
+            }
+        }
+
+        private void TrailerQualityCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (TrailerQualityCombo.SelectedItem is ComboBoxItem item)
+            {
+                if (int.TryParse(item.Tag.ToString(), out int q))
+                {
+                    if (q != AppSettings.TrailerQuality)
+                    {
+                        AppSettings.TrailerQuality = q;
+                        ShowStatus("Fragman kalitesi ayarlandı: " + item.Content);
+                    }
                 }
             }
         }

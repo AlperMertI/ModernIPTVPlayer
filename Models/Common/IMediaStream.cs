@@ -1,4 +1,5 @@
 using System;
+using Microsoft.UI.Xaml.Media.Imaging;
 using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Models
@@ -20,6 +21,10 @@ namespace ModernIPTVPlayer.Models
         string? SourceTitle { get; set; }
         string SourceDisplayName => !string.IsNullOrEmpty(SourceTitle) ? SourceTitle : Title;
 
+        // UI Binding Properties
+        BitmapImage? PosterBitmap => string.IsNullOrEmpty(PosterUrl) ? null : SharedImageManager.GetOptimizedImage(PosterUrl, targetWidth: 150);
+        bool HasNoPoster => string.IsNullOrWhiteSpace(PosterUrl) || PosterUrl.Equals("null", StringComparison.OrdinalIgnoreCase) || PosterUrl.Length <= 10;
+
         // Extended Metadata
         string? Genres { get; set; }
         string? Cast { get; set; }
@@ -38,6 +43,13 @@ namespace ModernIPTVPlayer.Models
         // Source Identification
         string SourceBadgeText { get; }
         bool ShowSourceBadge { get; }
+
+        // [STREMIO_BINDING_SYNC] Properties for polymorphic binding in DiscoveryControl
+        string LandscapeImageUrl => BackdropUrl ?? PosterUrl;
+        string DisplaySubtext => Genres ?? "";
+        bool IsContinueWatching { get; set; }
+        bool IsNotContinueWatching => !IsContinueWatching;
+        string? EpisodeSubtext { get; set; }
         
         // Technical Metadata properties for polymorphism
         string Resolution { get; set; }
@@ -53,6 +65,9 @@ namespace ModernIPTVPlayer.Models
         /// Synchronizes the stream properties with the provided unified metadata.
         /// </summary>
         void UpdateFromUnified(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified);
+
+        void Pin();
+        void Unpin();
     }
 
     /// <summary>
@@ -112,5 +127,67 @@ namespace ModernIPTVPlayer.Models
     {
         public MediaType Type { get; set; }
         public string? InitialCategoryId { get; set; }
+    }
+
+    public class ColorExtractedEventArgs : EventArgs
+    {
+        public Windows.UI.Color Primary { get; }
+        public Windows.UI.Color Secondary { get; }
+
+        public ColorExtractedEventArgs(Windows.UI.Color primary, Windows.UI.Color secondary)
+        {
+            Primary = primary;
+            Secondary = secondary;
+        }
+    }
+
+    public class SpotlightItemClickedEventArgs : EventArgs
+    {
+        public IMediaStream Stream { get; }
+        public Microsoft.UI.Xaml.UIElement SourceElement { get; }
+        public Microsoft.UI.Xaml.Media.ImageSource? PreloadedLogo { get; }
+
+        public SpotlightItemClickedEventArgs(IMediaStream stream, Microsoft.UI.Xaml.UIElement sourceElement, Microsoft.UI.Xaml.Media.ImageSource? preloadedLogo)
+        {
+            Stream = stream;
+            SourceElement = sourceElement;
+            PreloadedLogo = preloadedLogo;
+        }
+    }
+
+    public class TrailerExpandRequestedEventArgs : EventArgs
+    {
+        public IMediaStream Stream { get; }
+        public Microsoft.UI.Xaml.UIElement SourceElement { get; }
+
+        public TrailerExpandRequestedEventArgs(IMediaStream stream, Microsoft.UI.Xaml.UIElement sourceElement)
+        {
+            Stream = stream;
+            SourceElement = sourceElement;
+        }
+    }
+
+    public class CatalogItemClickedEventArgs : EventArgs
+    {
+        public IMediaStream Stream { get; }
+        public Microsoft.UI.Xaml.UIElement SourceElement { get; }
+
+        public CatalogItemClickedEventArgs(IMediaStream stream, Microsoft.UI.Xaml.UIElement sourceElement)
+        {
+            Stream = stream;
+            SourceElement = sourceElement;
+        }
+    }
+
+    public class DetailsRequestedEventArgs : EventArgs
+    {
+        public IMediaStream Stream { get; }
+        public TmdbMovieResult? Tmdb { get; }
+
+        public DetailsRequestedEventArgs(IMediaStream stream, TmdbMovieResult? tmdb)
+        {
+            Stream = stream;
+            Tmdb = tmdb;
+        }
     }
 }

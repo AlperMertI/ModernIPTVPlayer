@@ -21,7 +21,7 @@ namespace ModernIPTVPlayer.Controls
         public Image ImageElement => PosterImage;
         public (Color Primary, Color Secondary)? HeroColors { get; private set; }
 
-        public event EventHandler<(Color Primary, Color Secondary)> ColorsExtracted;
+        public event EventHandler<ColorExtractedEventArgs> ColorsExtracted;
         public event EventHandler<IMediaStream>? Clicked;
         public event EventHandler HoverStarted;
         public event EventHandler HoverEnded;
@@ -97,6 +97,30 @@ namespace ModernIPTVPlayer.Controls
             set { SetValue(BadgeTextProperty, value); }
         }
 
+        public static readonly DependencyProperty MediaStreamProperty =
+            DependencyProperty.Register("MediaStream", typeof(IMediaStream), typeof(PosterCard), new PropertyMetadata(null, OnMediaStreamChanged));
+
+        public IMediaStream MediaStream
+        {
+            get { return (IMediaStream)GetValue(MediaStreamProperty); }
+            set { SetValue(MediaStreamProperty, value); }
+        }
+
+        private static void OnMediaStreamChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+        {
+            if (d is PosterCard card && e.NewValue is IMediaStream stream)
+            {
+                // [ROOT FIX] Self-hydrate all display properties from the managed stream.
+                // This replaces all {x:Bind} from the DataTemplate, ensuring zero XAML-generated
+                // interface casts and complete immunity from WinRT proxy issues.
+                card.ImageUrl = stream.PosterUrl;
+                card.ShowProgress = stream.ShowProgress;
+                card.ProgressValue = stream.ProgressValue;
+                card.IsAvailableOnIptv = stream.IsAvailableOnIptv;
+                card.ShowIptvBadge = StremioDiscoveryControl.ShowIptvBadgeGlobal;
+            }
+        }
+
         public static readonly DependencyProperty ShowProgressProperty =
             DependencyProperty.Register("ShowProgress", typeof(bool), typeof(PosterCard), new PropertyMetadata(false));
 
@@ -150,14 +174,6 @@ namespace ModernIPTVPlayer.Controls
             }
         }
         
-        private void PrepareForLoading()
-        {
-            PosterImage.Opacity = 0;
-            PosterShimmer.Opacity = 1;
-            PosterShimmer.Visibility = Visibility.Visible;
-            FadeInStoryboard?.Stop();
-        }
-        
         private Microsoft.UI.Dispatching.DispatcherQueueTimer? _hoverTimer;
         private System.Threading.CancellationTokenSource? _renderCts;
         private string? _lastUrl;
@@ -202,10 +218,10 @@ namespace ModernIPTVPlayer.Controls
             }
 
             // [PRECISION] Calculate target width. If layout is not ready (0), 
-            // use a safe fallback for the first pass.
+            // use a safe fallback for the first pass. The DataTemplate forces Width=172.
             double actualWidth = this.ActualWidth;
             bool isLayoutReady = actualWidth > 0;
-            if (!isLayoutReady) actualWidth = 160;
+            if (!isLayoutReady) actualWidth = 172;
 
             double targetWidth = Math.Round(actualWidth / 10.0) * 10.0;
             string itemTitle = Title ?? "Unknown";
@@ -215,8 +231,6 @@ namespace ModernIPTVPlayer.Controls
                 _lastUrl = null;
                 _lastWidth = 0;
                 PosterImage.Source = null;
-                PosterImage.Opacity = 0;
-                PosterShimmer.Visibility = Visibility.Collapsed;
                 return;
             }
 
@@ -224,10 +238,6 @@ namespace ModernIPTVPlayer.Controls
             // skip the entire expensive re-initialization to avoid flickers.
             if (PosterImage.Source != null && ImageUrl == _lastUrl && targetWidth == _lastWidth)
             {
-                if (PosterImage.Opacity < 1 && PosterShimmer.Visibility == Visibility.Collapsed)
-                {
-                    PosterImage.Opacity = 1;
-                }
                 return;
             }
 
@@ -253,20 +263,12 @@ namespace ModernIPTVPlayer.Controls
                 _lastWidth = targetWidth;
 
                 if (PosterImage.Source != bitmap) PosterImage.Source = bitmap;
-                PosterImage.Opacity = 1;
-                PosterShimmer.Visibility = Visibility.Collapsed;
-                FadeInStoryboard?.Stop();
             }
             else
             {
                 // [SENIOR OPTIMIZATION: Flicker-Free / Surface Refresh]
                 _lastUrl = ImageUrl;
                 _lastWidth = targetWidth;
-
-                if (!isResolutionUpgrade)
-                {
-                    PrepareForLoading();
-                }
                 
                 // If the surface is dormant/evicted, re-setting UriSource forces a native refresh
                 if (isDormant) bitmap.UriSource = new Uri(ImageUrl);
@@ -289,12 +291,7 @@ namespace ModernIPTVPlayer.Controls
         {
             if (IptvBadge == null) return;
             
-            bool isIptvSource = false;
-            object ctx = DataContext;
-            if (ctx is StremioMediaStream stream)
-            {
-                isIptvSource = stream.IsAvailableOnIptv || stream.IsIptv;
-            }
+            bool isIptvSource = MediaStream?.IsAvailableOnIptv ?? false;
 
             IptvBadge.Visibility = (ShowIptvBadge && (IsAvailableOnIptv || isIptvSource)) ? Visibility.Visible : Visibility.Collapsed;
         }
@@ -302,14 +299,12 @@ namespace ModernIPTVPlayer.Controls
 
         private void Image_ImageOpened(object sender, RoutedEventArgs e)
         {
-            FadeInStoryboard?.Begin();
             UpdateIPTVBadgeVisibility();
         }
 
         private void Image_ImageFailed(object sender, ExceptionRoutedEventArgs e)
         {
-            PosterShimmer.Visibility = Visibility.Collapsed;
-            PosterImage.Opacity = 0;
+            // Optional: Show placeholder on fail
         }
 
         private void PosterCard_Loaded(object sender, RoutedEventArgs e)
@@ -339,17 +334,17 @@ namespace ModernIPTVPlayer.Controls
 
         private void OnPointerExited(object sender, PointerRoutedEventArgs e)
         {
-             // [FIX] Bounds Check relative to MainBorder
-             var point = e.GetCurrentPoint(MainBorder).Position;
-             
-             if (point.X >= 0 && point.Y >= 0 && 
-                 point.X <= MainBorder.ActualWidth && 
-                 point.Y <= MainBorder.ActualHeight)
-             {
-                 return;
-             }
+            // [FIX] Bounds Check relative to MainBorder
+            var point = e.GetCurrentPoint(MainBorder).Position;
+            
+            if (point.X >= 0 && point.Y >= 0 && 
+                point.X <= MainBorder.ActualWidth && 
+                point.Y <= MainBorder.ActualHeight)
+            {
+                return;
+            }
 
-             ResetHoverState();
+            ResetHoverState();
         }
 
         public void ResetHoverState()
@@ -359,7 +354,7 @@ namespace ModernIPTVPlayer.Controls
             Canvas.SetZIndex(this, 0); // Reset ZIndex
             HoverOutStoryboard.Begin();
             HoverEnded?.Invoke(this, EventArgs.Empty);
-             
+            
             TiltProjection.RotationX = 0;
             TiltProjection.RotationY = 0;
         }
@@ -392,17 +387,10 @@ namespace ModernIPTVPlayer.Controls
         private void OnTapped(object sender, TappedRoutedEventArgs e)
         {
             e.Handled = true;
-            object ctx = DataContext;
-            IMediaStream? stream = ctx as IMediaStream;
-            if (stream == null && ctx is UnifiedMediaItemContext contextWrap)
+            if (MediaStream != null)
             {
-                stream = contextWrap.Data;
-            }
-
-            if (stream != null)
-            {
-                System.Diagnostics.Debug.WriteLine($"[PosterCard] Firing Clicked event for: {stream.Title}");
-                Clicked?.Invoke(this, stream);
+                System.Diagnostics.Debug.WriteLine($"[PosterCard] Firing Clicked event for: {MediaStream.Title}");
+                Clicked?.Invoke(this, MediaStream);
             }
         }
     }

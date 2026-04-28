@@ -88,7 +88,7 @@ namespace ModernIPTVPlayer
                 }
             }
 
-            _allWatchlistItems = items.Cast<IMediaStream>().ToList();
+            _allWatchlistItems = items.OfType<IMediaStream>().ToList();
             ApplyFiltersAndSorting();
         }
 
@@ -247,7 +247,7 @@ namespace ModernIPTVPlayer
                 var trending = await Services.Stremio.StremioService.Instance.GetCatalogItemsAsync("https://v3-cinemeta.strem.io", stremioType, "top");
                 if (trending.Any() && RecommendationsGrid != null)
                 {
-                    RecommendationsGrid.ItemsSource = trending.Take(12).Cast<IMediaStream>().ToList();
+                    RecommendationsGrid.ItemsSource = trending.Take(12).OfType<IMediaStream>().ToList();
                 }
             }
             catch (Exception ex)
@@ -271,7 +271,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void WatchlistGrid_ColorExtracted(object sender, (Windows.UI.Color Primary, Windows.UI.Color Secondary) e)
+        private void WatchlistGrid_ColorExtracted(object sender, ColorExtractedEventArgs e)
         {
             BackdropControl.TransitionTo(e.Primary, e.Secondary);
         }

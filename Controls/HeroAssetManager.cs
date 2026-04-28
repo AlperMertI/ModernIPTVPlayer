@@ -29,6 +29,7 @@ namespace ModernIPTVPlayer.Controls
         {
             public Task<LoadedImageSurface?> SurfaceTask = null!;
             public Task<(Windows.UI.Color Primary, Windows.UI.Color Secondary)?>? ColorsTask;
+            public Task<byte[]?>? BytesTask;
             public bool Failed;
 
             // ROOT FIX for the "logo stuck forever" bug:
@@ -140,6 +141,24 @@ namespace ModernIPTVPlayer.Controls
         public void PreloadLogo(string url) => _ = GetLogoSurfaceAsync(url, CancellationToken.None);
         public void PreloadBackdrop(string url) => _ = GetBackdropSurfaceAsync(url, CancellationToken.None);
 
+        private static async Task SafeDelayAsync(int ms, CancellationToken token)
+        {
+            if (ms <= 0) return;
+            var tcs = new TaskCompletionSource<bool>();
+            using (token.Register(() => tcs.TrySetResult(true)))
+            {
+                if (token.IsCancellationRequested) return;
+                await Task.WhenAny(Task.Delay(ms), tcs.Task).ConfigureAwait(false);
+            }
+        }
+        public Task<byte[]?> GetLogoBytesAsync(string url)
+        {
+            var sanitized = SanitizeImageUrl(url, isLogo: true);
+            if (string.IsNullOrEmpty(sanitized)) return Task.FromResult<byte[]?>(null);
+            var entry = _logos.GetOrAdd(sanitized, u => BuildEntry(u, MediaKind.Logo));
+            return entry.BytesTask ?? Task.FromResult<byte[]?>(null);
+        }
+
         /// <summary>Preload spotlight items 1..n with stagger so they do not compete with the active hero or discovery.</summary>
         public async Task ProcessSecondaryHeroAssetsAsync(List<StremioMediaStream> items, CancellationToken token)
         {
@@ -149,7 +168,7 @@ namespace ModernIPTVPlayer.Controls
                 for (int i = 0; i < items.Count; i++)
                 {
                     if (token.IsCancellationRequested) break;
-                    if (i > 0) await Task.Delay(1200, token).ConfigureAwait(false);
+                    if (i > 0) await SafeDelayAsync(1200, token).ConfigureAwait(false);
 
                     var item = items[i];
                     string? bgUrl = item.Meta?.Background ?? item.PosterUrl;
@@ -194,8 +213,11 @@ namespace ModernIPTVPlayer.Controls
         private Entry BuildEntry(string url, MediaKind kind)
         {
             var entry = new Entry();
+
             var bytesTask = FetchBytesAsync(url);
+            entry.BytesTask = bytesTask;
             entry.SurfaceTask = CreateSurfaceFromBytesAsync(url, kind, bytesTask, entry);
+
             if (kind == MediaKind.Backdrop)
             {
                 entry.ColorsTask = ExtractColorsFromBytesAsync(url, bytesTask);
@@ -215,12 +237,12 @@ namespace ModernIPTVPlayer.Controls
                 resp.EnsureSuccessStatusCode();
                 var data = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
                 sw.Stop();
-                _logger($"[HERO-IMG] FETCH ok {filename} {sw.ElapsedMilliseconds}ms bytes={data.Length}");
+                _logger($"[HERO-IMG] FETCH ok {sw.ElapsedMilliseconds}ms bytes={data.Length} url={url}");
                 return data;
             }
             catch (Exception ex)
             {
-                _logger($"[HERO-IMG] fetch FAIL {filename}: {ex.Message}");
+                _logger($"[HERO-IMG] fetch FAIL url={url} error={ex.Message}");
                 return null;
             }
             finally
@@ -244,6 +266,16 @@ namespace ModernIPTVPlayer.Controls
             }
 
             var filename = Path.GetFileName(url);
+
+            // [FAIL-FAST] LoadedImageSurface does not support SVG. Attempting to load one often leads to 
+            // platform-level stalls in the native decoder. We fail fast here to avoid the 10s watchdog hang.
+            if (url.EndsWith(".svg", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger($"[HERO-IMG] SVG detected - skipping to avoid stall. url={url}");
+                entry.Failed = false; // Cached skip
+                return null;
+            }
+
             var totalSw = System.Diagnostics.Stopwatch.StartNew();
             var tcs = new TaskCompletionSource<LoadedImageSurface?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -278,12 +310,12 @@ namespace ModernIPTVPlayer.Controls
                         decodeSw.Stop();
                         if (args.Status == LoadedImageSourceLoadStatus.Success)
                         {
-                            _logger($"[HERO-IMG] DONE {filename} decode+gpu {decodeSw.ElapsedMilliseconds}ms total\u2248{totalSw.ElapsedMilliseconds}ms");
+                            _logger($"[HERO-IMG] DONE {decodeSw.ElapsedMilliseconds}ms total\u2248{totalSw.ElapsedMilliseconds}ms url={url}");
                             tcs.TrySetResult(s);
                         }
                         else
                         {
-                            _logger($"[HERO-IMG] FAIL {filename} Status={args.Status} after {decodeSw.ElapsedMilliseconds}ms");
+                            _logger($"[HERO-IMG] FAIL Status={args.Status} after {decodeSw.ElapsedMilliseconds}ms url={url}");
                             entry.Failed = true;
                             DisposeEntryResources(entry);
                             tcs.TrySetResult(null);
@@ -294,7 +326,7 @@ namespace ModernIPTVPlayer.Controls
                 }
                 catch (Exception ex)
                 {
-                    _logger($"[HERO-IMG] UI StartLoad CRITICAL {filename}: {ex.Message}");
+                    _logger($"[HERO-IMG] UI StartLoad CRITICAL: {ex.Message} url={url}");
                     entry.Failed = true;
                     try { surface?.Dispose(); } catch { }
                     try { ms?.Dispose(); } catch { }
@@ -319,9 +351,12 @@ namespace ModernIPTVPlayer.Controls
             var winner = await Task.WhenAny(tcs.Task, watchdog).ConfigureAwait(false);
             if (winner == watchdog && !tcs.Task.IsCompleted)
             {
-                _logger($"[HERO-IMG] WATCHDOG {filename} decode stalled > {DECODE_WATCHDOG_MS}ms — releasing caller, marking failed.");
-                entry.Failed = true;
-                DisposeEntryResources(entry);
+                _logger($"[HERO-IMG] WATCHDOG decode stalled > {DECODE_WATCHDOG_MS}ms — releasing caller. url={url}");
+                entry.Failed = false; // Set to false to avoid retry loops for platform stalls, though arguably it could stay true.
+
+                // CRITICAL: Disposal of Composition objects MUST happen on the UI thread to avoid COMException.
+                _dispatcher.TryEnqueue(() => DisposeEntryResources(entry));
+
                 tcs.TrySetResult(null);
             }
 

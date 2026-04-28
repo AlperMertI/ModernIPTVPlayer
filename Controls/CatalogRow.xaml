@@ -56,6 +56,33 @@
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
+
+                <VisualStateGroup x:Name="HoverStates">
+                    <VisualState x:Name="Normal">
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="ScrollLeftButton" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.2"/>
+                            <DoubleAnimation Storyboard.TargetName="ScrollRightButton" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.2"/>
+                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ScrollLeftButton" Storyboard.TargetProperty="Visibility">
+                                <DiscreteObjectKeyFrame KeyTime="0:0:0.2" Value="Collapsed"/>
+                            </ObjectAnimationUsingKeyFrames>
+                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ScrollRightButton" Storyboard.TargetProperty="Visibility">
+                                <DiscreteObjectKeyFrame KeyTime="0:0:0.2" Value="Collapsed"/>
+                            </ObjectAnimationUsingKeyFrames>
+                        </Storyboard>
+                    </VisualState>
+                    <VisualState x:Name="PointerOver">
+                        <Storyboard>
+                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ScrollLeftButton" Storyboard.TargetProperty="Visibility">
+                                <DiscreteObjectKeyFrame KeyTime="0" Value="Visible"/>
+                            </ObjectAnimationUsingKeyFrames>
+                            <ObjectAnimationUsingKeyFrames Storyboard.TargetName="ScrollRightButton" Storyboard.TargetProperty="Visibility">
+                                <DiscreteObjectKeyFrame KeyTime="0" Value="Visible"/>
+                            </ObjectAnimationUsingKeyFrames>
+                            <DoubleAnimation Storyboard.TargetName="ScrollLeftButton" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.3"/>
+                            <DoubleAnimation Storyboard.TargetName="ScrollRightButton" Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.3"/>
+                        </Storyboard>
+                    </VisualState>
+                </VisualStateGroup>
         </VisualStateManager.VisualStateGroups>
 
         <Grid.RenderTransform>
@@ -92,14 +119,9 @@
                           HorizontalScrollMode="Disabled"
                           HorizontalScrollBarVisibility="Hidden"
                           VerticalScrollMode="Disabled"
-                          VerticalScrollBarVisibility="Disabled"
-                          IsVerticalRailEnabled="False"
-                          IsHorizontalRailEnabled="False"
-                          IsVerticalScrollChainingEnabled="True"
+                          VerticalScrollBarVisibility="Hidden"
                           IsHorizontalScrollChainingEnabled="False"
-                          AllowFocusOnInteraction="False"
-                          IsTabStop="False"
-                          Visibility="Collapsed"
+                          ManipulationMode="TranslateX"
                           Loaded="ItemsScrollViewer_Loaded">
                 <ItemsRepeater x:Name="Repeater" 
                                ItemsSource="{x:Bind ItemsSource, Mode=OneWay}"
@@ -107,8 +129,10 @@
                                HorizontalCacheLength="2.0"
                                ElementPrepared="Repeater_ElementPrepared"
                                ElementClearing="Repeater_ElementClearing"
-                               ManipulationMode="TranslateX, System"
+                               ManipulationMode="TranslateX"
+                               ManipulationStarted="Repeater_ManipulationStarted"
                                ManipulationDelta="Repeater_ManipulationDelta"
+                               ManipulationCompleted="Repeater_ManipulationCompleted"
                                Margin="48,0,48,0">
                     <ItemsRepeater.Layout>
                         <StackLayout Orientation="Horizontal" Spacing="12"/>
@@ -116,23 +140,20 @@
                 </ItemsRepeater>
             </ScrollViewer>
 
-            <!-- Navigation Arrows -->
+            <!-- Navigation Arrows (Hero Style) -->
             <Button x:Name="ScrollRightButton" 
                     Click="ScrollRight_Click"
                     HorizontalAlignment="Right" 
                     VerticalAlignment="Center" 
                     Margin="0,0,24,0"
                     Style="{StaticResource VortexButtonStyle}" 
-                    Width="56" Height="56" 
-                    Padding="0"
-                    HorizontalContentAlignment="Center"
-                    VerticalContentAlignment="Center"
+                    Width="48" Height="48" 
                     Canvas.ZIndex="1000"
                     IsHitTestVisible="True"
-                    Background="#11FFFFFF"
                     PointerEntered="Button_PointerEntered"
-                    Visibility="Collapsed">
-                <FontIcon Glyph="&#xE761;" FontSize="20" FontWeight="Bold"/>
+                    Visibility="Collapsed"
+                    Opacity="0">
+                <FontIcon Glyph="&#xE761;" FontSize="18"/>
             </Button>
             
             <Button x:Name="ScrollLeftButton" 
@@ -141,16 +162,13 @@
                     VerticalAlignment="Center" 
                     Margin="24,0,0,0"
                     Style="{StaticResource VortexButtonStyle}" 
-                    Width="56" Height="56" 
-                    Padding="0"
-                    HorizontalContentAlignment="Center"
-                    VerticalContentAlignment="Center"
+                    Width="48" Height="48" 
                     Canvas.ZIndex="1000"
                     IsHitTestVisible="True"
-                    Background="#11FFFFFF"
                     PointerEntered="Button_PointerEntered"
-                    Visibility="Collapsed">
-                <FontIcon Glyph="&#xE760;" FontSize="20" FontWeight="Bold"/>
+                    Visibility="Collapsed"
+                    Opacity="0">
+                <FontIcon Glyph="&#xE760;" FontSize="18"/>
             </Button>
         </Grid>
     </Grid>

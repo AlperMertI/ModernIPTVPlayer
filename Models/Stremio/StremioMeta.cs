@@ -63,6 +63,9 @@ namespace ModernIPTVPlayer.Models.Stremio
             set { if (MetadataBuffer.IsEqual(_logoOff, _logoLen, value)) return; var r = MetadataBuffer.Store(value); _logoOff = r.Offset; _logoLen = r.Length; _logo = value; } 
         }
 
+        [JsonPropertyName("landscapePoster")]
+        public string? LandscapePoster { get; set; }
+
         private int _descOff, _descLen;
         private string _desc;
         public string Description 
