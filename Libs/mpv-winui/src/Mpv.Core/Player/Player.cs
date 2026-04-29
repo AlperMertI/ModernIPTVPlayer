@@ -13,6 +13,11 @@ namespace Mpv.Core;
 
 public sealed partial class Player
 {
+    ~Player()
+    {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [FINALIZER] Mpv.Core.Player finalizing");
+    }
+
     public Player()
     {
         Client = new MpvClientNative();

@@ -156,6 +156,7 @@ namespace ModernIPTVPlayer
             Ready        // Everything complete
         }
         private bool _isHandoffInProgress = false;
+        private bool _isHandoffReturn = false;
         private bool _isProcessingSizeChanged = false;
         private PageLoadState _pageLoadState = PageLoadState.Initial;
         private IMediaStream _pendingLoadItem;  // Item waiting for layout
@@ -1710,21 +1711,39 @@ namespace ModernIPTVPlayer
 
                 SetupParallax();
                 _isHandoffInProgress = false;
+                
+                // [CRITICAL] Skip MPV handoff if Native (MF) mode is selected as default
+                if (AppSettings.PlayerSettings.Engine == Models.PlayerEngine.Native)
+                {
+                    Debug.WriteLine("[MediaInfoPage] Native Mode active: Clearing any residual Handoff player.");
+                    App.HandoffPlayer = null;
+                }
 
                 if (App.HandoffPlayer != null)
                 {
                     MediaInfoPlayer = App.HandoffPlayer;
                     App.HandoffPlayer = null;
+                    
+                    // [STATE_PROTECTION] Sync path so we don't treat it as a new stream
+                    try { 
+                        _prebufferUrl = await MediaInfoPlayer.GetPropertyAsync("path"); 
+                        _streamUrl = _prebufferUrl;
+                        _ = MediaInfoPlayer.SetPropertyAsync("mute", "yes"); // Preview is usually muted
+                        _isSourcesFetchInProgress = false; // We already have the content
+                    } catch { }
+
                     if (PlayerHost != null)
                     {
                         PlayerHost.Content = MediaInfoPlayer;
                         MediaInfoPlayer.Visibility = Visibility.Visible;
                         MediaInfoPlayer.Opacity = 1;
                     }
+                    Debug.WriteLine("[MediaInfoPage] Successfully re-attached handed-off player. State protected.");
                 }
 
                 await HistoryManager.Instance.InitializeAsync();
                 await CloseTrailer();
+                _isHandoffReturn = true; // Flag for internal logic
                 RestoreUIVisibility();
 
                 IMediaStream newItem = incomingItem;
@@ -3469,8 +3488,15 @@ namespace ModernIPTVPlayer
 
         private async Task ExtractAndApplyAmbienceAsync(Image sourceImage = null, string sourceLabel = null)
         {
+            var tid = Environment.CurrentManagedThreadId;
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [AMBIENCE] Extraction START on TID: {tid} | Source: {sourceLabel}");
+            
             var img = sourceImage ?? GetActiveHeroImage();
-            if (img == null || img.Source == null) return;
+            if (img == null || img.Source == null)
+            {
+                 Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [AMBIENCE] Extraction CANCELLED: img or source is null");
+                 return;
+            }
 
             int startEpoch = Volatile.Read(ref _ambienceNavigationEpoch);
             string currentUrl = GetImageSourceUrl(img);
@@ -3529,11 +3555,12 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[AMBIENCE] Extraction error: {ex.Message}");
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [AMBIENCE] Extraction error on TID: {tid}: {ex.Message}\n{ex.StackTrace}");
             }
             finally
             {
                 _ambienceLock.Release();
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [AMBIENCE] Extraction EXIT on TID: {tid}");
             }
         }
 
@@ -5054,6 +5081,15 @@ namespace ModernIPTVPlayer
         private async void StartPrebufferingV2(string url, double startTime = 0)
         {
             if (string.IsNullOrEmpty(url)) return;
+            
+            // [OPTIMIZATION] If player is set to Native (Media Foundation), do not start the MPV pre-buffer player.
+            // This prevents ghost MPV processes and network contention during 4K playback.
+            if (AppSettings.PlayerSettings.Engine == Models.PlayerEngine.Native)
+            {
+                Debug.WriteLine("[MediaInfoPage] Native Mode detected: Skipping MPV pre-buffering to prevent contention.");
+                return;
+            }
+
             if (!AppSettings.IsPrebufferEnabled) return;
             if (_prebufferUrl == url && MediaInfoPlayer != null) return; // Already prebuffering this url
 
@@ -5368,84 +5404,90 @@ namespace ModernIPTVPlayer
         
         private async Task PerformHandoverAndNavigate(string url, string title, string id = null, string parentId = null, string seriesName = null, int season = 0, int episode = 0, double startSeconds = -1, string posterUrl = null, string type = null, string backdropUrl = null)
         {
-            _isHandoffInProgress = true;
-            // Handoff Logic
-            try
+            // [OPTIMIZATION] Skip handoff for Native (Media Foundation) Mode
+            if (AppSettings.PlayerSettings.Engine != Models.PlayerEngine.Native)
             {
-                // CRITICAL SHAKE: Unpause!
-                bool isPlayerActive = false;
-                if (MediaInfoPlayer != null)
+                // Handoff Logic (MPV Only)
+                try
                 {
-                    try
+                    bool isPlayerActive = false;
+                    if (MediaInfoPlayer != null)
                     {
-                        // [FIX] If we are in AutoResume mode, we deliberately skipped StartPrebuffering.
-                        // So the player is likely empty or holds a trailer. DO NOT HANDOFF.
-                        if (_shouldAutoResume)
+                        try
                         {
-                             isPlayerActive = false;
-                             Debug.WriteLine("[MediaInfoPage:Handoff] AutoResume active -> Forcing FRESH START (Skipping Handoff).");
+                            if (_shouldAutoResume)
+                            {
+                                 isPlayerActive = false;
+                                 Debug.WriteLine("[MediaInfoPage:Handoff] AutoResume active -> Forcing FRESH START (Skipping Handoff).");
+                            }
+                            else
+                            {
+                                string path = null;
+                                try { path = await MediaInfoPlayer.GetPropertyAsync("path"); } catch { }
+
+                                if (!string.IsNullOrEmpty(path) && path != "N/A")
+                                {
+                                    isPlayerActive = true;
+                                    _isHandoffInProgress = true; // Confirmed Handoff
+                                    App.HandoffPlayer = MediaInfoPlayer; 
+                                    Debug.WriteLine($"[MediaInfoPage:Handoff] Player matched path: {path}");
+                                    
+                                    // PRE-WARM VISUALS
+                                    _ = MpvSetupHelper.ApplyVisualSettingsAsync(MediaInfoPlayer);
+                                    
+                                    try 
+                                    {
+                                        MediaInfoPlayer.EnableHandoffMode();
+                                        MediaInfoPlayer.EnsureSwapChainLinked();
+                                    } catch { }
+
+                                    try 
+                                    {
+                                        bool isExplicitVod = _item is Models.Stremio.StremioMediaStream sms_h && (sms_h.Meta.Type == "movie" || sms_h.Meta.Type == "series" || sms_h.Meta.Type == "tv");
+                                        if (_item is SeriesStream) isExplicitVod = true;
+                                        bool isExplicitLive = (_item is LiveStream) || (_item is Models.Stremio.StremioMediaStream sms_lh && sms_lh.Meta.Type == "live");
+
+                                        bool isLive = isExplicitLive || (_streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts")) && !isExplicitVod);
+                                        _ = MpvSetupHelper.ApplyBufferSettingsAsync(MediaInfoPlayer, isSecondary: false, isLive: isLive);
+                                        _ = MediaInfoPlayer.SetPropertyAsync("pause", "no");
+                                    } catch { }
+                                    
+                                    MediaInfoPlayer.EnsureSwapChainLinked();
+                                    MediaInfoPlayer.EnableHandoffMode();
+                                    
+                                    var parent = MediaInfoPlayer.Parent;
+                                    if (parent is Panel p) p.Children.Remove(MediaInfoPlayer);
+                                    else if (parent is ContentControl cc) cc.Content = null;
+                                }
+                            }
                         }
-                        else
+                        catch (Exception ex) 
                         {
-                            string path = null;
-                            try { path = await MediaInfoPlayer.GetPropertyAsync("path"); } catch { }
-
-                            if (!string.IsNullOrEmpty(path) && path != "N/A")
-                            {
-                                isPlayerActive = true;
-                                _isHandoffInProgress = true;
-                                App.HandoffPlayer = MediaInfoPlayer; // Valid Handoff
-                            
-                            Debug.WriteLine($"[MediaInfoPage:Handoff] Player matched path: {path}");
-                            
-                            // APPLY MAIN BUFFER SETTINGS
-                            try 
-                            {
-                                bool isExplicitVod = _item is Models.Stremio.StremioMediaStream sms_h && (sms_h.Meta.Type == "movie" || sms_h.Meta.Type == "series" || sms_h.Meta.Type == "tv");
-                                if (_item is SeriesStream) isExplicitVod = true;
-                                bool isExplicitLive = (_item is LiveStream) || (_item is Models.Stremio.StremioMediaStream sms_lh && sms_lh.Meta.Type == "live");
-
-                                bool isLive = isExplicitLive || (_streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts")) && !isExplicitVod);
-                                await MpvSetupHelper.ApplyBufferSettingsAsync(MediaInfoPlayer, isSecondary: false, isLive: isLive);
-                                await MediaInfoPlayer.SetPropertyAsync("pause", "no");
-                            } catch { }
-                            
-                            // [FIX] Force swap chain linking BEFORE handoff detachment
-                            // Without this, the swap chain may never be linked to the SwapChainPanel
-                            // if the async _needsFirstFrameLink dispatch hasn't executed yet.
-                            MediaInfoPlayer.EnsureSwapChainLinked();
-                            MediaInfoPlayer.EnableHandoffMode();
-                            
-                            // Detach from parent
-                            var parent = MediaInfoPlayer.Parent;
-                            if (parent is Panel p) p.Children.Remove(MediaInfoPlayer);
-                            else if (parent is ContentControl cc) cc.Content = null;
-                            Debug.WriteLine("[MediaInfoPage:Handoff] Detached from visual tree.");
+                            Debug.WriteLine($"[MediaInfoPage:Handoff] Player Check Failed: {ex.Message}");
                         }
-                        // [FIX] Closing the else block added for Handoff prevention
                     }
-                    }
-                    catch (Exception ex) 
+
+                    if (!isPlayerActive)
                     {
-                        Debug.WriteLine($"[MediaInfoPage:Handoff] Player Check Failed: {ex.Message}");
+                        Debug.WriteLine("[MediaInfoPage:Handoff] Player is not active or empty. Forcing FRESH START.");
+                        App.HandoffPlayer = null;
                     }
                 }
-
-                if (!isPlayerActive)
+                catch (Exception ex)
                 {
-                    Debug.WriteLine("[MediaInfoPage:Handoff] Player is not active or empty. Forcing FRESH START.");
-                    App.HandoffPlayer = null;
+                    Debug.WriteLine($"[MediaInfoPage:Handoff] ERROR: {ex}");
                 }
-                
-                // Navigate
-                Debug.WriteLine($"[MediaInfoPage:Handoff] Navigating to PlayerPage for {url} | StartSeconds: {startSeconds} | HasHandoff: {App.HandoffPlayer != null}");
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl, GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
             }
-            catch (Exception ex)
+            else
             {
-                Debug.WriteLine($"[MediaInfoPage:Handoff] ERROR: {ex}");
-                Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl, GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
+                Debug.WriteLine("[MediaInfoPage:Handoff] Native Mode detected: Skipping Handoff logic.");
+                App.HandoffPlayer = null;
+                _isHandoffInProgress = false;
             }
+
+            // [FINAL NAVIGATION] Always happens here
+            Debug.WriteLine($"[MediaInfoPage:Handoff] Navigating to PlayerPage for {url} | StartSeconds: {startSeconds} | HasHandoff: {App.HandoffPlayer != null}");
+            Frame.Navigate(typeof(PlayerPage), new PlayerNavigationArgs(url, title, id, parentId, seriesName, season, episode, startSeconds, posterUrl, type, backdropUrl, GetLogoUrl(), _primaryColorHex, _sourceAddonUrl));
         }
 
         private string GetLogoUrl()

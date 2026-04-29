@@ -11,6 +11,15 @@ namespace Mpv.Core.Interop;
 
 public partial class MpvRenderContextNative
 {
+    public static int _globalCleanupRunning = 0;
+    
+    ~MpvRenderContextNative()
+    {
+#if DEBUG
+        Debug.WriteLine("[Mpv] Finalizing MpvRenderContextNative");
+#endif
+    }
+
     public const string MpvRenderApiTypeOpenGL = "opengl";
     public const string MpvRenderApiTypeDXGI = "dxgi";
     public const string MpvRenderApiTypeSoftware = "sw";
@@ -99,9 +108,12 @@ public partial class MpvRenderContextNative
         }
     }
 
+    private volatile bool _isTearingDown = false;
+    [System.Runtime.ExceptionServices.HandleProcessCorruptedStateExceptions]
     public void Render(MpvRenderParam[] param)
     {
-        if (Handle.Handle == IntPtr.Zero) return;
+        if (Handle.Handle == IntPtr.Zero || _isTearingDown) return;
+        var tid = Environment.CurrentManagedThreadId;
         
         try {
             var size = Marshal.SizeOf<MpvRenderParam>();
@@ -121,8 +133,13 @@ public partial class MpvRenderContextNative
             var terminator = new MpvRenderParam { Type = 0, Data = IntPtr.Zero };
             Marshal.StructureToPtr(terminator, ptr + (size * param.Length), false);
 
+            if (_isTearingDown) 
+            {
+                Marshal.FreeHGlobal(ptr);
+                return;
+            }
+
             var errorCode = mpv_render_context_render(Handle.Handle, ptr);
-            
             Marshal.FreeHGlobal(ptr);
 
             if (errorCode != MpvError.Success)
@@ -143,6 +160,7 @@ public partial class MpvRenderContextNative
     {
         if (Handle.Handle == IntPtr.Zero) return Task.CompletedTask;
         
+        _isTearingDown = true;
         try
         {
             // [CRITICAL] Unset callback first

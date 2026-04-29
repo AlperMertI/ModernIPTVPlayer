@@ -25,6 +25,11 @@ public sealed partial class MpvPlayer : Control
 
     public static long LiveInstanceCount => Interlocked.Read(ref _liveInstances);
 
+    ~MpvPlayer()
+    {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [FINALIZER] MpvPlayer finalizing for instance {_instanceId}");
+    }
+
     public MpvPlayer()
     {
         _instanceId = Interlocked.Increment(ref _nextInstanceId);
@@ -35,6 +40,7 @@ public sealed partial class MpvPlayer : Control
 
     private bool _mpvGpuIsDirty = false;
     private bool _isDisposed = false;
+    private volatile bool _isCleaningUp = false;
     private Mpv.Core.Interop.MpvRenderContextNative.MpvRenderUpdateCallback? _updateCallback;
 
     public static readonly DependencyProperty RenderApiProperty =
@@ -437,9 +443,16 @@ public sealed partial class MpvPlayer : Control
         }
     }
 
+
     public async Task CleanupAsync()
     {
-        if (_isDisposed) return;
+        if (_isDisposed || _isCleaningUp) return;
+        _isCleaningUp = true;
+        
+        var cleanupId = _instanceId;
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] CleanupAsync START for instance {cleanupId}");
+        Interlocked.Increment(ref Mpv.Core.Interop.MpvRenderContextNative._globalCleanupRunning);
+
         _isDisposed = true;
 
         // 1. Unsubscribe from all events IMMEDIATELY to prevent "echo" tasks 
@@ -475,7 +488,9 @@ public sealed partial class MpvPlayer : Control
             {
                 try
                 {
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] Calling Player.DisposeAsync for instance {cleanupId}");
                     await Player.DisposeAsync();
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] Player.DisposeAsync COMPLETED for instance {cleanupId}");
                 }
                 catch (Exception ex) 
                 { 
@@ -500,6 +515,8 @@ public sealed partial class MpvPlayer : Control
             _renderControl = null!;
         }
 
+        Interlocked.Decrement(ref Mpv.Core.Interop.MpvRenderContextNative._globalCleanupRunning);
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] CleanupAsync FINISHED for instance {cleanupId}");
         Interlocked.Decrement(ref _liveInstances);
     }
 
@@ -553,8 +570,21 @@ public sealed partial class MpvPlayer : Control
     // Dönüş: True = Çizim yapıldı, False = Yapılmadı
     private unsafe bool Render(TimeSpan delta)
     {
+        if (_isDisposed || _isCleaningUp)
+        {
+            if (_isCleaningUp) Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] Render REJECTED on instance {_instanceId} (Cleaning Up)");
+            return false;
+        }
+
         if (Player == null || Player.Client?.IsInitialized is not true || Player.RenderContext == null || _renderControl == null)
         {
+            return false;
+        }
+
+        // Final guard for native handles
+        if (Player.RenderContext.Handle.Handle == IntPtr.Zero)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] Render context handle is ZERO for instance {_instanceId}!");
             return false;
         }
 

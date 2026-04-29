@@ -39,6 +39,9 @@ public partial class D3D11RenderControl : ContentControl
     private static ComPtr<ID3D11Device1> _device;
     private static ComPtr<ID3D11DeviceContext1> _context;
     private static int _globalDeviceRefCount = 0;
+    private static readonly System.Threading.Lock _staticInitLock = new();
+    private bool _isHandoffMode = false;
+    private int _inFlightRenderCalls = 0;
     private ComPtr<IDXGISwapChain2> _swapChain; 
     
     private static D3D11? _d3d11;
@@ -300,6 +303,11 @@ public partial class D3D11RenderControl : ContentControl
     private IntPtr _lastHMonitor = IntPtr.Zero;
     private long _frameCounter = 0;
 
+    ~D3D11RenderControl()
+    {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [FINALIZER] D3D11RenderControl finalizing for instance {GetHashCode()}");
+    }
+
     public D3D11RenderControl()
     {
         _instanceId = Interlocked.Increment(ref _nextInstanceId);
@@ -458,37 +466,40 @@ public partial class D3D11RenderControl : ContentControl
         LogControl("Initialize() Called");
         UpdateRefreshRate(); // Re-check on init
 
-        if (_device.Handle == null)
+        lock (_staticInitLock)
         {
-            LogControl("Device is NULL, creating...");
-            LogSync($"Stable Native Bridge Initializing... (TargetHz: {_monitorRefreshRate})");
-            try
+            if (_device.Handle == null)
             {
-                LogControl("Loading D3D11 API...");
+                LogControl("Device is NULL, creating...");
+                LogSync($"Stable Native Bridge Initializing... (TargetHz: {_monitorRefreshRate})");
+                try
+                {
+                    LogControl("Loading D3D11 API...");
 #pragma warning disable CS0618 
-                _d3d11 ??= Silk.NET.Direct3D11.D3D11.GetApi();
-                LogControl("Loading DXGI API...");
-                _dxgi ??= Silk.NET.DXGI.DXGI.GetApi();
+                    _d3d11 ??= Silk.NET.Direct3D11.D3D11.GetApi();
+                    LogControl("Loading DXGI API...");
+                    _dxgi ??= Silk.NET.DXGI.DXGI.GetApi();
 #pragma warning restore CS0618
+                }
+                catch (Exception ex)
+                {
+                    LogControl($"FATAL API LOAD ERROR: {ex.Message}");
+                    throw;
+                }
+
+                CreateDevice();
             }
-            catch (Exception ex)
+            else
             {
-                LogControl($"FATAL API LOAD ERROR: {ex.Message}");
-                throw;
+                LogControl("REUSING Static D3D11 Device.");
             }
 
-            CreateDevice();
+            // [CRITICAL] Always assign handles for every instance, even if device is reused
+            DeviceHandle = (IntPtr)_device.Handle;
+            ContextHandle = (IntPtr)_context.Handle;
+            Interlocked.Increment(ref _globalDeviceRefCount);
+            Interlocked.Increment(ref _liveDevices);
         }
-        else
-        {
-            LogControl("REUSING Static D3D11 Device.");
-        }
-
-        // [CRITICAL] Always assign handles for every instance, even if device is reused
-        DeviceHandle = (IntPtr)_device.Handle;
-        ContextHandle = (IntPtr)_context.Handle;
-        Interlocked.Increment(ref _globalDeviceRefCount);
-        Interlocked.Increment(ref _liveDevices);
 
         _swapChainPanel = new SwapChainPanel();
         _compositionScaleChangedHandler = OnCompositionScaleChanged;
@@ -531,17 +542,32 @@ public partial class D3D11RenderControl : ContentControl
             _hdrInitTcs.TrySetResult(true);
         }
 
-        // Initialize SwapChain ONLY if we have a valid size. 
-        // If the control is 1x1 (initial state), we'll defer to OnSizeChanged.
-        if (_targetWidth > 8 && _targetHeight > 8)
+        // [HANDOFF_OPTIMIZATION] If in handoff mode or we have a valid XamlRoot, 
+        // we start the loop immediately using the screen/window size as a fallback.
+        double effectiveWidth = _targetWidth;
+        double effectiveHeight = _targetHeight;
+
+        if (effectiveWidth <= 8 || effectiveHeight <= 8)
+        {
+            if (this.XamlRoot != null)
+            {
+                effectiveWidth = this.XamlRoot.Size.Width;
+                effectiveHeight = this.XamlRoot.Size.Height;
+                _targetWidth = effectiveWidth;
+                _targetHeight = effectiveHeight;
+            }
+        }
+
+        if (effectiveWidth > 8 && effectiveHeight > 8)
         {
             UpdateSwapChain(); 
             Ready?.Invoke(this, EventArgs.Empty);
             StartRenderLoop();
+            Debug.WriteLine($"[D3D11] RenderLoop started immediately (Size: {effectiveWidth}x{effectiveHeight})");
         }
         else
         {
-            LogControl($"Deferred Initialization: Current Size {_targetWidth}x{_targetHeight} is too small.");
+            Debug.WriteLine($"[D3D11] Deferring loop: Size too small ({effectiveWidth}x{effectiveHeight})");
         }
 
         // [RESIZE OPTIMIZATION] Initialize debounce timer for resize start/end detection
@@ -568,6 +594,16 @@ public partial class D3D11RenderControl : ContentControl
         _xamlRootChangedHandler ??= OnXamlRootChanged;
         _subscribedXamlRoot = XamlRoot;
         _subscribedXamlRoot.Changed += _xamlRootChangedHandler;
+    }
+
+    private void UnsubscribeXamlRootChanged()
+    {
+        if (_subscribedXamlRoot != null && _xamlRootChangedHandler != null)
+        {
+            try { _subscribedXamlRoot.Changed -= _xamlRootChangedHandler; } catch { }
+            _subscribedXamlRoot = null;
+            _xamlRootChangedHandler = null;
+        }
     }
 
     private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args)
@@ -721,7 +757,24 @@ public partial class D3D11RenderControl : ContentControl
                     _lastFrameStamp = now;
                     
                     renderStartTime = Stopwatch.GetTimestamp();
-                    didDraw = RenderFrame?.Invoke(delta) ?? false;
+                    
+                    if (RenderFrame != null)
+                    {
+                        Interlocked.Increment(ref _inFlightRenderCalls);
+                        try
+                        {
+                            didDraw = RenderFrame(delta);
+                        }
+                        finally
+                        {
+                            Interlocked.Decrement(ref _inFlightRenderCalls);
+                        }
+                    }
+                    else
+                    {
+                        didDraw = false;
+                    }
+
                     renderEndTime = Stopwatch.GetTimestamp();
                     double renderMs = (renderEndTime - renderStartTime) * 1000.0 / Stopwatch.Frequency;
 
@@ -780,6 +833,7 @@ public partial class D3D11RenderControl : ContentControl
                 lastPresentWasSuccess = false;
             }
         }
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] RenderLoop EXITING.");
     }
 
     private unsafe void PresentFrame()
@@ -1420,11 +1474,11 @@ public partial class D3D11RenderControl : ContentControl
                 
                 if (completedTask == timeoutTask)
                 {
-                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] StopLoopAsync WARNING: Render loop did not exit in time. Forcing continuation.");
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] StopLoopAsync TIMEOUT (2s). Render loop STILL RUNNING!");
                 }
                 else
                 {
-                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] StopLoopAsync: Render loop exited gracefully.");
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] StopLoopAsync: Render loop exited gracefully.");
                 }
             }
             catch (Exception ex)
@@ -1464,58 +1518,61 @@ public partial class D3D11RenderControl : ContentControl
             }
 
             FlushContext();
+            
+            // [SYNC] Wait for any in-flight render calls to finish (Max 100ms)
+            int waitCount = 0;
+            while (_inFlightRenderCalls > 0 && waitCount < 10)
+            {
+                Thread.Sleep(10);
+                waitCount++;
+            }
 
             if (_swapChain.Handle != null) { _swapChain.Dispose(); _swapChain = default; Interlocked.Decrement(ref _liveSwapChains); }
-            if (_context.Handle != null) 
-            { 
-                _context.Handle->ClearState();
-                _context.Handle->Flush();
-            }
-            if (_device.Handle != null) 
-            { 
-                Interlocked.Decrement(ref _globalDeviceRefCount);
-                Interlocked.Decrement(ref _liveDevices); 
-            }
             
+            lock (_staticInitLock)
+            {
+                Interlocked.Decrement(ref _globalDeviceRefCount);
+                Interlocked.Decrement(ref _liveDevices);
+
+                if (_globalDeviceRefCount <= 0)
+                {
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] LAST instance closing. Performing DXGI Trim...");
+                    
+                    try
+                    {
+                        if (_device.Handle != null)
+                        {
+                            // [RESOURCE MANAGEMENT] Instead of disposing the device (which crashes WinUI composition),
+                            // we call Trim() to tell the driver to release all internal caches and memory.
+                            using var dxgiDevice = _device.QueryInterface<Silk.NET.DXGI.IDXGIDevice3>();
+                            if (dxgiDevice.Handle != null)
+                            {
+                                dxgiDevice.Trim();
+                                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DXGI Trim completed successfully.");
+                            }
+                        }
+                        
+                        // Still run a GC collection to clean up managed COM wrappers
+                        GC.Collect();
+                        GC.WaitForPendingFinalizers();
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"[D3D_CTRL] Trim error: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    Debug.WriteLine($"[D3D_CTRL] Instance closed. {_globalDeviceRefCount} instances active.");
+                }
+            }
+
             DeviceHandle = IntPtr.Zero;
             ContextHandle = IntPtr.Zero;
             AdapterName = "auto";
             
             if (_cachedNativePanel != IntPtr.Zero) { Marshal.Release(_cachedNativePanel); _cachedNativePanel = IntPtr.Zero; }
-
-            if (_displayInfo != null)
-            {
-                if (_advancedColorInfoChangedHandler != null)
-                {
-                    _advancedColorInfoChangedHandler = null;
-                }
-                _displayInfo = null;
-            }
-            if (_swapChainPanel != null && _compositionScaleChangedHandler != null)
-            {
-                _compositionScaleChangedHandler = null;
-            }
-            if (_subscribedXamlRoot != null && _xamlRootChangedHandler != null)
-            {
-                _subscribedXamlRoot = null;
-            }
-
-            if (_resizeDebounceTimer != null)
-            {
-                _resizeDebounceTimer.Stop();
-                _resizeDebounceTimer = null;
-            }
-
-            _lastLinkedHandle = IntPtr.Zero;
-            _needsFirstFrameLink = false;
-            _frameLatencyWaitHandle = IntPtr.Zero;
-
-            _cts = null!;
-
-            try { _mpvUpdateEvent.Dispose(); } catch { }
-            Interlocked.Decrement(ref _liveControls);
         }
-        try { _resizeEvent.Dispose(); } catch { }
     }
 
     private static long ApproxBackBufferBytes(int width, int height) => Math.Max(0L, (long)width * height * 4);

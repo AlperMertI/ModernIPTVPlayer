@@ -36,6 +36,7 @@ namespace ModernIPTVPlayer.Services.Streaming
             public bool HasReceivedPPS;
             public bool PacketHasHeaders;
             public bool GateOpen;
+            public bool HasDolbyVision; // Detected DV NALs (62/63)
             public HevcSpsInfo? ColorInfo;
         }
 
@@ -364,6 +365,7 @@ namespace ModernIPTVPlayer.Services.Streaming
             public int BitDepthLuma;
             public int BitDepthChroma;
             public int ChromaFormatIdc;  // 1=4:2:0, 2=4:2:2, 3=4:4:4
+            public bool IsDolbyVision;   // Explicitly detected DV NALs or SEI
         }
 
         /// <summary>
@@ -1334,6 +1336,8 @@ namespace ModernIPTVPlayer.Services.Streaming
                 35 => "AUD",
                 39 => "SEI_PREFIX",
                 40 => "SEI_SUFFIX",
+                62 => "DV_RPU",      // Dolby Vision Reference Picture Unit
+                63 => "DV_METADATA", // Dolby Vision Metadata
                 _ => $"NAL_{nalType}"
             };
         }
@@ -1597,6 +1601,20 @@ namespace ModernIPTVPlayer.Services.Streaming
                     {
                         result.TotalKeyframes++;
                         result.GateOpen = true;
+                    }
+                    else if (cleanNalType == 62 || cleanNalType == 63) // Dolby Vision
+                    {
+                        result.HasDolbyVision = true;
+                        if (result.ColorInfo.HasValue)
+                        {
+                            var ci = result.ColorInfo.Value;
+                            ci.IsDolbyVision = true;
+                            result.ColorInfo = ci;
+                        }
+                        else
+                        {
+                            result.ColorInfo = new HevcSpsInfo { IsValid = true, IsDolbyVision = true };
+                        }
                     }
                 }
             }

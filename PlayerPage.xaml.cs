@@ -17,6 +17,7 @@ using System.Text.Json.Serialization;
 using System.Linq;
 using System.Net.Http;
 using System.Reflection;
+using System.Threading;
 using Windows.Foundation;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
@@ -60,6 +61,7 @@ namespace ModernIPTVPlayer
         private bool _isPageLoaded = false;
         private string? _navigationError = null;
         private DispatcherTimer? _statsTimer;
+        private int _statsTickRunning = 0;
         private Microsoft.UI.Xaml.DispatcherTimer _seekDebounceTimer; // Timer for cumulative seek
         private int _pendingSeekSeconds = 0; // Accumulated seconds to seek
         private bool _isDragging = false;
@@ -123,6 +125,11 @@ namespace ModernIPTVPlayer
         private const bool NativeHdrExperimentDisableRealTimePlayback = false;
         private const bool NativePlaybackVerboseDiagnostics = true;
         private string? _currentNativePlaybackUrl;
+        private string? _currentNativeOriginalUrl;
+        private NativePlaybackRoute _currentNativeRoute = NativePlaybackRoute.None;
+        private bool _nativeProgressiveProxyRetryAttempted = false;
+        private Windows.Media.Playback.MediaPlaybackItem? _currentNativePlaybackItem;
+        private bool _forceMpvForCurrentPlayback = false;
         private Stopwatch? _startupStopwatch;
         private DateTime _launchTimestampUtc = DateTime.MinValue;
         private int _nativeTeardownState = 0;
@@ -181,7 +188,17 @@ namespace ModernIPTVPlayer
             public uint? Transfer;
             public uint? Matrix;
             public uint? Range;
+            public bool IsDolbyVision;
             public string Source;
+        }
+
+        private enum NativePlaybackRoute
+        {
+            None,
+            AdaptiveManifest,
+            DirectVod,
+            ProgressiveVodProxy,
+            LiveTsProxy
         }
 
         public PlayerPage()
@@ -355,6 +372,7 @@ namespace ModernIPTVPlayer
         private async void StatsTimer_Tick(object? sender, object e)
         {
             if (!IsPlayerActive) return;
+            if (System.Threading.Interlocked.Exchange(ref _statsTickRunning, 1) == 1) return;
 
             try 
             {
@@ -793,7 +811,8 @@ namespace ModernIPTVPlayer
 
                             try 
                             {
-                                if (_nativeMediaPlayer.Source is Windows.Media.Playback.MediaPlaybackItem item)
+                                var item = _currentNativePlaybackItem;
+                                if (item != null)
                                 {
                                     if (item.VideoTracks.Count > 0)
                                     {
@@ -952,6 +971,10 @@ namespace ModernIPTVPlayer
                 }
             }
             catch { /* Ignore errors during polling */ }
+            finally
+            {
+                System.Threading.Volatile.Write(ref _statsTickRunning, 0);
+            }
         }
 
 
@@ -1270,6 +1293,7 @@ namespace ModernIPTVPlayer
             base.OnNavigatedTo(e);
             BeginPlayerMemoryTrace("ctor");
             _startupStopwatch = Stopwatch.StartNew();
+            _forceMpvForCurrentPlayback = false;
 
             if (e.Parameter is string url)
             {
@@ -1461,6 +1485,9 @@ namespace ModernIPTVPlayer
             };
 
             _currentNativePlaybackUrl = null;
+            _currentNativeOriginalUrl = null;
+            _currentNativeRoute = NativePlaybackRoute.None;
+            _currentNativePlaybackItem = null;
             _adaptiveMediaSource = null;
             _nativeMediaPlayer = null;
             _activeNativePlayerSessionId = 0;
@@ -1560,17 +1587,19 @@ namespace ModernIPTVPlayer
                     BuildPlayerMemoryTraceDetail("after-visual-detach", $"children={PlayerContainer?.Children?.Count ?? -1}"),
                     PlayerMemoryBaseline);
 
-                if (_isHandoff)
+                bool isGoingBackToInfo = e.SourcePageType != null && e.SourcePageType.Name.Contains("MediaInfoPage");
+
+                if (isGoingBackToInfo || _isHandoff)
                 {
-                    // If it was a handoff, we DON'T CleanupAsync because the control belongs to MediaInfoPage.
-                    // CleanupAsync destroys the native MpvContext, making the control unusable on the previous page.
-                    // Instead, we just PAUSE playback and return the player to the source page.
-                    _ = _mpvPlayer.ExecuteCommandAsync("set", "pause", "yes");
-                    App.HandoffPlayer = _mpvPlayer; // Return player to source page for reuse
+                    // [STATE_PROTECTION] We PAUSE the player to save resources/bandwidth,
+                    // but we DO NOT dispose it. This keeps the current frame/position ready.
+                    _ = _mpvPlayer.SetPropertyAsync("pause", "yes");
+                    _ = _mpvPlayer.SetPropertyAsync("mute", "yes");
+
+                    App.HandoffPlayer = _mpvPlayer; 
+                    _mpvPlayer = null; 
                     
-                    // We DO NOT call DisableHandoffMode(); -> PreserveStateOnUnload keeps RenderControl alive.
-                    
-                    Debug.WriteLine("[PlayerPage] Returned handed-off player to source page (Paused, Buffer Preserved).");
+                    Debug.WriteLine("[PlayerPage] Reverse Handoff: Player parked in global state (Paused).");
                 }
                 else
                 {
@@ -2208,6 +2237,10 @@ namespace ModernIPTVPlayer
             _cachedDisplayHdrAvailable = "-";
             _cachedDisplaySdrWhite = "-";
             _cachedDisplayLuminance = "-";
+            _nativeProgressiveProxyRetryAttempted = false;
+            _currentNativeRoute = NativePlaybackRoute.None;
+            _currentNativeOriginalUrl = null;
+            _currentNativePlaybackItem = null;
 
             StartCursorTimer();
 
@@ -2218,7 +2251,10 @@ namespace ModernIPTVPlayer
                 return;
             }
 
-            StartLogoLoading();
+            if (App.HandoffPlayer == null)
+            {
+                StartLogoLoading();
+            }
 
             // 0. Lightweight URL resolve (iptv:// protocol → real URL, from cache only)
             _streamUrl = await ResolveStreamUrlAsync(_streamUrl);
@@ -2230,219 +2266,76 @@ namespace ModernIPTVPlayer
             //     an early-warning system that logs diagnostics and pre-warms the connection.
             _ = ValidateStreamUrlInBackground(_streamUrl);
 
-            _useMpvPlayer = AppSettings.PlayerSettings.Engine == Models.PlayerEngine.Mpv;
-
+            _useMpvPlayer = _forceMpvForCurrentPlayback || AppSettings.PlayerSettings.Engine == Models.PlayerEngine.Mpv;
+            if (_forceMpvForCurrentPlayback)
+            {
+                LogPlayerTrace("[NATIVE-ROUTE] Forced MPV for current playback after Native failure.");
+            }
             if (_useMpvPlayer)
             {
-                LogStartupTiming("MPV branch start");
-                LogLaunchTiming("MPV branch start");
                 MediaFoundationPlayer.Visibility = Visibility.Collapsed;
                 MediaFoundationPlayer.Source = null;
                 try { MediaFoundationPlayer.MediaPlayer?.Pause(); } catch {}
 
                 if (App.HandoffPlayer != null)
                 {
-                    // HANDOFF MODE: FAST PATH (No Delay!)
                     LogPlayerTrace("[PlayerPage] Doing Handoff...");
-                    LogStartupTiming("MPV handoff path");
-                    LogLaunchTiming("MPV handoff path");
-                    var pSettings = AppSettings.PlayerSettings;
                     _isHandoff = true;
-                    _bufferUnlocked = false;
                     _mpvPlayer = App.HandoffPlayer;
                     App.HandoffPlayer = null; 
                     _sessionStartTime = DateTime.Now;
 
-                    // Phase 2: RE-ENABLE VISUALS & UNLOCK BUFFER
-                    try 
-                    {
-                        // 1. Restore Video Rendering
-                        await _mpvPlayer.SetPropertyAsync("vid", "1");
-
-                        // 2. Expand Buffers for active watch
-                        int mainBuffer = AppSettings.BufferSeconds;
-                        await _mpvPlayer.SetPropertyAsync("cache", "yes");
-                        await _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", mainBuffer.ToString());
-                        await _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB");
-                        await _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "32MiB");
-
-                        // 3. Trigger Phase 2: Visual Enhancements
-                        await MpvSetupHelper.ApplyVisualSettingsAsync(_mpvPlayer);
-
-                        // 4. Initial Color Space Sync
-                        await _mpvPlayer.SyncHdrStatusAsync();
-                    } catch { }
-
+                    // 1. ATTACH TO UI IMMEDIATELY
                     PlayerContainer.Children.Add(_mpvPlayer);
                     _mpvPlayer.Visibility = Visibility.Visible;
                     _mpvPlayer.Opacity = 1;
-                    _mpvPlayer.IsHitTestVisible = false;
                     _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
                     _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
+                    
+                    // 2. UPGRADE BUFFERS (Non-blocking Batch)
+                    // We transition from "Preview" buffers to "Full" playback buffers here.
+                    // Using fire-and-forget tasks to avoid UI thread stalls.
+                    _ = _mpvPlayer.SetPropertyAsync("vid", "1");
+                    _ = _mpvPlayer.SetPropertyAsync("cache", "yes");
+                    _ = _mpvPlayer.SetPropertyAsync("demuxer-readahead-secs", AppSettings.BufferSeconds.ToString());
+                    _ = _mpvPlayer.SetPropertyAsync("demuxer-max-bytes", "512MiB");
+                    _ = _mpvPlayer.SetPropertyAsync("demuxer-max-back-bytes", "32MiB");
+                    
+                    _ = _mpvPlayer.SetPropertyAsync("pause", "no");
+                    _ = _mpvPlayer.SetPropertyAsync("mute", "no");
 
+                    _ = MpvSetupHelper.ApplyVisualSettingsAsync(_mpvPlayer);
+                    _ = _mpvPlayer.SyncHdrStatusAsync();
+                    
                     _mpvPlayer.Redraw();
-
                     ApplyPrimaryColorToUi();
                     Services.SleepPreventionService.PreventSleep();
-
-                    // 1. Initial State Restoration & UI Activation
                     _statsTimer?.Start(); 
-                    await _mpvPlayer.SetPropertyAsync("pause", "no");
-                    await _mpvPlayer.SetPropertyAsync("mute", "no");
-
-                    // 2. Verification
-                    var pIdle = await _mpvPlayer.GetPropertyAsync("core-idle");
-                    var pPath = await _mpvPlayer.GetPropertyAsync("path");
-
-                    if (string.IsNullOrEmpty(pPath) || pPath == "N/A")
-                    {
-                        if (_navArgs != null && _navArgs.StartSeconds > 0)
-                        {
-                            await _mpvPlayer.SetPropertyAsync("start", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                        }
-                        LogStartupTiming("MPV OpenAsync start");
-                        LogLaunchTiming("MPV OpenAsync start");
-                        await _mpvPlayer.OpenAsync(_navArgs.Url);
-                        LogStartupTiming("MPV OpenAsync done");
-                        LogLaunchTiming("MPV OpenAsync done");
-                        await _mpvPlayer.SetPropertyAsync("pause", "no");
-                    }
-                    else if (pIdle == "yes")
-                    {
-                        await _mpvPlayer.SetPropertyAsync("pause", "no");
-                        await Task.Delay(200);
-                        await _mpvPlayer.SetPropertyAsync("pause", "no");
-                        _mpvPlayer.Redraw();
-                    }
-
-                    // [RESTORE SAVED AUDIO/SUBTITLE TRACKS]
-                    string contentId = !string.IsNullOrEmpty(_navArgs?.Id) ? _navArgs.Id : _streamUrl;
-                    var history = HistoryManager.Instance.GetProgress(contentId);
-                    bool isHistoryStale = history != null && pSettings.PreferredLanguagesUpdatedAt > history.Timestamp;
-
-                    if (history != null && !isHistoryStale)
-                    {
-                        if (!string.IsNullOrEmpty(history.AudioTrackId))
-                            await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
-                        if (!string.IsNullOrEmpty(history.SubtitleTrackId))
-                            await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
-                    }
-
-                    _ = AutoFetchAndRestoreAddonSubtitleAsync();
                 }
                 else
                 {
-                     // FRESH START MODE
-                     LogPlayerTrace("[PlayerPage] Starting Fresh Playback...");
-                     LogStartupTiming("MPV fresh start");
-                     LogLaunchTiming("MPV fresh start");
-                     _sessionStartTime = DateTime.Now;
-                     Services.Streaming.StreamSlotSimulator.Instance.StopAll();
-                     await Task.Delay(50); 
+                    // FRESH START MODE
+                    LogPlayerTrace("[PlayerPage] Starting Fresh Playback...");
+                    _sessionStartTime = DateTime.Now;
+                    _mpvPlayer = new MpvWinUI.MpvPlayer();
+                    _mpvPlayer.RenderApi = AppSettings.PlayerSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext ? "d3d11" : "dxgi";
 
-                     _mpvPlayer = new MpvWinUI.MpvPlayer();
+                    PlayerContainer.Children.Add(_mpvPlayer);
+                    _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
+                    _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
+                    _mpvPlayer.PropertyChanged += OnMpvPropertyChanged;
 
-                     try 
-                     {
-                         var pSettings = AppSettings.PlayerSettings;
-                         if (pSettings.VideoOutput == ModernIPTVPlayer.Models.VideoOutput.GpuNext)
-                         {
-                             _mpvPlayer.RenderApi = "d3d11";
-                         }
-                         else
-                         {
-                             _mpvPlayer.RenderApi = "dxgi";
-                         }
-                         LogPlayerTrace($"[PlayerPage] Selected Render API: {_mpvPlayer.RenderApi}");
-                     }
-                     catch (Exception ex)
-                     {
-                         LogPlayerTrace($"[PlayerPage] Failed to load settings for RenderApi: {ex.Message}");
-                          _mpvPlayer.RenderApi = "d3d11"; 
-                     }
-
-                     PlayerContainer.Children.Add(_mpvPlayer);
-                     _mpvPlayer.HorizontalAlignment = HorizontalAlignment.Stretch;
-                     _mpvPlayer.VerticalAlignment = VerticalAlignment.Stretch;
-                     _mpvPlayer.IsHitTestVisible = false;
-                     _mpvPlayer.PropertyChanged += OnMpvPropertyChanged;
-
-                     try
+                    try
                     {
-
-                        if (_loadingTargetProgress < 70) _loadingTargetProgress = 70; 
-
-                        if (_mpvPlayer == null) return;
-
                         await MpvSetupHelper.ConfigurePlayerAsync(_mpvPlayer, _streamUrl, isSecondary: false);
-                        
-                        // Use centralized buffer settings instead of hardcoded 2GB
-                        bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8") || _streamUrl.Contains(":8080") || _streamUrl.Contains("/ts"));
+                        bool isLive = _streamUrl != null && (_streamUrl.Contains("/live/") || _streamUrl.Contains(".m3u8"));
                         await MpvSetupHelper.ApplyBufferSettingsAsync(_mpvPlayer, false, isLive);
-                        
-                        if (_mpvPlayer == null) return; 
-
-                        if (_navArgs != null && _navArgs.StartSeconds > 0)
-                        {
-                            await _mpvPlayer.SetPropertyAsync("start", _navArgs.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
-                        }
-
                         await _mpvPlayer.OpenAsync(_streamUrl);
-
-                        ApplyPrimaryColorToUi();
-                        Services.SleepPreventionService.PreventSleep();
-
-                        // Detect Physical Refresh Rate
-                        try
-                        {
-                             var ptr = GetForegroundWindow();
-                             var monitor = MonitorFromWindow(ptr, MONITOR_DEFAULTTONEAREST);
-                             var devMode = new DEVMODE();
-                             devMode.dmSize = (short)System.Runtime.InteropServices.Marshal.SizeOf(typeof(DEVMODE));
-                             if (EnumDisplaySettings(null, ENUM_CURRENT_SETTINGS, ref devMode))
-                             {
-                                 if (devMode.dmDisplayFrequency > 0)
-                                 {
-                                     _mpvPlayer?.SetDisplayFps(devMode.dmDisplayFrequency);
-                                 }
-                             }
-                        }
-                        catch {}
-
                         _statsTimer?.Start();
-                        SetupProfessionalAnimations();
-                        
-                        // [RESTORE SAVED AUDIO/SUBTITLE TRACKS]
-                         string contentId = !string.IsNullOrEmpty(_navArgs?.Id) ? _navArgs.Id : _streamUrl;
-                         var history = HistoryManager.Instance.GetProgress(contentId);
-                         var pSettings = AppSettings.PlayerSettings;
-
-                         bool isHistoryStale = history != null && pSettings.PreferredLanguagesUpdatedAt > history.Timestamp;
-
-                         if (history != null && !isHistoryStale)
-                         {
-                             if (!string.IsNullOrEmpty(history.AudioTrackId))
-                                 await _mpvPlayer.SetPropertyAsync("aid", history.AudioTrackId);
-                             if (!string.IsNullOrEmpty(history.SubtitleTrackId))
-                                 await _mpvPlayer.SetPropertyAsync("sid", history.SubtitleTrackId);
-                         }
-
-                        _ = AutoFetchAndRestoreAddonSubtitleAsync();
-
                     }
-                    catch (Exception ex)
-                    {
-                        LogPlayerTrace($"[PlayerPage] MPV Error: {ex}");
-                        if (_mpvPlayer == null)
-                        {
-                            await ShowMessageDialog("Oynatıcı Hatası", "Video oynatıcı başlatılamadı.");
-                        }
-                        else
-                        {
-                            await ShowMessageDialog("MPV Oynatıcı Hatası", $"MPV başlatılamadı. \n\nHata: {ex.Message}");
-                        }
-                    }
+                    catch (Exception ex) { LogPlayerTrace($"[PlayerPage] MPV Error: {ex.Message}"); }
                 }
+                _ = AutoFetchAndRestoreAddonSubtitleAsync();
             }
             else
             {
@@ -2451,9 +2344,10 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private async Task StartNativePlaybackAsync(string url)
+        private async Task StartNativePlaybackAsync(string url, bool forceProgressiveVodProxy = false)
         {
             LogPlayerTrace("[PlayerPage] Starting Native Media Foundation Pipeline...");
+            ResetNativeTeardownState();
             int nativeGeneration = BumpNativePlaybackGeneration();
             long nativeSessionId = BeginNativeSession();
 
@@ -2464,6 +2358,7 @@ namespace ModernIPTVPlayer
                   _sessionStartTime = DateTime.Now; // Post-seek immunity
             _isPaused = false;
             _sessionStartTime = DateTime.Now;
+            _currentNativeOriginalUrl = url;
 
             // Prevent MPV from running in the background and throwing "render_context not being called" errors
             if (App.HandoffPlayer != null)
@@ -2484,8 +2379,11 @@ namespace ModernIPTVPlayer
             
             _nativeMediaPlayer = new Windows.Media.Playback.MediaPlayer();
             _activeNativePlayerSessionId = nativeSessionId;
-            // Advanced Optimizations
-            _nativeMediaPlayer.RealTimePlayback = !NativeHdrExperimentDisableRealTimePlayback;
+            
+            // Use RealTimePlayback only for raw live TS. VOD needs normal buffering.
+            bool isLive = Uri.TryCreate(url, UriKind.Absolute, out var liveProbeUri) && IsLiveTsUri(liveProbeUri);
+            _nativeMediaPlayer.RealTimePlayback = isLive && !NativeHdrExperimentDisableRealTimePlayback;
+            
             _nativeMediaPlayer.SystemMediaTransportControls.IsEnabled = true; // SMTC Kernel Priority
             // MediaFailed -> Fallback to MPV
             _nativeMediaPlayer.MediaFailed += MediaPlayer_MediaFailed;
@@ -2525,14 +2423,14 @@ namespace ModernIPTVPlayer
                 HttpHelper.ApplyDefaultHeaders(winrtClient);
 
                 // 3. Choose the right native source path.
-                // AdaptiveMediaSource is for manifests (.m3u8/.mpd), not raw live MPEG-TS.
-                bool looksAdaptiveManifest =
-                    uri.AbsoluteUri.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ||
-                    uri.AbsoluteUri.Contains(".mpd", StringComparison.OrdinalIgnoreCase) ||
-                    uri.AbsoluteUri.Contains(".ism", StringComparison.OrdinalIgnoreCase);
+                // Manifests, progressive VOD, and raw live TS have very different read patterns.
+                bool looksAdaptiveManifest = IsAdaptiveManifestUri(uri);
+                bool looksLiveTs = IsLiveTsUri(uri);
 
-                if (looksAdaptiveManifest)
+                if (looksAdaptiveManifest && !forceProgressiveVodProxy)
                 {
+                    _currentNativeRoute = NativePlaybackRoute.AdaptiveManifest;
+                    LogPlayerTrace($"[NATIVE-ROUTE] Adaptive manifest detected -> AdaptiveMediaSource. URL={uri}");
                     LogStartupTiming("Native manifest path");
                     LogLaunchTiming("Native manifest path");
                     var adaptiveResult = await Windows.Media.Streaming.Adaptive.AdaptiveMediaSource.CreateFromUriAsync(uri, winrtClient);
@@ -2548,6 +2446,7 @@ namespace ModernIPTVPlayer
                         _adaptiveMediaSource.DownloadCompleted += AdaptiveSource_DownloadCompleted;
                         var source = Windows.Media.Core.MediaSource.CreateFromAdaptiveMediaSource(_adaptiveMediaSource);
                         var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                        _currentNativePlaybackItem = item;
                         _currentNativePlaybackUrl = uri.ToString();
                         _nativeMediaPlayer.Source = item;
                         LogStartupTiming("Native manifest source assigned");
@@ -2555,7 +2454,7 @@ namespace ModernIPTVPlayer
                     }
                     else
                     {
-                        LogPlayerTrace($"[PlayerPage] AdaptiveMediaSource failed ({adaptiveResult.Status}); falling back to Header-Aware Local Proxy...");
+                        LogPlayerTrace($"[NATIVE-ROUTE] AdaptiveMediaSource failed ({adaptiveResult.Status}); retrying through LiveTs proxy.");
                         // [LEAK_FIX] Stop previous proxy session before starting a new one
                         if (!string.IsNullOrEmpty(_currentNativePlaybackUrl))
                         {
@@ -2563,18 +2462,21 @@ namespace ModernIPTVPlayer
                             _currentNativePlaybackUrl = null;
                         }
 
-                        string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString());
+                        _currentNativeRoute = NativePlaybackRoute.LiveTsProxy;
+                        string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString(), Services.StreamProxyMode.LiveTs);
                         var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(proxyUrl));
                         var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                        _currentNativePlaybackItem = item;
                         _currentNativePlaybackUrl = proxyUrl;
                         _nativeMediaPlayer.Source = item;
                         LogStartupTiming("Native proxy source assigned");
                         LogLaunchTiming("Native proxy source assigned");
                     }
                 }
-                else
+                else if (looksLiveTs)
                 {
-                    LogPlayerTrace("[PlayerPage] Direct live/TS URL detected; using Header-Aware Local Proxy immediately.");
+                    _currentNativeRoute = NativePlaybackRoute.LiveTsProxy;
+                    LogPlayerTrace($"[NATIVE-ROUTE] Raw live/TS detected -> LiveTs proxy. URL={uri}");
                     LogStartupTiming("Native proxy path");
                     LogLaunchTiming("Native proxy path");
                     // [LEAK_FIX] Stop previous proxy session before starting a new one
@@ -2584,13 +2486,51 @@ namespace ModernIPTVPlayer
                         _currentNativePlaybackUrl = null;
                     }
 
-                    string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString());
+                    string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString(), Services.StreamProxyMode.LiveTs);
                     var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(proxyUrl));
                     var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                    _currentNativePlaybackItem = item;
                     _currentNativePlaybackUrl = proxyUrl;
                     _nativeMediaPlayer.Source = item;
                     LogStartupTiming("Native proxy source assigned");
                     LogLaunchTiming("Native proxy source assigned");
+                }
+                else if (forceProgressiveVodProxy)
+                {
+                    _currentNativeRoute = NativePlaybackRoute.ProgressiveVodProxy;
+                    LogPlayerTrace($"[NATIVE-ROUTE] Progressive VOD retry -> byte-exact ProgressiveVod proxy. URL={uri}");
+                    LogStartupTiming("Native progressive VOD proxy path");
+                    LogLaunchTiming("Native progressive VOD proxy path");
+
+                    if (!string.IsNullOrEmpty(_currentNativePlaybackUrl))
+                    {
+                        Services.StreamProxyService.Instance.StopRequest(_currentNativePlaybackUrl);
+                        _currentNativePlaybackUrl = null;
+                    }
+
+                    string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString(), Services.StreamProxyMode.ProgressiveVod);
+                    var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(proxyUrl));
+                    var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                    _currentNativePlaybackItem = item;
+                    _currentNativePlaybackUrl = proxyUrl;
+                    _nativeMediaPlayer.Source = item;
+                    LogStartupTiming("Native progressive VOD proxy source assigned");
+                    LogLaunchTiming("Native progressive VOD proxy source assigned");
+                }
+                else
+                {
+                    _currentNativeRoute = NativePlaybackRoute.DirectVod;
+                    LogPlayerTrace($"[NATIVE-ROUTE] Progressive VOD detected -> direct MediaSource. URL={uri}");
+                    LogStartupTiming("Native direct VOD path");
+                    LogLaunchTiming("Native direct VOD path");
+
+                    var source = Windows.Media.Core.MediaSource.CreateFromUri(uri);
+                    var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                    _currentNativePlaybackItem = item;
+                    _currentNativePlaybackUrl = uri.ToString();
+                    _nativeMediaPlayer.Source = item;
+                    LogStartupTiming("Native direct VOD source assigned");
+                    LogLaunchTiming("Native direct VOD source assigned");
                 }
 
                 // 4. Start Playback with "MediaOpened" timeout logic
@@ -2604,6 +2544,7 @@ namespace ModernIPTVPlayer
                 _nativeMediaPlayer.Play();
                 LogStartupTiming("Native Play called");
                 LogLaunchTiming("Native Play called");
+                StartNativeHealthMonitor(nativeSessionId, nativeGeneration);
 
                 // Optional: Monitor for initialization hang
                 _ = Task.Run(async () =>
@@ -2648,6 +2589,118 @@ namespace ModernIPTVPlayer
             }
         }
 
+        private void StartNativeHealthMonitor(long nativeSessionId, int nativeGeneration)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(6));
+
+                    double firstPosition = -1;
+                    double lastPosition = -1;
+                    int playingSamples = 0;
+                    int bufferingSamples = 0;
+
+                    for (int i = 0; i < 8; i++)
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(1));
+
+                        double? samplePosition = null;
+                        Windows.Media.Playback.MediaPlaybackState? sampleState = null;
+
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            if (!IsCurrentNativeSession(nativeSessionId) ||
+                                nativeGeneration != _nativePlaybackGeneration ||
+                                _useMpvPlayer ||
+                                _nativeMediaPlayer == null)
+                            {
+                                return;
+                            }
+
+                            var session = _nativeMediaPlayer.PlaybackSession;
+                            sampleState = session.PlaybackState;
+                            samplePosition = session.Position.TotalSeconds;
+                        });
+
+                        await Task.Delay(40);
+
+                        if (!samplePosition.HasValue || !sampleState.HasValue)
+                        {
+                            return;
+                        }
+
+                        if (firstPosition < 0)
+                        {
+                            firstPosition = samplePosition.Value;
+                        }
+
+                        lastPosition = samplePosition.Value;
+
+                        if (sampleState.Value == Windows.Media.Playback.MediaPlaybackState.Playing)
+                        {
+                            playingSamples++;
+                        }
+                        else if (sampleState.Value == Windows.Media.Playback.MediaPlaybackState.Buffering)
+                        {
+                            bufferingSamples++;
+                        }
+                    }
+
+                    double advanced = Math.Max(0, lastPosition - firstPosition);
+                    if (playingSamples >= 5 && advanced < 3.0 && !_isPaused)
+                    {
+                        DispatcherQueue.TryEnqueue(() =>
+                        {
+                            if (!IsCurrentNativeSession(nativeSessionId) ||
+                                nativeGeneration != _nativePlaybackGeneration ||
+                                _useMpvPlayer)
+                            {
+                                return;
+                            }
+
+                            LogPlayerTrace($"[NATIVE-HEALTH] Playback unhealthy: state=Playing samples={playingSamples}, advanced={advanced:F2}s over 8s, route={_currentNativeRoute}. Falling back to MPV for smooth playback.");
+                            TriggerMpvFallback();
+                        });
+                    }
+                    else
+                    {
+                        LogPlayerTrace($"[NATIVE-HEALTH] OK: playingSamples={playingSamples}, bufferingSamples={bufferingSamples}, advanced={advanced:F2}s over 8s, route={_currentNativeRoute}.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[NATIVE-HEALTH] Monitor error: {ex.Message}");
+                }
+            });
+        }
+
+        private static bool IsAdaptiveManifestUri(Uri uri)
+        {
+            string text = uri.AbsoluteUri;
+            return text.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains(".mpd", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains(".ism", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsLiveTsUri(Uri uri)
+        {
+            string text = uri.AbsoluteUri;
+            string path = uri.AbsolutePath;
+
+            if (path.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ||
+                path.EndsWith(".m2ts", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return text.Contains("/live/", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("/mpegts", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("type=mpegts", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("container=ts", StringComparison.OrdinalIgnoreCase);
+        }
+
 
         private void MediaPlayer_MediaFailed(Windows.Media.Playback.MediaPlayer sender, Windows.Media.Playback.MediaPlayerFailedEventArgs args)
         {
@@ -2671,6 +2724,26 @@ namespace ModernIPTVPlayer
                 var codecStatus = await Helpers.CodecHelper.GetCodecSupportStatusAsync();
                 string codecSummary = string.Join(", ", codecStatus.Select(kvp => $"{kvp.Key}: {kvp.Value}"));
                 LogPlayerTrace($"[PlayerPage] Codec Support at Failure: {codecSummary}");
+
+                if (args.Error == Windows.Media.Playback.MediaPlayerError.DecodingError)
+                {
+                    LogPlayerTrace($"[NATIVE-ROUTE] Direct VOD failed with DecodingError. This points to MF decoder/render support, not transport. Skipping proxy retry and falling back to MPV.");
+                    TriggerMpvFallback();
+                    return;
+                }
+
+                if (_currentNativeRoute == NativePlaybackRoute.DirectVod &&
+                    !_nativeProgressiveProxyRetryAttempted &&
+                    !string.IsNullOrWhiteSpace(_streamUrl))
+                {
+                    _nativeProgressiveProxyRetryAttempted = true;
+                    LogPlayerTrace("[NATIVE-ROUTE] Direct VOD failed. Retrying once through byte-exact ProgressiveVod proxy before MPV fallback.");
+                    BeginNativeTeardown(collapseNativeSurface: false, reason: "retry-progressive-vod-proxy");
+                    await Task.Delay(150);
+                    _useMpvPlayer = false;
+                    _ = StartNativePlaybackAsync(_streamUrl, forceProgressiveVodProxy: true);
+                    return;
+                }
 
                 if (args.Error == Windows.Media.Playback.MediaPlayerError.SourceNotSupported)
                 {
@@ -2780,7 +2853,8 @@ namespace ModernIPTVPlayer
                     {
                         _cachedResolution = $"{wSize}x{hSize}";
 
-                        if (sender.Source is Windows.Media.Playback.MediaPlaybackItem item)
+                        var item = _currentNativePlaybackItem;
+                        if (item != null)
                         {
                             if (item.VideoTracks.Count > 0)
                             {
@@ -2797,6 +2871,7 @@ namespace ModernIPTVPlayer
                                 LogDisplayAdvancedColorState();
                                 LogAutoDetectedColorMetadata(item, videoProps);
                                 UpdateNativeSourceColorStats(videoProps);
+                                LogNativePlaybackSummary(item, videoProps);
                             }
 
                             if (item.AudioTracks.Count > 0)
@@ -2832,13 +2907,12 @@ namespace ModernIPTVPlayer
                     return;
                 }
 
-                // HDR detection deferred - MediaFoundation handles HDR output automatically
-                // when display is in HDR mode. Just mark content type.
+                // HDR interpretation is logged from MF color metadata after MediaOpened.
                 if (_cachedHdr == "-" || string.IsNullOrWhiteSpace(_cachedHdr))
                 {
                     _cachedHdr = "HEVC / Unspecified";
                 }
-                LogPlayerTrace($"[PlayerPage] HDR HEVC content detected - MediaFoundation will output HDR when display is in HDR mode");
+                LogPlayerTrace("[PlayerPage] HEVC opened in MediaFoundation; waiting for MF color metadata interpretation.");
             }
             catch (Exception ex)
             {
@@ -2954,6 +3028,97 @@ namespace ModernIPTVPlayer
             {
                 LogDiagnosticTrace($"[MF-DIAG] Diagnostic dump error: {ex.Message}");
             }
+        }
+
+        private void LogNativePlaybackSummary(Windows.Media.Playback.MediaPlaybackItem item, Windows.Media.MediaProperties.VideoEncodingProperties videoProps)
+        {
+            try
+            {
+                var mfColor = ReadMfSourceColorMetadata(videoProps);
+                string mfDetected = BuildMfDetectedDynamicRangeLabel(mfColor);
+                string colorSummary = BuildNativeColorspaceSummary(mfColor);
+                string sourceUrl = _currentNativeOriginalUrl ?? _streamUrl ?? "-";
+                bool nameSuggestsHdr = LooksLikeHdrByName(_navArgs?.Title) || LooksLikeHdrByName(sourceUrl);
+                bool mfLooksHdr = mfDetected.Contains("HDR", StringComparison.OrdinalIgnoreCase) ||
+                                  mfDetected.Contains("HLG", StringComparison.OrdinalIgnoreCase) ||
+                                  mfDetected.Contains("PQ", StringComparison.OrdinalIgnoreCase);
+
+                LogDiagnosticTrace("[MF-SUMMARY] ========== Native Playback Summary ==========");
+                LogDiagnosticTrace($"[MF-SUMMARY] Route: {_currentNativeRoute}");
+                LogDiagnosticTrace($"[MF-SUMMARY] Source: {sourceUrl}");
+                LogDiagnosticTrace($"[MF-SUMMARY] Video: {videoProps.Subtype}, {videoProps.Width}x{videoProps.Height}, FPS={FormatFrameRate(videoProps)}, Profile={videoProps.ProfileId}");
+                LogDiagnosticTrace($"[MF-SUMMARY] Tracks: video={item.VideoTracks.Count}, audio={item.AudioTracks.Count}, metadata={item.TimedMetadataTracks.Count}");
+                LogDiagnosticTrace($"[MF-SUMMARY] MFDetected: {mfDetected}");
+                LogDiagnosticTrace($"[MF-SUMMARY] MFColor: primaries={DescribePrimaries(mfColor.Primaries)}, transfer={DescribeTransfer(mfColor.Transfer)}, matrix={DescribeMatrix(mfColor.Matrix)}, range={DescribeRange(mfColor.Range)}");
+                LogDiagnosticTrace($"[MF-SUMMARY] UIInterpretation: HDR={_cachedHdr}, Color={colorSummary}");
+                LogDiagnosticTrace($"[MF-SUMMARY] Display: mode={_cachedDisplayHdrStatus}, hdrAvailable={_cachedDisplayHdrAvailable}, hdr10Metadata={GetCurrentHdr10MetadataSupportText()}, luminance={_cachedDisplayLuminance}");
+
+                var proxyColor = StreamProxyService.Instance.ColorInfo;
+                if (_currentNativeRoute == NativePlaybackRoute.LiveTsProxy && proxyColor.HasValue)
+                {
+                    var pc = proxyColor.Value;
+                    LogDiagnosticTrace($"[MF-SUMMARY] LiveTsParser: valid={pc.IsValid}, colorDesc={pc.HasColourDescription}, primaries={pc.ColourPrimaries}, transfer={pc.TransferCharacteristics}, matrix={pc.MatrixCoefficients}, dv={pc.IsDolbyVision}");
+                }
+
+                if (nameSuggestsHdr && !mfLooksHdr)
+                {
+                    LogDiagnosticTrace("[MF-SUMMARY] WARNING: Source name suggests HDR/DV/HLG, but MF did not report HDR metadata. Transport is now clean; if playback looks SDR, investigate decoder/container/display support next.");
+                }
+
+                LogDiagnosticTrace("[MF-SUMMARY] ============================================");
+            }
+            catch (Exception ex)
+            {
+                LogDiagnosticTrace($"[MF-SUMMARY] Summary log error: {ex.Message}");
+            }
+        }
+
+        private static string FormatFrameRate(Windows.Media.MediaProperties.VideoEncodingProperties videoProps)
+        {
+            if (videoProps.FrameRate.Denominator == 0) return "-";
+            double fps = (double)videoProps.FrameRate.Numerator / videoProps.FrameRate.Denominator;
+            return fps.ToString("F2", CultureInfo.InvariantCulture);
+        }
+
+        private string GetCurrentHdr10MetadataSupportText()
+        {
+            try
+            {
+                if (MainWindow.Current == null) return "-";
+                var displayInfo = Microsoft.Graphics.Display.DisplayInformation.CreateForWindowId(MainWindow.Current.AppWindow.Id);
+                var ac = displayInfo.GetAdvancedColorInfo();
+                return ac.IsHdrMetadataFormatCurrentlySupported(Microsoft.Graphics.Display.DisplayHdrMetadataFormat.Hdr10) ? "Yes" : "No";
+            }
+            catch
+            {
+                return "-";
+            }
+        }
+
+        private static string BuildMfDetectedDynamicRangeLabel(SourceColorMetadata metadata)
+        {
+            string transfer = DescribeTransfer(metadata.Transfer);
+            string primaries = DescribePrimaries(metadata.Primaries);
+
+            if (metadata.IsDolbyVision) return "Dolby Vision";
+            if (transfer == "HDR10 (PQ)") return "HDR10/PQ";
+            if (transfer == "HLG") return "HLG";
+            if (primaries == "BT.2020") return "WideColor/BT.2020 with unknown transfer";
+            if (transfer == "SDR" || primaries == "BT.709") return "SDR";
+            return "Unknown/Unspecified";
+        }
+
+        private static bool LooksLikeHdrByName(string? text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+
+            return text.Contains("HDR", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("HDR10", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("HDR10+", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("HLG", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("DV", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("Dolby Vision", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("DoVi", StringComparison.OrdinalIgnoreCase);
         }
 
         private void LogDisplayAdvancedColorState()
@@ -3096,6 +3261,7 @@ namespace ModernIPTVPlayer
             result.Transfer = (uint)pc.TransferCharacteristics;
             result.Matrix = (uint)pc.MatrixCoefficients;
             result.Range = (uint)(pc.VideoFullRangeFlag == 1 ? 1 : 0);
+            result.IsDolbyVision = pc.IsDolbyVision;
             return result;
         }
 
@@ -3117,6 +3283,7 @@ namespace ModernIPTVPlayer
                 Transfer = ChoosePreferredColorField(SanitizeMfTransfer(primary.Transfer), fallback.Transfer),
                 Matrix = ChoosePreferredColorField(SanitizeMfMatrix(primary.Matrix), fallback.Matrix),
                 Range = ChoosePreferredColorField(SanitizeMfRange(primary.Range), fallback.Range),
+                IsDolbyVision = primary.IsDolbyVision || fallback.IsDolbyVision,
                 Source = primary.Source
             };
         }
@@ -3164,6 +3331,11 @@ namespace ModernIPTVPlayer
         {
             string transfer = DescribeTransfer(metadata.Transfer);
             string primaries = DescribePrimaries(metadata.Primaries);
+
+            if (metadata.IsDolbyVision)
+            {
+                return HasMeaningfulColorLabel(primaries) ? $"Dolby Vision / {primaries}" : "Dolby Vision";
+            }
 
             if (transfer == "HLG")
             {
@@ -3413,7 +3585,9 @@ namespace ModernIPTVPlayer
 
             return text.Contains("HDR", StringComparison.OrdinalIgnoreCase) ||
                    text.Contains("HLG", StringComparison.OrdinalIgnoreCase) ||
-                   text.Contains("PQ", StringComparison.OrdinalIgnoreCase);
+                   text.Contains("PQ", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("Dolby Vision", StringComparison.OrdinalIgnoreCase) ||
+                   text.Contains("DoVi", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -3575,11 +3749,11 @@ namespace ModernIPTVPlayer
                             18 => "HLG (Broadcast HDR)",
                             _ => "HDR (unknown transfer)"
                         };
-                        LogDiagnosticTrace($"[MF-COLOR]   *** HDR DETTECTED: {hdrType} ***");
+                        LogDiagnosticTrace($"[MF-COLOR]   *** HDR detected by MediaFoundation: {hdrType} ***");
                     }
                     else
                     {
-                        LogDiagnosticTrace("[MF-COLOR]   *** SDR content (BT.709 or unspecified) ***");
+                        LogDiagnosticTrace("[MF-COLOR]   *** MF did not report HDR metadata (SDR or unknown/unspecified) ***");
                     }
                 }
 
@@ -3825,12 +3999,8 @@ namespace ModernIPTVPlayer
             if (_useMpvPlayer) return; // Already in MPV
             ShowOsd("Native Oynatıcı desteklemiyor, MPV ile deneniyor...");
             
-            // Fix Persistence: Assign back to AppSettings to ensure it sticks
-            var settings = AppSettings.PlayerSettings;
-            settings.Engine = Models.PlayerEngine.Mpv;
-            AppSettings.PlayerSettings = settings;
-
             _useMpvPlayer = true;
+            _forceMpvForCurrentPlayback = true;
             
             BeginNativeTeardown(collapseNativeSurface: true, reason: "fallback-to-mpv");
 
@@ -6158,36 +6328,38 @@ namespace ModernIPTVPlayer
         {
             try
             {
-                if (_navArgs == null || _mpvPlayer == null) return;
+                if (_navArgs == null) return;
+                bool isMpv = _useMpvPlayer && _mpvPlayer != null;
+                bool isNative = !_useMpvPlayer && _nativeMediaPlayer != null;
 
-                // 1. Wait for player to be READY (IsMediaLoaded = true in mpv-core)
-                // This indicates the player is ready to accept track commands (sub-add).
+                if (!isMpv && !isNative) return;
+
+                // 1. Wait for player to be READY
                 Debug.WriteLine("[AutoSubRestore] Waiting for player to stabilize...");
                 int subRestoreRetry = 0;
-                while (_mpvPlayer != null && !_mpvPlayer.IsMediaLoaded && subRestoreRetry < 40)
+                while (subRestoreRetry < 40)
                 {
+                    if (!_isPageLoaded) return;
+                    
+                    if (isMpv && _mpvPlayer != null && _mpvPlayer.IsMediaLoaded) break;
+                    if (isNative && _nativeMediaPlayer != null && _nativeMediaPlayer.PlaybackSession.PlaybackState != Windows.Media.Playback.MediaPlaybackState.Opening) break;
+
                     await Task.Delay(250); // 250ms x 40 = 10s max wait
                     subRestoreRetry++;
-                    if (!_isPageLoaded) return;
                 }
                 
-                if (_mpvPlayer == null || !_isPageLoaded) return;
+                if (!_isPageLoaded) return;
 
                 // 2. Load the track list (populates _currentSubtitleTracks with embedded tracks)
                 Debug.WriteLine("[AutoSubRestore] Loading tracks...");
                 await LoadTracksAsync();
-                if (_mpvPlayer == null || !_isPageLoaded) return;
+                if (!_isPageLoaded) return;
 
-                // 3. FetchAddonSubtitles is already triggered by LoadTracksAsync (line 2154: _ = FetchAddonSubtitles())
-                //    But it's fire-and-forget inside LoadTracksAsync, so we need to wait for it.
-                //    Call it again (cache will be used if it already ran).
+                // 3. Fetch addon subtitles (uses cache if available)
                 Debug.WriteLine("[AutoSubRestore] Fetching addon subtitles...");
                 await FetchAddonSubtitles();
-                if (_mpvPlayer == null || !_isPageLoaded) return;
+                if (!_isPageLoaded) return;
 
-                // 4. InjectAddonSubsIntoList already handles finding the saved URL and calling sub-add.
-                //    It was called by FetchAddonSubtitles -> InjectAddonSubsIntoList.
-                //    So by this point, the subtitle should already be applied.
                 Debug.WriteLine("[AutoSubRestore] Complete.");
             }
             catch (Exception ex)
@@ -6239,12 +6411,18 @@ namespace ModernIPTVPlayer
                     foreach (var t in _currentSubtitleTracks) t.IsSelected = (t == match);
                     match.IsSelected = true;
 
-                    // 2. Explicitly apply to MPV
-                    if (_mpvPlayer != null)
+                    // 2. Explicitly apply to Player
+                    if (_useMpvPlayer && _mpvPlayer != null)
                     {
                         System.Diagnostics.Debug.WriteLine($"[InjectAddonSubs] Auto-selecting subtitle: {match.Text} ({match.Url})");
                         _ = _mpvPlayer.ExecuteCommandAsync("sub-add", match.Url);
                         ShowOsd($"Altyazı Otomatik Seçildi: {match.Text}");
+                    }
+                    else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                    {
+                         System.Diagnostics.Debug.WriteLine($"[InjectAddonSubs] Auto-selecting subtitle (Native): {match.Text}");
+                         SelectSubtitleTrack_Native(-1, match.Url); // -1 triggers URL-based selection
+                         ShowOsd($"Altyazı Otomatik Seçildi: {match.Text}");
                     }
 
                     // 3. Sync UI Selection
@@ -6369,18 +6547,55 @@ namespace ModernIPTVPlayer
                 }
                 else if (!_useMpvPlayer && _nativeMediaPlayer != null)
                 {
-                    SelectSubtitleTrack_Native(track.Id);
+                    SelectSubtitleTrack_Native(track.Id, track.Url);
                     ShowOsd($"Altyazı: {track.Text}");
                 }
             }
         }
 
-        private void SelectSubtitleTrack_Native(int index)
+        private void SelectSubtitleTrack_Native(int index, string url = null)
         {
             if (_nativeMediaPlayer?.Source is not Windows.Media.Playback.MediaPlaybackItem playbackItem) return;
             
             try
             {
+                // Handle External Addon/URL Subtitles
+                if (!string.IsNullOrEmpty(url))
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SelectSubtitleTrack_Native] Adding external subtitle: {url}");
+                    
+                    // 1. Create Source from URL
+                    var tts = Windows.Media.Core.TimedTextSource.CreateFromUri(new Uri(url));
+                    
+                    // 2. Register for Resolved event to enable it once MF has processed the file
+                    tts.Resolved += (s, args) =>
+                    {
+                        if (args.Error == null && args.Tracks.Count > 0)
+                        {
+                            DispatcherQueue.TryEnqueue(() => 
+                            {
+                                // Disable others first
+                                for (uint i = 0; i < playbackItem.TimedMetadataTracks.Count; i++)
+                                {
+                                    playbackItem.TimedMetadataTracks.SetPresentationMode(i, Windows.Media.Playback.TimedMetadataTrackPresentationMode.Disabled);
+                                }
+                                // Enable the newly resolved track
+                                playbackItem.TimedMetadataTracks.SetPresentationMode(0, Windows.Media.Playback.TimedMetadataTrackPresentationMode.PlatformPresented);
+                                System.Diagnostics.Debug.WriteLine("[SelectSubtitleTrack_Native] External subtitle resolved and enabled.");
+                            });
+                        }
+                        else
+                        {
+                            System.Diagnostics.Debug.WriteLine($"[SelectSubtitleTrack_Native] External subtitle resolution failed: {args.Error?.ExtendedError.Message}");
+                        }
+                    };
+
+                    // 3. Add to the MediaSource (which is the source of the playbackItem)
+                    playbackItem.Source.ExternalTimedTextSources.Add(tts);
+                    return;
+                }
+
+                // Handle Embedded Subtitles
                 var subtitleTracks = playbackItem.TimedMetadataTracks;
                 if (index >= 0 && index < subtitleTracks.Count)
                 {
@@ -6400,7 +6615,7 @@ namespace ModernIPTVPlayer
                         }
                     }
                     
-                    System.Diagnostics.Debug.WriteLine($"[SelectSubtitleTrack_Native] Selected track {index}");
+                    System.Diagnostics.Debug.WriteLine($"[SelectSubtitleTrack_Native] Selected embedded track {index}");
                 }
                 else if (index < 0)
                 {
@@ -6458,7 +6673,7 @@ namespace ModernIPTVPlayer
                 _backgroundTasksCts = new System.Threading.CancellationTokenSource();
                 var ct = _backgroundTasksCts.Token;
 
-                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                using var request = new HttpRequestMessage(HttpMethod.Head, url);
                 using var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(10));
                 using var linkedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
@@ -6469,12 +6684,18 @@ namespace ModernIPTVPlayer
 
                 // Log diagnostics
                 LogPlayerTrace($"[StreamValidation] HEAD response: {(int)response.StatusCode} {contentType ?? "unknown"}");
+                LogHttpMediaHeaders("[StreamValidation] HEAD", response);
 
                 // Warn on suspicious responses (webpage instead of video)
                 if (contentType != null && contentType.StartsWith("text/") &&
                     !contentType.Contains("mpegurl") && !contentType.Contains("xml"))
                 {
                     LogPlayerTrace("[StreamValidation] WARNING: Server returned text/html instead of video. Playback may fail.");
+                }
+
+                if (LooksLikeProgressiveContainerUrl(url))
+                {
+                    _ = ProbeProgressiveHttpShapeAsync(url, response.Content.Headers.ContentLength, ct);
                 }
             }
             catch (OperationCanceledException)
@@ -6485,6 +6706,76 @@ namespace ModernIPTVPlayer
             {
                 LogPlayerTrace($"[StreamValidation] Error (non-fatal): {ex.Message}");
             }
+        }
+
+        private async Task ProbeProgressiveHttpShapeAsync(string url, long? contentLength, CancellationToken ct)
+        {
+            try
+            {
+                await ProbeRangeAsync(url, "bytes=0-0", "[SourceProbe] range-first-byte", ct);
+
+                if (contentLength.HasValue && contentLength.Value > 1024 * 1024)
+                {
+                    long tailStart = Math.Max(0, contentLength.Value - 1024 * 1024);
+                    await ProbeRangeAsync(url, $"bytes={tailStart}-{contentLength.Value - 1}", "[SourceProbe] range-tail-1MiB", ct);
+                }
+
+                LogPlayerTrace("[SourceProbe] open-ended range probe skipped to avoid competing with active playback; proxy retry logs MF's real open-ended requests if needed.");
+            }
+            catch (OperationCanceledException)
+            {
+                LogPlayerTrace("[SourceProbe] cancelled/timed out");
+            }
+            catch (Exception ex)
+            {
+                LogPlayerTrace($"[SourceProbe] error: {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+
+        private async Task ProbeRangeAsync(string url, string rangeHeader, string label, CancellationToken ct)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation("Range", rangeHeader);
+            using var timeoutCts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(8));
+            using var linkedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
+
+            using var response = await HttpHelper.Client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                linkedCts.Token);
+
+            LogPlayerTrace($"{label}: request={rangeHeader} status={(int)response.StatusCode} {response.StatusCode}");
+            LogHttpMediaHeaders(label, response);
+
+            bool askedForRange = !string.IsNullOrWhiteSpace(rangeHeader);
+            if (askedForRange && response.StatusCode != System.Net.HttpStatusCode.PartialContent)
+            {
+                LogPlayerTrace($"{label}: WARNING range request did not return 206. MediaFoundation may not be able to treat this remote file like a seekable local file.");
+            }
+        }
+
+        private void LogHttpMediaHeaders(string prefix, HttpResponseMessage response)
+        {
+            string contentLength = response.Content.Headers.ContentLength?.ToString(CultureInfo.InvariantCulture) ?? "-";
+            string contentRange = response.Content.Headers.ContentRange?.ToString() ?? "-";
+            string acceptRanges = response.Headers.TryGetValues("Accept-Ranges", out var ar) ? string.Join(",", ar) : "-";
+            string etag = response.Headers.ETag?.ToString() ?? "-";
+            string lastModified = response.Content.Headers.LastModified?.ToString() ?? response.Headers.Date?.ToString() ?? "-";
+            string server = response.Headers.Server?.ToString() ?? "-";
+            string cache = response.Headers.CacheControl?.ToString() ?? "-";
+
+            LogPlayerTrace($"{prefix}: headers ct={response.Content.Headers.ContentType?.ToString() ?? "-"} len={contentLength} range={contentRange} acceptRanges={acceptRanges} etag={etag} lastModified={lastModified} server={server} cache={cache}");
+        }
+
+        private static bool LooksLikeProgressiveContainerUrl(string url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+
+            return url.Contains(".mkv", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains(".mp4", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains(".mov", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains(".avi", StringComparison.OrdinalIgnoreCase) ||
+                   url.Contains("video/x-matroska", StringComparison.OrdinalIgnoreCase);
         }
 
         private async Task<(bool Success, string Url, string ErrorMsg)> CheckStreamUrlAsync(string url)

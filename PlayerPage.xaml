@@ -216,15 +216,25 @@
               Transitions="{x:Null}"/>
 
         <!-- 1. Video Layer -->
-        <!-- Moved below PlayerContainer to ensure it renders ON TOP when active -->
-        <Viewbox x:Name="MediaFoundationViewbox" Stretch="Uniform" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
-            <MediaPlayerElement x:Name="MediaFoundationPlayer"
-                            Visibility="Collapsed"
-                            AutoPlay="True"
-                            AreTransportControlsEnabled="False"
-                            IsHitTestVisible="False"
-                            Transitions="{x:Null}"/>
-        </Viewbox>
+        <!-- [OPTIMIZED] Removed Viewbox as it interferes with Platform Subtitle rendering in WinUI 3 -->
+        <!-- Using Stretch=Uniform on the player itself is the high-performance way to scale -->
+        <MediaPlayerElement x:Name="MediaFoundationPlayer"
+                        Visibility="Collapsed"
+                        AutoPlay="True"
+                        AreTransportControlsEnabled="True"
+                        Stretch="Uniform"
+                        IsHitTestVisible="False"
+                        Transitions="{x:Null}"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Stretch">
+            <MediaPlayerElement.Resources>
+                <!-- Optimized: Apply style to the internal MediaTransportControls instance without replacing the object -->
+                <Style TargetType="MediaTransportControls">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Setter Property="IsHitTestVisible" Value="False"/>
+                </Style>
+            </MediaPlayerElement.Resources>
+        </MediaPlayerElement>
 
         <!-- [FIX] Snapshot Image for Smooth PiP Transition -->
         <Image x:Name="SnapshotImage" Stretch="Uniform" Visibility="Collapsed" IsHitTestVisible="False"/>
