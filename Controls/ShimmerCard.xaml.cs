@@ -25,7 +25,7 @@ namespace ModernIPTVPlayer.Controls
                     StartShimmer();
             };
 
-            this.Unloaded += (s, e) => ShimmerStoryboard.Stop();
+            this.Unloaded += (s, e) => ShimmerSurface.Stop();
         }
 
         private void OnVisibilityChanged(DependencyObject sender, DependencyProperty dp)
@@ -33,7 +33,7 @@ namespace ModernIPTVPlayer.Controls
             if (Visibility == Visibility.Visible)
                 StartShimmer();
             else
-                ShimmerStoryboard.Stop();
+                ShimmerSurface.Stop();
         }
 
         public static readonly DependencyProperty CornerRadiusProperty =
@@ -47,9 +47,7 @@ namespace ModernIPTVPlayer.Controls
 
         private void StartShimmer()
         {
-            // Random staggering (up to 300ms to ensure snappiness)
-            ShimmerStoryboard.BeginTime = TimeSpan.FromMilliseconds(new System.Random().NextDouble() * 300);
-            ShimmerStoryboard.Begin();
+            ShimmerSurface.Start();
         }
     }
 }

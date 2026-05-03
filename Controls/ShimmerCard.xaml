@@ -7,34 +7,10 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <UserControl.Resources>
-        <Storyboard x:Name="ShimmerStoryboard" RepeatBehavior="Forever">
-            <DoubleAnimation Storyboard.TargetName="ShimmerTransform" 
-                             Storyboard.TargetProperty="X"
-                             From="-420" To="420" 
-                             Duration="0:0:1.8">
-                <DoubleAnimation.EasingFunction>
-                    <SineEase EasingMode="EaseInOut"/>
-                </DoubleAnimation.EasingFunction>
-            </DoubleAnimation>
-        </Storyboard>
-    </UserControl.Resources>
-
     <Grid Padding="{x:Bind Padding, Mode=OneWay}">
-        <!-- Mask for Shimmer -->
-        <Grid CornerRadius="{x:Bind CornerRadius, Mode=OneWay}" x:Name="ShimmerMask" Background="#1AFFFFFF">
-            <Rectangle Opacity="1">
-                <Rectangle.Fill>
-                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                        <GradientStop Color="Transparent" Offset="0"/>
-                        <GradientStop Color="#15FFFFFF" Offset="0.5"/>
-                        <GradientStop Color="Transparent" Offset="1"/>
-                    </LinearGradientBrush>
-                </Rectangle.Fill>
-                <Rectangle.RenderTransform>
-                    <TranslateTransform x:Name="ShimmerTransform" X="-420"/>
-                </Rectangle.RenderTransform>
-            </Rectangle>
-        </Grid>
+        <local:ShimmerControl x:Name="ShimmerSurface"
+                              CornerRadius="{x:Bind CornerRadius, Mode=OneWay}"
+                              HorizontalAlignment="Stretch"
+                              VerticalAlignment="Stretch"/>
     </Grid>
 </UserControl>

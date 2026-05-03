@@ -8,17 +8,19 @@
     d:DesignHeight="20"
     d:DesignWidth="200">
 
-    <Grid CornerRadius="4" Background="#1AFFFFFF">
-        <Rectangle x:Name="ShimmerRect" Width="400">
+    <Grid x:Name="ShimmerMask" CornerRadius="{x:Bind CornerRadius, Mode=OneWay}" Background="{x:Bind BaseBrush, Mode=OneWay}">
+        <Rectangle x:Name="ShimmerRect" Width="{x:Bind SweepWidth, Mode=OneWay}" HorizontalAlignment="Left" Opacity="{x:Bind HighlightOpacity, Mode=OneWay}">
             <Rectangle.Fill>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                     <GradientStop Color="Transparent" Offset="0"/>
-                    <GradientStop Color="#15FFFFFF" Offset="0.5"/>
+                    <GradientStop Color="#05FFFFFF" Offset="0.22"/>
+                    <GradientStop Color="#38FFFFFF" Offset="0.5"/>
+                    <GradientStop Color="#08FFFFFF" Offset="0.78"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </LinearGradientBrush>
             </Rectangle.Fill>
             <Rectangle.RenderTransform>
-                <TranslateTransform x:Name="ShimmerTransform" X="-400"/>
+                <TranslateTransform x:Name="ShimmerTransform" X="-360"/>
             </Rectangle.RenderTransform>
         </Rectangle>
     </Grid>

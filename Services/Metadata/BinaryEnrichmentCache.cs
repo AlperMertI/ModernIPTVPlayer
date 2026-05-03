@@ -37,7 +37,7 @@ namespace ModernIPTVPlayer.Services.Metadata
         }
 
         private const string CACHE_FILE_NAME = "enriched_metadata.bin";
-        private const int VERSION = 4; // Incremented for CheckedFields and ProbedAddons persistence
+        private const int VERSION = 5; // Incremented to support persistent serialization of Seasons, Cast, and technical media info.
         private readonly string _cachePath;
         
         // String interning for sources (RAM optimization)
@@ -140,6 +140,7 @@ namespace ModernIPTVPlayer.Services.Metadata
         public async Task SaveAsync(string id, UnifiedMetadata data)
         {
             await _initializationTask;
+            System.Diagnostics.Debug.WriteLine($"[BinaryCache] Queueing save for {id}");
             var entry = new CacheEntry(id, data, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             await _writeChannel.Writer.WriteAsync(entry);
         }
@@ -147,7 +148,13 @@ namespace ModernIPTVPlayer.Services.Metadata
         public async Task<bool> TryPatchAsync(string id, UnifiedMetadata target)
         {
             await _initializationTask;
-            if (!_index.TryGetValue(id, out var info)) return false;
+            if (!_index.TryGetValue(id, out var info)) 
+            {
+                // System.Diagnostics.Debug.WriteLine($"[BinaryCache] MISS for {id}");
+                return false;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"[BinaryCache] HIT for {id} at offset {info.Offset}");
 
             return await Task.Run(() =>
             {
@@ -203,6 +210,37 @@ namespace ModernIPTVPlayer.Services.Metadata
                         {
                             target.ProbedAddons.Add(br.ReadString());
                         }
+
+                        // Hydrate IsSeries flag and complex list collections (Cast, Directors, Seasons)
+                        target.IsSeries = br.ReadBoolean();
+                        
+                        string castJson = br.ReadString();
+                        if (!string.IsNullOrEmpty(castJson))
+                        {
+                            target.Cast = System.Text.Json.JsonSerializer.Deserialize(castJson, Services.Json.AppJsonContext.Default.ListUnifiedCast);
+                        }
+
+                        string dirJson = br.ReadString();
+                        if (!string.IsNullOrEmpty(dirJson))
+                        {
+                            target.Directors = System.Text.Json.JsonSerializer.Deserialize(dirJson, Services.Json.AppJsonContext.Default.ListUnifiedCast);
+                        }
+
+                        string seaJson = br.ReadString();
+                        if (!string.IsNullOrEmpty(seaJson))
+                        {
+                            target.Seasons = System.Text.Json.JsonSerializer.Deserialize(seaJson, Services.Json.AppJsonContext.Default.ListUnifiedSeason);
+                        }
+
+                        // Hydrate technical media metadata
+                        target.Bitrate = br.ReadInt64();
+                        target.IsHdr = br.ReadBoolean();
+                        target.Resolution = ReadStringSafe(br);
+                        target.VideoCodec = ReadStringSafe(br);
+                        target.AudioCodec = ReadStringSafe(br);
+                        target.Status = ReadStringSafe(br);
+                        target.Country = ReadStringSafe(br);
+                        target.Runtime = ReadStringSafe(br);
                         
                         return true;
                     }
@@ -239,7 +277,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 bw.Write(entry.Metadata.Overview ?? "");
 
                                 // Persist Provenance
-                                bw.Write(GetSourceIndex(entry.Metadata.MetadataSourceInfo));
+                                // [FIX] Fallback to DataSource if MetadataSourceInfo is empty (e.g. for Seeds)
+                                bw.Write(GetSourceIndex(entry.Metadata.MetadataSourceInfo ?? entry.Metadata.DataSource));
                                 bw.Write(entry.Metadata.PriorityScore);
                                 bw.Write((int)entry.Metadata.MaxEnrichmentContext);
 
@@ -260,6 +299,33 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 var probed = entry.Metadata.ProbedAddons?.ToList() ?? new List<string>();
                                 bw.Write(probed.Count);
                                 foreach (var p in probed) bw.Write(p);
+
+                                // Persist complex metadata collections and technical properties
+                                bw.Write(entry.Metadata.IsSeries);
+                                
+                                string castJson = (entry.Metadata.Cast != null && entry.Metadata.Cast.Count > 0) 
+                                    ? System.Text.Json.JsonSerializer.Serialize(entry.Metadata.Cast, Services.Json.AppJsonContext.Default.ListUnifiedCast) 
+                                    : "";
+                                bw.Write(castJson);
+
+                                string dirJson = (entry.Metadata.Directors != null && entry.Metadata.Directors.Count > 0) 
+                                    ? System.Text.Json.JsonSerializer.Serialize(entry.Metadata.Directors, Services.Json.AppJsonContext.Default.ListUnifiedCast) 
+                                    : "";
+                                bw.Write(dirJson);
+
+                                string seaJson = (entry.Metadata.Seasons != null && entry.Metadata.Seasons.Count > 0) 
+                                    ? System.Text.Json.JsonSerializer.Serialize(entry.Metadata.Seasons, Services.Json.AppJsonContext.Default.ListUnifiedSeason) 
+                                    : "";
+                                bw.Write(seaJson);
+
+                                bw.Write(entry.Metadata.Bitrate);
+                                bw.Write(entry.Metadata.IsHdr);
+                                bw.Write(entry.Metadata.Resolution ?? "");
+                                bw.Write(entry.Metadata.VideoCodec ?? "");
+                                bw.Write(entry.Metadata.AudioCodec ?? "");
+                                bw.Write(entry.Metadata.Status ?? "");
+                                bw.Write(entry.Metadata.Country ?? "");
+                                bw.Write(entry.Metadata.Runtime ?? "");
                             }
                             data = ms.ToArray();
                         }

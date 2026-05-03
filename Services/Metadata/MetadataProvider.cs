@@ -256,7 +256,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // Peek should also check if the stream itself already satisfies the context requirements!
                 var tempMetadata = new UnifiedMetadata();
                 if (stream is ModernIPTVPlayer.Models.Stremio.StremioMediaStream sms)
-                    SeedFromCatalogMetadata(tempMetadata, sms, new MetadataTrace("PeekReasoning", cacheKey, stream.Title), context, quiet: true);
+                    SeedFromCatalogMetadata(tempMetadata, sms, null, context, quiet: true);
                 else if (stream is SeriesStream series_s)
                 {
                     tempMetadata.Title = series_s.Title;
@@ -359,7 +359,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             if (!string.IsNullOrWhiteSpace(id) && id != rawId)
             {
-                trace.Log("ID", $"Canonical ID resolved at entry: {rawId} -> {id}");
+                trace?.Log("ID", $"Canonical ID resolved at entry: {rawId} -> {id}");
             }
 
             // 0. Global Check: composite/non-standard IDs should not abort metadata flow.
@@ -415,21 +415,12 @@ namespace ModernIPTVPlayer.Services.Metadata
             // 1. Check Result Cache
             if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
             {
-                // [FIX] Context-Aware Cache Validation
-                // Even if we have a cache hit, we must ensure it satisfies the current context's requirements.
-                // For example, a result cached by 'Spotlight' context might not have 'Seasons' data needed by 'Detail' context.
                 bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
-                MetadataField required = GetRequiredFields(context, isCw);
-                MetadataField cacheMissing = GetMissingFields(cached.Data, required);
-                trace.Log("Cache", $"Required={required} Missing={cacheMissing}");
-
                 if (IsSatisfied(cached.Data, context, isCw))
                 {
                     sw.Stop();
                     string provenance = cached.Data.DataSource ?? cached.Data.MetadataSourceInfo ?? "Unknown";
-                    string fields = GetContentSummary(cached.Data);
-                    
-                    trace.Log("Cache", $"⚡ Cache HIT (Primary) [{provenance}] for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms | Content: {fields}"); 
+                    trace?.Log("Phase1", $"⚡ CACHE HIT (RAM) | Status: SATISFIED | Source: {provenance}"); 
 
                     // [FIX] CROSS-CATALOG TITLE SEEDING:
                     // Even on cache hit, if we entered from a different catalog, we should seed its title!
@@ -453,19 +444,19 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
                 else
                 {
-                    isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
                     var missingFromCache = GetMissingFields(cached.Data, GetRequiredFields(context, isCw));
-                    trace.Log("Cache", "HIT but NOT SATISFIED. Passing as seed.");
+                    trace?.Log("Phase1", $"⚡ CACHE HIT (RAM) | Status: INCOMPLETE (Missing: {missingFromCache}) | Transitioning to Phase 2 (Disk/Network)...");
                     
                     // We have cached data but it's not enough for the current context.
                     // We continue to GetMetadataInternalAsync, passing the cached data as 'seed' to avoid redundant addon probes.
                     return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
                     {
-                        trace.Log("Upgrade", $"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
-                        return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data, onUpdate, ct);
+                        trace?.Log("Upgrade", $"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
+                        return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data, onUpdate, ct, trace);
                     })).Value;
                 }
-            }            // 2. Check High-Speed Persistent Disk Cache (BinaryEnrichmentCache)
+            }
+            // 2. Check High-Speed Persistent Disk Cache (BinaryEnrichmentCache)
             // If RAM cache misses, check disk before going to network.
             if (isCanonical && !string.IsNullOrWhiteSpace(id))
             {
@@ -477,7 +468,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 {
                     string provenance = diskEnriched.DataSource ?? diskEnriched.MetadataSourceInfo ?? "Unknown";
                     string fields = GetContentSummary(diskEnriched);
-                    trace.Log("Disk", $"HIT: Found enriched metadata in binary store [{provenance}] | Content: {fields}");
+                    trace?.Log("Phase2", $"⚡ CACHE HIT (DISK) | Found in binary store [{provenance}] | Content: {fields}");
                     
                     // Satisfaction check - if disk data is enough, promote to RAM cache and return
                     bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
@@ -505,7 +496,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     if (IsSatisfied(disc.Data, MetadataContext.Detail, isCw))
                     {
                         sw.Stop();
-                        trace.Log("Promotion", $"⚡ Cache HIT (Promoted) for '{stream.Title}' [{id ?? "NoId"}] in {sw.Elapsed.TotalMilliseconds:F1}ms");
+                        trace?.Log("Promotion", $"⚡ Cache HIT (Promoted) for '{stream.Title}' [{id ?? "NoId"}] in {sw.Elapsed.TotalMilliseconds:F1}ms");
                         return disc.Data;
                     }
                     else
@@ -514,14 +505,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                         var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail, isCw));
                         string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
                         
-                        trace.Log("Promotion", $"SEEDING Detail fetch ({id ?? stream?.Title}) | Reason: {seedReason}");
+                        trace?.Log("Phase1", $"PROMOTING Discovery cache to Detail ({id ?? stream?.Title}) | Reason: {seedReason}");
                         
                         return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
                         {
                             await _enrichmentSemaphore.WaitAsync(ct);
                             try 
                             {
-                                return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data, onUpdate, ct);
+                                return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data, onUpdate, ct, trace);
                             }
                             finally { _enrichmentSemaphore.Release(); }
                         }, ct))).Value;
@@ -534,9 +525,9 @@ namespace ModernIPTVPlayer.Services.Metadata
             // Refine fetch reason by seeing what we already have from the stream/catalog data
             var tempMetadata = new UnifiedMetadata();
             if (stream is ModernIPTVPlayer.Models.Stremio.StremioMediaStream sms)
-                SeedFromCatalogMetadata(tempMetadata, sms, new MetadataTrace("Reasoning", cacheKey, stream.Title), context, quiet: true);
+                SeedFromCatalogMetadata(tempMetadata, sms, null, context, quiet: true);
             else if (stream != null)
-                SeedFromIptvStream(tempMetadata, stream, new MetadataTrace("IPTV-Seed", cacheKey, stream.Title));
+                SeedFromIptvStream(tempMetadata, stream, trace);
 
             bool isContinueWatching = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
             var missing = GetMissingFields(tempMetadata, GetRequiredFields(context, isContinueWatching));
@@ -572,7 +563,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             var fetchReason = missing.ToString();
-            trace.Log("Reason", $"Missing fields for {context}: {fetchReason}");
+            trace?.Log("Reason", $"Missing fields for {context}: {fetchReason}");
 
             // [DISK SEEDING] If we had a disk hit but it wasn't satisfied, 'cached.Data' contains the disk data.
             // We pass it to GetMetadataInternalAsync to avoid redundant network probes for fields we already have.
@@ -580,12 +571,12 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
             {
-                trace.Log("MISS", $"START Fetching ({context}): {id ?? stream.Title} | Type: {fetchType} | Reason: {fetchReason} | Seeded: {seedData != null}");
+                trace?.Log("Phase3", $"NETWORK ENRICHMENT START | Reason: {fetchReason} | Context: {context} | Seeded: {seedData != null}");
                 
                 await _enrichmentSemaphore.WaitAsync(ct);
                 try 
                 {
-                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, seedData, onUpdate, ct);
+                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, seedData, onUpdate, ct, trace);
                 }
                 finally { _enrichmentSemaphore.Release(); }
             }, ct))).Value;
@@ -623,13 +614,13 @@ namespace ModernIPTVPlayer.Services.Metadata
             return baseId;
         }
 
-        private async Task<UnifiedMetadata> GetMetadataInternalAsync(string id, string type, Models.IMediaStream sourceStream, string cacheKey, MetadataContext context, Action<string> onBackdropFound = null, UnifiedMetadata seed = null, Action<UnifiedMetadata> onUpdate = null, CancellationToken ct = default)
+        private async Task<UnifiedMetadata> GetMetadataInternalAsync(string id, string type, Models.IMediaStream sourceStream, string cacheKey, MetadataContext context, Action<string> onBackdropFound = null, UnifiedMetadata seed = null, Action<UnifiedMetadata> onUpdate = null, CancellationToken ct = default, MetadataTrace? trace = null)
         {
             // [FIX] Normalize ID to canonical IMDB ID immediately to avoid search failures on priority addons
             string normalizedId = NormalizeId(id) ?? id;
             try
             {
-                var result = await GetMetadataAsync(normalizedId, type, sourceStream, context, onBackdropFound, seed, onUpdate, ct);
+                var result = await GetMetadataAsync(normalizedId, type, sourceStream, context, onBackdropFound, seed, onUpdate, ct, trace);
                 
                 if (result != null)
                 {
@@ -673,7 +664,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         // also cache under the CLEAN ID to ensure instant peeks later.
                         string cleanKey = $"{normalizedId}_{type}";
                         if (context == MetadataContext.Discovery) cleanKey += "_discovery";
-                        _resultCache[cleanKey] = (result, expiry);
+                        if (!_resultCache.ContainsKey(cleanKey)) _resultCache[cleanKey] = (result, expiry);
                     AppLogger.Info($"[MetadataProvider] Promotion-cached: {cacheKey} -> {cleanKey}");
                     }
 
@@ -694,9 +685,10 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private readonly StremioService _stremioService = StremioService.Instance;
 
-        private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null, UnifiedMetadata seed = null, Action<UnifiedMetadata> onUpdate = null, CancellationToken ct = default)
+        private async Task<UnifiedMetadata> GetMetadataAsync(string id, string type, Models.IMediaStream sourceStream = null, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null, UnifiedMetadata seed = null, Action<UnifiedMetadata> onUpdate = null, CancellationToken ct = default, MetadataTrace? trace = null)
         {
-            var trace = new MetadataTrace(context.ToString(), id, sourceStream?.Title);
+            // [STABILITY] Never re-initialize trace if one was passed from the top-level orchestration.
+            trace ??= new MetadataTrace(context.ToString(), id, sourceStream?.Title);
             bool isSeriesType = type == "series" || type == "tv";
             bool isContinueWatching = (sourceStream as StremioMediaStream)?.IsContinueWatching ?? false;
             var metadata = seed ?? new UnifiedMetadata
@@ -710,7 +702,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                 BackdropUrl = sourceStream?.BackdropUrl ?? sourceStream?.PosterUrl,
                 Genres = sourceStream?.Genres,
                 Rating = double.TryParse(sourceStream?.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var r) ? r : 0,
-                IsFromIptv = sourceStream is VodStream || sourceStream is SeriesStream
+                IsFromIptv = sourceStream is VodStream || sourceStream is SeriesStream,
+                DataSource = (sourceStream is StremioMediaStream strm) ? strm.SourceAddon : "Library"
             };
 
             // [FIX] Ensure IsSeries is correctly synced if we are using a seed (cached result)
@@ -721,7 +714,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             // restored from our persistent disk cache if possible.
             if (!IsCanonicalId(metadata.ImdbId) && !string.IsNullOrEmpty(id) && IsCanonicalId(id))
             {
-                trace.Log("ID", $"Pinning canonical ID to metadata: {id}");
+                trace?.Log("ID", $"Pinning canonical ID to metadata: {id}");
                 metadata.ImdbId = id;
             }
 
@@ -733,7 +726,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (_rawToCanonicalIdCache.TryGetValue(rawId, out var cachedCanonical))
                 {
                     AppLogger.Info($"[Metadata] Restored mapping from disk cache: {rawId} -> {cachedCanonical}");
-                    trace.Log("ID", $"Restored from disk cache: {rawId} -> {cachedCanonical}");
+                    trace?.Log("ID", $"Restored from disk cache: {rawId} -> {cachedCanonical}");
                     metadata.ImdbId = cachedCanonical;
                 }
                 // B. Fallback to IptvMatchService (User/Internal persistent mappings)
@@ -742,7 +735,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     var match = IptvMatchService.Instance.MatchToIptvById(metadata.ImdbId, "movie");
                     if (match != null && !string.IsNullOrEmpty(match.IMDbId) && IsImdbId(match.IMDbId))
                     {
-                        trace.Log("ID", $"Early Resolution (Service): IPTV {metadata.ImdbId} -> IMDb {match.IMDbId}");
+                        trace?.Log("ID", $"Early Resolution (Service): IPTV {metadata.ImdbId} -> IMDb {match.IMDbId}");
                         metadata.ImdbId = match.IMDbId;
                         
                         // Sync back to our high-speed cache
@@ -753,6 +746,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             bool isCw = (sourceStream as StremioMediaStream)?.IsContinueWatching ?? false;
             MetadataField required = GetRequiredFields(context, isCw);
+            MetadataField missing = GetMissingFields(metadata, required);
 
             try
             {
@@ -780,7 +774,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 {
                     await iptvTask;
                     onUpdate?.Invoke(metadata);
-                    trace.Log("Progressive", $"Dispatched early IPTV seed: {metadata.Title}");
+                    trace?.Log("Progressive", $"Dispatched early IPTV seed: {metadata.Title}");
                 }
 
                 if (sourceStream is StremioMediaStream stremioStream)
@@ -811,16 +805,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                     onUpdate?.Invoke(metadata);
                 }
 
-                MetadataField missing = GetMissingFields(metadata, required);
-                MetadataField pending = missing & ~metadata.CheckedFields;
-                
-                if (pending == MetadataField.None && metadata.MaxEnrichmentContext >= context)
-                {
-                    trace.Log("Cache", $"Item satisfied (Missing={missing}, Checked={metadata.CheckedFields}). Skipping network.");
-                    return metadata;
-                }
-                
-                trace.Log("Seed", $"Required={required} Missing={missing} Pending={pending}");
+                missing = GetMissingFields(metadata, required);
+                trace?.Log("Phase2", $"NETWORK ENRICHMENT START | Target: {required} | Current Missing: {missing}");
 
                 string currentSearchId = NormalizeId(metadata.ImdbId) ?? NormalizeId(id) ?? id;
                 
@@ -851,7 +837,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         {
                             _rawToCanonicalIdCache[rawId] = discoveredId;
                             AppLogger.Info($"[Metadata] Discovery LEARNED: {rawId} -> {discoveredId}. Syncing to library...");
-                            trace.Log("Discovery", $"LEARNED: {rawId} -> {discoveredId}");
+                            trace?.Log("Discovery", $"LEARNED: {rawId} -> {discoveredId}");
                             _ = SaveMappingCacheAsync(); 
 
                             string playlistId = App.CurrentLogin?.PlaylistId ?? AppSettings.LastPlaylistId?.ToString() ?? "default";
@@ -866,7 +852,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 
                 if (tmdbEnabled)
                 {
-                    trace.Log("TMDB", "TMDB enrichment starting...");
+                    trace?.Log("TMDB", "TMDB enrichment starting...");
                     var tmdb = await EnrichWithTmdbAsync(metadata, context, isContinueWatching, ct);
                     if (tmdb != null)
                     {
@@ -890,15 +876,15 @@ namespace ModernIPTVPlayer.Services.Metadata
                     }
                     else
                     {
-                        trace.Log("TMDB", "TMDB enrichment failed. Falling back to addon chain.");
+                        trace?.Log("TMDB", "TMDB enrichment failed. Falling back to addon chain.");
                     }
                 }
                 else
                 {
                     if (!tmdbAllowed && AppSettings.IsTmdbEnabled)
-                        trace.Log("TMDB", "TMDB skipped for Discovery context (Throttling Protection).");
+                        trace?.Log("TMDB", "TMDB skipped for Discovery context (Throttling Protection).");
                     else
-                        trace.Log("TMDB", "TMDB disabled or API key missing.");
+                        trace?.Log("TMDB", "TMDB disabled or API key missing.");
                 }
 
                 if (tmdbEnabled)
@@ -906,16 +892,16 @@ namespace ModernIPTVPlayer.Services.Metadata
                     bool satisfiesRequirements = GetMissingFields(metadata, required) == MetadataField.None;
                     if (metadata.TmdbInfo != null && satisfiesRequirements)
                     {
-                        trace.Log("Decision", "TMDB present and satisfies requirements. Skipping addon detail probes.");
+                        trace?.Log("Decision", "TMDB present and satisfies requirements. Skipping addon detail probes.");
                     }
                     else if (metadata.TmdbInfo != null)
                     {
-                        trace.Log("Decision", "TMDB present but requirements not met (e.g. Logo/Rating missing). Probing addons for gaps.");
+                        trace?.Log("Decision", "TMDB present but requirements not met (e.g. Logo/Rating missing). Probing addons for gaps.");
                         // Proceed to addon probes (line 805 onwards)
                     }
                     else
                     {
-                        trace.Log("Decision", "TMDB enabled but result unavailable. Proceeding to addon detail probes as fallback.");
+                        trace?.Log("Decision", "TMDB enabled but result unavailable. Proceeding to addon detail probes as fallback.");
                     }
                 }
 
@@ -935,7 +921,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         if (!IsCanonicalId(currentSearchId) && !string.IsNullOrWhiteSpace(rawCatalogId) && !string.Equals(currentSearchId, rawCatalogId, StringComparison.Ordinal))
                         {
                             currentSearchId = rawCatalogId;
-                            trace.Log("ID", $"Canonical ID yok. Raw catalog ID ile probe denenecek: {currentSearchId}");
+                            trace?.Log("ID", $"Canonical ID yok. Raw catalog ID ile probe denenecek: {currentSearchId}");
                         }
 
                         // Prepare Probe Order (Restored full Torbox/TBM nuance)
@@ -959,7 +945,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 {
                                     probeOrder = new[] { src }.Concat(remaining);
                                 }
-                                trace.Log("Decision", $"Non-canonical source-first probe uygulanacak: {GetHostSafe(src.Url)}");
+                                trace?.Log("Decision", $"Non-canonical source-first probe uygulanacak: {GetHostSafe(src.Url)}");
                             }
                         }
 
@@ -980,22 +966,22 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 // to ensure that the preferred source (e.g. AioStreams) logic is applied.
                                 if (index < primaryPriority)
                                 {
-                                    trace.Log("Addon", $"Satisfied but {GetHostSafe(url)} (Prio:{index}) has higher priority than current (Prio:{primaryPriority}). Probing for better data.");
+                                    trace?.Log("Addon", $"Satisfied but {GetHostSafe(url)} (Prio:{index}) has higher priority than current (Prio:{primaryPriority}). Probing for better data.");
                                 }
                                 else if (hasGenericEpTitles)
                                 {
-                                    trace.Log("Addon", $"Fields satisfied but episode titles are generic. Continuing probe to {GetHostSafe(url)} for better episode data.");
+                                    trace?.Log("Addon", $"Fields satisfied but episode titles are generic. Continuing probe to {GetHostSafe(url)} for better episode data.");
                                 }
                                 else
                                 {
-                                    trace.Log("Addon", "Missing field kalmadi ve tum oncelikli eklentiler tarandi. Probe zinciri tamamlandi.");
+                                    trace?.Log("Addon", "Missing field kalmadi ve tum oncelikli eklentiler tarandi. Probe zinciri tamamlandi.");
                                     break;
                                 }
                             }
 
                             if (metadata.ProbedAddons.Contains(url))
                             {
-                                trace.Log("Addon", $"Skip already probed addon: {GetHostSafe(url)}");
+                                trace?.Log("Addon", $"Skip already probed addon: {GetHostSafe(url)}");
                                 continue;
                             }
 
@@ -1008,7 +994,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 // [FIX] Never probe Cinemeta with a non-canonical ID (like IPTV name/id) to avoid 404 spam.
                                 if (GetHostSafe(url).Contains("cinemeta", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin Cinemeta probe edilmez.");
+                                    trace?.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin Cinemeta probe edilmez.");
                                     continue;
                                 }
 
@@ -1017,7 +1003,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                     bool isCatalogSource = index == sourcePriority;
                                     if (!isCatalogSource && !(isTbmNamespace && isTorboxResolver))
                                     {
-                                        trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin sadece catalog source (ve tbm ise torbox resolver) probe edilir.");
+                                        trace?.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) icin sadece catalog source (ve tbm ise torbox resolver) probe edilir.");
                                         continue;
                                     }
                                 }
@@ -1025,7 +1011,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                                 {
                                     if (!(isTbmNamespace && isTorboxResolver))
                                     {
-                                        trace.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) ve source belirsiz. Sadece en yuksek oncelik (tbm ise torbox resolver) probe edilir.");
+                                        trace?.Log("Addon", $"Skip {GetHostSafe(url)}: Non-canonical ID ({currentSearchId}) ve source belirsiz. Sadece en yuksek oncelik (tbm ise torbox resolver) probe edilir.");
                                         continue;
                                     }
                                 }
@@ -1033,17 +1019,17 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                             if (currentSearchId != null && (currentSearchId.StartsWith("error", StringComparison.OrdinalIgnoreCase) || currentSearchId.Contains("aiostreamserror")))
                             {
-                                trace.Log("Addon", $"Invalid ID for probing: {currentSearchId}");
+                                trace?.Log("Addon", $"Invalid ID for probing: {currentSearchId}");
                                 break;
                             }
 
-                            trace.Log("Addon", $"Probe {GetHostSafe(url)} Priority={index} ID={currentSearchId}");
+                            trace?.Log("Addon", $"Probe {GetHostSafe(url)} Priority={index} ID={currentSearchId}");
                             var entry = await GetAddonMetaCachedAsync(url, type, currentSearchId, trace, ct);
                             metadata.ProbedAddons.Add(url);
 
                             if (!entry.HasValue || entry.Meta == null || !IsValidMetadata(entry.Meta))
                             {
-                                trace.Log("Addon", $"No usable meta from {GetHostSafe(url)} (HasValue={entry.HasValue}, IsNull={entry.Meta == null})");
+                                trace?.Log("Addon", $"No usable meta from {GetHostSafe(url)} (HasValue={entry.HasValue}, IsNull={entry.Meta == null})");
                                 continue;
                             }
 
@@ -1052,7 +1038,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                             {
                                 currentSearchId = discoveredImdbId!;
                                 metadata.ImdbId = discoveredImdbId;
-                                trace.Log("ID", $"Upgraded search id to canonical IMDb: {discoveredImdbId}. Allowing full addon loop.");
+                                trace?.Log("ID", $"Upgraded search id to canonical IMDb: {discoveredImdbId}. Allowing full addon loop.");
                             }
 
                              int addonPriority = MetadataPriority.CalculateScore(MetadataPriority.AUTHORITY_STREMIO_ADDON, MetadataPriority.DEPTH_DETAIL, index);
@@ -1067,13 +1053,13 @@ namespace ModernIPTVPlayer.Services.Metadata
                                  metadata.PriorityScore = addonPriority;
                                  metadata.PrimaryMetadataAddonUrl = url;
                                  metadata.MetadataSourceInfo = $"{GetHostSafe(url)} (Primary)";
-                                 trace.Log("Priority", $"Primary source switched to {GetHostSafe(url)} (Score: {addonPriority})");
+                                 trace?.Log("Priority", $"Primary source switched to {GetHostSafe(url)} (Score: {addonPriority})");
                                  if (sourceStream is StremioMediaStream sms) sms.UpdateFromUnified(metadata);
                                  onUpdate?.Invoke(metadata);
                              }
                              else
                              {
-                                 trace.Log("Priority", $"{GetHostSafe(url)} used as gap filler (AddonScore: {addonPriority} < CurrentScore: {metadata.PriorityScore}).");
+                                 trace?.Log("Priority", $"{GetHostSafe(url)} used as gap filler (AddonScore: {addonPriority} < CurrentScore: {metadata.PriorityScore}).");
                              }
 
                              if (!string.IsNullOrEmpty(entry.Meta.Background) && metadata.BackdropUrls.Count <= 20)
@@ -1087,17 +1073,18 @@ namespace ModernIPTVPlayer.Services.Metadata
                                  if (epChanges > 0)
                                  {
                                      // Credit the addon for episode contributions even if the "Seasons" bit isn't fully cleared
-                                     trace.Log("Merge", $"Addon {GetHostSafe(url)} contributed {epChanges} episode updates.");
+                                     trace?.Log("Merge", $"Addon {GetHostSafe(url)} contributed {epChanges} episode updates.");
                                      string addonName = GetHostSafe(url);
                                      string priorityTag = overwritePrimary ? "Primary" : "Gaps";
                                      string epTag = $"(Episodes: {epChanges}) [{priorityTag}]";
                                      
-                                     if (string.IsNullOrEmpty(metadata.DataSource))
+                                     if (string.IsNullOrEmpty(metadata.DataSource) || metadata.DataSource == addonName || metadata.DataSource == "Library")
                                          metadata.DataSource = $"{addonName} {epTag}";
                                      else if (!metadata.DataSource.Contains(addonName))
                                          metadata.DataSource += $" + {addonName} {epTag}";
                                      else if (!metadata.DataSource.Contains("Episodes:"))
                                          metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} {epTag}");
+                                      onUpdate?.Invoke(metadata);
                                  }
                              }
 
@@ -1117,19 +1104,20 @@ namespace ModernIPTVPlayer.Services.Metadata
                                      metadata.DataSource += $" + {addonName} ({fieldStr}) [{priorityTag}]";
                                  else if (!metadata.DataSource.Contains($"({fieldStr})"))
                                      metadata.DataSource = metadata.DataSource.Replace(addonName, $"{addonName} ({fieldStr})");
+                                  onUpdate?.Invoke(metadata);
                              }
 
                              // [BREAK LOGIC] If everything satisfied, stop early
                              if (missingAfter == MetadataField.None)
                              {
-                                 trace.Log("Addon", "All required fields satisfied. Breaking probe chain.");
+                                 trace?.Log("Addon", "All required fields satisfied. Breaking probe chain.");
                                  break;
                              }
 
                              // [OPTIMIZATION] Best-effort break for series (One Piece fix)
                              if (metadata.IsSeries && missingAfter == MetadataField.Seasons && index >= 1)
                              {
-                                 trace.Log("Addon", "Found best-effort episode titles. Breaking probe chain to save time.");
+                                 trace?.Log("Addon", "Found best-effort episode titles. Breaking probe chain to save time.");
                                  break;
                              }
                         }
@@ -1137,10 +1125,11 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
 
                 if (metadata.IsSeries && metadata.TmdbInfo != null) ReconcileTmdbSeasons(metadata, metadata.TmdbInfo);
+                trace?.Log("Phase3", $"ENRICHMENT COMPLETE | Final Source: {metadata.DataSource ?? metadata.MetadataSourceInfo}");
             }
             catch (Exception ex)
             {
-                trace.Log("Error", ex.Message);
+                trace?.Log("Error", ex.Message);
                 AppLogger.Critical("CRITICAL ERROR in GetMetadataAsync", ex);
             }
 
@@ -1160,7 +1149,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             metadata.CheckedFields |= required;
 
             var finalMissing = GetMissingFields(metadata, GetRequiredFields(context, isCw));
-            trace.Log("Finish", $"FinalSource={metadata.MetadataSourceInfo} DataSource={metadata.DataSource} Missing={finalMissing} Checked={metadata.CheckedFields}");
+            trace?.Log("Finish", $"FinalSource={metadata.MetadataSourceInfo} DataSource={metadata.DataSource} Missing={finalMissing} Checked={metadata.CheckedFields}");
             
             // [FIX] Update the highest enrichment level attained.
             // This prevents re-fetching items that are "unresolvably missing" certain fields (e.g. 2026 movies missing Rating).
@@ -1285,7 +1274,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             return addonUrls.FindIndex(a => string.Equals(GetHostSafe(a), host, StringComparison.OrdinalIgnoreCase));
         }
 
-        private void SeedFromIptvStream(UnifiedMetadata metadata, Models.IMediaStream stream, MetadataTrace trace)
+        private void SeedFromIptvStream(UnifiedMetadata metadata, Models.IMediaStream stream, MetadataTrace? trace)
         {
             if (stream == null) return;
             
@@ -1311,11 +1300,11 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (metadata.PriorityScore > 4000)
             {
                 metadata.CatalogSourceInfo = "IPTV-Enriched";
-                trace.Log("Seed", $"Recovered enriched metadata from disk: Score={metadata.PriorityScore}");
+                trace?.Log("Seed", $"Recovered enriched metadata from disk: Score={metadata.PriorityScore}");
             }
         }
 
-        private void SeedFromCatalogMetadata(UnifiedMetadata metadata, StremioMediaStream stream, MetadataTrace trace, MetadataContext context, bool quiet = false)
+        private void SeedFromCatalogMetadata(UnifiedMetadata metadata, StremioMediaStream stream, MetadataTrace? trace, MetadataContext context, bool quiet = false)
         {
             if (stream?.Meta == null) return;
 
@@ -1330,7 +1319,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (string.IsNullOrEmpty(addonUrl))
                 {
                     addonUrl = "history";
-                    if (!quiet) trace.Log("History", $"Source identified as Watch History for {bestId}");
+                    if (!quiet) trace?.Log("History", $"Source identified as Watch History for {bestId}");
                 }
             }
             
@@ -1352,7 +1341,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                         if (discoveryEntry.Data != null && !string.IsNullOrEmpty(discoveryEntry.Data.CatalogSourceAddonUrl))
                         {
                             addonUrl = discoveryEntry.Data.CatalogSourceAddonUrl;
-                            if (!quiet) trace.Log("Fallback", $"Source addon recovered from discovery cache: {GetHostSafe(addonUrl)}");
+                            if (!quiet) trace?.Log("Fallback", $"Source addon recovered from discovery cache: {GetHostSafe(addonUrl)}");
                         }
                     }
                 }
@@ -1391,7 +1380,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     // Otherwise, new becomes SubTitle.
                     if (currentCatalogPriority < primaryCatalogPriority)
                     {
-                        trace.Log("Seed", $"Title swap: {metadata.Title} (low pri) -> SubTitle, {newTitle} (high pri) -> Title");
+                        trace?.Log("Seed", $"Title swap: {metadata.Title} (low pri) -> SubTitle, {newTitle} (high pri) -> Title");
                         metadata.SubTitle = metadata.Title;
                         metadata.Title = newTitle;
                         metadata.CatalogSourceAddonUrl = stream.SourceAddon;
@@ -1399,7 +1388,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                     }
                     else if (string.IsNullOrWhiteSpace(metadata.SubTitle))
                     {
-                        if (!quiet) trace.Log("Seed", $"Alternative title from lower priority catalog ({GetHostSafe(stream.SourceAddon)}): {newTitle} -> SubTitle");
+                        if (!quiet) trace?.Log("Seed", $"Alternative title from lower priority catalog ({GetHostSafe(stream.SourceAddon)}): {newTitle} -> SubTitle");
                         metadata.SubTitle = newTitle;
                     }
                 }
@@ -1494,7 +1483,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 : (stream.Meta.Website.Length > 96 ? stream.Meta.Website.Substring(0, 96) + "..." : stream.Meta.Website);
             
             if (!quiet)
-                trace.Log("Seed", $"Catalog IDs: MetaId={stream.Meta.Id ?? "null"} Imdb={stream.Meta.ImdbId ?? "null"} Website={websitePreview} => Resolved={metadata.ImdbId ?? "null"}");
+                trace?.Log("Seed", $"Catalog IDs: MetaId={stream.Meta.Id ?? "null"} Imdb={stream.Meta.ImdbId ?? "null"} Website={websitePreview} => Resolved={metadata.ImdbId ?? "null"}");
 
             if ((stream.Meta.Trailers?.Count > 0) || (stream.Meta.TrailerStreams?.Count > 0))
             {
@@ -1587,7 +1576,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
             }
 
-            if (!quiet) trace.Log("Seed", $"Catalog seed applied from {GetHostSafe(addonUrl)}");
+            if (!quiet) trace?.Log("Seed", $"Catalog seed applied from {GetHostSafe(addonUrl)}");
         }
 
         private async Task<string?> ResolveIdByTitleDiscoveryAsync(string title, string type, string? year, MetadataTrace trace, CancellationToken ct = default)
@@ -1596,13 +1585,13 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 // [UNIONIZED] Use the existing TitleHelper logic for cleaning/matching
                 string searchQuery = title;
-                trace.Log("Discovery", $"Searching Cinemeta for: \"{searchQuery}\" (Year: {year ?? "Any"})");
+                trace?.Log("Discovery", $"Searching Cinemeta for: \"{searchQuery}\" (Year: {year ?? "Any"})");
 
                 const string cinemetaUrl = "https://v3-cinemeta.strem.io";
                 var cinemetaManifest = StremioAddonManager.Instance.GetManifest(cinemetaUrl);
                 if (cinemetaManifest == null)
                 {
-                    trace.Log("Discovery", "Cinemeta manifest not found in manager. Skipping search.");
+                    trace?.Log("Discovery", "Cinemeta manifest not found in manager. Skipping search.");
                     return null;
                 }
 
@@ -1610,7 +1599,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 var results = await _stremioService.SearchAddonAsync(cinemetaUrl, cinemetaManifest, searchQuery, type);
                 if (results == null || results.Count == 0)
                 {
-                    trace.Log("Discovery", "No results found on Cinemeta.");
+                    trace?.Log("Discovery", "No results found on Cinemeta.");
                     return null;
                 }
 
@@ -1622,17 +1611,17 @@ namespace ModernIPTVPlayer.Services.Metadata
                         string? discoveredId = NormalizeId(result.IMDbId) ?? result.IMDbId;
                         if (IsImdbId(discoveredId))
                         {
-                            trace.Log("Discovery", $"SUCCESS: Matched \"{title}\" to {discoveredId} ({result.Title})");
+                            trace?.Log("Discovery", $"SUCCESS: Matched \"{title}\" to {discoveredId} ({result.Title})");
                             return discoveredId;
                         }
                     }
                 }
                 
-                trace.Log("Discovery", $"Found {results.Count} results, but none matched using TitleHelper.IsMatch.");
+                trace?.Log("Discovery", $"Found {results.Count} results, but none matched using TitleHelper.IsMatch.");
             }
             catch (Exception ex)
             {
-                trace.Log("Discovery-Error", ex.Message);
+                trace?.Log("Discovery-Error", ex.Message);
             }
             return null;
         }
@@ -1642,11 +1631,11 @@ namespace ModernIPTVPlayer.Services.Metadata
             string key = $"{addonUrl}|{type}|{id}";
             if (_addonMetaCache.TryGetValue(key, out var cached) && DateTime.Now < cached.Expiry)
             {
-                trace.Log("AddonCache", $"HIT {GetHostSafe(addonUrl)}");
+                trace?.Log("AddonCache", $"HIT {GetHostSafe(addonUrl)}");
                 return cached.Data;
             }
 
-            trace.Log("AddonCache", $"MISS {GetHostSafe(addonUrl)}");
+            trace?.Log("AddonCache", $"MISS {GetHostSafe(addonUrl)}");
             return await _activeAddonMetaTasks.GetOrAdd(key, _ => FetchAddonMetaInternalAsync(addonUrl, type, id, key, trace, ct));
         }
 
@@ -1654,7 +1643,7 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             try
             {
-                trace.Log("Addon", $"Fetching metadata from addon: {GetHostSafe(addonUrl)}");
+                trace?.Log("Addon", $"Fetching metadata from addon: {GetHostSafe(addonUrl)}");
                 var meta = await _stremioService.GetMetaAsync(addonUrl, type, id, trace.OperationId, ct);
                 var entry = new AddonMetaCacheEntry { HasValue = meta != null, Meta = meta };
                 var ttl = entry.HasValue ? _addonMetaPositiveCacheDuration : _addonMetaNegativeCacheDuration;
@@ -1663,7 +1652,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
             catch (TaskCanceledException ex)
             {
-                trace.Log("AddonCache", $"TaskCanceledException on {GetHostSafe(addonUrl)}: {ex.Message}");
+                trace?.Log("AddonCache", $"TaskCanceledException on {GetHostSafe(addonUrl)}: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] TaskCanceledException in FetchAddonMetaInternalAsync | URL: {addonUrl} | Type: {type} | ID: {id} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
                 var entry = new AddonMetaCacheEntry { HasValue = false, Meta = null };
                 _addonMetaCache[cacheKey] = (entry, DateTime.Now.Add(_addonMetaNegativeCacheDuration));
@@ -1671,7 +1660,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
             catch (OperationCanceledException ex)
             {
-                trace.Log("AddonCache", $"OperationCanceledException on {GetHostSafe(addonUrl)}: {ex.Message}");
+                trace?.Log("AddonCache", $"OperationCanceledException on {GetHostSafe(addonUrl)}: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] OperationCanceledException in FetchAddonMetaInternalAsync | URL: {addonUrl} | Type: {type} | ID: {id} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
                 var entry = new AddonMetaCacheEntry { HasValue = false, Meta = null };
                 _addonMetaCache[cacheKey] = (entry, DateTime.Now.Add(_addonMetaNegativeCacheDuration));
@@ -1679,7 +1668,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
             catch (Exception ex)
             {
-                trace.Log("AddonCache", $"Fetch error on {GetHostSafe(addonUrl)}: {ex.Message}");
+                trace?.Log("AddonCache", $"Fetch error on {GetHostSafe(addonUrl)}: {ex.Message}");
                 System.Diagnostics.Debug.WriteLine($"[MetadataProvider] Exception in FetchAddonMetaInternalAsync | URL: {addonUrl} | Type: {type} | ID: {id} | ExceptionType: {ex.GetType().Name} | Message: {ex.Message} | StackTrace: {ex.StackTrace}");
                 var entry = new AddonMetaCacheEntry { HasValue = false, Meta = null };
                 _addonMetaCache[cacheKey] = (entry, DateTime.Now.Add(_addonMetaNegativeCacheDuration));
@@ -2210,11 +2199,11 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (season == null) return;
 
             // Fetch detailed season info
-            if (trace != null) trace.Log("TMDB", $"Enriching Season {seasonNumber}...");
+            if (trace != null) trace?.Log("TMDB", $"Enriching Season {seasonNumber}...");
             var tmdbSeason = await TmdbHelper.GetSeasonDetailsAsync(metadata.TmdbInfo.Id, seasonNumber, ct: ct);
             if (tmdbSeason?.Episodes == null) 
             {
-                if (trace != null) trace.Log("TMDB", $"Season {seasonNumber} NOT found or empty on TMDB.");
+                if (trace != null) trace?.Log("TMDB", $"Season {seasonNumber} NOT found or empty on TMDB.");
                 return;
             }
 
@@ -2291,7 +2280,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             if (trace != null) 
-                trace.Log("TMDB", $"Season {seasonNumber} Enrichment Completed: {initialCount} -> {season.Episodes.Count} (Updated {updated}, Added {added})");
+                trace?.Log("TMDB", $"Season {seasonNumber} Enrichment Completed: {initialCount} -> {season.Episodes.Count} (Updated {updated}, Added {added})");
 
             // Ensure correct order
             season.Episodes = season.Episodes.OrderBy(e => e.EpisodeNumber).ToList();
@@ -2738,7 +2727,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (!quiet)
             {
                 string msg = $"Mapped data [Primary={overwritePrimary}] for: '{unified.Title}' (Source: {stremio.Name} [{stremio.Id}])";
-                if (trace != null) trace.Log("Seed", msg);
+                if (trace != null) trace?.Log("Seed", msg);
                 else AppLogger.Info($"[MetadataProvider] {msg}");
             }
         }

@@ -231,8 +231,9 @@ namespace ModernIPTVPlayer.Models.Metadata
                 Title = stream.Title, Overview = stream.Description, PosterUrl = stream.PosterUrl,
                 BackdropUrl = stream.BackdropUrl ?? stream.PosterUrl, Year = stream.Year, Genres = stream.Genres,
                 MetadataId = stream.Id.ToString(), ImdbId = stream.IMDbId, IsSeries = stream is SeriesStream,
-                SourceTitle = stream.SourceTitle, Resolution = stream.Resolution, DataSource = "Seed",
-                LogoUrl = (stream is StremioMediaStream s) ? s.LogoUrl : null
+                SourceTitle = stream.SourceTitle, Resolution = stream.Resolution, 
+                DataSource = (stream is StremioMediaStream s && !string.IsNullOrEmpty(s.SourceAddon)) ? s.SourceAddon : "Library",
+                LogoUrl = (stream is StremioMediaStream sm) ? sm.LogoUrl : null
             };
             if (double.TryParse(stream.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out double r))
                 meta.Rating = r;
