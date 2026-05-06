@@ -59,9 +59,9 @@ namespace ModernIPTVPlayer.Services
         {
             try
             {
-                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
                 GC.WaitForPendingFinalizers();
-                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true);
                 return LogCheckpoint(name, detail, baseline);
             }
             catch (Exception ex)

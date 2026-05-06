@@ -52,11 +52,11 @@ namespace ModernIPTVPlayer.Controls
             await _stateLock.WaitAsync();
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[HeroTrailer] Play Request: {videoId}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] Play Request: {videoId}");
 
                 if (_webView == null)
                 {
-                    System.Diagnostics.Debug.WriteLine("[HeroTrailer] Acquiring WebView from Global Pool...");
+                    System.Diagnostics.Debug.WriteLine("[INFO-CLEANUP] Acquiring WebView from Global Pool...");
                     _webView = await TrailerPoolService.Instance.AcquireAsync(RootGrid);
                     if (_webView != null)
                     {
@@ -73,7 +73,7 @@ namespace ModernIPTVPlayer.Controls
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[HeroTrailer] Play Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] Play Error: {ex.Message}");
             }
             finally
             {
@@ -98,7 +98,7 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[HeroTrailer] Message: {msg}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] Message: {msg}");
                 
                 if (msg == "READY")
                 {
@@ -141,7 +141,7 @@ namespace ModernIPTVPlayer.Controls
             await _stateLock.WaitAsync();
             try 
             {
-                System.Diagnostics.Debug.WriteLine($"[HeroTrailer] Cleanup Requested");
+                System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] Cleanup Requested");
                 _isTrailerPlaying = false;
                 
                 if (_webView != null)
@@ -153,7 +153,7 @@ namespace ModernIPTVPlayer.Controls
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[HeroTrailer] Cleanup Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] Cleanup Error: {ex.Message}");
             }
             finally
             {

@@ -57,7 +57,13 @@ namespace ModernIPTVPlayer.Controls
 
         public System.Collections.ObjectModel.ObservableCollection<CastItem> CastList { get; private set; } = new();
         public System.Collections.ObjectModel.ObservableCollection<CastItem> DirectorList { get; private set; } = new();
+        public double DriftX { get; set; } = 15.0; // Default drift from right
         private bool _isTrailerRevealed = false;
+        
+        public void ResetToInitialState(bool isMorphing)
+        {
+            ResetState(isMorphing, forceSkeleton: true, sessionNonce: _loadNonce, ct: default);
+        }
 
         public Image BannerImage => BackdropImage;
 
@@ -116,7 +122,7 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[Cleanup] ExpandedCard releasing resources for: {_stream?.Title ?? "None"}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] ExpandedCard releasing resources for: {_stream?.Title ?? "None"}");
                 
                 // 1. Release Heavy UI Resources
                 BackdropImage.Source = null;
@@ -158,7 +164,7 @@ namespace ModernIPTVPlayer.Controls
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[Cleanup] Error during ExpandedCard release: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] Error during ExpandedCard release: {ex.Message}");
             }
         }
 
@@ -435,11 +441,21 @@ namespace ModernIPTVPlayer.Controls
 
         private void ExpandButton_Click(object sender, RoutedEventArgs e) => ToggleCinemaMode(!_isCinemaMode);
 
+        private long _lastResetTicks = 0;
+
         /// <summary>
         /// Resets the card to initial state before loading new data
         /// </summary>
         private void ResetState(bool isMorphing = false, bool isStopping = false, bool forceSkeleton = true, long sessionNonce = -1, CancellationToken ct = default)
         {
+            // [PINNACLE] Frame-Gate: Don't reset more than once per frame (16ms) unless it's a new session.
+            long currentTicks = DateTime.UtcNow.Ticks;
+            if (sessionNonce == -1 && (currentTicks - _lastResetTicks) < TimeSpan.FromMilliseconds(16).Ticks)
+            {
+                 return;
+            }
+            _lastResetTicks = currentTicks;
+
             // Transactional Guard: If a reset arrives from an old session (e.g. a late StopTrailer), ignore it.
             if (sessionNonce != -1 && sessionNonce != _loadNonce)
             {
@@ -447,10 +463,16 @@ namespace ModernIPTVPlayer.Controls
                 return;
             }
 
+            // [PINNACLE] Rapid-Fire Guard: If we are already resetting/stopping, don't do it again.
+            if (isStopping && _cts == null && LoadingRing.Visibility == Visibility.Collapsed)
+            {
+                 System.Diagnostics.Debug.WriteLine("[EXP-RESET] SKIPPED | Already in stopped state.");
+                 return;
+            }
+
             // 1. STRATEGY: Calculate our behavior once at the top
             bool isSmartSwap = !forceSkeleton;
             bool shouldProtectIdentity = isSmartSwap || isStopping;
-            System.Diagnostics.Debug.WriteLine($"[EXP-RESET] Start | Session: {sessionNonce} | SmartSwap: {isSmartSwap} | Stopping: {isStopping} | IdentityProtected: {shouldProtectIdentity} | ForceSkeleton: {forceSkeleton}");
 
             // 2. STATE MANAGEMENT: Reset memory only if we are truly moving to a NEW item
             if (!isStopping) 
@@ -603,14 +625,12 @@ namespace ModernIPTVPlayer.Controls
 
         private void WipeExpandedContent(bool shouldProtectIdentity)
         {
-            if (shouldProtectIdentity)
+            // [FIX] Identity protection should only apply during active Morphing (Smart Swap).
+            // If the card is currently hidden, we MUST wipe the old data regardless of the flag.
+            if (shouldProtectIdentity && this.Visibility == Visibility.Visible)
             {
-                System.Diagnostics.Debug.WriteLine($"[EXP-VERBOSE] UI SHIELDED - Skipping Wipe | Current Title: {TitleText.Text}");
                 return;
             }
-
-            // FULL WIPE: Only happens when moving to a brand new item with a cache miss
-            System.Diagnostics.Debug.WriteLine($"[EXP-VERBOSE] Identity WIPE active (Full Clear) | Nonce: {_loadNonce}");
             
             // Layer A (Identity)
             TitleText.Text = "";
@@ -626,11 +646,21 @@ namespace ModernIPTVPlayer.Controls
             // Layer B (Details)
             DescText.Text = "";
             WritersText.Text = "";
+            MoodText.Text = "";
+            PlayButtonSubtext.Text = "";
+            PlayButtonSubtext.Visibility = Visibility.Collapsed;
             RatingText.Visibility = Visibility.Collapsed;
             YearText.Visibility = Visibility.Collapsed;
             
             if (BadgeAge != null) { BadgeAge.Visibility = Visibility.Collapsed; if (BadgeAgeText != null) BadgeAgeText.Text = ""; }
             if (BadgeCountry != null) { BadgeCountry.Visibility = Visibility.Collapsed; if (BadgeCountryText != null) BadgeCountryText.Text = ""; }
+            
+            // Layer C: Technicals (Dynamic Badges)
+            if (TechBadgesPanel != null)
+            {
+                TechBadgesPanel.Children.Clear();
+                TechBadgesPanel.Visibility = Visibility.Collapsed;
+            }
             
             CastList.Clear();
             CastHeaderText.Visibility = Visibility.Collapsed;
@@ -639,10 +669,11 @@ namespace ModernIPTVPlayer.Controls
             DirectorHeaderText.Visibility = Visibility.Collapsed;
             DirectorListView.Visibility = Visibility.Collapsed;
 
-            // LAYER C: Feedback - Only show spinner if we don't have cached data yet
+            // LAYER D: Feedback
             AmbienceGrid.Visibility = (shouldProtectIdentity) ? Visibility.Collapsed : Visibility.Visible;
             LoadingRing.IsActive = !shouldProtectIdentity;
             LoadingRing.Visibility = (shouldProtectIdentity) ? Visibility.Collapsed : Visibility.Visible;
+            RealContentPanel.Opacity = (shouldProtectIdentity) ? 1.0 : 0.0;
         }
 
         /// <summary>
@@ -675,9 +706,22 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        public async Task LoadDataAsync(ModernIPTVPlayer.Models.IMediaStream stream, bool isMorphing = false)
+        private IMediaStream? _currentLoadingStream;
+
+        public async Task LoadDataAsync(IMediaStream stream, bool isMorphing = false)
         {
+            if (stream == null) return;
+            
+            // [DE-DUPLICATION] 
+            // Skip loading if this is the same item AND the card is already visible.
+            if (_currentLoadingStream != null && _currentLoadingStream.Id == stream.Id && _currentLoadingStream.Title == stream.Title && this.Visibility == Visibility.Visible)
+            {
+                return;
+            }
+
             _isSeriesFinished = false; // Reset on new load
+            _currentLoadingStream = stream;
+
             // 1. Transactional Update
             _loadNonce++;
             long loadNonce = _loadNonce;
@@ -686,103 +730,53 @@ namespace ModernIPTVPlayer.Controls
             _cts?.Dispose();
             _cts = new CancellationTokenSource();
             var ct = _cts.Token;
-            var token = ct; // For methods that use 'token'
+
+            // [FIX] Instant Wipe: Reset state BEFORE the debounce delay.
+            // This ensures that any previous item's data is cleared immediately when the card opens.
+            var seed = ModernIPTVPlayer.Models.Metadata.UnifiedMetadata.FromStream(stream);
+            bool hasRealCache = Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(stream, Models.Metadata.MetadataContext.ExpandedCard) != null;
+            bool isEligibleForSmartSwap = isMorphing || seed != null || hasRealCache;
+
+            ResetState(isMorphing, forceSkeleton: !isEligibleForSmartSwap, sessionNonce: loadNonce, ct: ct);
+
+            // [PINNACLE] Intelligent Debounce (Silent Pattern):
+            await Task.Delay(150);
+            if (ct.IsCancellationRequested) return;
 
             try
             {
+                _stream = stream;
 
-
-            // 2. High-Fidelity Seeding (Architectural Improvement)
-            // Immediately extract all available local data from the stream.
-            var seed = ModernIPTVPlayer.Models.Metadata.UnifiedMetadata.FromStream(stream);
-            bool hasRealCache = Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(stream, Models.Metadata.MetadataContext.ExpandedCard) != null;
-            
-            // Engineering Decision: If we have seed data, we enable "Smart Swap" 
-            // even if the item isn't in the global enriched cache yet.
-            bool isEligibleForSmartSwap = isMorphing || seed != null || hasRealCache;
-
-            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Start Session {loadNonce}: {stream.Title} | SmartSwap: {isEligibleForSmartSwap}");
-
-            _stream = stream;
-
-            // 3. Authority Seeding (0ms)
-            // [FIX] Perform seed update AFTER setting the stream to ensure all UI components have context
-            if (seed != null)
-            {
-                UpdateUiFromUnified(seed, ct: ct);
-            }
-
-            // 4. Session-Locked Reset (Shielded if smart swapping)
-            ResetState(isMorphing, forceSkeleton: !isEligibleForSmartSwap, sessionNonce: loadNonce, ct: ct);
-
-            // [FIX] If we are smart-swapping with seed data, ensure we don't re-trigger the reveal stagger
-            if (seed != null && isEligibleForSmartSwap)
-            {
-                _isRevealed = true; 
-            }
-
-            // Minimal delay for layout settlement, then start enrichment tasks
-            await Task.Delay(10, ct);
-            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Post-delay checkpoint. loadNonce matching: {loadNonce == _loadNonce}");
-            if (loadNonce != _loadNonce) return; 
-            
-            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Starting Metadata request via MetadataProvider...");
-            // Initial Badges (Static parse before probe/metadata)
-            UpdateTechnicalBadges(stream);
-
-            // ... (Rest of UI updates follow seamlessly using the seed data) ...
-
-            // Stremio Badge Logic: Hide technical skeleton if no history available
-            if (stream is StremioMediaStream stremio)
-            {
-                var history = HistoryManager.Instance.GetProgress(stremio.IMDbId);
-                if (history == null || string.IsNullOrEmpty(history.StreamUrl))
+                // 2. High-Fidelity Seeding
+                if (seed != null)
                 {
-                    // No history or URL yet - hide tech skeleton and panel
-                    BadgeSkeleton.Visibility = Visibility.Collapsed;
-                    TechBadgesPanel.Visibility = Visibility.Collapsed;
+                    UpdateUiFromUnified(seed, ct: ct);
                 }
-                else
-                {
-                    TechBadgesPanel.Visibility = Visibility.Visible;
-                }
-            }
-            else
-            {
-                TechBadgesPanel.Visibility = Visibility.Visible;
-            }
 
-            UpdatePlayButton(stream);
-            UpdateProgressState(stream);
+                // Initial Badges & State
+                UpdateTechnicalBadges(stream);
+                UpdatePlayButton(stream);
+                UpdateProgressState(stream);
+                UpdateWatchlistIcon(Services.WatchlistManager.Instance.IsOnWatchlist(stream), animate: false);
 
-            // Check Watchlist State (non-blocking - IsOnWatchlist returns false if not initialized yet)
-            UpdateWatchlistIcon(Services.WatchlistManager.Instance.IsOnWatchlist(stream), animate: false);
-
+                // 5. Authoritative Enrichment
                 var metadataTask = Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream, Models.Metadata.MetadataContext.ExpandedCard, onUpdate: (partial) => 
                 {
                     this.DispatcherQueue.TryEnqueue(() => 
                     {
-                        if (loadNonce != _loadNonce) 
-                        {
-                            System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] onUpdate IGNORED (Stale Nonce): {partial.Title} | TaskNonce: {loadNonce} | Current: {_loadNonce}");
-                            return;
-                        }
-                        
+                        if (loadNonce != _loadNonce) return;
                         lock (partial.SyncRoot)
                         {
-                             System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] onUpdate Dispatching: {partial.Title} | DataSource: {partial.DataSource}");
                              UpdateUiFromUnified(partial, ct: ct);
                         }
                     });
-                }, ct: ct);
-                var timeoutTask = Task.Delay(15000, ct);
+                });
+
+                var timeoutTask = Task.Delay(8000, ct);
                 var completedTask = await Task.WhenAny(metadataTask, timeoutTask);
-                System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Wait complete. metadataTask status: {metadataTask.Status} | Timing out: {completedTask == timeoutTask}");
+                
                 if (completedTask == timeoutTask)
                 {
-                    System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] TIMEOUT HIT for metadata.");
-                    DescText.Text = "Metadata loading timed out.";
-                    MainSkeleton.Visibility = Visibility.Collapsed;
                     RealContentPanel.Opacity = 1;
                     LoadingRing.IsActive = false;
                     LoadingRing.Visibility = Visibility.Collapsed;
@@ -1392,10 +1386,19 @@ namespace ModernIPTVPlayer.Controls
             // 1. Identity
             string logoUrl = unified.LogoUrl ?? "";
             bool logoUrlChanged = _currentLogoUrl != logoUrl;
-            SafeSetImage(LogoImage, logoUrl, ref _currentLogoUrl);
-
+            // [FIX] Explicitly handle Logo cleanup if missing in seed
             bool hasLogo = !string.IsNullOrEmpty(logoUrl);
-            LogoContainer.Visibility = hasLogo ? Visibility.Visible : Visibility.Collapsed;
+            if (!hasLogo)
+            {
+                LogoImage.Source = null;
+                _currentLogoUrl = null;
+                LogoContainer.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                SafeSetImage(LogoImage, logoUrl, ref _currentLogoUrl);
+                LogoContainer.Visibility = Visibility.Visible;
+            }
 
             // Always set title text
             SafeSetText(TitleText, overrideTitle ?? unified.Title);
@@ -1403,10 +1406,15 @@ namespace ModernIPTVPlayer.Controls
             // [FIX] VISIBILITY SEEDING:
             // Only force Title visible if we don't have a logo, or if this is a fresh item, or the logo changed.
             // This prevents 'Authoritative' updates from overriding the 'WIDE' logo decision made by ImageOpened.
-            if (!hasLogo || !isDedupe || logoUrlChanged)
+            if (!hasLogo)
             {
                 TitleText.Visibility = Visibility.Visible;
-                System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] 0ms Seed - Title Visible forced");
+            }
+            else if (!isDedupe || logoUrlChanged)
+            {
+                // [FIX] Prevent Title flicker: If we have a logo, hide the title immediately.
+                // It will be re-shown in LogoImage_ImageOpened if the logo is "Boxy".
+                TitleText.Visibility = Visibility.Collapsed;
             }
 
 
@@ -1458,27 +1466,25 @@ namespace ModernIPTVPlayer.Controls
                 SafeSetText(MoodText, "Top Rated");
             }
 
-            // 5. ANIMATION: One-shot reveal per item to prevent double-fades
-            if (!_isRevealed)
+            // 5. ANIMATION: Trigger staggered reveal for every new item
+            if (!isDedupe)
             {
-                _isRevealed = true;
-                DispatcherQueue.TryEnqueue(() => StaggeredRevealContent());
+                StaggeredRevealContent();
             }
 
             ToolTipService.SetToolTip(PlayButton, _stream?.Title);
         }
 
 
-        private void LogoImage_ImageOpened(object sender, RoutedEventArgs e)
+        private void LogoImage_ImageOpened(object sender, Microsoft.UI.Xaml.RoutedEventArgs e)
         {
-            if (sender is Image img && img.Source is BitmapImage bmp)
+            if (sender is Image img)
             {
-                var width = bmp.PixelWidth;
-                var height = bmp.PixelHeight;
-                if (height > 0)
+                var bitmap = img.Source as Microsoft.UI.Xaml.Media.Imaging.BitmapImage;
+                if (bitmap != null)
                 {
-                    double aspect = (double)width / height;
-                    System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] Logo Opened - Pixels: {width}x{height} | Aspect: {aspect:F2}");
+                    double aspect = (double)bitmap.PixelWidth / bitmap.PixelHeight;
+                    Debug.WriteLine($"[ExpandedCard] Logo Image Opened: {bitmap.PixelWidth}x{bitmap.PixelHeight} (Aspect: {aspect:F2})");
                     if (aspect < 2.0) // Boxy/Square/Portrait
                     {
                         System.Diagnostics.Debug.WriteLine("[EXP-LAYOUT] Final Decision: BOXY - Keeping Title Visible");
@@ -1515,28 +1521,37 @@ namespace ModernIPTVPlayer.Controls
             try
             {
                 if (_compositor == null) return;
-                if (LogoImage.Source == null) return;
+                if (LogoImage == null || LogoImage.Source == null || LogoImage.XamlRoot == null) return;
 
                 var visual = ElementCompositionPreview.GetElementVisual(LogoContainer);
                 if (visual == null) return;
                 
+                // [FIX] GetAlphaMask can throw ArgumentException if the image isn't fully ready or has 0 size.
+                if (LogoImage.ActualWidth <= 0 || LogoImage.ActualHeight <= 0) return;
+
                 var shadow = _compositor.CreateDropShadow();
-                
                 shadow.Color = Color.FromArgb(160, 0, 0, 0);
                 shadow.BlurRadius = 15f;
-                shadow.Offset = new System.Numerics.Vector3(0, 5, 0);
+                shadow.Offset = new System.Numerics.Vector3(0f, 5f, 0f);
                 
-                // Important: Mask the shadow with the actual image content
-                shadow.Mask = LogoImage.GetAlphaMask();
+                try 
+                {
+                    shadow.Mask = LogoImage.GetAlphaMask();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"[ExpandedCard] Could not get alpha mask for logo: {ex.Message}");
+                    return;
+                }
                 
                 var sprite = _compositor.CreateSpriteVisual();
                 sprite.Shadow = shadow;
-                
-                // Sync shadow container size with image container size
+
+                // Sync size with the container
                 var bindSize = _compositor.CreateExpressionAnimation("visual.Size");
                 bindSize.SetReferenceParameter("visual", visual);
                 sprite.StartAnimation("Size", bindSize);
-                
+
                 // Attach shadow to the dedicated host (background layer)
                 ElementCompositionPreview.SetElementChildVisual(LogoShadowHost, sprite);
             }
@@ -1545,6 +1560,7 @@ namespace ModernIPTVPlayer.Controls
                 Debug.WriteLine($"[ExpandedCard] Failed to apply logo shadow: {ex.Message}");
             }
         }
+
 
         private async Task UpdateCreditsAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata unified, CancellationToken ct = default)
         {
@@ -1593,10 +1609,8 @@ namespace ModernIPTVPlayer.Controls
                 }
 
                 dispatcher.TryEnqueue(() => {
-                    // Safety check: is the card still showing the same content?
                     if (_lastMetadata != unified) return;
 
-                    // Update Cast Section
                     CastList.Clear();
                     foreach (var item in castItems) CastList.Add(item);
                     
@@ -1605,14 +1619,38 @@ namespace ModernIPTVPlayer.Controls
                     CastListView.Visibility = hasCast ? Visibility.Visible : Visibility.Collapsed;
                     if (hasCast) CastListView.ItemsSource = CastList;
 
-                    // Update Directors Section
                     DirectorList.Clear();
+
+                    // If it's a series and we have writers, add them first
+                    if (unified.IsSeries && !string.IsNullOrEmpty(unified.Writers))
+                    {
+                        var writers = unified.Writers.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+                        foreach (var w in writers.Take(3))
+                        {
+                            var trimmed = w.Trim();
+                            if (!directorItems.Any(d => d.Name.Equals(trimmed, StringComparison.OrdinalIgnoreCase)))
+                                directorItems.Insert(0, CreateCastItem(trimmed, null));
+                        }
+                    }
+
                     foreach (var item in directorItems) DirectorList.Add(item);
 
                     bool hasDirectors = DirectorList.Count > 0;
-                    DirectorHeaderText.Visibility = hasDirectors ? Visibility.Visible : Visibility.Collapsed;
-                    DirectorListView.Visibility = hasDirectors ? Visibility.Visible : Visibility.Collapsed;
-                    if (hasDirectors) DirectorListView.ItemsSource = DirectorList;
+                    bool hasWriters = unified.IsSeries && !string.IsNullOrEmpty(unified.Writers);
+
+                    if (hasDirectors)
+                    {
+                        if (hasWriters) DirectorHeaderText.Text = "Yönetmen / Yazar";
+                        else DirectorHeaderText.Text = "Yönetmen";
+                    }
+                    else if (hasWriters)
+                    {
+                        DirectorHeaderText.Text = "Yazar";
+                    }
+
+                    DirectorHeaderText.Visibility = (hasDirectors || hasWriters) ? Visibility.Visible : Visibility.Collapsed;
+                    DirectorListView.Visibility = (hasDirectors || hasWriters) ? Visibility.Visible : Visibility.Collapsed;
+                    if (hasDirectors || hasWriters) DirectorListView.ItemsSource = DirectorList;
                 });
             }
             catch (Exception ex)
@@ -1656,43 +1694,42 @@ namespace ModernIPTVPlayer.Controls
         private void StaggeredRevealContent()
         {
             if (_compositor == null || RealContentPanel == null) return;
-
-            double delay = 0;
-            const double staggerIncrement = 0.08; 
+            
+            // [ARCHITECTURAL] We use a staggered delay in a single frame.
+            // Implicit Animations would be better but for precise staggered delays 
+            // on first-load children, explicit StartAnimation with DelayTime is more deterministic.
+            
+            double delay = 0.02; 
+            const double staggerIncrement = 0.04;
 
             foreach (var child in RealContentPanel.Children)
             {
-                if (child is UIElement element)
+                if (child is UIElement element && element.Visibility == Visibility.Visible)
                 {
-                    var visual = Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.GetElementVisual(element);
+                    var visual = ElementCompositionPreview.GetElementVisual(element);
                     
-                    // CRITICAL: Set Visual Opacity to 0 initially
+                    // Reset to entrance state
                     visual.Opacity = 0f;
+                    ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+                    visual.Properties.InsertVector3("Translation", new System.Numerics.Vector3((float)DriftX, 0, 0));
 
-                    try 
-                    {
-                        var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
-                        fadeIn.InsertKeyFrame(1f, 1f);
-                        fadeIn.Duration = TimeSpan.FromMilliseconds(400);
-                        fadeIn.DelayTime = TimeSpan.FromSeconds(delay);
+                    // Create Easing
+                    var easing = _compositor.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.1f, 0.9f), new System.Numerics.Vector2(0.2f, 1f));
 
-                        // Define MoveUp Animation
-                        var moveUp = _compositor.CreateVector3KeyFrameAnimation();
-                        moveUp.InsertKeyFrame(0f, new System.Numerics.Vector3(0, 8, 0));
-                        moveUp.InsertKeyFrame(1f, System.Numerics.Vector3.Zero);
-                        moveUp.Duration = TimeSpan.FromMilliseconds(500);
-                        moveUp.DelayTime = TimeSpan.FromSeconds(delay);
+                    // Fade
+                    var fadeIn = _compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(1f, 1f, easing);
+                    fadeIn.Duration = TimeSpan.FromMilliseconds(500);
+                    fadeIn.DelayTime = TimeSpan.FromSeconds(delay);
 
-                        Microsoft.UI.Xaml.Hosting.ElementCompositionPreview.SetIsTranslationEnabled(element, true);
-                        
-                        try { visual.StartAnimation("Opacity", fadeIn); } catch { }
-                        try { visual.StartAnimation("Translation", moveUp); } catch { }
-                    }
-                    catch (Exception ex)
-                    {
-                         System.Diagnostics.Debug.WriteLine($"[ExpandedCard] Staggered Animation Error: {ex.Message}");
-                         visual.Opacity = 1f; // Ensure visible if animation fails
-                    }
+                    // Slide
+                    var slideIn = _compositor.CreateVector3KeyFrameAnimation();
+                    slideIn.InsertKeyFrame(1f, System.Numerics.Vector3.Zero, easing);
+                    slideIn.Duration = TimeSpan.FromMilliseconds(700);
+                    slideIn.DelayTime = TimeSpan.FromSeconds(delay);
+
+                    visual.StartAnimation("Opacity", fadeIn);
+                    visual.StartAnimation("Translation", slideIn);
 
                     delay += staggerIncrement;
                 }

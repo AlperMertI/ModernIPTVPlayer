@@ -188,13 +188,13 @@ public sealed partial class Player
                 if (System.IO.File.Exists(statsPath))
                 {
                     Debug.WriteLine($"[MpvPlayer] Loading stats.lua...");
-                    await Client.ExecuteWithResultAsync(new[] { "load-script", statsPath });
+                    await Client.ExecuteAsync(new[] { "load-script", statsPath });
                 }
 
                 if (System.IO.File.Exists(oscPath))
                 {
                     Debug.WriteLine($"[MpvPlayer] Loading osc.lua...");
-                    await Client.ExecuteWithResultAsync(new[] { "load-script", oscPath });
+                    await Client.ExecuteAsync(new[] { "load-script", oscPath });
                 }
             }
             catch (Exception ex)

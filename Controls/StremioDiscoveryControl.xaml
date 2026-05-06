@@ -13,15 +13,17 @@
     d:DesignHeight="1000"
     d:DesignWidth="1200">
     <UserControl.Resources>
-        <DataTemplate x:Key="StandardCardTemplate">
+        <DataTemplate x:Key="StandardCardTemplate" x:DataType="stremioModels:StremioMediaStream">
             <local:PosterCard Width="172" Height="252" 
+                              MediaStream="{x:Bind}"
                               HoverStarted="PosterCard_HoverStarted" 
                               HoverEnded="PosterCard_HoverEnded"
                               Clicked="Card_Clicked"
                               ElementSoundMode="Off"/>
         </DataTemplate>
-        <DataTemplate x:Key="LandscapeCardTemplate">
+        <DataTemplate x:Key="LandscapeCardTemplate" x:DataType="stremioModels:StremioMediaStream">
             <local:LandscapeCard Width="296" Height="176" 
+                                  MediaStream="{x:Bind}"
                                   HoverStarted="LandscapeCard_HoverStarted" 
                                   HoverEnded="LandscapeCard_HoverEnded"
                                   Clicked="Card_Clicked"
@@ -65,7 +67,7 @@
                       HorizontalScrollMode="Disabled" 
                       HorizontalScrollBarVisibility="Disabled"
                       VerticalScrollMode="Auto"
-                      VerticalScrollBarVisibility="Hidden"
+                      VerticalScrollBarVisibility="Auto"
                       Loaded="MainScroll_Loaded"
                       IsHorizontalRailEnabled="True"
                       IsVerticalRailEnabled="True">
@@ -74,8 +76,7 @@
                 
                 <ItemsRepeater x:Name="DiscoveryRepeater" 
                                ItemsSource="{x:Bind _discoveryRows}"
-                               ItemTemplate="{StaticResource DiscoveryRowTemplateSelector}"
-                               VerticalCacheLength="3.5"
+                               VerticalCacheLength="1.5"
                                ElementPrepared="DiscoveryRepeater_ElementPrepared">
                     <ItemsRepeater.Layout>
                         <StackLayout Orientation="Vertical" Spacing="36"/>

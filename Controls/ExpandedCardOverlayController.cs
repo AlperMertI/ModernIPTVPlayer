@@ -9,6 +9,7 @@ using System;
 using System.Numerics;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.UI.Xaml.Input;
 using Windows.Foundation;
 
 namespace ModernIPTVPlayer.Controls
@@ -28,6 +29,7 @@ namespace ModernIPTVPlayer.Controls
 
         private DispatcherTimer? _hoverTimer;
         private DispatcherTimer? _flightTimer;
+        private double _lastTargetX = 0;
         private CancellationTokenSource? _closeCts;
         private FrameworkElement? _pendingHoverCard;
         private FrameworkElement? _activeSourceCard;
@@ -37,8 +39,9 @@ namespace ModernIPTVPlayer.Controls
         private Storyboard? _cardBoundsStoryboard;
         private bool _pointerExitNeedsRearm;
         private DateTimeOffset _suppressPointerExitUntil;
-        private bool _isPointerOverCard;
+
         private bool _isClosing;
+        private bool _isPointerOverCard;
         private IMediaStream? _currentStream;
 
         public event EventHandler<IMediaStream>? PlayRequested;
@@ -128,6 +131,27 @@ namespace ModernIPTVPlayer.Controls
             {
                 IsManipulationInProgress = false;
             };
+
+            // [PINNACLE] Listen to ViewChanged to detect Mouse Wheel and Scrollbar movement
+            // which doesn't trigger DirectManipulation events.
+            _scrollLockTarget.ViewChanged += (s, e) =>
+            {
+                if (e.IsIntermediate)
+                {
+                    IsManipulationInProgress = true;
+                    CancelPendingShow();
+                    
+                    // If the card is visible while scrolling fast, close it to save resources
+                    if (IsCardVisible && !_isInCinemaMode)
+                    {
+                         ForceClose();
+                    }
+                }
+                else
+                {
+                    IsManipulationInProgress = false;
+                }
+            };
         }
 
         public void PrepareForTrailer() => _expandedCard.PrepareForTrailer();
@@ -167,7 +191,7 @@ namespace ModernIPTVPlayer.Controls
 
         public void OnHoverStarted(FrameworkElement card)
         {
-            if (_isInCinemaMode) return;
+            if (_isInCinemaMode || IsManipulationInProgress) return;
             if (IsCardVisible && _activeSourceCard == card) return;
 
             try 
@@ -201,7 +225,7 @@ namespace ModernIPTVPlayer.Controls
                 if (isAlreadyOpen)
                 {
                     visual.Opacity = 1f;
-                    _flightTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+                    _flightTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
                     _flightTimer.Tick -= FlightTimer_Tick;
                     _flightTimer.Tick += FlightTimer_Tick;
                     _flightTimer.Stop();
@@ -210,7 +234,7 @@ namespace ModernIPTVPlayer.Controls
                 }
                 else
                 {
-                    _hoverTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+                    _hoverTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1000) };
                     _hoverTimer.Tick -= HoverTimer_Tick;
                     _hoverTimer.Tick += HoverTimer_Tick;
                     _hoverTimer.Stop();
@@ -220,29 +244,32 @@ namespace ModernIPTVPlayer.Controls
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlayController] OnHoverStarted error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[LIB-OVERLAY] OnHoverStarted error: {ex.Message}");
             }
         }
 
         public async Task CloseExpandedCardAsync(FrameworkElement? sourceCard = null, bool force = false)
         {
-            if (sourceCard != null && _activeSourceCard != sourceCard && !force) return;
+            if (sourceCard != null && _activeSourceCard != sourceCard && !force)
+            {
+                if (_expandedCard.Visibility != Visibility.Visible) return;
+                if (sourceCard is PosterCard p && p.IsHovered) return;
+                if (sourceCard is LandscapeCard l && l.IsHovered) return;
+            }
             if (_isInCinemaMode && !force) return;
             if (_isPointerOverCard && !force) return;
-            if (_isClosing && !force) return;
-
             if (force)
             {
                 ForceClose();
                 return;
             }
 
-            _isClosing = true;
             try
             {
-                _closeCts?.Cancel();
-                _closeCts = new CancellationTokenSource();
-                var token = _closeCts.Token;
+                var localCts = new CancellationTokenSource();
+                var oldCts = Interlocked.Exchange(ref _closeCts, localCts);
+                oldCts?.Cancel();
+                var token = localCts.Token;
 
                 if (_expandedCard.Visibility == Visibility.Visible)
                 {
@@ -288,13 +315,10 @@ namespace ModernIPTVPlayer.Controls
             catch (TaskCanceledException) { }
             finally
             {
-                _isClosing = false;
             }
         }
 
         /// <summary>
-        /// Synchronously and immediately clears the expanded card state.
-        /// Ideal for navigation and page switches.
         /// </summary>
         public void ForceClose()
         {
@@ -307,16 +331,16 @@ namespace ModernIPTVPlayer.Controls
                 
                 if (_expandedCard.Visibility == Visibility.Visible)
                 {
-                    System.Diagnostics.Debug.WriteLine("[ExpandedCardOverlayController] ForceClose: Stopping trailer.");
+                    System.Diagnostics.Debug.WriteLine("[LIB-OVERLAY] ForceClose: Stopping trailer.");
                     _expandedCard.StopTrailer();
                 }
                 FinalizeCloseVisualState();
                 
-                // System.Diagnostics.Debug.WriteLine("[ExpandedCardOverlayController] ForceClose executed.");
+                // System.Diagnostics.Debug.WriteLine("[LIB-OVERLAY] ForceClose executed.");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlayController] ForceClose Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[LIB-OVERLAY] ForceClose Error: {ex.Message}");
             }
         }
 
@@ -406,6 +430,22 @@ namespace ModernIPTVPlayer.Controls
                 double targetX = position.X - (widthDiff / 2);
                 double targetY = position.Y - (heightDiff / 2);
 
+                // [DIRECTIONAL DRIFT] Determine move direction for staggered animation
+                double driftDeltaX = targetX - _lastTargetX;
+                _lastTargetX = targetX;
+                
+                // If moving right, new content should drift in from the right (positive X)
+                // If moving left, new content should drift in from the left (negative X)
+                // Use a threshold to avoid jitter on small adjustments
+                if (Math.Abs(driftDeltaX) > 2)
+                {
+                    _expandedCard.DriftX = driftDeltaX > 0 ? 15.0 : -15.0;
+                }
+                else
+                {
+                    _expandedCard.DriftX = 15.0; // Default
+                }
+
                 if (targetX < 10) targetX = 10;
                 if (targetY < 10) targetY = 10;
                 if (targetX + CardWidth > _overlayCanvas.ActualWidth) targetX = _overlayCanvas.ActualWidth - CardWidth - 10;
@@ -458,6 +498,9 @@ namespace ModernIPTVPlayer.Controls
 
                     Canvas.SetLeft(_expandedCard, targetX);
                     Canvas.SetTop(_expandedCard, targetY);
+                    
+                    // [FIX] Synchronous Wipe: Clear the card BEFORE it becomes visible
+                    _expandedCard.ResetToInitialState(isMorphing: false);
                     _expandedCard.Visibility = Visibility.Visible;
 
                     var springAnim = compositor.CreateSpringVector3Animation();
@@ -482,7 +525,7 @@ namespace ModernIPTVPlayer.Controls
             catch (OperationCanceledException) { /* Expected on hover changes */ }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[ExpandedCardOverlayController] Show error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[LIB-OVERLAY] Show error: {ex.Message}");
             }
         }
 
@@ -912,3 +955,5 @@ namespace ModernIPTVPlayer.Controls
         }
     }
 }
+
+

@@ -1519,15 +1519,25 @@ public partial class D3D11RenderControl : ContentControl
 
             FlushContext();
             
-            // [SYNC] Wait for any in-flight render calls to finish (Max 100ms)
+            // [SYNC] Wait for any in-flight render calls to finish (Max 500ms)
             int waitCount = 0;
-            while (_inFlightRenderCalls > 0 && waitCount < 10)
+            while (_inFlightRenderCalls > 0 && waitCount < 50)
             {
                 Thread.Sleep(10);
                 waitCount++;
             }
 
-            if (_swapChain.Handle != null) { _swapChain.Dispose(); _swapChain = default; Interlocked.Decrement(ref _liveSwapChains); }
+            if (_inFlightRenderCalls > 0)
+            {
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] WARNING: DestroyResources proceeding with {_inFlightRenderCalls} calls still in flight!");
+            }
+
+            if (_swapChain.Handle != null) 
+            { 
+                try { _swapChain.Dispose(); } catch (Exception ex) { Debug.WriteLine($"[D3D_CTRL] SwapChain Dispose Error: {ex.Message}"); }
+                _swapChain = default; 
+                Interlocked.Decrement(ref _liveSwapChains); 
+            }
             
             lock (_staticInitLock)
             {

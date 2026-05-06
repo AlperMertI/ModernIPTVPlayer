@@ -2,9 +2,10 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using System;
+using ModernIPTVPlayer.Models;
 using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml.Hosting;
-using ModernIPTVPlayer.Models;
+using System.Numerics;
 using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer.Controls
@@ -179,6 +180,10 @@ namespace ModernIPTVPlayer.Controls
         private void Card_Loaded(object sender, RoutedEventArgs e)
         {
             UpdateImage();
+            
+            // [PINNACLE] Initialize the Visual layer properties
+            var visual = ElementCompositionPreview.GetElementVisual(MainBorder);
+            visual.CenterPoint = new Vector3((float)MainBorder.ActualWidth / 2, (float)MainBorder.ActualHeight / 2, 0);
         }
 
         private void Card_Unloaded(object sender, RoutedEventArgs e)
@@ -192,6 +197,7 @@ namespace ModernIPTVPlayer.Controls
             IsHovered = true;
             Canvas.SetZIndex(this, 10);
             HoverInStoryboard.Begin();
+            StartCompositionTilt();
             HoverStarted?.Invoke(this, EventArgs.Empty);
             PlayButtonContainer.Opacity = 1.0;
         }
@@ -219,24 +225,39 @@ namespace ModernIPTVPlayer.Controls
             IsHovered = false;
             Canvas.SetZIndex(this, 0);
             HoverOutStoryboard.Begin();
+            StopCompositionTilt();
             HoverEnded?.Invoke(this, EventArgs.Empty);
-            TiltProjection.RotationX = 0;
-            TiltProjection.RotationY = 0;
         }
 
         private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
         {
-            if (IsHovered)
-            {
-                var pointerPosition = e.GetCurrentPoint(MainBorder).Position;
-                var center = new Windows.Foundation.Point(MainBorder.ActualWidth / 2, MainBorder.ActualHeight / 2);
-                
-                var xDiff = pointerPosition.X - center.X;
-                var yDiff = pointerPosition.Y - center.Y;
+            // [PINNACLE] Handled by the Compositor thread.
+        }
 
-                TiltProjection.RotationY = -xDiff / 50.0; // Subtle tilt for wide cards
-                TiltProjection.RotationX = yDiff / 50.0;
-            }
+        private void StartCompositionTilt()
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(MainBorder);
+            var compositor = visual.Compositor;
+            var pointerPropSet = ElementCompositionPreview.GetPointerPositionPropertySet(MainBorder);
+
+            var tiltAnim = compositor.CreateExpressionAnimation(
+                "Matrix4x4.CreateTranslation(-center.X, -center.Y, 0) * " +
+                "Matrix4x4.CreateRotationY(-((pointer.Position.X - center.X) / 60.0) * (3.14159 / 180.0)) * " +
+                "Matrix4x4.CreateRotationX(((pointer.Position.Y - center.Y) / 60.0) * (3.14159 / 180.0)) * " +
+                "Matrix4x4.CreateTranslation(center.X, center.Y, 0)"
+            );
+
+            tiltAnim.SetReferenceParameter("pointer", pointerPropSet);
+            tiltAnim.SetVector2Parameter("center", new Vector2((float)MainBorder.ActualWidth / 2, (float)MainBorder.ActualHeight / 2));
+
+            visual.StartAnimation("TransformMatrix", tiltAnim);
+        }
+
+        private void StopCompositionTilt()
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(MainBorder);
+            visual.StopAnimation("TransformMatrix");
+            visual.TransformMatrix = Matrix4x4.Identity;
         }
 
         private void OnTapped(object sender, TappedRoutedEventArgs e)

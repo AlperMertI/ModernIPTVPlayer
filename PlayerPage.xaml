@@ -275,7 +275,7 @@
 
                 <!-- Status / Remaining Time -->
                 <StackPanel Spacing="4" HorizontalAlignment="Left">
-                    <TextBlock x:Name="InactivityChapterInfo" Foreground="{StaticResource GoldGradient}" FontSize="22" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="InactivityChapterInfo" Foreground="{ThemeResource GoldGradient}" FontSize="22" FontWeight="SemiBold"/>
                     <TextBlock x:Name="InactivityRemainingTime" Foreground="White" FontSize="32" FontWeight="Bold"/>
                 </StackPanel>
             </StackPanel>

@@ -1632,25 +1632,6 @@ namespace ModernIPTVPlayer
                                     "Player.cleanup.after-gc",
                                     BuildPlayerMemoryTraceDetail($"after-gc", $"mpvAlive={playerWeakRef.IsAlive} proxyTasks={Services.StreamProxyService.ActiveTaskCount}"),
                                     PlayerMemoryBaseline);
-                                _ = Task.Run(async () =>
-                                {
-                                    try
-                                    {
-                                        await Task.Delay(2000);
-                                        MemoryTelemetryService.ForceFullCollectionAndLog(
-                                            "Player.cleanup.delayed-2s",
-                                            BuildPlayerMemoryTraceDetail($"delayed-2s", $"mpvAlive={playerWeakRef.IsAlive} proxyTasks={Services.StreamProxyService.ActiveTaskCount}"),
-                                            PlayerMemoryBaseline);
-
-                                        await Task.Delay(8000);
-                                        // [FINAL_CLEANUP] One last forced compaction to ensure native driver threads/buffers are evicted
-                                        MemoryTelemetryService.ForceFullCollectionAndLog(
-                                            "Player.cleanup.delayed-10s",
-                                            BuildPlayerMemoryTraceDetail($"delayed-10s", $"mpvAlive={playerWeakRef.IsAlive} proxyTasks={Services.StreamProxyService.ActiveTaskCount}"),
-                                            PlayerMemoryBaseline);
-                                    }
-                                    catch { }
-                                });
                                 Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [LIFECYCLE] Background Cleanup COMPLETED");
                             }
                             catch (Exception ex) 

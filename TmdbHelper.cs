@@ -61,7 +61,8 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[TMDB] Images Error: {ex.Message}");
+                if (ex is not OperationCanceledException)
+                    System.Diagnostics.Debug.WriteLine($"[TMDB] Images Error: {ex.Message}");
                 return new List<string>();
             }
         }
@@ -167,7 +168,8 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[TMDB] Search Error: {ex.Message}");
+                if (ex is not OperationCanceledException)
+                    System.Diagnostics.Debug.WriteLine($"[TMDB] Search Error: {ex.Message}");
                 return null;
             }
         }
@@ -340,7 +342,8 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] EXCEPTION: {ex.Message}");
+                if (ex is not OperationCanceledException)
+                    System.Diagnostics.Debug.WriteLine($"[TMDB-Trailer] EXCEPTION: {ex.Message}");
                 return null;
             }
         }

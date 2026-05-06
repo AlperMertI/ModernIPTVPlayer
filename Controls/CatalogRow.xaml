@@ -13,6 +13,17 @@
     <UserControl.Resources>
         <converters:BoolToVisibleConverter x:Key="BoolToVisibleConverter"/>
         <converters:BoolToCollapsedConverter x:Key="BoolToCollapsedConverter"/>
+
+        <DataTemplate x:Key="ShimmerStandardTemplate">
+            <local:ShimmerCard Width="172" Height="252" Margin="0,0,12,0"/>
+        </DataTemplate>
+        <DataTemplate x:Key="ShimmerLandscapeTemplate">
+            <local:ShimmerCard Width="296" Height="176" Margin="0,0,12,0"/>
+        </DataTemplate>
+        
+        <local:RowStyleToTemplateConverter x:Key="ShimmerTemplateConverter" 
+                                           StandardTemplate="{StaticResource ShimmerStandardTemplate}" 
+                                           LandscapeTemplate="{StaticResource ShimmerLandscapeTemplate}" />
     </UserControl.Resources>
 
     <Grid x:Name="RootPanel" Margin="0" Opacity="0"
@@ -39,15 +50,15 @@
                     </VisualState.Setters>
                     <Storyboard>
                         <DoubleAnimation Storyboard.TargetName="EntranceTranslation" 
-                                         Storyboard.TargetProperty="Y" 
-                                         To="0" Duration="0:0:0.6">
+                                          Storyboard.TargetProperty="Y" 
+                                          To="0" Duration="0:0:0.6">
                             <DoubleAnimation.EasingFunction>
                                 <CubicEase EasingMode="EaseOut"/>
                             </DoubleAnimation.EasingFunction>
                         </DoubleAnimation>
                         <DoubleAnimation Storyboard.TargetName="RootPanel" 
-                                         Storyboard.TargetProperty="Opacity" 
-                                         To="1" Duration="0:0:0.4"/>
+                                          Storyboard.TargetProperty="Opacity" 
+                                          To="1" Duration="0:0:0.4"/>
                     </Storyboard>
                 </VisualState>
                 <VisualState x:Name="Empty">
@@ -107,13 +118,14 @@
 
         <Grid x:Name="ListContainer" Grid.Row="1" Margin="0,12,0,0">
             <!-- Shimmer State -->
-            <StackPanel x:Name="ShimmerPanel" Orientation="Horizontal" Visibility="Collapsed" Margin="-10,0,0,0">
-                 <local:ShimmerCard x:Name="S1" Width="172" Height="252" Margin="0,0,4,0"/>
-                 <local:ShimmerCard x:Name="S2" Width="172" Height="252" Margin="0,0,4,0"/>
-                 <local:ShimmerCard x:Name="S3" Width="172" Height="252" Margin="0,0,4,0"/>
-                 <local:ShimmerCard x:Name="S4" Width="172" Height="252" Margin="0,0,4,0"/>
-                 <local:ShimmerCard x:Name="S5" Width="172" Height="252" Margin="0,0,4,0"/>
-            </StackPanel>
+            <ItemsRepeater x:Name="ShimmerPanel" 
+                           Visibility="Collapsed" 
+                           Margin="48,0,48,0"
+                           ItemTemplate="{x:Bind RowStyle, Converter={StaticResource ShimmerTemplateConverter}, Mode=OneWay}">
+                <ItemsRepeater.Layout>
+                    <StackLayout Orientation="Horizontal" Spacing="12"/>
+                </ItemsRepeater.Layout>
+            </ItemsRepeater>
 
             <ScrollViewer x:Name="ItemsScrollViewer" 
                           HorizontalScrollMode="Disabled"

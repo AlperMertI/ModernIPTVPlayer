@@ -22,6 +22,9 @@ using ModernIPTVPlayer.Models.Metadata;
 using Microsoft.UI.Xaml.Data;
 using Microsoft.UI.Xaml.Input;
 
+using Microsoft.UI.Xaml.Hosting;
+using System.Numerics;
+
 namespace ModernIPTVPlayer.Controls
 {
     [Microsoft.UI.Xaml.Data.Bindable]
@@ -110,7 +113,9 @@ namespace ModernIPTVPlayer.Controls
         public HeroSectionControl HeroSection => HeroControl;
         public ItemsRepeater DiscoveryRows => DiscoveryRepeater;
 
-        private ObservableCollection<CatalogRowViewModel> _discoveryRows = new();
+        private readonly ObservableCollection<CatalogRowViewModel> _discoveryRows = new();
+        private readonly DiscoveryElementFactory _elementFactory = new();
+        private bool _isInitialLoadDone = false;
         private int _rowCount = 0;
         private bool _isDiscoveryRunning = false;
         private bool _isDraggingRow = false;
@@ -119,9 +124,12 @@ namespace ModernIPTVPlayer.Controls
         private int _discoveryVersion = 0; // Monotonic counter to invalidate stale runs
         private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _lastHeroColors;
         private bool _isSourceActive = true;
-        private double _targetVerticalOffset = 0;
-        private DateTime _lastWheelTime = DateTime.MinValue;
         private DispatcherTimer? _heroDebounceTimer;
+        
+        // Performance Tracking
+        private DateTime _lastViewChangeTime = DateTime.MinValue;
+        private double _lastVerticalOffset = 0;
+        private double _currentVelocity = 0; // pixels per ms
 
         // Hero Priority Logic
         public enum RowState { Pending, Success, Failed }
@@ -194,11 +202,17 @@ namespace ModernIPTVPlayer.Controls
             try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:ctor", "enter", null, "H6-H7-H8"); } catch { }
             // #endregion
             this.InitializeComponent();
+            
+            // Link resources and assign factory to the repeater
+            _elementFactory.StandardCardTemplate = this.Resources["StandardCardTemplate"] as DataTemplate;
+            _elementFactory.LandscapeCardTemplate = this.Resources["LandscapeCardTemplate"] as DataTemplate;
+            DiscoveryRepeater.ItemTemplate = _elementFactory;
             // #region agent log
             try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:ctor", "InitializeComponent done", null, "H6-H7-H8"); } catch { }
             // #endregion
             this.DataContext = this;
             this.Loaded += (s, e) => {
+                HeroControl.LinkToScrollViewer(MainScroll);
                 // #region agent log
                 try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:Loaded", "loaded", null, "H6-H7-H8"); } catch { }
                 // #endregion
@@ -472,63 +486,9 @@ namespace ModernIPTVPlayer.Controls
             {
                 MainScroll.ViewChanged -= ScrollViewer_ViewChanged;
                 MainScroll.ViewChanged += ScrollViewer_ViewChanged;
-                _targetVerticalOffset = MainScroll.VerticalOffset;
-
-                // [NATIVE GLIDE] Nuclear Intercept to create smooth targets
-                MainScroll.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler(MainScroll_PointerWheelChanged), true);
             }
         }
 
-        private void MainScroll_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
-        {
-            var pointerPoint = e.GetCurrentPoint(MainScroll);
-            if (!pointerPoint.Properties.IsHorizontalMouseWheel)
-            {
-                var now = DateTime.Now;
-                double timeSinceLast = (now - _lastWheelTime).TotalMilliseconds;
-                
-                // [SYNC] If idle for too long, sync to reality
-                if (timeSinceLast > 500)
-                {
-                    _targetVerticalOffset = MainScroll.VerticalOffset;
-                }
-
-                int delta = pointerPoint.Properties.MouseWheelDelta;
-                
-                // [BURST DAMPENING]
-                // Single notch (> 150ms idle) gets a 2.4x glide.
-                // Fast burst (< 150ms) gets a 1.2x precision move.
-                double multiplier = (timeSinceLast > 150) ? 2.4 : 1.2;
-                
-                _targetVerticalOffset -= delta * multiplier;
-                _lastWheelTime = now;
-
-                // Clamp to bounds
-                _targetVerticalOffset = Math.Max(0, Math.Min(_targetVerticalOffset, MainScroll.ScrollableHeight));
-
-                // [GPU-NATIVE] Native Glide
-                MainScroll.ChangeView(null, _targetVerticalOffset, null, false);
-                
-                e.Handled = true;
-            }
-        }
-
-        public void AddScrollVelocity(double delta)
-        {
-            var now = DateTime.Now;
-            double timeSinceLast = (now - _lastWheelTime).TotalMilliseconds;
-
-            if (timeSinceLast > 500)
-            {
-                _targetVerticalOffset = MainScroll.VerticalOffset;
-            }
-
-            double multiplier = (timeSinceLast > 150) ? 2.4 : 1.2;
-            _targetVerticalOffset -= delta * multiplier;
-            _lastWheelTime = now;
-            _targetVerticalOffset = Math.Max(0, Math.Min(_targetVerticalOffset, MainScroll.ScrollableHeight));
-            MainScroll.ChangeView(null, _targetVerticalOffset, null, false);
-        }
 
         private void StremioDiscoveryControl_Unloaded(object sender, RoutedEventArgs e)
         {
@@ -760,6 +720,8 @@ namespace ModernIPTVPlayer.Controls
 
         public async Task LoadDiscoveryAsync(string contentType)
         {
+            _isInitialLoadDone = false;
+            // Existing logic...
             // #region agent log
             try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "enter", new System.Collections.Generic.Dictionary<string, object?> { ["type"] = contentType }, "H6-H7-H8"); } catch { }
             // #endregion
@@ -1104,13 +1066,14 @@ namespace ModernIPTVPlayer.Controls
                     }
                     // #region agent log
                     try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync.TryEnqueue", "exit callback", null, "H-A"); } catch { }
-                    // Schedule a Low-priority ping so we can see whether ItemsRepeater's layout pass
-                    // completes (Low runs after Normal-priority layout work).
+                    // #endregion
+                    
+                    // PINNACLE: Mark initial load as done after the first layout pass completes.
+                    // This ensures only the first 12 rows get the choreographed entrance.
                     DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
                     {
-                        try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync.TryEnqueue", "low-priority after-layout ping", null, "H-XAML"); } catch { }
+                        _isInitialLoadDone = true;
                     });
-                    // #endregion
                 });
                 // #region agent log
                 try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:LoadDiscoveryAsync", "step: after DispatcherQueue.TryEnqueue", null, "H-A"); } catch { }
@@ -1162,9 +1125,31 @@ namespace ModernIPTVPlayer.Controls
 
         private void DiscoveryRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
         {
-            // #region agent log
-            try { ModernIPTVPlayer.App.DebugNdjson("StremioDiscoveryControl.xaml.cs:ElementPrepared", "enter", new System.Collections.Generic.Dictionary<string, object?> { ["elementType"] = args.Element?.GetType().FullName, ["idx"] = args.Index }, "H6"); } catch { }
-            // #endregion
+            // [PINNACLE] Staggered Entrance Animation
+            // Only apply during the initial reveal of content to avoid distracting pops during scroll.
+            if (!_isInitialLoadDone && args.Index < 12)
+            {
+                var visual = ElementCompositionPreview.GetElementVisual(args.Element);
+                var compositor = visual.Compositor;
+
+                visual.Opacity = 0f;
+                ElementCompositionPreview.SetIsTranslationEnabled(args.Element, true);
+                
+                var fadeAnim = compositor.CreateScalarKeyFrameAnimation();
+                fadeAnim.InsertKeyFrame(1.0f, 1.0f);
+                fadeAnim.Duration = TimeSpan.FromMilliseconds(700);
+                fadeAnim.DelayTime = TimeSpan.FromMilliseconds(args.Index * 45);
+                fadeAnim.InsertKeyFrame(0.0f, 0.0f);
+
+                var slideAnim = compositor.CreateVector3KeyFrameAnimation();
+                slideAnim.InsertKeyFrame(1.0f, new Vector3(0, 0, 0));
+                slideAnim.Duration = TimeSpan.FromMilliseconds(900);
+                slideAnim.DelayTime = TimeSpan.FromMilliseconds(args.Index * 45);
+                slideAnim.InsertKeyFrame(0.0f, new Vector3(0, 40, 0));
+
+                visual.StartAnimation("Opacity", fadeAnim);
+                visual.StartAnimation("Translation", slideAnim);
+            }
             if (args.Element is CatalogRow row)
             {
                 row.ItemClicked -= CatalogRow_ItemClicked;
@@ -1179,9 +1164,15 @@ namespace ModernIPTVPlayer.Controls
                 // [SMART PREFETCH] Only pre-warm the GPU cache for rows entering the 
                 // virtual viewport (plus the 3.5-screen buffer). This replaces 
                 // the eager 'all-rows' pre-fetching to save RAM.
+                // [PERF FIX] Throttle prefetching during fast scrolling to maintain 120fps.
                 if (row.DataContext is CatalogRowViewModel vm)
                 {
-                    PrefetchRowImages(vm);
+                    if (_currentVelocity < 1.5) // Only prefetch if we aren't "flying" through the list
+                    {
+                        DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => {
+                            PrefetchRowImages(vm);
+                        });
+                    }
                 }
 
                 row.ScrollStarted -= CatalogRow_ScrollStarted;
@@ -1349,6 +1340,22 @@ namespace ModernIPTVPlayer.Controls
 
         private void ScrollViewer_ViewChanged(object sender, ScrollViewerViewChangedEventArgs e)
         {
+            // [PERF] Calculate scroll velocity to throttle heavy UI work
+            var now = DateTime.Now;
+            var elapsed = (now - _lastViewChangeTime).TotalMilliseconds;
+            if (elapsed > 0 && elapsed < 100) // Filter out noise or large jumps
+            {
+                double delta = Math.Abs(MainScroll.VerticalOffset - _lastVerticalOffset);
+                _currentVelocity = delta / elapsed;
+            }
+            else
+            {
+                _currentVelocity = 0;
+            }
+
+            _lastViewChangeTime = now;
+            _lastVerticalOffset = MainScroll.VerticalOffset;
+
             ViewChanged?.Invoke(this, e);
         }
 

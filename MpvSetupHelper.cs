@@ -46,6 +46,15 @@ namespace ModernIPTVPlayer
                 string userAgent = HttpHelper.UserAgent;
                 string headers = "Accept: */*\nConnection: keep-alive\nAccept-Language: en-US,en;q=0.9\n";
 
+                // [RESILIENCE] Automatically derive Referer/Origin from the URL to improve compatibility with hosters
+                if (Uri.TryCreate(streamUrl, UriKind.Absolute, out var uri) && (uri.Scheme == "http" || uri.Scheme == "https"))
+                {
+                    string origin = $"{uri.Scheme}://{uri.Host}";
+                    headers += $"Referer: {origin}/\n";
+                    headers += $"Origin: {origin}\n";
+                }
+
+
                 await player.SetPropertyAsync("user-agent", userAgent);
                 await player.SetPropertyAsync("http-header-fields", headers);
 

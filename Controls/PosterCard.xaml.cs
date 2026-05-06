@@ -11,6 +11,9 @@ using Windows.UI;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Helpers;
+using Microsoft.UI.Composition;
+using Microsoft.UI.Xaml.Hosting;
+using System.Numerics;
 
 namespace ModernIPTVPlayer.Controls
 {
@@ -310,6 +313,10 @@ namespace ModernIPTVPlayer.Controls
         private void PosterCard_Loaded(object sender, RoutedEventArgs e)
         {
             UpdateImage();
+            
+            // [PINNACLE] Initialize the Visual layer properties
+            var visual = ElementCompositionPreview.GetElementVisual(MainBorder);
+            visual.CenterPoint = new Vector3((float)MainBorder.ActualWidth / 2, (float)MainBorder.ActualHeight / 2, 0);
         }
 
         private void PosterCard_Unloaded(object sender, RoutedEventArgs e)
@@ -327,8 +334,9 @@ namespace ModernIPTVPlayer.Controls
         private void OnPointerEntered(object sender, PointerRoutedEventArgs e)
         {
             IsHovered = true;
-            Canvas.SetZIndex(this, 10); // Bring to front
+            Canvas.SetZIndex(this, 10); 
             HoverInStoryboard.Begin();
+            StartCompositionTilt();
             HoverStarted?.Invoke(this, EventArgs.Empty);
         }
 
@@ -353,26 +361,49 @@ namespace ModernIPTVPlayer.Controls
             IsHovered = false;
             Canvas.SetZIndex(this, 0); // Reset ZIndex
             HoverOutStoryboard.Begin();
+            StopCompositionTilt();
             HoverEnded?.Invoke(this, EventArgs.Empty);
-            
-            TiltProjection.RotationX = 0;
-            TiltProjection.RotationY = 0;
         }
 
         private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
         {
-            if (IsHovered)
-            {
-                var pointerPosition = e.GetCurrentPoint(MainBorder).Position;
-                var center = new Windows.Foundation.Point(MainBorder.ActualWidth / 2, MainBorder.ActualHeight / 2);
-                
-                var xDiff = pointerPosition.X - center.X;
-                var yDiff = pointerPosition.Y - center.Y;
-
-                TiltProjection.RotationY = -xDiff / 25.0; 
-                TiltProjection.RotationX = yDiff / 25.0;
-            }
+            // [PINNACLE] This is now handled entirely by the Compositor thread.
+            // No UI thread work is performed during mouse movement.
         }
+
+        private void StartCompositionTilt()
+        {
+            if (!IsTiltEnabled) return;
+
+            var visual = ElementCompositionPreview.GetElementVisual(MainBorder);
+            var compositor = visual.Compositor;
+            var pointerPropSet = ElementCompositionPreview.GetPointerPositionPropertySet(MainBorder);
+
+            // Matrix expression for 3D Tilt around the center point.
+            // Using hardware-linked pointer position ensures 120fps fluid response.
+            var tiltAnim = compositor.CreateExpressionAnimation(
+                "Matrix4x4.CreateTranslation(-center.X, -center.Y, 0) * " +
+                "Matrix4x4.CreateRotationY(-((pointer.Position.X - center.X) / 30.0) * (3.14159 / 180.0)) * " +
+                "Matrix4x4.CreateRotationX(((pointer.Position.Y - center.Y) / 30.0) * (3.14159 / 180.0)) * " +
+                "Matrix4x4.CreateTranslation(center.X, center.Y, 0)"
+            );
+
+            tiltAnim.SetReferenceParameter("pointer", pointerPropSet);
+            tiltAnim.SetVector2Parameter("center", new Vector2((float)MainBorder.ActualWidth / 2, (float)MainBorder.ActualHeight / 2));
+
+            visual.StartAnimation("TransformMatrix", tiltAnim);
+        }
+
+        private void StopCompositionTilt()
+        {
+            var visual = ElementCompositionPreview.GetElementVisual(MainBorder);
+            visual.StopAnimation("TransformMatrix");
+            
+            // Reset to identity matrix
+            var compositor = visual.Compositor;
+            visual.TransformMatrix = Matrix4x4.Identity;
+        }
+
         public double GetProgressScale(double progress)
         {
             return Math.Clamp(progress / 100.0, 0, 1.0);

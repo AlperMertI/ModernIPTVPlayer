@@ -10,6 +10,12 @@ public partial class MpvClientNative
 {
     #region Client
     [LibraryImport(MpvIdentifier)]
+    private static partial void mpv_free(IntPtr data);
+
+    [LibraryImport(MpvIdentifier)]
+    private static partial void mpv_free_node_contents(ref MpvNode node);
+
+    [LibraryImport(MpvIdentifier)]
     private static partial MpvHandle mpv_create();
 
     [LibraryImport(MpvIdentifier, StringMarshalling = StringMarshalling.Utf8)]
@@ -84,7 +90,7 @@ public partial class MpvClientNative
     private static partial MpvError mpv_get_property(MpvHandle handle, string name, MpvFormat format, out MpvNode data);
 
     [LibraryImport(MpvIdentifier, StringMarshalling = StringMarshalling.Utf8)]
-    private static partial string mpv_get_property_string(MpvHandle handle, string name);
+    private static partial IntPtr mpv_get_property_string(MpvHandle handle, string name);
 
     [LibraryImport(MpvIdentifier, StringMarshalling = StringMarshalling.Utf8)]
     private static partial MpvError mpv_del_property(MpvHandle handle, string name);

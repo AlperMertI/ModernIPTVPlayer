@@ -86,7 +86,7 @@ namespace ModernIPTVPlayer.Controls
         }
 
         public static readonly DependencyProperty BaseBrushProperty =
-            DependencyProperty.Register(nameof(BaseBrush), typeof(Brush), typeof(ShimmerControl), new PropertyMetadata(new SolidColorBrush(Windows.UI.Color.FromArgb(34, 255, 255, 255))));
+            DependencyProperty.Register(nameof(BaseBrush), typeof(Brush), typeof(ShimmerControl), new PropertyMetadata(new SolidColorBrush(Windows.UI.Color.FromArgb(18, 255, 255, 255))));
 
         public Brush BaseBrush
         {

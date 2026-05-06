@@ -152,13 +152,29 @@ public partial class MpvClientNative
     /// <returns>Options.</returns>
     public MpvClientNative SetOption(string name, MpvNode node)
     {
-        var errorCode = mpv_set_option(Handle, name, node.Format, ref node);
-        if (errorCode != MpvError.Success)
+        try
         {
-            throw new Exception($"Failed to set the option. Error code: {errorCode}", CreateError(errorCode));
-        }
+            var errorCode = mpv_set_option(Handle, name, node.Format, ref node);
+            if (errorCode != MpvError.Success)
+            {
+                throw new Exception($"Failed to set the option. Error code: {errorCode}", CreateError(errorCode));
+            }
 
-        return this;
+            return this;
+        }
+        finally
+        {
+            // If we allocated this node ourselves (ManagedToUnmanaged), we must free our own allocations.
+            // Note: MpvNode(string) uses Marshal.StringToCoTaskMemUTF8
+            if (node.Format == MpvFormat.String && node._structuredValue != IntPtr.Zero)
+            {
+                Marshal.FreeCoTaskMem(node._structuredValue);
+            }
+            else if ((node.Format == MpvFormat.NodeArray || node.Format == MpvFormat.NodeMap || node.Format == MpvFormat.ByteArray) && node._structuredValue != IntPtr.Zero)
+            {
+                Marshal.FreeCoTaskMem(node._structuredValue);
+            }
+        }
     }
 
     /// <summary>
@@ -178,15 +194,42 @@ public partial class MpvClientNative
 
     public bool GetPropertyToBoolean(string name)
     {
-        var flag = GetPropertyToNode(name, MpvFormat.Flag).Flag;
-        return flag == 1;
+        var node = GetPropertyToNode(name, MpvFormat.Flag);
+        try
+        {
+            return node.Flag == 1;
+        }
+        finally
+        {
+            mpv_free_node_contents(ref node);
+        }
     }
 
     public long GetPropertyToLong(string name)
-        => GetPropertyToNode(name, MpvFormat.Int64).IntegerValue;
+    {
+        var node = GetPropertyToNode(name, MpvFormat.Int64);
+        try
+        {
+            return node.IntegerValue;
+        }
+        finally
+        {
+            mpv_free_node_contents(ref node);
+        }
+    }
 
     public double GetPropertyToDouble(string name)
-        => GetPropertyToNode(name, MpvFormat.Double).DoubleValue;
+    {
+        var node = GetPropertyToNode(name, MpvFormat.Double);
+        try
+        {
+            return node.DoubleValue;
+        }
+        finally
+        {
+            mpv_free_node_contents(ref node);
+        }
+    }
 
     public MpvNode GetPropertyToNode(string name, MpvFormat format)
     {
@@ -202,8 +245,20 @@ public partial class MpvClientNative
 
     public string GetPropertyToString(string name)
     {
-        var property = mpv_get_property_string(Handle, name);
-        return property;
+        var ptr = mpv_get_property_string(Handle, name);
+        if (ptr == IntPtr.Zero)
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            return Marshal.PtrToStringUTF8(ptr) ?? string.Empty;
+        }
+        finally
+        {
+            mpv_free(ptr);
+        }
     }
 
     public MpvClientNative SetProperty(string name, bool data)
@@ -217,13 +272,27 @@ public partial class MpvClientNative
 
     public MpvClientNative SetProperty(string name, MpvNode node)
     {
-        var errorCode = mpv_set_property(Handle, name, node.Format, ref node);
-        if (errorCode != MpvError.Success)
+        try
         {
-            throw new Exception($"Failed to set the property. Error code: {errorCode}", CreateError(errorCode));
-        }
+            var errorCode = mpv_set_property(Handle, name, node.Format, ref node);
+            if (errorCode != MpvError.Success)
+            {
+                throw new Exception($"Failed to set the property. Error code: {errorCode}", CreateError(errorCode));
+            }
 
-        return this;
+            return this;
+        }
+        finally
+        {
+            if (node.Format == MpvFormat.String && node._structuredValue != IntPtr.Zero)
+            {
+                Marshal.FreeCoTaskMem(node._structuredValue);
+            }
+            else if ((node.Format == MpvFormat.NodeArray || node.Format == MpvFormat.NodeMap || node.Format == MpvFormat.ByteArray) && node._structuredValue != IntPtr.Zero)
+            {
+                Marshal.FreeCoTaskMem(node._structuredValue);
+            }
+        }
     }
 
     public MpvClientNative SetProperty(string name, string data)
@@ -253,23 +322,8 @@ public partial class MpvClientNative
 
     public async Task ExecuteAsync(string[] command)
     {
-        var errorCode = MpvError.Success;
-        await Task.Run(() =>
-        {
-            try
-            {
-                errorCode = mpv_command_string(Handle, string.Join(' ', command));
-            }
-            catch (Exception)
-            {
-                errorCode = MpvError.Generic;
-            }
-        });
-
-        if (errorCode != MpvError.Success)
-        {
-            throw new Exception($"Failed to execute the command. Error code: {errorCode}", CreateError(errorCode));
-        }
+        var result = await ExecuteWithResultAsync(command);
+        mpv_free_node_contents(ref result);
     }
 
     public async Task ExecuteAsync(string command)
@@ -303,6 +357,12 @@ public partial class MpvClientNative
         return result;
     }
 
+    public async Task ExecuteAsync(MpvNode command)
+    {
+        var result = await ExecuteWithResultAsync(command);
+        mpv_free_node_contents(ref result);
+    }
+
     public async Task<MpvNode> ExecuteWithResultAsync(string[] command)
     {
         var nullTermArray = new string[command.Length + 1];
@@ -322,6 +382,7 @@ public partial class MpvClientNative
 
         return result;
     }
+
 
     public void Wakeup()
     {

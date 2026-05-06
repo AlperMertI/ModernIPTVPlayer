@@ -72,6 +72,7 @@
     <PackageReference Include="CommunityToolkit.HighPerformance" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" />
     <PackageReference Include="CommunityToolkit.WinUI.Extensions" />
+    <PackageReference Include="MessagePack" />
     <PackageReference Include="Microsoft.DotNet.PlatformAbstractions" />
     <PackageReference Include="Microsoft.Web.WebView2" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
@@ -161,6 +162,9 @@
   </ItemGroup>
   <ItemGroup>
     <Page Update="Controls\ShimmerCard.xaml">
+      <Generator>MSBuild:Compile</Generator>
+    </Page>
+    <Page Update="Themes\Gradients.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>

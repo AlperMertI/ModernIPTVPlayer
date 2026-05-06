@@ -350,236 +350,243 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         public async Task<UnifiedMetadata> GetMetadataAsync(Models.IMediaStream stream, MetadataContext context = MetadataContext.Detail, Action<string> onBackdropFound = null, Action<UnifiedMetadata> onUpdate = null, CancellationToken ct = default)
         {
-            if (stream == null) return null;
-            
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            string rawId = stream.IMDbId;
-            string id = ResolveBestInitialId(stream) ?? NormalizeId(rawId) ?? rawId;
-            var trace = new MetadataTrace(context.ToString(), id, stream?.Title);
-
-            if (!string.IsNullOrWhiteSpace(id) && id != rawId)
+            try
             {
-                trace?.Log("ID", $"Canonical ID resolved at entry: {rawId} -> {id}");
-            }
-
-            // 0. Global Check: composite/non-standard IDs should not abort metadata flow.
-            // We fall back to title-based keying so catalog-seed + trace logging still works.
-            bool isCanonical = IsImdbId(id) || (!string.IsNullOrWhiteSpace(id) && id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase));
-            if (!isCanonical && !string.IsNullOrWhiteSpace(rawId) && _rawToCanonicalIdCache.TryGetValue(rawId, out var cachedCanonical))
-            {
-                id = cachedCanonical;
-                isCanonical = true;
-                AppLogger.Info($"Canonical ID restored from raw-cache: {rawId} -> {cachedCanonical}");
-            }
-            if (isCanonical && !string.IsNullOrWhiteSpace(rawId) && id != rawId && !_rawToCanonicalIdCache.ContainsKey(rawId))
-            {
-                _rawToCanonicalIdCache[rawId] = id;
-                _ = SaveMappingCacheAsync();
-            }
-
-            if (!isCanonical && rawId != null && (rawId.Contains(",") || rawId.Contains(" ") || rawId.Length > 100))
-            {
-                AppLogger.Warn($"Non-standard ID detected, using title fallback. RawId: {rawId}");
-                id = null;
-            }
-
-            string streamType = (stream as Models.Stremio.StremioMediaStream)?.Meta?.Type;
-            string normalizedType = (stream is SeriesStream || string.Equals(streamType, "series", StringComparison.OrdinalIgnoreCase) || string.Equals(streamType, "tv", StringComparison.OrdinalIgnoreCase)) ? "series" : "movie";
-            
-            string fetchType = normalizedType;
-            string normalizedId = NormalizeId(id) ?? id;
-            
-            string fetchId = id ?? rawId ?? stream.Title;
-            
-            string addonHash = GetAddonOrderHash();
-            string tmdbLang = AppSettings.TmdbLanguage;
-            
-            // [FIX] Use Title as extreme fallback only if no ID (Raw or Canonical) exists
-            string idPart = !string.IsNullOrWhiteSpace(id) ? id : (string.IsNullOrWhiteSpace(rawId) ? stream.Title : rawId);
-            string baseCacheKey = $"{idPart}_{normalizedType}_{addonHash}_{tmdbLang}";
-            string cacheKey = baseCacheKey;
-            
-            if (context == MetadataContext.Discovery)
-            {
-                // Prefer full version if it exists in cache
-                if (_resultCache.ContainsKey(baseCacheKey))
-                {
-                    cacheKey = baseCacheKey;
-                }
-                else
-                {
-                    cacheKey += "_discovery";
-                }
-            }
-
-            // 1. Check Result Cache
-            if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
-            {
-                bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
-                if (IsSatisfied(cached.Data, context, isCw))
-                {
-                    sw.Stop();
-                    string provenance = cached.Data.DataSource ?? cached.Data.MetadataSourceInfo ?? "Unknown";
-                    trace?.Log("Phase1", $"⚡ CACHE HIT (RAM) | Status: SATISFIED | Source: {provenance}"); 
-
-                    // [FIX] CROSS-CATALOG TITLE SEEDING:
-                    // Even on cache hit, if we entered from a different catalog, we should seed its title!
-                    if (stream is StremioMediaStream stremioStream)
-                    {
-                        lock (cached.Data.SyncRoot)
-                        {
-                            SeedFromCatalogMetadata(cached.Data, stremioStream, trace, context: MetadataContext.Detail);
-                            
-                            // [ARCHITECTURAL FIX] Sync enriched data BACK to the proxy object!
-                            // This ensures that even on cache hit, the local stream gets its TrailerUrl, etc.
-                            stremioStream.UpdateFromUnified(cached.Data);
-                        }
-                    }
-
-                    if (onBackdropFound != null && cached.Data.BackdropUrls != null)
-                    {
-                        foreach (var bg in cached.Data.BackdropUrls) onBackdropFound(bg);
-                    }
-                    return cached.Data;
-                }
-                else
-                {
-                    var missingFromCache = GetMissingFields(cached.Data, GetRequiredFields(context, isCw));
-                    trace?.Log("Phase1", $"⚡ CACHE HIT (RAM) | Status: INCOMPLETE (Missing: {missingFromCache}) | Transitioning to Phase 2 (Disk/Network)...");
-                    
-                    // We have cached data but it's not enough for the current context.
-                    // We continue to GetMetadataInternalAsync, passing the cached data as 'seed' to avoid redundant addon probes.
-                    return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
-                    {
-                        trace?.Log("Upgrade", $"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
-                        return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data, onUpdate, ct, trace);
-                    })).Value;
-                }
-            }
-            // 2. Check High-Speed Persistent Disk Cache (BinaryEnrichmentCache)
-            // If RAM cache misses, check disk before going to network.
-            if (isCanonical && !string.IsNullOrWhiteSpace(id))
-            {
-                var diskEnriched = new UnifiedMetadata();
-                // [NATIVE AOT SAFE] Seed from catalog first so patch has a base
-                if (stream is StremioMediaStream stremioStreamDisk) SeedFromCatalogMetadata(diskEnriched, stremioStreamDisk, trace, context, quiet: true);
+                if (stream == null) return null;
                 
-                if (await BinaryEnrichmentCache.Instance.TryPatchAsync(id, diskEnriched))
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                string rawId = stream.IMDbId;
+                string id = ResolveBestInitialId(stream) ?? NormalizeId(rawId) ?? rawId;
+                var trace = new MetadataTrace(context.ToString(), id, stream?.Title);
+
+                if (!string.IsNullOrWhiteSpace(id) && id != rawId)
                 {
-                    string provenance = diskEnriched.DataSource ?? diskEnriched.MetadataSourceInfo ?? "Unknown";
-                    string fields = GetContentSummary(diskEnriched);
-                    trace?.Log("Phase2", $"⚡ CACHE HIT (DISK) | Found in binary store [{provenance}] | Content: {fields}");
-                    
-                    // Satisfaction check - if disk data is enough, promote to RAM cache and return
-                    bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
-                    if (IsSatisfied(diskEnriched, context, isCw))
-                    {
-                        var expiry = DateTime.Now.AddDays(context == MetadataContext.Discovery ? 1 : 7);
-                        _resultCache[cacheKey] = (diskEnriched, expiry);
-                        
-                        if (stream is StremioMediaStream s) s.UpdateFromUnified(diskEnriched);
-                        return diskEnriched;
-                    }
-                    
-                    // If not satisfied (e.g. need seasons), use disk as a higher-quality seed for internal fetch
-                    cached = (diskEnriched, DateTime.Now.AddMinutes(1));
+                    trace?.Log("ID", $"Canonical ID resolved at entry: {rawId} -> {id}");
                 }
-            }
-            
-            // Promotion check for Discovery cache
-            if (context == MetadataContext.Detail)
-            {
-                string discoveryKey = cacheKey + "_discovery";
-                if (_resultCache.TryGetValue(discoveryKey, out var disc) && DateTime.Now < disc.Expiry)
+
+                // 0. Global Check: composite/non-standard IDs should not abort metadata flow.
+                // We fall back to title-based keying so catalog-seed + trace logging still works.
+                bool isCanonical = IsImdbId(id) || (!string.IsNullOrWhiteSpace(id) && id.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase));
+                if (!isCanonical && !string.IsNullOrWhiteSpace(rawId) && _rawToCanonicalIdCache.TryGetValue(rawId, out var cachedCanonical))
                 {
-                    bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
-                    if (IsSatisfied(disc.Data, MetadataContext.Detail, isCw))
+                    id = cachedCanonical;
+                    isCanonical = true;
+                    AppLogger.Info($"Canonical ID restored from raw-cache: {rawId} -> {cachedCanonical}");
+                }
+                if (isCanonical && !string.IsNullOrWhiteSpace(rawId) && id != rawId && !_rawToCanonicalIdCache.ContainsKey(rawId))
+                {
+                    _rawToCanonicalIdCache[rawId] = id;
+                    _ = SaveMappingCacheAsync();
+                }
+
+                if (!isCanonical && rawId != null && (rawId.Contains(",") || rawId.Contains(" ") || rawId.Length > 100))
+                {
+                    AppLogger.Warn($"Non-standard ID detected, using title fallback. RawId: {rawId}");
+                    id = null;
+                }
+
+                string streamType = (stream as Models.Stremio.StremioMediaStream)?.Meta?.Type;
+                string normalizedType = (stream is SeriesStream || string.Equals(streamType, "series", StringComparison.OrdinalIgnoreCase) || string.Equals(streamType, "tv", StringComparison.OrdinalIgnoreCase)) ? "series" : "movie";
+                
+                string fetchType = normalizedType;
+                string normalizedId = NormalizeId(id) ?? id;
+                
+                string fetchId = id ?? rawId ?? stream.Title;
+                
+                string addonHash = GetAddonOrderHash();
+                string tmdbLang = AppSettings.TmdbLanguage;
+                
+                // [FIX] Use Title as extreme fallback only if no ID (Raw or Canonical) exists
+                string idPart = !string.IsNullOrWhiteSpace(id) ? id : (string.IsNullOrWhiteSpace(rawId) ? stream.Title : rawId);
+                string baseCacheKey = $"{idPart}_{normalizedType}_{addonHash}_{tmdbLang}";
+                string cacheKey = baseCacheKey;
+                
+                if (context == MetadataContext.Discovery)
+                {
+                    // Prefer full version if it exists in cache
+                    if (_resultCache.ContainsKey(baseCacheKey))
                     {
-                        sw.Stop();
-                        trace?.Log("Promotion", $"⚡ Cache HIT (Promoted) for '{stream.Title}' [{id ?? "NoId"}] in {sw.Elapsed.TotalMilliseconds:F1}ms");
-                        return disc.Data;
+                        cacheKey = baseCacheKey;
                     }
                     else
                     {
-                        // [PROMOTION SEEDING] Use discovery data as seed to avoid redundant probes
-                        var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail, isCw));
-                        string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
-                        
-                        trace?.Log("Phase1", $"PROMOTING Discovery cache to Detail ({id ?? stream?.Title}) | Reason: {seedReason}");
-                        
-                        return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
-                        {
-                            await _enrichmentSemaphore.WaitAsync(ct);
-                            try 
-                            {
-                                return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data, onUpdate, ct, trace);
-                            }
-                            finally { _enrichmentSemaphore.Release(); }
-                        }, ct))).Value;
+                        cacheKey += "_discovery";
                     }
                 }
-            }
 
-            // 2. Check Active Tasks (Deduplication) - Use Lazy to ensure atomic task creation
-            
-            // Refine fetch reason by seeing what we already have from the stream/catalog data
-            var tempMetadata = new UnifiedMetadata();
-            if (stream is ModernIPTVPlayer.Models.Stremio.StremioMediaStream sms)
-                SeedFromCatalogMetadata(tempMetadata, sms, null, context, quiet: true);
-            else if (stream != null)
-                SeedFromIptvStream(tempMetadata, stream, trace);
-
-            bool isContinueWatching = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
-            var missing = GetMissingFields(tempMetadata, GetRequiredFields(context, isContinueWatching));
-            
-            // [NEW] Early exit if catalog/discovery/IPTV data already satisfies current context requirements
-            // [FIX] NEVER early exit for Spotlight or Detail if we want TMDB enrichment, as catalog-seed is only a starting point.
-            // [PRIORITY FIX] If the stream already has a high priority score (5000+), it means it was previously enriched
-            // and we should trust the disk-based metadata as an "Instant HIT".
-            bool isHighPriority = tempMetadata.PriorityScore > 4000;
-            
-            if (missing == MetadataField.None && context != MetadataContext.Spotlight && context != MetadataContext.Detail)
-            {
-                sw.Stop();
-                var msg = $"[MetadataProvider] ⚡ Instant HIT (Satisfied by Catalog) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
-                AppLogger.Info(msg);
-                System.Diagnostics.Debug.WriteLine(msg);
-                
-                // Result found and satisfied without background task
-                var expiry = DateTime.Now.Add(_cacheDuration);
-                _resultCache[cacheKey] = (tempMetadata, expiry);
-                return tempMetadata;
-            }
-            else if (isHighPriority && missing == MetadataField.None)
-            {
-                sw.Stop();
-                var msg = $"[MetadataProvider] ⚡ Instant HIT (Satisfied by Priority: {tempMetadata.PriorityScore}) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
-                AppLogger.Info(msg);
-                System.Diagnostics.Debug.WriteLine(msg);
-                
-                var expiry = DateTime.Now.Add(_cacheDuration);
-                _resultCache[cacheKey] = (tempMetadata, expiry);
-                return tempMetadata;
-            }
-
-            var fetchReason = missing.ToString();
-            trace?.Log("Reason", $"Missing fields for {context}: {fetchReason}");
-
-            // [DISK SEEDING] If we had a disk hit but it wasn't satisfied, 'cached.Data' contains the disk data.
-            // We pass it to GetMetadataInternalAsync to avoid redundant network probes for fields we already have.
-            var seedData = (cached.Data != null && cached.Data.PriorityScore >= 0) ? cached.Data : null;
-
-            return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
-            {
-                trace?.Log("Phase3", $"NETWORK ENRICHMENT START | Reason: {fetchReason} | Context: {context} | Seeded: {seedData != null}");
-                
-                await _enrichmentSemaphore.WaitAsync(ct);
-                try 
+                // 1. Check Result Cache
+                if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
                 {
-                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, seedData, onUpdate, ct, trace);
+                    bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                    if (IsSatisfied(cached.Data, context, isCw))
+                    {
+                        sw.Stop();
+                        string provenance = cached.Data.DataSource ?? cached.Data.MetadataSourceInfo ?? "Unknown";
+                        trace?.Log("Phase1", $"⚡ CACHE HIT (RAM) | Status: SATISFIED | Source: {provenance}"); 
+
+                        // [FIX] CROSS-CATALOG TITLE SEEDING:
+                        // Even on cache hit, if we entered from a different catalog, we should seed its title!
+                        if (stream is StremioMediaStream stremioStream)
+                        {
+                            lock (cached.Data.SyncRoot)
+                            {
+                                SeedFromCatalogMetadata(cached.Data, stremioStream, trace, context: MetadataContext.Detail);
+                                
+                                // [ARCHITECTURAL FIX] Sync enriched data BACK to the proxy object!
+                                // This ensures that even on cache hit, the local stream gets its TrailerUrl, etc.
+                                stremioStream.UpdateFromUnified(cached.Data);
+                            }
+                        }
+
+                        if (onBackdropFound != null && cached.Data.BackdropUrls != null)
+                        {
+                            foreach (var bg in cached.Data.BackdropUrls) onBackdropFound(bg);
+                        }
+                        return cached.Data;
+                    }
+                    else
+                    {
+                        var missingFromCache = GetMissingFields(cached.Data, GetRequiredFields(context, isCw));
+                        trace?.Log("Phase1", $"⚡ CACHE HIT (RAM) | Status: INCOMPLETE (Missing: {missingFromCache}) | Transitioning to Phase 2 (Disk/Network)...");
+                        
+                        // We have cached data but it's not enough for the current context.
+                        // We continue to GetMetadataInternalAsync, passing the cached data as 'seed' to avoid redundant addon probes.
+                        return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
+                        {
+                            trace?.Log("Upgrade", $"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
+                            return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data, onUpdate, ct, trace);
+                        })).Value;
+                    }
                 }
-                finally { _enrichmentSemaphore.Release(); }
-            }, ct))).Value;
+                // 2. Check High-Speed Persistent Disk Cache (BinaryEnrichmentCache)
+                // If RAM cache misses, check disk before going to network.
+                if (isCanonical && !string.IsNullOrWhiteSpace(id))
+                {
+                    var diskEnriched = new UnifiedMetadata();
+                    // [NATIVE AOT SAFE] Seed from catalog first so patch has a base
+                    if (stream is StremioMediaStream stremioStreamDisk) SeedFromCatalogMetadata(diskEnriched, stremioStreamDisk, trace, context, quiet: true);
+                    
+                    if (await BinaryEnrichmentCache.Instance.TryPatchAsync(id, diskEnriched))
+                    {
+                        string provenance = diskEnriched.DataSource ?? diskEnriched.MetadataSourceInfo ?? "Unknown";
+                        string fields = GetContentSummary(diskEnriched);
+                        trace?.Log("Phase2", $"⚡ CACHE HIT (DISK) | Found in binary store [{provenance}] | Content: {fields}");
+                        
+                        // Satisfaction check - if disk data is enough, promote to RAM cache and return
+                        bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                        if (IsSatisfied(diskEnriched, context, isCw))
+                        {
+                            var expiry = DateTime.Now.AddDays(context == MetadataContext.Discovery ? 1 : 7);
+                            _resultCache[cacheKey] = (diskEnriched, expiry);
+                            
+                            if (stream is StremioMediaStream s) s.UpdateFromUnified(diskEnriched);
+                            return diskEnriched;
+                        }
+                        
+                        // If not satisfied (e.g. need seasons), use disk as a higher-quality seed for internal fetch
+                        cached = (diskEnriched, DateTime.Now.AddMinutes(1));
+                    }
+                }
+                
+                // Promotion check for Discovery cache
+                if (context == MetadataContext.Detail)
+                {
+                    string discoveryKey = cacheKey + "_discovery";
+                    if (_resultCache.TryGetValue(discoveryKey, out var disc) && DateTime.Now < disc.Expiry)
+                    {
+                        bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                        if (IsSatisfied(disc.Data, MetadataContext.Detail, isCw))
+                        {
+                            sw.Stop();
+                            trace?.Log("Promotion", $"⚡ Cache HIT (Promoted) for '{stream.Title}' [{id ?? "NoId"}] in {sw.Elapsed.TotalMilliseconds:F1}ms");
+                            return disc.Data;
+                        }
+                        else
+                        {
+                            // [PROMOTION SEEDING] Use discovery data as seed to avoid redundant probes
+                            var seedMissing = GetMissingFields(disc.Data, GetRequiredFields(MetadataContext.Detail, isCw));
+                            string seedReason = seedMissing == MetadataField.None ? "None" : seedMissing.ToString();
+                            
+                            trace?.Log("Phase1", $"PROMOTING Discovery cache to Detail ({id ?? stream?.Title}) | Reason: {seedReason}");
+                            
+                            return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
+                            {
+                                await _enrichmentSemaphore.WaitAsync(ct);
+                                try 
+                                {
+                                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data, onUpdate, ct, trace);
+                                }
+                                finally { _enrichmentSemaphore.Release(); }
+                            }, ct))).Value;
+                        }
+                    }
+                }
+
+                // 2. Check Active Tasks (Deduplication) - Use Lazy to ensure atomic task creation
+                
+                // Refine fetch reason by seeing what we already have from the stream/catalog data
+                var tempMetadata = new UnifiedMetadata();
+                if (stream is ModernIPTVPlayer.Models.Stremio.StremioMediaStream sms)
+                    SeedFromCatalogMetadata(tempMetadata, sms, null, context, quiet: true);
+                else if (stream != null)
+                    SeedFromIptvStream(tempMetadata, stream, trace);
+
+                bool isContinueWatching = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
+                var missing = GetMissingFields(tempMetadata, GetRequiredFields(context, isContinueWatching));
+                
+                // [NEW] Early exit if catalog/discovery/IPTV data already satisfies current context requirements
+                // [FIX] NEVER early exit for Spotlight or Detail if we want TMDB enrichment, as catalog-seed is only a starting point.
+                // [PRIORITY FIX] If the stream already has a high priority score (5000+), it means it was previously enriched
+                // and we should trust the disk-based metadata as an "Instant HIT".
+                bool isHighPriority = tempMetadata.PriorityScore > 4000;
+                
+                if (missing == MetadataField.None && context != MetadataContext.Spotlight && context != MetadataContext.Detail)
+                {
+                    sw.Stop();
+                    var msg = $"[MetadataProvider] ⚡ Instant HIT (Satisfied by Catalog) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                    AppLogger.Info(msg);
+                    System.Diagnostics.Debug.WriteLine(msg);
+                    
+                    // Result found and satisfied without background task
+                    var expiry = DateTime.Now.Add(_cacheDuration);
+                    _resultCache[cacheKey] = (tempMetadata, expiry);
+                    return tempMetadata;
+                }
+                else if (isHighPriority && missing == MetadataField.None)
+                {
+                    sw.Stop();
+                    var msg = $"[MetadataProvider] ⚡ Instant HIT (Satisfied by Priority: {tempMetadata.PriorityScore}) for '{stream.Title}' in {sw.Elapsed.TotalMilliseconds:F1}ms";
+                    AppLogger.Info(msg);
+                    System.Diagnostics.Debug.WriteLine(msg);
+                    
+                    var expiry = DateTime.Now.Add(_cacheDuration);
+                    _resultCache[cacheKey] = (tempMetadata, expiry);
+                    return tempMetadata;
+                }
+
+                var fetchReason = missing.ToString();
+                trace?.Log("Reason", $"Missing fields for {context}: {fetchReason}");
+
+                // [DISK SEEDING] If we had a disk hit but it wasn't satisfied, 'cached.Data' contains the disk data.
+                // We pass it to GetMetadataInternalAsync to avoid redundant network probes for fields we already have.
+                var seedData = (cached.Data != null && cached.Data.PriorityScore >= 0) ? cached.Data : null;
+
+                return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
+                {
+                    trace?.Log("Phase3", $"NETWORK ENRICHMENT START | Reason: {fetchReason} | Context: {context} | Seeded: {seedData != null}");
+                    
+                    await _enrichmentSemaphore.WaitAsync(ct);
+                    try 
+                    {
+                        return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, seedData, onUpdate, ct, trace);
+                    }
+                    finally { _enrichmentSemaphore.Release(); }
+                }, ct))).Value;
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
+            }
         }
 
         private string? ResolveBestInitialId(Models.IMediaStream stream)
@@ -676,6 +683,10 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
                 
                 return result;
+            }
+            catch (OperationCanceledException)
+            {
+                return null;
             }
             finally
             {
@@ -1247,7 +1258,10 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 bool hasCast = metadata.Cast != null && metadata.Cast.Count > 0;
                 bool hasDirectors = metadata.Directors != null && metadata.Directors.Count > 0;
-                if (!hasCast || !hasDirectors) missing |= MetadataField.Cast;
+                bool hasWriters = !string.IsNullOrEmpty(metadata.Writers);
+
+                bool castSatisfied = hasCast && (hasDirectors || (metadata.IsSeries && hasWriters));
+                if (!castSatisfied) missing |= MetadataField.Cast;
             }
 
             if (required.HasFlag(MetadataField.CastPortraits))

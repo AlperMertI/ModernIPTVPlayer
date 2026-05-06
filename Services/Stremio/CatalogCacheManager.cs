@@ -6,8 +6,9 @@ using System.Text;
 using System.Threading.Tasks;
 using Windows.Storage;
 using ModernIPTVPlayer.Models.Stremio;
-using System.Text.Json;
-using ModernIPTVPlayer.Services.Json;
+using MessagePack;
+using ModernIPTVPlayer.Models.Common;
+using System.Linq;
 
 namespace ModernIPTVPlayer.Services.Stremio
 {
@@ -15,7 +16,14 @@ namespace ModernIPTVPlayer.Services.Stremio
     {
         private const string CACHE_DIR = "StremioCatalogs";
         private const string MAGIC = "CTLC";
-        private const int VERSION = 2;
+        private const int VERSION = 3;
+        
+        // [NATIVE AOT] Use a static options object with a composite resolver.
+        // This ensures compatibility with the AOT source generator and avoids runtime reflection.
+        private static readonly MessagePackSerializerOptions AotOptions = MessagePackSerializerOptions.Standard
+            .WithResolver(MessagePack.Resolvers.CompositeResolver.Create(
+                MessagePack.Resolvers.StandardResolver.Instance
+            ));
 
         public static string CanonicalizeCatalogUrl(string url)
         {
@@ -34,6 +42,37 @@ namespace ModernIPTVPlayer.Services.Stremio
 
             try
             {
+                var dto = new CatalogCacheDTO
+                {
+                    ETag = etag ?? string.Empty,
+                    Timestamp = DateTime.UtcNow.Ticks,
+                    Items = items.Select(x => new MediaItemDTO
+                    {
+                        Id = x.IMDbId ?? x.Meta?.Id ?? string.Empty,
+                        Title = x.Title ?? string.Empty,
+                        Poster = x.PosterUrl ?? string.Empty,
+                        Background = x.BackdropUrl ?? string.Empty,
+                        Logo = x.LogoUrl ?? string.Empty,
+                        Type = x.Type ?? "movie",
+                        Year = x.Year ?? string.Empty,
+                        Rating = double.TryParse(x.Rating, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var r) ? r : 0,
+                        Overview = x.Overview ?? string.Empty,
+                        Genres = x.Genres ?? string.Empty,
+                        Trailer = x.TrailerUrl ?? string.Empty,
+                        Resolution = x.Resolution ?? string.Empty,
+                        Codec = x.Codec ?? string.Empty,
+                        IsHdr = x.IsHdr,
+                        Bitrate = x.Bitrate,
+                        Fps = x.Fps ?? string.Empty,
+                        SourceAddon = x.SourceAddon ?? string.Empty,
+                        Progress = (int)x.ProgressValue,
+                        IsAvailableOnIptv = x.IsAvailableOnIptv,
+                        IsIptv = x.IsIptv,
+                        SeriesName = x.SeriesName ?? string.Empty,
+                        EpisodeSubtext = x.EpisodeSubtext ?? string.Empty
+                    }).ToList()
+                };
+
                 string fileName = GetSafeFileName(url);
                 var folder = await GetCacheFolderAsync();
                 
@@ -42,14 +81,16 @@ namespace ModernIPTVPlayer.Services.Stremio
 
                 using (var stream = await file.OpenStreamForWriteAsync())
                 using (var compressor = new ZstandardStream(stream, CompressionLevel.Optimal))
-                using (var writer = new BinaryWriter(compressor, Encoding.UTF8))
                 {
-                    writer.Write(MAGIC);
-                    writer.Write(VERSION);
-                    writer.Write(DateTime.UtcNow.Ticks);
-                    writer.Write(etag ?? "");
-                    var json = JsonSerializer.Serialize(items, AppJsonContext.Default.ListStremioMediaStream);
-                    writer.Write(json);
+                    // Write Magic & Version for fast header checks
+                    using (var writer = new BinaryWriter(compressor, Encoding.UTF8, true))
+                    {
+                        writer.Write(MAGIC);
+                        writer.Write(VERSION);
+                    }
+                    
+                    // Serialize DTO directly to the compression stream using AOT-safe options
+                    await MessagePackSerializer.SerializeAsync(compressor, dto, AotOptions);
                 }
 
                 var finalFile = await folder.TryGetItemAsync(fileName);
@@ -58,7 +99,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             }
             catch (Exception ex)
             {
-                AppLogger.Error($"[CatalogCache] Save failed for {url}", ex);
+                AppLogger.Error($"[CatalogCache] MessagePack Save failed for {url}", ex);
             }
         }
 
@@ -72,32 +113,54 @@ namespace ModernIPTVPlayer.Services.Stremio
                 var item = await folder.TryGetItemAsync(fileName);
                 if (item == null) return (null, null, DateTime.MinValue);
 
-                var fileInfo = await folder.GetFileAsync(fileName);
-                var props = await fileInfo.GetBasicPropertiesAsync();
-                
-                if (props.Size < 300) // Lowered slightly due to better Zstd compression
-                {
-                    try { await fileInfo.DeleteAsync(); } catch { }
-                    return (null, null, DateTime.MinValue);
-                }
-
                 using var stream = await folder.OpenStreamForReadAsync(fileName);
                 using var decompressor = new ZstandardStream(stream, CompressionMode.Decompress);
-                using var reader = new BinaryReader(decompressor, Encoding.UTF8);
-
-                if (reader.ReadString() != MAGIC) return (null, null, DateTime.MinValue);
-                int version = reader.ReadInt32();
-                if (version != VERSION) return (null, null, DateTime.MinValue);
                 
-                long ticks = reader.ReadInt64();
-                string etag = reader.ReadString();
-                string json = reader.ReadString();
- 
-                var items = JsonSerializer.Deserialize(json, AppJsonContext.Default.ListStremioMediaStream);
-                return (etag, items, new DateTime(ticks));
+                using (var reader = new BinaryReader(decompressor, Encoding.UTF8, true))
+                {
+                    if (reader.ReadString() != MAGIC) return (null, null, DateTime.MinValue);
+                    int version = reader.ReadInt32();
+                    if (version != VERSION) return (null, null, DateTime.MinValue);
+                }
+
+                // Deserialize directly from the compression stream using AOT-safe options
+                var dto = await MessagePackSerializer.DeserializeAsync<CatalogCacheDTO>(decompressor, AotOptions);
+                if (dto == null) return (null, null, DateTime.MinValue);
+
+                var items = dto.Items.Select(x => new StremioMediaStream
+                {
+                    Meta = new StremioMeta
+                    {
+                        Id = x.Id,
+                        Name = x.Title,
+                        Poster = x.Poster,
+                        Background = x.Background,
+                        Logo = x.Logo,
+                        Type = x.Type,
+                        Year = x.Year,
+                        Imdbrating = x.Rating,
+                        Description = x.Overview,
+                        Genres = x.Genres
+                    },
+                    SourceAddon = x.SourceAddon,
+                    TrailerUrl = x.Trailer,
+                    ProgressValue = x.Progress,
+                    Resolution = x.Resolution,
+                    Codec = x.Codec,
+                    IsHdr = x.IsHdr,
+                    Bitrate = x.Bitrate,
+                    Fps = x.Fps,
+                    IsAvailableOnIptv = x.IsAvailableOnIptv,
+                    IsIptv = x.IsIptv,
+                    SeriesName = x.SeriesName,
+                    EpisodeSubtext = x.EpisodeSubtext
+                }).ToList();
+
+                return (dto.ETag, items, new DateTime(dto.Timestamp));
             }
             catch (Exception ex)
             {
+                AppLogger.Warn($"[CatalogCache] MessagePack Load failed for {url}: {ex.Message}");
                 return (null, null, DateTime.MinValue);
             }
         }

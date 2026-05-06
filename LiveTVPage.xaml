@@ -431,7 +431,7 @@
                                                         </Grid.ColumnDefinitions>
             
                                                         <!-- Selection Visual (Hidden by default) -->
-                                                        <Border x:Name="SelectionBorder" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" CornerRadius="10" 
+                                                        <Border x:Name="SelectionBorder" BorderBrush="{ThemeResource GoldGradient}" BorderThickness="2" CornerRadius="10" 
                                                                 Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVisibleConverter}}" Grid.ColumnSpan="2"
                                                                 IsHitTestVisible="False"/>
 

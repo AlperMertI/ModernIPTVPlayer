@@ -268,6 +268,33 @@ namespace ModernIPTVPlayer.Controls
             } catch (Exception ex) { HeroLog($"Composition Error: {ex.Message}"); }
         }
 
+        /// <summary>
+        /// PINNACLE: Links the hero backdrop to a ScrollViewer for hardware-accelerated parallax.
+        /// Runs entirely on the compositor thread for 120fps synchronization.
+        /// </summary>
+        public void LinkToScrollViewer(ScrollViewer scrollViewer)
+        {
+            try
+            {
+                var visual = ElementCompositionPreview.GetElementVisual(HeroImageHost);
+                var compositor = visual.Compositor;
+                
+                // Retrieve the hardware-linked property set from the scroll viewer
+                var scrollPropSet = ElementCompositionPreview.GetScrollViewerManipulationPropertySet(scrollViewer);
+                
+                // Create parallax expression: Move at 40% speed of the scroll
+                // Translation.Y is negative during scroll, so we invert to move the image "up" slower.
+                var parallaxAnim = compositor.CreateExpressionAnimation("-scroll.Translation.Y * 0.4f");
+                parallaxAnim.SetReferenceParameter("scroll", scrollPropSet);
+                
+                visual.StartAnimation("Translation.Y", parallaxAnim);
+            }
+            catch (Exception ex)
+            {
+                HeroLog($"Parallax Link Error: {ex.Message}");
+            }
+        }
+
         private const int HERO_EXIT_DURATION_MS = 300;
         private const int SHIMMER_REVEAL_THRESHOLD_MS = 500;
         private const int MIN_REVEAL_HOLD_MS = 650;

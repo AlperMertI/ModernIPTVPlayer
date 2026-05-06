@@ -25,6 +25,7 @@ namespace ModernIPTVPlayer
                 if (season != null)
                 {
                     // 1. ALWAYS populate CurrentEpisodes with what we have immediately
+                    _isEpisodesLoading = season.Episodes.Count == 0;
                     CurrentEpisodes.Clear();
                     foreach (var ep in season.Episodes) CurrentEpisodes.Add(ep);
 
@@ -40,12 +41,12 @@ namespace ModernIPTVPlayer
 
                     if (needsEnrichment && tmdbInfo != null)
                     {
-                         System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Season {season.SeasonNumber} needs enrichment. (EnrichedByTmdb={season.IsEnrichedByTmdb}, TmdbEnabled={tmdbEnabled})");
+                         System.Diagnostics.Debug.WriteLine($"[INFO-PAGE] Season {season.SeasonNumber} needs enrichment. (EnrichedByTmdb={season.IsEnrichedByTmdb}, TmdbEnabled={tmdbEnabled})");
                          _ = LoadTmdbSeasonDataAsync(season.SeasonNumber);
                     }
                 }
                 
-                System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 1.3: Setting EpisodesRepeater ItemsSource (Count={CurrentEpisodes.Count})");
+                System.Diagnostics.Debug.WriteLine($"[INFO-FLOW] STEP 1.3: Setting EpisodesRepeater ItemsSource (Count={CurrentEpisodes.Count})");
                 EpisodesRepeater.ItemsSource = CurrentEpisodes;
 
                 // Restore selection state - always update IsSelected based on _selectedEpisode
@@ -55,7 +56,7 @@ namespace ModernIPTVPlayer
                     if (matchingEpisode != null)
                     {
                         SelectEpisode(matchingEpisode);
-                        System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Restored selection: {matchingEpisode.Title}");
+                        System.Diagnostics.Debug.WriteLine($"[INFO-PAGE] Restored selection: {matchingEpisode.Title}");
                     }
                 }
                 else if (_pendingAutoSelectEpisode != null)
@@ -64,7 +65,7 @@ namespace ModernIPTVPlayer
                      
                     if (matchingEpisode != null)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Auto-selecting episode: {matchingEpisode.Title} (ID: {matchingEpisode.Id})");
+                        System.Diagnostics.Debug.WriteLine($"[INFO-PAGE] Auto-selecting episode: {matchingEpisode.Title} (ID: {matchingEpisode.Id})");
                         _isProgrammaticSelection = true;
                         try
                         {
@@ -73,7 +74,7 @@ namespace ModernIPTVPlayer
                         }
                         catch (Exception ex)
                         {
-                            System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] Auto-selection failed: {ex.Message}");
+                            System.Diagnostics.Debug.WriteLine($"[INFO-PAGE] Auto-selection failed: {ex.Message}");
                         }
                         finally
                         {
@@ -81,12 +82,18 @@ namespace ModernIPTVPlayer
                         }
                     }
                 }
+                
+                // [REVEAL SYNC] Re-evaluate layout now that episodes are in the binding collection.
+                // Using Low priority ensures ItemsRepeater has a chance to see the new collection.
+                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => {
+                    SyncLayout();
+                });
             }
         }
 
         private async Task LoadTmdbSeasonDataAsync(int seasonNumber)
         {
-            System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 7: LoadTmdbSeasonDataAsync ENTER for Season: {seasonNumber}");
+            System.Diagnostics.Debug.WriteLine($"[INFO-FLOW] STEP 7: LoadTmdbSeasonDataAsync ENTER for Season: {seasonNumber}");
              try
              {
                  if (_unifiedMetadata == null) return;
@@ -134,7 +141,7 @@ namespace ModernIPTVPlayer
 
                          uiSeason.Episodes = newEpList;
                          uiSeason.IsEnrichedByTmdb = true;
-                         System.Diagnostics.Debug.WriteLine($"[MediaInfo-Flow] STEP 7.1: LoadTmdbSeasonDataAsync UI Update: Season {seasonNumber}, Count {newEpList.Count}");
+                         System.Diagnostics.Debug.WriteLine($"[INFO-FLOW] STEP 7.1: LoadTmdbSeasonDataAsync UI Update: Season {seasonNumber}, Count {newEpList.Count}");
                           
                          if (SeasonComboBox.SelectedItem == uiSeason)
                          {
@@ -142,6 +149,7 @@ namespace ModernIPTVPlayer
                               
                               _sourcesVisualGeneration++;
                               _animatedSourceRevealIndexes.Clear();
+                              _isEpisodesLoading = false;
                               CurrentEpisodes.Clear();
                               foreach(var ep in newEpList) CurrentEpisodes.Add(ep);
                               
@@ -156,7 +164,7 @@ namespace ModernIPTVPlayer
              }
              catch (Exception ex)
              {
-                 System.Diagnostics.Debug.WriteLine($"[MediaInfoPage] LoadTmdbSeasonDataAsync Error: {ex.Message}");
+                 System.Diagnostics.Debug.WriteLine($"[INFO-PAGE] LoadTmdbSeasonDataAsync Error: {ex.Message}");
              }
         }
 
@@ -254,7 +262,14 @@ namespace ModernIPTVPlayer
                 
                 StartPrebuffering(_streamUrl);
                 if (!string.IsNullOrEmpty(_streamUrl)) _ = UpdateTechnicalBadgesAsync(_streamUrl);
+                ApplySelectedEpisodeHistoryActions(history);
                 
+                RefreshAllAddonActiveFlags();
+                SyncAddonSelectionToActive();
+
+                // Selecting an episode is intentionally side-effect light: it updates the hero
+                // metadata and selected row, but it does not request sources. The arrow/source
+                // commands own that panel transition so the episodes list stays visible.
                 SyncLayout();
             }
             finally { _isProgrammaticSelection = false; }
@@ -264,6 +279,60 @@ namespace ModernIPTVPlayer
         {
             if (ep == null) return;
             // UPDATE INFO PANEL (Already handled in SelectEpisode for text, but can add more logic here)
+        }
+
+        private void ApplySelectedEpisodeHistoryActions(HistoryItem history)
+        {
+            if (PlayButtonText == null) return;
+
+            bool hasProgress = history != null && history.Position > 0;
+            double progressPercent = history?.Duration > 0
+                ? (history.Position / history.Duration) * 100
+                : 0;
+            bool canContinue = hasProgress && !history.IsFinished && progressPercent < 98;
+
+            if (canContinue)
+            {
+                PlayButtonText.Text = "Devam Et";
+                if (StickyPlayButtonText != null) StickyPlayButtonText.Text = "Devam Et";
+
+                string subtext = "";
+                if (history.Duration > 0)
+                {
+                    subtext = BuildRemainingText(history);
+                }
+
+                if (PlayButtonSubtext != null)
+                {
+                    PlayButtonSubtext.Text = subtext;
+                    PlayButtonSubtext.Visibility = string.IsNullOrWhiteSpace(subtext) ? Visibility.Collapsed : Visibility.Visible;
+                }
+
+                if (StickyPlayButtonSubtext != null)
+                {
+                    StickyPlayButtonSubtext.Text = subtext;
+                    StickyPlayButtonSubtext.Visibility = string.IsNullOrWhiteSpace(subtext) ? Visibility.Collapsed : Visibility.Visible;
+                }
+
+                if (RestartButton != null) RestartButton.Visibility = Visibility.Visible;
+                return;
+            }
+
+            if (hasProgress && (history.IsFinished || progressPercent >= 98))
+            {
+                PlayButtonText.Text = "Tekrar İzle";
+                if (StickyPlayButtonText != null) StickyPlayButtonText.Text = "Tekrar İzle";
+                if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
+                if (StickyPlayButtonSubtext != null) StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
+                if (RestartButton != null) RestartButton.Visibility = Visibility.Visible;
+                return;
+            }
+
+            PlayButtonText.Text = "Oynat";
+            if (StickyPlayButtonText != null) StickyPlayButtonText.Text = "Oynat";
+            if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
+            if (StickyPlayButtonSubtext != null) StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
+            if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
         }
 
         private void DeselectEpisode()
@@ -280,7 +349,7 @@ namespace ModernIPTVPlayer
                 }
 
                 // Restore UI State
-                ShowSourcesPanel(false);
+                OpenEpisodesPanel(PanelChangeReason.EpisodeDeselected);
                 UpdateInfoPanelVisibility(false);
 
                 if (PlayButtonText != null)
@@ -290,7 +359,7 @@ namespace ModernIPTVPlayer
                 }
                 if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
 
-                SyncLayout();
+                if (!_isResettingPageState) SyncLayout();
             }
             finally
             {
@@ -299,5 +368,19 @@ namespace ModernIPTVPlayer
         }
 
         #endregion
+        
+        private List<EpisodeItem> CreateEpisodePlaceholders(int count)
+        {
+            var list = new List<EpisodeItem>();
+            foreach (var opacity in GenerateShimmerOpacitySequence(count))
+            {
+                list.Add(new EpisodeItem
+                {
+                    IsPlaceholder = true,
+                    ShimmerOpacity = opacity
+                });
+            }
+            return list;
+        }
     }
 }

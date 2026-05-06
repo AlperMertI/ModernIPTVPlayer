@@ -53,9 +53,6 @@
             <Border.RenderTransform>
                 <ScaleTransform x:Name="ScaleTrans" ScaleX="1.0" ScaleY="1.0"/>
             </Border.RenderTransform>
-            <Border.Projection>
-                <PlaneProjection x:Name="TiltProjection"/>
-            </Border.Projection>
             <Grid>
                 <Grid x:Name="ImageContainer" Background="Transparent">
                     <Image x:Name="PosterImage" Stretch="UniformToFill" ImageOpened="Image_ImageOpened" ImageFailed="Image_ImageFailed"/>

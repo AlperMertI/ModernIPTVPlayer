@@ -42,7 +42,7 @@ namespace ModernIPTVPlayer.Controls
                 // #region agent log
                 try { ModernIPTVPlayer.App.DebugNdjson("DynamicBackdrop.xaml.cs:Loaded", "enter", null, "H9"); } catch { }
                 // #endregion
-                System.Diagnostics.Debug.WriteLine($"[DynamicBackdrop] Loaded. Opacity: {this.Opacity}, Visibility: {this.Visibility}, ActualSize: {this.ActualWidth}x{this.ActualHeight}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-AMBIENCE] Loaded. Opacity: {this.Opacity}, Visibility: {this.Visibility}, ActualSize: {this.ActualWidth}x{this.ActualHeight}");
                 StartBreathingAnimation();
                 // #region agent log
                 try { ModernIPTVPlayer.App.DebugNdjson("DynamicBackdrop.xaml.cs:Loaded", "StartBreathingAnimation done", null, "H9"); } catch { }
@@ -74,7 +74,7 @@ namespace ModernIPTVPlayer.Controls
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[DynamicBackdrop] ApplyState Error: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-AMBIENCE] ApplyState Error: {ex.Message}");
             }
         }
 
@@ -86,11 +86,11 @@ namespace ModernIPTVPlayer.Controls
             {
                 if (this.XamlRoot == null)
                 {
-                    System.Diagnostics.Debug.WriteLine("[DynamicBackdrop] Skipping BreathingAnim: XamlRoot is NULL");
+                    System.Diagnostics.Debug.WriteLine("[INFO-AMBIENCE] Skipping BreathingAnim: XamlRoot is NULL");
                     return;
                 }
 
-                System.Diagnostics.Debug.WriteLine("[DynamicBackdrop] Starting Breathing Animations...");
+                System.Diagnostics.Debug.WriteLine("[INFO-AMBIENCE] Starting Breathing Animations...");
                 var visual = ElementCompositionPreview.GetElementVisual(this);
                 if (visual == null) return;
                 var compositor = visual.Compositor;
@@ -133,15 +133,15 @@ namespace ModernIPTVPlayer.Controls
                     bloomAnim.IterationBehavior = Microsoft.UI.Composition.AnimationIterationBehavior.Forever;
                     bloomVisual.StartAnimation("Opacity", bloomAnim);
                 }
-                System.Diagnostics.Debug.WriteLine("[DynamicBackdrop] Breathing Animations OK");
+                System.Diagnostics.Debug.WriteLine("[INFO-AMBIENCE] Breathing Animations OK");
             }
             catch (System.Runtime.InteropServices.COMException ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[DynamicBackdrop] !!! COMException in StartBreathing: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-AMBIENCE] !!! COMException in StartBreathing: {ex.Message}");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[DynamicBackdrop] !!! Error in StartBreathing: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-AMBIENCE] !!! Error in StartBreathing: {ex.Message}");
             }
         }
 
@@ -149,7 +149,7 @@ namespace ModernIPTVPlayer.Controls
         {
             try
             {
-                System.Diagnostics.Debug.WriteLine($"[DynamicBackdrop] TransitionTo: L(#{targetLeft.R:X2}{targetLeft.G:X2}{targetLeft.B:X2}) R(#{targetRight.R:X2}{targetRight.G:X2}{targetRight.B:X2})");
+                System.Diagnostics.Debug.WriteLine($"[INFO-AMBIENCE] TransitionTo: L(#{targetLeft.R:X2}{targetLeft.G:X2}{targetLeft.B:X2}) R(#{targetRight.R:X2}{targetRight.G:X2}{targetRight.B:X2})");
 
                 _backdropAnimationTimer?.Stop();
 
@@ -169,7 +169,7 @@ namespace ModernIPTVPlayer.Controls
                 // Apply the target state immediately so we don't stay black.
                 if (this.XamlRoot == null)
                 {
-                    System.Diagnostics.Debug.WriteLine("[DynamicBackdrop] Applying state immediately (XamlRoot is NULL)");
+                    System.Diagnostics.Debug.WriteLine("[INFO-AMBIENCE] Applying state immediately (XamlRoot is NULL)");
                     ApplyBackdropState(targetLeft, targetRight);
                     return;
                 }
@@ -186,7 +186,7 @@ namespace ModernIPTVPlayer.Controls
                     {
                         if (this.XamlRoot == null)
                         {
-                            System.Diagnostics.Debug.WriteLine("[DynamicBackdrop] Timer Stop: XamlRoot is null");
+                            System.Diagnostics.Debug.WriteLine("[INFO-AMBIENCE] Timer Stop: XamlRoot is null");
                             _backdropAnimationTimer?.Stop();
                             return;
                         }
@@ -214,7 +214,7 @@ namespace ModernIPTVPlayer.Controls
                     }
                     catch (Exception ex)
                     {
-                        System.Diagnostics.Debug.WriteLine($"[DynamicBackdrop] Timer Error: {ex.Message}");
+                        System.Diagnostics.Debug.WriteLine($"[INFO-AMBIENCE] Timer Error: {ex.Message}");
                         _backdropAnimationTimer?.Stop();
                     }
                 };
@@ -222,7 +222,7 @@ namespace ModernIPTVPlayer.Controls
             }
             catch (Exception ex)
             {
-                 System.Diagnostics.Debug.WriteLine($"[DynamicBackdrop] TransitionTo Error: {ex.Message}");
+                 System.Diagnostics.Debug.WriteLine($"[INFO-AMBIENCE] TransitionTo Error: {ex.Message}");
             }
         }
 

@@ -7,6 +7,7 @@
     <!-- Top-Level Packages -->
     <PackageVersion Include="CommunityToolkit.HighPerformance" Version="8.4.2" />
     <PackageVersion Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.3.260402-preview2" />
+    <PackageVersion Include="MessagePack" Version="3.1.4" />
     <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.0.0-preview2" />
     <PackageVersion Include="Microsoft.Windows.CsWinRT" Version="2.3.0-prerelease.251115.2" />
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.1761-preview" />

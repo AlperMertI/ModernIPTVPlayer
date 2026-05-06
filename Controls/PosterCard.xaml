@@ -48,11 +48,6 @@
         </Grid.Resources>
 
         <!-- Controls scaling on internal elements to avoid cropping -->
-
-
-
-
-
         <!-- Main Content -->
         <Border x:Name="MainBorder" CornerRadius="12" Background="#0C0E14" RenderTransformOrigin="0.5,0.5"
                 PointerEntered="OnPointerEntered"
@@ -62,9 +57,6 @@
             <Border.RenderTransform>
                 <ScaleTransform x:Name="ScaleTrans" ScaleX="1.0" ScaleY="1.0"/>
             </Border.RenderTransform>
-            <Border.Projection>
-                <PlaneProjection x:Name="TiltProjection"/>
-            </Border.Projection>
             <Grid>
                 <Image x:Name="PosterImage" Stretch="UniformToFill" ImageOpened="Image_ImageOpened" ImageFailed="Image_ImageFailed"/>
                 
@@ -169,7 +161,5 @@
                 </Border>
             </Grid>
         </Border>
-
-
     </Grid>
 </UserControl>

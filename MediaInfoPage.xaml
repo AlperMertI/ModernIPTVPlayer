@@ -9,6 +9,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:ctl="using:ModernIPTVPlayer.Controls"
     xmlns:mpv="using:MpvWinUI"
+    xmlns:converters="using:ModernIPTVPlayer.Converters"
     mc:Ignorable="d"
     Background="#0D0D0D">
 
@@ -17,13 +18,26 @@
         <local:StringToImageSourceConverter x:Key="StringToImage"/>
         <local:BooleanInverseToVisibilityConverter x:Key="BoolInverseToVis"/>
         <local:StringToVisibilityConverter x:Key="StringToVis"/>
+        <converters:ActiveBorderConverter x:Key="ActiveBorderConverter"/>
+        <converters:ActiveBackgroundConverter x:Key="ActiveBackgroundConverter"/>
 
         <DataTemplate x:Key="RealStreamTemplate" x:DataType="local:StremioStreamViewModel">
             <!-- Root Grid for Stagger Animation -->
             <Grid Background="Transparent">
-                <Grid Tapped="SourceItem_Tapped" CornerRadius="10" Background="Transparent">
+                <Grid Tapped="SourceItem_Tapped" 
+                      PointerEntered="SourceItem_PointerEntered" 
+                      PointerExited="SourceItem_PointerExited"
+                      CornerRadius="10" Background="Transparent">
+                    <!-- Hover Effect Layer -->
+                    <Border x:Name="HoverBorder" Background="White" Opacity="0" CornerRadius="10" IsHitTestVisible="False"/>
+
+                    <!-- Active Background Layer -->
+                    <Border x:Name="ActiveBackground" Background="{ThemeResource GoldGradient}" Opacity="0.1" CornerRadius="10" 
+                            Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
+
                     <!-- Flat Grid Structure for better resize performance -->
-                    <Grid Padding="12,10" Background="#1AFFFFFF" CornerRadius="10" BorderThickness="1" BorderBrush="#10FFFFFF">
+                    <Grid Padding="12,10" Background="#1AFFFFFF" CornerRadius="10" BorderThickness="1" 
+                          BorderBrush="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource ActiveBorderConverter}}">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="65"/>
                             <ColumnDefinition Width="1"/>
@@ -32,7 +46,7 @@
                         
                         <!-- Provider Column -->
                         <TextBlock Grid.Column="0" Text="{x:Bind ProviderText, Mode=OneWay}" FontSize="10" FontWeight="Black" 
-                                   Foreground="{StaticResource GoldGradient}" HorizontalAlignment="Stretch" VerticalAlignment="Center" 
+                                   Foreground="{ThemeResource GoldGradient}" HorizontalAlignment="Stretch" VerticalAlignment="Center" 
                                    TextAlignment="Center" TextWrapping="Wrap" Opacity="0.9" MaxLines="3" Margin="2,0"/>
 
                         <!-- Divider -->
@@ -46,8 +60,16 @@
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
-                            <TextBlock Grid.Row="0" Text="{x:Bind SourceDisplayName, Mode=OneWay}" FontWeight="Bold" FontSize="14" 
-                                       Foreground="White" TextWrapping="NoWrap" MaxLines="1" TextTrimming="CharacterEllipsis" Margin="0,0,0,4"/>
+                            <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
+                                <TextBlock Text="{x:Bind SourceDisplayName, Mode=OneWay}" FontWeight="Bold" FontSize="14" 
+                                           Foreground="White" TextWrapping="NoWrap" MaxLines="1" TextTrimming="CharacterEllipsis"/>
+                                
+                                <!-- Explicit Active Label -->
+                                <Border Background="{ThemeResource GoldGradient}" CornerRadius="4" Padding="6,1" 
+                                        Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="AKTİF" FontSize="9" FontWeight="Black" Foreground="Black"/>
+                                </Border>
+                            </StackPanel>
                             
                             <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" Margin="0,0,0,4">
                                 <!-- Quality Badge -->
@@ -70,37 +92,192 @@
                         </Grid>
                     </Grid>
                     
-                    <!-- Active Indicator -->
-                    <Border CornerRadius="10" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" 
-                            Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False"/>
+                    <!-- Active Indicator Border (More prominent) -->
+                    <Border CornerRadius="10" BorderBrush="{ThemeResource GoldGradient}" BorderThickness="2" 
+                            Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToVis}}" IsHitTestVisible="False">
+                        <Grid>
+                            <!-- Checkmark Icon in Top Right -->
+                            <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="{ThemeResource GoldGradient}" 
+                                      HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,4,4,0"/>
+                        </Grid>
+                    </Border>
                 </Grid>
             </Grid>
         </DataTemplate>
 
         <DataTemplate x:Key="ShimmerStreamTemplate" x:DataType="local:StremioStreamViewModel">
-            <!-- Root Grid for Stagger Animation (Opacity 0 by default to prevent flicker) -->
-            <Grid Background="Transparent">
-                <StackPanel Spacing="10" Padding="8,10" Background="#26FFFFFF" CornerRadius="10" Opacity="{x:Bind ShimmerOpacity, Mode=OneWay}">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="65"/>
-                            <ColumnDefinition Width="1"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <ctl:ShimmerControl Grid.Column="0" Width="40" Height="20" CornerRadius="4" HorizontalAlignment="Center"/>
-                        <Rectangle Grid.Column="1" Fill="#E6FFD700" VerticalAlignment="Stretch" Margin="0,8,10,8" Opacity="0.1"/>
-                        <StackPanel Grid.Column="2" Spacing="6" VerticalAlignment="Center">
-                            <ctl:ShimmerControl Width="200" Height="18" CornerRadius="4" HorizontalAlignment="Left"/>
-                            <ctl:ShimmerControl Width="140" Height="12" CornerRadius="4" HorizontalAlignment="Left" Opacity="0.6"/>
+            <Grid Background="Transparent" MinHeight="86" Opacity="{x:Bind ShimmerOpacity, Mode=OneWay}">
+                <Grid Padding="12,10" Background="#1AFFFFFF" CornerRadius="12" BorderThickness="1" BorderBrush="#10FFFFFF" MinHeight="86">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="65"/>
+                        <ColumnDefinition Width="1"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <ctl:ShimmerControl Grid.Column="0" Width="44" Height="20" CornerRadius="4" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Rectangle Grid.Column="1" Fill="{ThemeResource GoldGradient}" VerticalAlignment="Stretch" Margin="0,4,10,4" Opacity="0.12"/>
+
+                    <Grid Grid.Column="2" VerticalAlignment="Center">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <ctl:ShimmerControl Grid.Row="0" Width="190" Height="16" CornerRadius="4" HorizontalAlignment="Left" Margin="0,0,0,6"/>
+                        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="6" Margin="0,0,0,7">
+                            <ctl:ShimmerControl Width="52" Height="16" CornerRadius="4"/>
+                            <ctl:ShimmerControl Width="44" Height="16" CornerRadius="4"/>
+                            <ctl:ShimmerControl Width="66" Height="16" CornerRadius="4"/>
                         </StackPanel>
+                        <ctl:ShimmerControl Grid.Row="2" Width="230" Height="12" CornerRadius="4" HorizontalAlignment="Left" Opacity="0.6"/>
                     </Grid>
-                </StackPanel>
+                </Grid>
+            </Grid>
+        </DataTemplate>
+
+        <DataTemplate x:Key="ShimmerEpisodeTemplate" x:DataType="local:EpisodeItem">
+            <Grid Background="Transparent" MinHeight="86" Opacity="{x:Bind ShimmerOpacity, Mode=OneWay}">
+                <Grid Padding="12,10" Background="#1AFFFFFF" CornerRadius="12" BorderThickness="1" BorderBrush="#10FFFFFF" MinHeight="86">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="100"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <ctl:ShimmerControl Grid.Column="0" Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+
+                    <Grid Grid.Column="1" VerticalAlignment="Center" Margin="12,0,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <ctl:ShimmerControl Grid.Row="0" Width="140" Height="16" CornerRadius="4" HorizontalAlignment="Left" Margin="0,0,0,6"/>
+                        <ctl:ShimmerControl Grid.Row="1" Width="220" Height="14" CornerRadius="4" HorizontalAlignment="Left" Margin="0,0,0,7"/>
+                        <ctl:ShimmerControl Grid.Row="2" Width="160" Height="12" CornerRadius="4" HorizontalAlignment="Left" Opacity="0.6"/>
+                    </Grid>
+                </Grid>
             </Grid>
         </DataTemplate>
 
         <local:StreamTemplateSelector x:Key="StreamSelector" 
                                       RealTemplate="{StaticResource RealStreamTemplate}" 
                                       ShimmerTemplate="{StaticResource ShimmerStreamTemplate}"/>
+
+        <local:EpisodeTemplateSelector x:Key="EpisodeSelector" 
+                                       RealTemplate="{StaticResource RealEpisodeTemplate}" 
+                                       ShimmerTemplate="{StaticResource ShimmerEpisodeTemplate}"/>
+
+        <DataTemplate x:Key="RealEpisodeTemplate" x:DataType="local:EpisodeItem">
+            <Grid Background="Transparent" Padding="0" CornerRadius="12"
+                  Tapped="EpisodeItem_Tapped"
+                  PointerEntered="EpisodeItem_PointerEntered"
+                  PointerExited="EpisodeItem_PointerExited">
+                <Grid.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="İzlendi Olarak İşaretle" Click="MarkWatched_Click" Tag="{x:Bind}"/>
+                        <MenuFlyoutItem Text="İzlenmedi Olarak İşaretle" Click="MarkUnwatched_Click" Tag="{x:Bind}"/>
+                        <MenuFlyoutSeparator/>
+                        <MenuFlyoutItem Text="Buradan Sonrasını İzlendi İşaretle" Click="MarkRemainingWatched_Click" Tag="{x:Bind}"/>
+                    </MenuFlyout>
+                </Grid.ContextFlyout>
+
+                <!-- Selection Visual -->
+                <Border x:Name="SelectionBorder" BorderBrush="{ThemeResource GoldGradient}" BorderThickness="2" CornerRadius="12" 
+                        Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
+
+                <Grid Padding="8" Background="#0AFFFFFF" CornerRadius="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Thumbnail -->
+                    <Grid Grid.Column="0" CornerRadius="12" Height="80" HorizontalAlignment="Left" VerticalAlignment="Center" Width="150">
+                        <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill"/>
+
+                        <!-- Dark Gradient Overlay -->
+                        <Grid Background="#33000000"/>
+
+                        <!-- Premium Watched Overlay -->
+                        <Grid Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                              Background="#B3000000" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Left" 
+                                        Spacing="4" Padding="6,3" Background="#99000000" CornerRadius="0,6,0,10">
+                                <FontIcon Glyph="&#xE73E;" FontSize="10" Foreground="{ThemeResource GoldGradient}"/>
+                                <TextBlock Text="İZLENDİ" FontSize="9" FontWeight="Bold" Foreground="{ThemeResource GoldGradient}"/>
+                            </StackPanel>
+                            <Border BorderBrush="{ThemeResource GoldGradient}" BorderThickness="2" CornerRadius="10,0,0,10"/>
+                        </Grid>
+
+                        <!-- Premium Progress Bar -->
+                        <ProgressBar Value="{x:Bind ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
+                                     Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                                     Foreground="#E50914" Background="#44000000" BorderThickness="0" Margin="0"/>
+                    </Grid>
+
+                    <!-- Info -->
+                    <Grid Grid.Column="1" Padding="16,0,8,0" VerticalAlignment="Center">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Top Row: Episode Number & Duration & Watched Status -->
+                        <Grid Opacity="0.7">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <TextBlock Text="{x:Bind EpisodeNumberFormatted}" FontSize="11" FontWeight="SemiBold" Foreground="{ThemeResource GoldGradient}"/>
+                                <TextBlock Text="•" FontSize="11" Foreground="#666" Visibility="{x:Bind DurationFormatted, Converter={StaticResource StringToVis}}"/>
+                                <TextBlock Text="{x:Bind DurationFormatted}" FontSize="11" Foreground="#DDD"/>
+                                <!-- Watched Icon -->
+                                <FontIcon Glyph="&#xE73E;" FontSize="11" Foreground="{ThemeResource GoldGradient}" 
+                                          Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                                          Margin="4,0,0,0" ToolTipService.ToolTip="İzlendi"/>
+                            </StackPanel>
+
+                            <!-- Air Date (Right Aligned) -->
+                            <TextBlock Grid.Column="2" Text="{x:Bind ReleaseDateFormatted}" FontSize="11" Foreground="#DDD" 
+                                       Visibility="{x:Bind ReleaseDateFormatted, Converter={StaticResource StringToVis}}"/>
+                        </Grid>
+
+                        <!-- Title -->
+                        <TextBlock Grid.Row="1" Text="{x:Bind Title}" FontWeight="Bold" FontSize="15" 
+                                   TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Foreground="White" Margin="0,4"/>
+
+                        <!-- Unreleased / Overview -->
+                        <StackPanel Grid.Row="2" Margin="0,2,0,0">
+                            <!-- Overview (only if released or generally) -->
+                            <TextBlock Text="{x:Bind Overview}" FontSize="12" Foreground="#C8C8C8"
+                                       TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
+
+                        <!-- Progress Text -->
+                        <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA"
+                                   Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
+                    </Grid>
+
+                    <!-- Right Arrow Button - Go to Sources -->
+                    <Button Grid.Column="2" Style="{StaticResource GlassButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Center"
+                            Width="40" Height="40" CornerRadius="20" Margin="8,0,0,0"
+                            Padding="0" BorderThickness="0" Background="#99000000" Tapped="EpisodeArrowButton_Tapped" Tag="{x:Bind}"
+                            ToolTipService.ToolTip="Kaynakları Gör">
+                        <FontIcon Glyph="&#xE76C;" Foreground="{ThemeResource GoldGradient}" FontSize="18"/>
+                    </Button>
+                </Grid>
+                <!-- Hover Overlay (on top but transparent to input) -->
+                <Border x:Name="HoverBorder" IsHitTestVisible="False" Background="White" Opacity="0" CornerRadius="12"/>
+            </Grid>
+        </DataTemplate>
 
         <!-- Premium Glass Button Style -->
         <!-- Premium Glass Button Style -->
@@ -242,7 +419,7 @@
                             <Border x:Name="HoverOverlay" Background="White" Opacity="0" CornerRadius="14"/>
 
                             <!-- Selection Indicator (Left accent pill) -->
-                            <Border x:Name="SelectionIndicator" Background="{StaticResource GoldGradient}" 
+                            <Border x:Name="SelectionIndicator" Background="{ThemeResource GoldGradient}" 
                                     Width="4" Height="24" CornerRadius="2" HorizontalAlignment="Left" Margin="4,0,0,0" 
                                     Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
 
@@ -600,6 +777,9 @@
         <!-- LEFT: INFO PANEL -->
         <!-- LEFT: INFO PANEL -->
         <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Padding="0">
+            <Grid.RenderTransform>
+                <CompositeTransform x:Name="InfoContainerTransform"/>
+            </Grid.RenderTransform>
             
 
             <!-- Inner Grid: Content anchored based on state -->
@@ -641,14 +821,14 @@
                                <Border x:Name="BadgeCountry" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
                                    <TextBlock x:Name="BadgeCountryText" FontSize="11" Foreground="#CCC" VerticalAlignment="Center"/>
                                </Border>
-                               <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{StaticResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
-                                   <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
+                               <Border x:Name="Badge4K" Visibility="Collapsed" BorderBrush="{ThemeResource GoldGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
+                                   <TextBlock Text="4K UHD" FontSize="11" FontWeight="Bold" Foreground="{ThemeResource GoldGradient}"/>
                                </Border>
                                <Border x:Name="BadgeRes" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
                                    <TextBlock x:Name="BadgeResText" Text="1080P" FontSize="11" Foreground="#CCC"/>
                                </Border>
-                               <Border x:Name="BadgeHDR" Visibility="Collapsed" BorderBrush="{StaticResource SilverGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
-                                   <TextBlock Text="HDR" FontSize="11" FontWeight="Bold" Foreground="{StaticResource SilverGradient}"/>
+                               <Border x:Name="BadgeHDR" Visibility="Collapsed" BorderBrush="{ThemeResource SilverGradient}" BorderThickness="1.5" CornerRadius="4" Padding="6,2" Background="#44000000">
+                                   <TextBlock Text="HDR" FontSize="11" FontWeight="Bold" Foreground="{ThemeResource SilverGradient}"/>
                                </Border>
                                <Border x:Name="BadgeSDR" Visibility="Collapsed" BorderBrush="#66FFFFFF" BorderThickness="1" CornerRadius="4" Padding="6,2">
                                    <TextBlock Text="SDR" FontSize="11" Foreground="#CCC"/>
@@ -688,24 +868,28 @@
                     <!-- ACTION BAR -->
                     <Grid x:Name="ActionBarGroup" Margin="0,4,0,0">
                         <StackPanel x:Name="ActionBarPanel" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center" HorizontalAlignment="Left" Opacity="1">
-                            <Button x:Name="PlayButton" Click="PlayButton_Click" Height="52" CornerRadius="26" Style="{StaticResource HeroPlayButtonStyle}"
+                            <Button x:Name="PlayButton" Click="PlayButton_Click" Height="52" MinWidth="52" CornerRadius="26" Style="{StaticResource HeroPlayButtonStyle}"
+                                    HorizontalAlignment="Left"
                                     HorizontalContentAlignment="Center" VerticalContentAlignment="Center"
                                     Padding="32,0" ToolTipService.ToolTip="Oynat (Enter)">
-                                <StackPanel Orientation="Horizontal" Spacing="12">
-                                    <FontIcon x:Name="PlayButtonIcon" Glyph="&#xF5B0;" FontSize="18"/>
-                                    <StackPanel x:Name="PlayButtonTextStack">
-                                        <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold" FontSize="16"/>
-                                        <TextBlock x:Name="PlayButtonSubtext" Text="" FontSize="11" Opacity="0.6" Visibility="Collapsed"/>
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <FontIcon x:Name="PlayButtonIcon" Glyph="&#xF5B0;" FontSize="18" Width="24" Height="24" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                    <StackPanel x:Name="PlayButtonTextStack" Margin="12,0,0,0" VerticalAlignment="Center" Opacity="1" Visibility="Collapsed">
+                                        <TextBlock x:Name="PlayButtonText" Text="Oynat" FontWeight="Bold" FontSize="16" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="PlayButtonSubtext" Text="" FontSize="11" Opacity="0.6" Visibility="Collapsed" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </StackPanel>
                             </Button>
 
                             <Button x:Name="RestartButton" Click="RestartButton_Click" Visibility="Collapsed"
-                                    Style="{StaticResource HeroPlayButtonStyle}" Height="52" CornerRadius="26" Padding="32,0"
-                                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center">
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <FontIcon Glyph="&#xE777;" FontSize="16"/>
-                                    <TextBlock x:Name="RestartButtonText" Text="Baştan Başla" FontSize="14" FontWeight="SemiBold"/>
+                                    Style="{StaticResource HeroPlayButtonStyle}" Height="52" MinWidth="52" CornerRadius="26" Padding="32,0"
+                                    HorizontalAlignment="Left"
+                                    HorizontalContentAlignment="Center" VerticalContentAlignment="Center" ToolTipService.ToolTip="Baştan Başla">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <FontIcon x:Name="RestartButtonIcon" Glyph="&#xE777;" FontSize="18" Width="24" Height="24" VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                    <StackPanel x:Name="RestartButtonTextStack" Margin="10,0,0,0" VerticalAlignment="Center" Opacity="1" Visibility="Collapsed">
+                                        <TextBlock x:Name="RestartButtonText" Text="Baştan Başla" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                    </StackPanel>
                                 </StackPanel>
                             </Button>
 
@@ -752,7 +936,7 @@
                 <Grid>
                     <StackPanel x:Name="DirectorSection" Spacing="2" Visibility="Collapsed" Margin="0">
                         <StackPanel.RenderTransform>
-                            <ScaleTransform x:Name="DirectorSectionScale" CenterX="0" CenterY="0"/>
+                            <CompositeTransform x:Name="DirectorSectionTransform"/>
                         </StackPanel.RenderTransform>
                         <TextBlock x:Name="DirectorHeader" Text="Yönetmen" FontSize="14" FontWeight="SemiBold" Foreground="#88FFFFFF" CharacterSpacing="50"/>
                         <ListView x:Name="DirectorListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
@@ -818,7 +1002,7 @@
                 <Grid>
                     <StackPanel x:Name="CastSection" Spacing="2" Visibility="Collapsed" Margin="0">
                         <StackPanel.RenderTransform>
-                            <ScaleTransform x:Name="CastSectionScale" CenterX="0" CenterY="0"/>
+                            <CompositeTransform x:Name="CastSectionTransform"/>
                         </StackPanel.RenderTransform>
                         <TextBlock x:Name="CastHeader" Text="Oyuncular" FontSize="14" FontWeight="SemiBold" Foreground="#88FFFFFF" CharacterSpacing="50"/>
                         <ListView x:Name="CastListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
@@ -894,7 +1078,10 @@
     
                     <!-- RIGHT: SERIES EPISODES -->
                     <!-- RIGHT: SERIES EPISODES -->
-                    <Grid x:Name="EpisodesPanel" Grid.Column="1" Grid.Row="0" Width="450" MaxWidth="600" Visibility="Collapsed" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Stretch">
+                    <Grid x:Name="EpisodesPanel" Grid.Column="1" Grid.Row="0" Width="450" MaxWidth="600" Visibility="Collapsed" Opacity="0" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Stretch">
+                        <Grid.RenderTransform>
+                            <CompositeTransform x:Name="EpisodesPanelTransform" TranslateX="200"/>
+                        </Grid.RenderTransform>
                          <!-- Premium Glass Background -->
                          <Border CornerRadius="20" BorderBrush="#1AFFFFFF" BorderThickness="1">
                              <Border.Background>
@@ -927,206 +1114,22 @@
                                                 Padding="8,0,8,20">
                                       <ItemsRepeater x:Name="EpisodesRepeater" 
                                                     ItemsSource="{x:Bind CurrentEpisodes}"
+                                                    ItemTemplate="{StaticResource EpisodeSelector}"
                                                     ElementPrepared="EpisodesRepeater_ElementPrepared"
                                                     ElementClearing="EpisodesRepeater_ElementClearing">
                                           <ItemsRepeater.Layout>
                                               <StackLayout Spacing="8"/>
                                           </ItemsRepeater.Layout>
-                                          <ItemsRepeater.ItemTemplate>
-                                              <DataTemplate x:DataType="local:EpisodeItem">
-                                                  <Grid Background="Transparent" Padding="0" CornerRadius="12"
-                                                        Tapped="EpisodeItem_Tapped"
-                                                        PointerEntered="EpisodeItem_PointerEntered"
-                                                        PointerExited="EpisodeItem_PointerExited">
-                                                      <Grid.ContextFlyout>
-                                                     <MenuFlyout>
-                                                         <MenuFlyoutItem Text="İzlendi Olarak İşaretle" Click="MarkWatched_Click" Tag="{x:Bind}"/>
-                                                         <MenuFlyoutItem Text="İzlenmedi Olarak İşaretle" Click="MarkUnwatched_Click" Tag="{x:Bind}"/>
-                                                         <MenuFlyoutSeparator/>
-                                                         <MenuFlyoutItem Text="Buradan Sonrasını İzlendi İşaretle" Click="MarkRemainingWatched_Click" Tag="{x:Bind}"/>
-                                                     </MenuFlyout>
-                                                     </Grid.ContextFlyout>
-                                                      
-                                                      <!-- Selection Visual -->
-                                                      <Border x:Name="SelectionBorder" BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" CornerRadius="12" 
-                                                              Visibility="{x:Bind IsSelected, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
-
-                                                      <Grid Padding="8" Background="#0AFFFFFF" CornerRadius="12">
-                                                          <Grid.ColumnDefinitions>
-                                                      <ColumnDefinition Width="150"/>
-                                                      <ColumnDefinition Width="*"/>
-                                                      <ColumnDefinition Width="Auto"/>
-                                                  </Grid.ColumnDefinitions>
-                                                  
-                                                  <!-- Thumbnail -->
-                                                 <Grid Grid.Column="0" CornerRadius="12" Height="80" HorizontalAlignment="Left" VerticalAlignment="Center" Width="150">
-                                                     <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill"/>
-                                                     
-                                                     <!-- Dark Gradient Overlay -->
-                                                     <Grid Background="#33000000"/>
-
-                                                    <!-- Premium Watched Overlay -->
-                                                     <Grid Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}"
-                                                           Background="#B3000000" VerticalAlignment="Stretch" HorizontalAlignment="Stretch">
-                                                           <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom" HorizontalAlignment="Left" 
-                                                                       Spacing="4" Padding="6,3" Background="#99000000" CornerRadius="0,6,0,10">
-                                                                <FontIcon Glyph="&#xE73E;" FontSize="10" Foreground="{StaticResource GoldGradient}"/>
-                                                                <TextBlock Text="İZLENDİ" FontSize="9" FontWeight="Bold" Foreground="{StaticResource GoldGradient}"/>
-                                                            </StackPanel>
-                                                            <Border BorderBrush="{StaticResource GoldGradient}" BorderThickness="2" CornerRadius="10,0,0,10"/>
-                                                      </Grid>
-                                                      
-                                                      <!-- Premium Progress Bar -->
-                                                      <ProgressBar Value="{x:Bind ProgressPercent}" Maximum="100" VerticalAlignment="Bottom" Height="3" 
-                                                                   Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
-                                                                   Foreground="#E50914" Background="#44000000" BorderThickness="0" Margin="0"/>
-                                                  </Grid>
-                                                  
-                                                  <!-- Info -->
-                                                  <Grid Grid.Column="1" Padding="16,0,8,0" VerticalAlignment="Center">
-                                                      <Grid.RowDefinitions>
-                                                          <RowDefinition Height="Auto"/>
-                                                          <RowDefinition Height="Auto"/>
-                                                          <RowDefinition Height="Auto"/>
-                                                          <RowDefinition Height="Auto"/>
-                                                      </Grid.RowDefinitions>
-                                                      
-                                                      <!-- Top Row: Episode Number & Duration & Watched Status -->
-                                                      <Grid Opacity="0.7">
-                                                          <Grid.ColumnDefinitions>
-                                                              <ColumnDefinition Width="Auto"/>
-                                                                 <ColumnDefinition Width="*"/>
-                                                                 <ColumnDefinition Width="Auto"/>
-                                                             </Grid.ColumnDefinitions>
-                                                             
-                                                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                                                 <TextBlock Text="{x:Bind EpisodeNumberFormatted}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource GoldGradient}"/>
-                                                                 <TextBlock Text="•" FontSize="11" Foreground="#666" Visibility="{x:Bind DurationFormatted, Converter={StaticResource StringToVis}}"/>
-                                                                 <TextBlock Text="{x:Bind DurationFormatted}" FontSize="11" Foreground="#DDD"/>
-                                                                  <!-- Watched Icon -->
-                                                                  <FontIcon Glyph="&#xE73E;" FontSize="11" Foreground="{StaticResource GoldGradient}" 
-                                                                            Visibility="{x:Bind IsWatched, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
-                                                                            Margin="4,0,0,0" ToolTipService.ToolTip="İzlendi"/>
-                                                             </StackPanel>
-                                                             
-                                                             <!-- Air Date (Right Aligned) -->
-                                                             <TextBlock Grid.Column="2" Text="{x:Bind ReleaseDateFormatted}" FontSize="11" Foreground="#DDD" 
-                                                                        Visibility="{x:Bind ReleaseDateFormatted, Converter={StaticResource StringToVis}}"/>
-                                                         </Grid>
-     
-                                                         <!-- Title -->
-                                                         <TextBlock Grid.Row="1" Text="{x:Bind Title}" FontWeight="Bold" FontSize="15" 
-                                                                    TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis" Foreground="White" Margin="0,4"/>
-    
-                                                         <!-- Unreleased / Overview -->
-                                                         <StackPanel Grid.Row="2" Margin="0,2,0,0">
-                                                             <!-- Release Date Redundant -> REMOVED because it's now in the header -->
-                                                             <!-- <TextBlock Text="{x:Bind ReleaseDateFormatted}" ... /> -->
-                                                             
-                                                             <!-- Overview (only if released or generally) -->
-                                                             <TextBlock Text="{x:Bind Overview}" FontSize="12" Foreground="#C8C8C8"
-                                                                        TextWrapping="Wrap" MaxLines="2" TextTrimming="CharacterEllipsis"/>
-                                                          </StackPanel>
-                                                          
-                                                          <!-- Progress Text -->
-                                                          <TextBlock Grid.Row="3" Text="{x:Bind ProgressText}" FontSize="12" Foreground="#AAA"
-                                                                     Visibility="{x:Bind HasProgress, Mode=OneWay, Converter={StaticResource BoolToVis}}" Margin="0,2,0,0"/>
-                                                      </Grid>
-                                                      
-                                                      <!-- Right Arrow Button - Go to Sources -->
-                                                      <Button Grid.Column="2" Style="{StaticResource GlassButtonStyle}" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                                              Width="40" Height="40" CornerRadius="20" Margin="8,0,0,0"
-                                                              Padding="0" BorderThickness="0" Background="#99000000" Tapped="EpisodeArrowButton_Tapped" Tag="{x:Bind}"
-                                                              ToolTipService.ToolTip="Kaynakları Gör">
-                                                          <FontIcon Glyph="&#xE76C;" Foreground="{StaticResource GoldGradient}" FontSize="18"/>
-                                                       </Button>
-                                                   </Grid>
-                                                   <!-- Hover Overlay (on top but transparent to input) -->
-                                                   <Border x:Name="HoverBorder" IsHitTestVisible="False" Background="White" Opacity="0" CornerRadius="12"/>
-                                                </Grid>
-                                           </DataTemplate>
-                                       </ItemsRepeater.ItemTemplate>
-                                   </ItemsRepeater>
-                               </ScrollViewer>
-                                  
-                                  <!-- Episodes Loading Shimmer -->
-                                  <Grid x:Name="EpisodesShimmerPanel" Grid.Row="1" Visibility="Collapsed" Padding="16,0,16,20">
-                                      <StackPanel Spacing="12">
-                                          <!-- Episode Item Shimmer 1 -->
-                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
-                                              <Grid.ColumnDefinitions>
-                                                  <ColumnDefinition Width="100"/>
-                                                  <ColumnDefinition Width="*"/>
-                                              </Grid.ColumnDefinitions>
-                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
-                                                  <ctl:ShimmerControl Width="120" Height="16" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="200" Height="14" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="150" Height="12" CornerRadius="4"/>
-                                              </StackPanel>
-                                          </Grid>
-                                          <!-- Episode Item Shimmer 2 -->
-                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
-                                              <Grid.ColumnDefinitions>
-                                                  <ColumnDefinition Width="100"/>
-                                                  <ColumnDefinition Width="*"/>
-                                              </Grid.ColumnDefinitions>
-                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
-                                                  <ctl:ShimmerControl Width="140" Height="16" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="180" Height="14" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="160" Height="12" CornerRadius="4"/>
-                                              </StackPanel>
-                                          </Grid>
-                                          <!-- Episode Item Shimmer 3 -->
-                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
-                                              <Grid.ColumnDefinitions>
-                                                  <ColumnDefinition Width="100"/>
-                                                  <ColumnDefinition Width="*"/>
-                                              </Grid.ColumnDefinitions>
-                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
-                                                  <ctl:ShimmerControl Width="100" Height="16" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="220" Height="14" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="140" Height="12" CornerRadius="4"/>
-                                              </StackPanel>
-                                          </Grid>
-                                          <!-- Episode Item Shimmer 4 -->
-                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
-                                              <Grid.ColumnDefinitions>
-                                                  <ColumnDefinition Width="100"/>
-                                                  <ColumnDefinition Width="*"/>
-                                              </Grid.ColumnDefinitions>
-                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
-                                                  <ctl:ShimmerControl Width="130" Height="16" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="190" Height="14" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="170" Height="12" CornerRadius="4"/>
-                                              </StackPanel>
-                                          </Grid>
-                                          <!-- Episode Item Shimmer 5 -->
-                                          <Grid Height="80" Background="#1AFFFFFF" CornerRadius="10">
-                                              <Grid.ColumnDefinitions>
-                                                  <ColumnDefinition Width="100"/>
-                                                  <ColumnDefinition Width="*"/>
-                                              </Grid.ColumnDefinitions>
-                                              <ctl:ShimmerControl Width="80" Height="60" CornerRadius="8" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                              <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="8">
-                                                  <ctl:ShimmerControl Width="110" Height="16" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="200" Height="14" CornerRadius="4"/>
-                                                  <ctl:ShimmerControl Width="150" Height="12" CornerRadius="4"/>
-                                              </StackPanel>
-                                          </Grid>
-                                      </StackPanel>
-                                  </Grid>
-                              </Grid>
+                                      </ItemsRepeater>
+                                  </ScrollViewer>
+                           </Grid>
                           </Border>
                     </Grid>
 
                     <!-- SOURCES PANEL (Stremio Streams) -->
-                    <Grid x:Name="SourcesPanel" Grid.Column="1" Grid.Row="0" MaxWidth="600" Visibility="Collapsed" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Stretch">
+                    <Grid x:Name="SourcesPanel" Grid.Column="1" Grid.Row="0" MaxWidth="600" Visibility="Collapsed" Opacity="0" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Stretch">
                         <Grid.RenderTransform>
-                            <CompositeTransform x:Name="SourcesPanelTransform"/>
+                            <CompositeTransform x:Name="SourcesPanelTransform" TranslateX="200"/>
                         </Grid.RenderTransform>
                          <Border CornerRadius="20" BorderBrush="#1AFFFFFF" BorderThickness="1">
                              <Border.Background>
@@ -1173,7 +1176,7 @@
                                                           <ListViewItemPresenter 
                                                               SelectionCheckMarkVisualEnabled="False"
                                                               SelectedBackground="Transparent"
-                                                              SelectedForeground="{StaticResource GoldGradient}"
+                                                              SelectedForeground="{ThemeResource GoldGradient}"
                                                               SelectedPointerOverBackground="Transparent"
                                                               PointerOverBackground="Transparent"
                                                               PressedBackground="Transparent"
@@ -1208,7 +1211,7 @@
                                       <!-- The Selection Underline (Sliding below items) -->
                                       <Rectangle x:Name="AddonSelectionUnderline" 
                                                  Height="2" 
-                                                 Fill="{StaticResource GoldGradient}"
+                                                 Fill="{ThemeResource GoldGradient}"
                                                  VerticalAlignment="Bottom"
                                                  HorizontalAlignment="Left"
                                                  Visibility="Collapsed"
@@ -1221,7 +1224,7 @@
                                                 VerticalScrollBarVisibility="Auto"
                                                 VerticalScrollMode="Enabled"
                                                 Padding="16,0,16,36">
-                                      <ItemsRepeater x:Name="SourcesRepeater"
+                                      <ItemsRepeater x:Name="SourcesRepeater" ItemsSource="{x:Bind VisibleSourceStreams}"
                                                     ElementPrepared="SourcesRepeater_ElementPrepared"
                                                     ElementClearing="SourcesRepeater_ElementClearing">
                                           <ItemsRepeater.RenderTransform>

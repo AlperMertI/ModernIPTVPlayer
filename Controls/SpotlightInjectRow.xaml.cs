@@ -361,12 +361,29 @@ namespace ModernIPTVPlayer.Controls
             _isInViewport = false;
         }
 
+        /// <summary>
+        /// Resets the spotlight row state for recycling.
+        /// </summary>
+        public void PrepareForRecycle()
+        {
+            CleanupWebView();
+            _isInViewport = false;
+            
+            _debounceTimer?.Stop();
+            _syncDebounceTimer?.Stop();
+            
+            _items.Clear();
+            _currentIndex = 0;
+            this.DataContext = null;
+        }
+
         private string _pendingTrailerId = null;
         private bool _isInViewport = false;
 
         private System.Collections.IList? _lastItemsCollection = null;
         private CatalogRowViewModel? _lastVm = null;
         private DispatcherTimer? _debounceTimer;
+        private DispatcherTimer? _uiDebounceTimer;
 
         private void Vm_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
@@ -563,7 +580,16 @@ namespace ModernIPTVPlayer.Controls
                 
                 if (_items.Count > 0)
                 {
-                    UpdateUI();
+                    // [PINNACLE] Lazy Hydration: Don't update UI immediately during fast scroll.
+                    // Wait for the row to settle before loading heavy assets (Logos/Trailers).
+                    if (_uiDebounceTimer == null)
+                    {
+                        _uiDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+                        _uiDebounceTimer.Tick += UiDebounceTimer_Tick;
+                    }
+                    _uiDebounceTimer.Stop();
+                    _uiDebounceTimer.Start();
+
                     AnimateInfoIn(true);
                     UpdateNavigationVisibility();
                     SynchronizeViewport();
@@ -582,6 +608,12 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private void UiDebounceTimer_Tick(object? sender, object e)
+        {
+            _uiDebounceTimer?.Stop();
+            UpdateUI();
+        }
+
         private void UpdateUI()
         {
             if (_currentIndex < 0 || _currentIndex >= _items.Count) return;
@@ -590,29 +622,22 @@ namespace ModernIPTVPlayer.Controls
             SubscribeToItemChanges(item);
 
             TitleBlock.Text = item.Title ?? "";
-            
-            System.Diagnostics.Debug.WriteLine($"[Spotlight] UpdateUI: {item.Title} | Logo: {item.LogoUrl} | Failed: {item.LogoLoadFailed}");
 
             if (!string.IsNullOrEmpty(item.LogoUrl) && !item.LogoLoadFailed)
             {
                 var logoSource = ImageHelper.GetCachedLogo(item.LogoUrl);
                 if (logoSource != null)
                 {
-                    // [DETECT LOADED PLACEHOLDER] If image is already in cache, check dimensions immediately
-                    System.Diagnostics.Debug.WriteLine($"[Spotlight] logoSource Dimensions: {logoSource.PixelWidth}x{logoSource.PixelHeight}");
                     if (logoSource.PixelWidth > 0 && logoSource.PixelWidth < 5 && logoSource.PixelHeight < 5)
                     {
                         item.LogoLoadFailed = true;
                         LogoImage.Visibility = Visibility.Collapsed;
                         TitleBlock.Visibility = Visibility.Visible;
-                        System.Diagnostics.Debug.WriteLine($"[Spotlight] Logo source was detected as PLACEHOLDER (size {logoSource.PixelWidth}x{logoSource.PixelHeight}). Falling back to Title.");
                     }
                     else
                     {
-                        // [PERF] Only set source if it's actually different to avoid loading loops
                         if (LogoImage.Source != logoSource)
                         {
-                            System.Diagnostics.Debug.WriteLine($"[Spotlight] Setting Logo Source (New): {item.LogoUrl}");
                             LogoImage.Source = logoSource;
                         }
                         
@@ -691,8 +716,6 @@ namespace ModernIPTVPlayer.Controls
             {
                 WatchlistButton.Content = new FontIcon { Glyph = "\xE710", FontSize = 16 };
             }
-
-            System.Diagnostics.Debug.WriteLine($"[Spotlight] UI Updated for: {item.Title} (ID: {item.IMDbId}) | Logo: {!string.IsNullOrEmpty(item.LogoUrl)} | Trailer: {!string.IsNullOrEmpty(item.TrailerUrl)} | Desc: {(!string.IsNullOrEmpty(DescriptionBlock.Text) ? "Yes" : "No")} | ImageCandidates: {_currentImageCandidates.Count}");
 
             // Smart Pre-load: Decode next/prev logos
             DispatcherQueue.TryEnqueue(() => 

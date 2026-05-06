@@ -4,6 +4,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
+using Microsoft.UI.Xaml.Input;
 using ModernIPTVPlayer.Models;
 using System;
 using System.Collections.Generic;
@@ -35,6 +36,7 @@ namespace ModernIPTVPlayer
         private CancellationTokenSource? _sourcesRevealCts;
         private readonly HashSet<int> _animatedSourceRevealIndexes = new();
         private readonly ObservableCollection<StremioStreamViewModel> _visibleSourceStreams = new();
+        public ObservableCollection<StremioStreamViewModel> VisibleSourceStreams => _visibleSourceStreams;
         private const int SourceRevealStaggerMs = 34;
 
         private enum SourceSelectionReason
@@ -46,6 +48,20 @@ namespace ModernIPTVPlayer
         private void ClearSourcesPanelState()
         {
             _sourcesPanelController?.Clear();
+        }
+
+        private void ClearSourcesPresentationState()
+        {
+            CancelSourcesReveal();
+            _sourcesVisualGeneration++;
+            _animatedSourceRevealIndexes.Clear();
+            _sourcesRevealItemLimit = 0;
+            _lastSourcesShimmerCount = -1;
+            _visibleSourceStreams.Clear();
+            if (SourcesRepeater != null && SourcesRepeater.ItemsSource != _visibleSourceStreams)
+            {
+                SourcesRepeater.ItemsSource = _visibleSourceStreams;
+            }
         }
 
         private bool ShouldOpenMovieSourcesEarly(IMediaStream item)
@@ -82,16 +98,10 @@ namespace ModernIPTVPlayer
             if (addons == null || addons.Count == 0) return;
 
             _isSourcesFetchInProgress = true;
-            _areSourcesVisible = true;
-            _suppressSourceSelectionUi = true;
-            try
-            {
-                _sourcesPanelController.InitializeLoading(addons, GetDynamicShimmerCount());
-            }
-            finally
-            {
-                _suppressSourceSelectionUi = false;
-            }
+            OpenSourcesPanel(PanelChangeReason.MovieAutoSources);
+            
+            _sourcesPanelController.InitializeLoading(addons, GetDynamicShimmerCount());
+            
             SyncLayout();
         }
 
@@ -115,37 +125,47 @@ namespace ModernIPTVPlayer
         {
             if (fe == null) return;
 
-            int delayMs = useIndexDelay ? Math.Min(Math.Max(index, 0) * SourceRevealStaggerMs, 360) : 0;
+            // 1. Enable Translation Facade FIRST to prevent "Property not found" errors
+            ElementCompositionPreview.SetIsTranslationEnabled(fe, true);
+            
             var visual = ElementCompositionPreview.GetElementVisual(fe);
             var compositor = visual.Compositor;
             var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 0.86f), new Vector2(0.16f, 1.0f));
 
-            fe.Opacity = 1;
+            int delayMs = useIndexDelay ? Math.Min(Math.Max(index, 0) * SourceRevealStaggerMs, 360) : 0;
+
+            // 2. Stop existing animations safely
             visual.StopAnimation(nameof(Visual.Opacity));
             visual.StopAnimation(nameof(Visual.Offset));
+            visual.StopAnimation("Translation");
+
             if (visual.Clip is InsetClip clip)
             {
                 clip.StopAnimation(nameof(InsetClip.RightInset));
                 clip.StopAnimation(nameof(InsetClip.LeftInset));
             }
             visual.Clip = null;
-            visual.Opacity = 0f;
-            visual.Offset = new Vector3(0, 14, 0);
 
+            // 3. Set Initial State
+            visual.Opacity = 0f;
+            visual.Properties.InsertVector3("Translation", new Vector3(0, 18, 0));
+
+            // 4. Smooth Opacity Animation
             var opacity = compositor.CreateScalarKeyFrameAnimation();
             opacity.InsertKeyFrame(0f, 0f);
             opacity.InsertKeyFrame(1f, 1f, easing);
-            opacity.Duration = TimeSpan.FromMilliseconds(280);
+            opacity.Duration = TimeSpan.FromMilliseconds(320);
             opacity.DelayTime = TimeSpan.FromMilliseconds(delayMs);
 
-            var translation = compositor.CreateVector3KeyFrameAnimation();
-            translation.InsertKeyFrame(0f, new Vector3(0, 14, 0));
-            translation.InsertKeyFrame(1f, Vector3.Zero, easing);
-            translation.Duration = TimeSpan.FromMilliseconds(420);
-            translation.DelayTime = TimeSpan.FromMilliseconds(delayMs);
+            // 2. Precise Glide Animation (Explicit Start)
+            var glide = compositor.CreateVector3KeyFrameAnimation();
+            glide.InsertKeyFrame(0f, new Vector3(0, 18, 0));
+            glide.InsertKeyFrame(1f, Vector3.Zero, easing);
+            glide.Duration = TimeSpan.FromMilliseconds(450);
+            glide.DelayTime = TimeSpan.FromMilliseconds(delayMs);
 
             visual.StartAnimation(nameof(Visual.Opacity), opacity);
-            visual.StartAnimation(nameof(Visual.Offset), translation);
+            visual.StartAnimation("Translation", glide);
         }
 
         private void CancelSourcesReveal()
@@ -164,7 +184,8 @@ namespace ModernIPTVPlayer
             _sourceScrollVersion++;
 
             var snapshot = streams?.Where(s => s != null).ToList() ?? new List<StremioStreamViewModel>();
-            _sourcesRevealItemLimit = animate ? snapshot.Count : 0;
+            bool containsOnlyPlaceholders = snapshot.Count > 0 && snapshot.All(s => s.IsPlaceholder);
+            _sourcesRevealItemLimit = animate && !containsOnlyPlaceholders ? snapshot.Count : 0;
 
             if (SourcesRepeater != null && SourcesRepeater.ItemsSource != _visibleSourceStreams)
             {
@@ -547,6 +568,7 @@ namespace ModernIPTVPlayer
                         AutoSelectBestLoadedAddon();
                     }
                 }
+                ClearOrphanedPlaceholderPresentation();
                 _owner.QueueAddonSelectionUnderlineUpdateAfterLayout(true);
             }
 
@@ -563,6 +585,7 @@ namespace ModernIPTVPlayer
                 {
                     AutoSelectBestLoadedAddon();
                 }
+                ClearOrphanedPlaceholderPresentation();
                 _owner.QueueAddonSelectionUnderlineUpdateAfterLayout(true);
             }
 
@@ -670,6 +693,18 @@ namespace ModernIPTVPlayer
                 }
             }
 
+            private void ClearOrphanedPlaceholderPresentation()
+            {
+                bool selectedIsLoading = _owner.AddonSelectorList?.SelectedItem is StremioAddonViewModel selected && selected.IsLoading;
+                bool onlyPlaceholdersVisible = _owner._visibleSourceStreams.Count > 0 &&
+                                               _owner._visibleSourceStreams.All(s => s.IsPlaceholder);
+
+                if (!selectedIsLoading && onlyPlaceholdersVisible)
+                {
+                    _owner.ClearSourcesPresentationState();
+                }
+            }
+
             public void SetActiveStream(StremioStreamViewModel activeVm)
             {
                 if (_owner._addonResults == null) return;
@@ -684,21 +719,18 @@ namespace ModernIPTVPlayer
                 }
             }
 
-            private static List<StremioStreamViewModel> CreatePlaceholders(int shimmerCount)
+            private List<StremioStreamViewModel> CreatePlaceholders(int shimmerCount)
             {
-                var dummyStreams = new List<StremioStreamViewModel>();
-                int count = Math.Max(1, shimmerCount);
-                for (int i = 0; i < count; i++)
+                var list = new List<StremioStreamViewModel>();
+                foreach (var opacity in _owner.GenerateShimmerOpacitySequence(shimmerCount))
                 {
-                    double opacity = 1.0 - ((double)i / count);
-                    dummyStreams.Add(new StremioStreamViewModel
+                    list.Add(new StremioStreamViewModel
                     {
                         IsPlaceholder = true,
-                        ShimmerOpacity = Math.Max(0.1, opacity)
+                        ShimmerOpacity = opacity
                     });
                 }
-
-                return dummyStreams;
+                return list;
             }
         }
         #region Event Handlers & Lifecycle
@@ -707,18 +739,22 @@ namespace ModernIPTVPlayer
         {
             if (args.Element is FrameworkElement fe)
             {
+                StremioStreamViewModel? rowViewModel = null;
                 if (sender.ItemsSource is System.Collections.IList list && args.Index >= 0 && args.Index < list.Count)
                 {
-                    fe.DataContext = list[args.Index];
+                    rowViewModel = list[args.Index] as StremioStreamViewModel;
+                    fe.DataContext = rowViewModel;
                 }
 
                 int generation = _sourcesVisualGeneration;
                 int preparedIndex = args.Index;
                 string stamp = $"src:{generation}:{preparedIndex}";
+                bool isPlaceholder = rowViewModel?.IsPlaceholder == true;
 
                 // Only reveal if it's within the limit and hasn't been animated in this generation
                 bool shouldReveal = preparedIndex >= 0 &&
                                     preparedIndex < _sourcesRevealItemLimit &&
+                                    !isPlaceholder &&
                                     !_animatedSourceRevealIndexes.Contains(preparedIndex);
 
                 if (Equals(fe.Tag, stamp)) return;
@@ -743,6 +779,24 @@ namespace ModernIPTVPlayer
                 fe.DataContext = null;
                 fe.Tag = null;
                 ResetRevealState(fe);
+            }
+        }
+
+        private void SourceItem_PointerEntered(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is FrameworkElement fe)
+            {
+                var hoverBorder = fe.FindName("HoverBorder") as Border;
+                if (hoverBorder != null) AnimateOpacity(hoverBorder, 0.1, TimeSpan.FromMilliseconds(200));
+            }
+        }
+
+        private void SourceItem_PointerExited(object sender, PointerRoutedEventArgs e)
+        {
+            if (sender is FrameworkElement fe)
+            {
+                var hoverBorder = fe.FindName("HoverBorder") as Border;
+                if (hoverBorder != null) AnimateOpacity(hoverBorder, 0.0, TimeSpan.FromMilliseconds(200));
             }
         }
 
@@ -838,24 +892,39 @@ namespace ModernIPTVPlayer
                 {
                     height = SourcesPanel.ActualHeight - 64 - 54 - 36;
                 }
-                if (height <= 0) height = ActualHeight > 0 ? ActualHeight * 0.72 : 520;
 
-                const double estimatedSourceRowHeight = 66.0;
-                int count = (int)Math.Ceiling(height / estimatedSourceRowHeight);
-                return Math.Clamp(count, 3, 18);
+                return CalculateSkeletonCount(height, 92.0);
             }
-            catch { return 5; }
+            catch { return 8; }
         }
 
-        private void QueueSourcesShimmerFitRefresh()
+        private void RefreshAllShimmers()
         {
-            if (_sourcesPanelController == null || SourcesPanel?.Visibility != Visibility.Visible) return;
+            if (_requestedPanelMode == MediaDetailPanelMode.None &&
+                (SourcesPanel == null || SourcesPanel.Visibility != Visibility.Visible) &&
+                (EpisodesPanel == null || EpisodesPanel.Visibility != Visibility.Visible)) return;
 
             int version = ++_sourcesShimmerRefreshVersion;
             DispatcherQueue.TryEnqueue(() =>
             {
                 if (version != _sourcesShimmerRefreshVersion) return;
-                _sourcesPanelController.RefreshSelectedShimmerCount(GetDynamicShimmerCount());
+                int count = GetDynamicShimmerCount();
+                
+                // 1. Sources Panel Refresh
+                _sourcesPanelController?.RefreshSelectedShimmerCount(count);
+                
+                // 2. Episodes Panel Refresh
+                if (_isEpisodesLoading)
+                {
+                    var placeholders = CreateEpisodePlaceholders(count);
+                    // Only update if count changed or currently empty to avoid flicker
+                    if (CurrentEpisodes.Count != count || (count > 0 && CurrentEpisodes.Any(e => !e.IsPlaceholder)))
+                    {
+                        CurrentEpisodes.Clear();
+                        foreach (var p in placeholders) CurrentEpisodes.Add(p);
+                    }
+                }
+                
                 QueueAddonSelectionUnderlineUpdateAfterLayout(false);
             });
         }

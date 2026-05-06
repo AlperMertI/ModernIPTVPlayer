@@ -603,15 +603,15 @@ namespace ModernIPTVPlayer.Services.Stremio
             return DeduplicateAndRank(resultsArray.SelectMany(x => x).ToList(), ""); 
         }
 
-        public async Task<StremioCatalogRoot> GetCatalogAsync(string baseUrl, string type, string id, System.Threading.CancellationToken cancellationToken = default)
+        public async Task<StremioCatalogRoot> GetCatalogAsync(string url, string type, string id, System.Threading.CancellationToken cancellationToken = default, List<StremioMediaStream>? preloadedItems = null)
         {
-            string url = $"{baseUrl.TrimEnd('/')}/catalog/{type}/{id}.json";
-            return await GetCatalogAsync(url, cancellationToken);
+            string catalogUrl = $"{url.TrimEnd('/')}/catalog/{type}/{id}.json";
+            return await GetCatalogAsync(catalogUrl, cancellationToken, preloadedItems: preloadedItems);
         }
 
         private static readonly TimeSpan CatalogHardTtl = TimeSpan.FromHours(4);
 
-        public async Task<StremioCatalogRoot> GetCatalogAsync(string url, System.Threading.CancellationToken cancellationToken = default, bool bypassConditional = false, string? preloadedEtag = null)
+        public async Task<StremioCatalogRoot> GetCatalogAsync(string url, System.Threading.CancellationToken cancellationToken = default, bool bypassConditional = false, string? preloadedEtag = null, List<StremioMediaStream>? preloadedItems = null)
         {
             // Extract Base URL (Source Addon)
             string addonBaseUrl = url;
@@ -657,8 +657,12 @@ namespace ModernIPTVPlayer.Services.Stremio
                 // If items are missing (common during ETag-only handoff), read them from disk now.
                 if (cachedItems == null)
                 {
-                    var (_, diskItems, _) = await CatalogCacheManager.LoadCatalogBinaryAsync(url);
-                    cachedItems = diskItems;
+                    cachedItems = preloadedItems;
+                    if (cachedItems == null)
+                    {
+                        var (_, diskItems, _) = await CatalogCacheManager.LoadCatalogBinaryAsync(url);
+                        cachedItems = diskItems;
+                    }
                 }
 
                 if (cachedItems != null)

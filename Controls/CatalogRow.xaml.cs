@@ -79,7 +79,7 @@ namespace ModernIPTVPlayer.Controls
         }
 
         public static readonly DependencyProperty ItemTemplateProperty =
-            DependencyProperty.Register("ItemTemplate", typeof(DataTemplate), typeof(CatalogRow), new PropertyMetadata(null));
+            DependencyProperty.Register("ItemTemplate", typeof(DataTemplate), typeof(CatalogRow), new PropertyMetadata(null, OnItemTemplateChanged));
 
         public DataTemplate ItemTemplate
         {
@@ -138,6 +138,8 @@ namespace ModernIPTVPlayer.Controls
         }
 
         public ItemsRepeater RepeaterControl => Repeater;
+        
+        private Models.CatalogRowViewModel? _currentVm;
 
 
 
@@ -155,11 +157,58 @@ namespace ModernIPTVPlayer.Controls
             try { ModernIPTVPlayer.App.DebugNdjson("CatalogRow.xaml.cs:ctor", "enter", null, "H-RENDER"); } catch { }
             // #endregion
             this.InitializeComponent();
+            this.DataContextChanged += CatalogRow_DataContextChanged;
+            
+            // Provide dummy items for shimmer to fill width
+            ShimmerPanel.ItemsSource = new int[15];
+
             // #region agent log
             try { ModernIPTVPlayer.App.DebugNdjson("CatalogRow.xaml.cs:ctor", "InitializeComponent done", null, "H-RENDER"); } catch { }
             // #endregion
             this.Loaded += CatalogRow_Loaded;
             this.Unloaded += CatalogRow_Unloaded;
+        }
+
+        private void CatalogRow_DataContextChanged(FrameworkElement sender, DataContextChangedEventArgs args)
+        {
+            if (_currentVm != null)
+            {
+                _currentVm.PropertyChanged -= CatalogRow_ViewModelPropertyChanged;
+            }
+
+            if (args.NewValue is Models.CatalogRowViewModel vm)
+            {
+                _currentVm = vm;
+                _currentVm.PropertyChanged += CatalogRow_ViewModelPropertyChanged;
+                
+                SyncPropertiesFromViewModel();
+            }
+            else
+            {
+                _currentVm = null;
+            }
+        }
+
+        private void CatalogRow_ViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(Models.CatalogRowViewModel.Items) || 
+                e.PropertyName == nameof(Models.CatalogRowViewModel.IsLoading) ||
+                e.PropertyName == nameof(Models.CatalogRowViewModel.CatalogName))
+            {
+                SyncPropertiesFromViewModel();
+            }
+        }
+
+        private void SyncPropertiesFromViewModel()
+        {
+            if (_currentVm == null) return;
+
+            CatalogName = _currentVm.CatalogName;
+            ItemsSource = _currentVm.Items;
+            IsLoading = _currentVm.IsLoading;
+            IsHeaderInteractive = _currentVm.IsHeaderInteractive;
+            
+            UpdateLoadingState();
         }
 
         private void CatalogRow_Loaded(object sender, RoutedEventArgs e)
@@ -423,6 +472,26 @@ namespace ModernIPTVPlayer.Controls
         }
 
 
+
+        /// <summary>
+        /// Resets the row state to prepare it for recycling in the ElementFactory.
+        /// </summary>
+        public void PrepareForRecycle()
+        {
+            _scrollEndTimer?.Stop();
+            _isScrolling = false;
+            
+            // Clear data bindings to release references
+            this.DataContext = null;
+            this.ItemsSource = null;
+            this.CatalogName = string.Empty;
+            
+            // Reset scroll position for next use
+            if (ItemsScrollViewer != null)
+            {
+                ItemsScrollViewer.ChangeView(0, null, null, true);
+            }
+        }
 
         private void RootPanel_PointerEntered(object sender, PointerRoutedEventArgs e)
         {

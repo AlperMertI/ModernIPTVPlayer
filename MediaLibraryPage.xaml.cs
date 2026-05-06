@@ -88,7 +88,7 @@ namespace ModernIPTVPlayer
                 };
 
                 WireEvents();
-                AppLogger.Info($"[MediaLibraryPage] Initialized");
+                AppLogger.Info($"[LIB-PAGE] Initialized");
                 // #region agent log
                 App.DebugNdjson("MediaLibraryPage.xaml.cs:ctor", "exit", null, "H2-H3");
                 // #endregion
@@ -98,7 +98,7 @@ namespace ModernIPTVPlayer
                 // #region agent log
                 App.DebugNdjson("MediaLibraryPage.xaml.cs:ctor", "EXCEPTION", new System.Collections.Generic.Dictionary<string, object?> { ["type"] = ex.GetType().FullName, ["msg"] = ex.Message, ["stack"] = ex.StackTrace }, "H2-H3");
                 // #endregion
-                AppLogger.Critical($"[MediaLibraryPage] Constructor Error", ex);
+                AppLogger.Critical($"[LIB-PAGE] Constructor Error", ex);
             }
         }
 
@@ -313,7 +313,7 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                AppLogger.Error($"[MediaLibraryPage] OnNavigatedTo Error", ex);
+                AppLogger.Error($"[LIB-PAGE] OnNavigatedTo Error", ex);
             }
         }
 
@@ -321,6 +321,9 @@ namespace ModernIPTVPlayer
         {
             base.OnNavigatedFrom(e);
             
+            // [FIX] Kill any active trailer leaks from expanded cards immediately
+            _stremioExpandedCardOverlay?.ForceClose();
+
             // [PHASE 2.4] Resource Disposal: Kill the hydration anchors
             _navigationCts?.Cancel();
             _navigationCts = null;
@@ -336,18 +339,14 @@ namespace ModernIPTVPlayer
             // Notify MediaLibraryStateService to purge if needed
             MediaLibraryStateService.Instance.UpdateScope(null);
 
-            // [PHASE 2.4] Manual GC Hint: Flush transient UI and Buffer allocations
-            GC.Collect(2, GCCollectionMode.Forced, true);
-            GC.WaitForPendingFinalizers();
-
-            AppLogger.Info("[MediaLibraryPage] Navigated From - Resources Purged.");
+            AppLogger.Info("[LIB-PAGE] Navigated From.");
         }
 
         public async void SwitchMediaType(MediaType newType)
         {
             if (_mediaType == newType) return;
             
-            AppLogger.Info($"[MediaLibraryPage] Switching MediaType to {newType}");
+            AppLogger.Info($"[LIB-PAGE] Switching MediaType to {newType}");
             _mediaType = newType;
             PageStateProvider.LastMediaType = newType;
             
@@ -380,7 +379,7 @@ namespace ModernIPTVPlayer
             CategoryList.ItemsSource = null;
             MediaGrid.ItemsSource = null;
             StremioControl.Clear();
-            AppLogger.Info($"[MediaLibraryPage] Data Cleared for {_mediaType}");
+            AppLogger.Info($"[LIB-PAGE] Data Cleared for {_mediaType}");
         }
 
         // ==========================================
@@ -439,7 +438,7 @@ namespace ModernIPTVPlayer
                 if (_currentSource == newSource) return;
 
                 _currentSource = newSource;
-                AppLogger.Info($"[MediaLibraryPage] Source Switching to {_currentSource}");
+                AppLogger.Info($"[LIB-PAGE] Source Switching to {_currentSource}");
 
                 UpdateLayoutForMode();
                 
@@ -470,7 +469,7 @@ namespace ModernIPTVPlayer
             var contextSource = _currentSource;
             string playlistId = AppSettings.LastPlaylistId?.ToString() ?? "default";
 
-            AppLogger.Info($"[MediaLibraryPage] Loading IPTV Data ({contextType})");
+            AppLogger.Info($"[LIB-PAGE] Loading IPTV Data ({contextType})");
 
             // 0. MEMORY CACHE CHECK
             if (_categoryCache.TryGetValue(contextType, out var memCats) && 
@@ -479,7 +478,7 @@ namespace ModernIPTVPlayer
             {
                 if (token.IsCancellationRequested || _mediaType != contextType) return;
 
-                AppLogger.Info($"[MediaLibraryPage] Restoring from Memory Cache ({contextType})");
+                AppLogger.Info($"[LIB-PAGE] Restoring from Memory Cache ({contextType})");
                 _iptvCategories = memCats;
                 _allIptvItems = memItems;
                 await UpdateIptvCollectionScopeAsync(playlistId, contextType);
@@ -511,7 +510,7 @@ namespace ModernIPTVPlayer
                     
                     if (cats.Count == 0 && !token.IsCancellationRequested)
                     {
-                        AppLogger.Warn($"[MediaLibraryPage] Cache Empty. Fetching {typeKey} categories from network...");
+                        AppLogger.Warn($"[LIB-PAGE] Cache Empty. Fetching {typeKey} categories from network...");
                         string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_{typeKey}_categories";
                         string json = await _httpClient.GetStringAsync(api, token);
                         cats = HttpHelper.TryDeserializeList(json, Services.Json.AppJsonContext.Default.ListLiveCategory);
@@ -528,7 +527,7 @@ namespace ModernIPTVPlayer
                         
                         if ((movies == null || movies.Count == 0) && !token.IsCancellationRequested)
                         {
-                            AppLogger.Warn("[MediaLibraryPage] Cache Empty. Fetching VOD streams from network...");
+                            AppLogger.Warn("[LIB-PAGE] Cache Empty. Fetching VOD streams from network...");
                             string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_vod_streams";
                             MemoryTelemetryService.LogCheckpoint("MediaLibrary.VOD.fetch.start", $"playlist={playlistId}");
                             using var response = await _httpClient.GetAsync(api, HttpCompletionOption.ResponseHeadersRead, token);
@@ -553,7 +552,7 @@ namespace ModernIPTVPlayer
                         
                         if ((series == null || series.Count == 0) && !token.IsCancellationRequested)
                         {
-                            AppLogger.Warn("[MediaLibraryPage] Cache Empty. Fetching Series from network...");
+                            AppLogger.Warn("[LIB-PAGE] Cache Empty. Fetching Series from network...");
                             string api = $"{_loginInfo.Host}/player_api.php?username={_loginInfo.Username}&password={_loginInfo.Password}&action=get_series";
                             MemoryTelemetryService.LogCheckpoint("MediaLibrary.Series.fetch.start", $"playlist={playlistId}");
                             using var response = await _httpClient.GetAsync(api, HttpCompletionOption.ResponseHeadersRead, token);
@@ -577,7 +576,7 @@ namespace ModernIPTVPlayer
                     _categoryCache[contextType] = cats;
                     _itemsCache[contextType] = items;
 
-                    AppLogger.Info($"[MediaLibraryPage] Background Load Done. Cats: {cats.Count}, Items: {items.Count}");
+                    AppLogger.Info($"[LIB-PAGE] Background Load Done. Cats: {cats.Count}, Items: {items.Count}");
                 });
 
                 if (token.IsCancellationRequested || _mediaType != contextType) return;
@@ -588,7 +587,7 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                if (!token.IsCancellationRequested) AppLogger.Error($"[MediaLibraryPage] LoadIptvDataAsync Error", ex);
+                if (!token.IsCancellationRequested) AppLogger.Error($"[LIB-PAGE] LoadIptvDataAsync Error", ex);
             }
             finally
             {
@@ -650,11 +649,11 @@ namespace ModernIPTVPlayer
 
                 // If identical reference, GridView will skip layout destruction.
                 MediaGrid.ItemsSource = collection;
-                AppLogger.Info($"[MediaLibraryPage] Displaying {((ICollection)collection).Count} items for Category {category.CategoryName} (RawCatId='{selectedRaw}', NormalizedCatId='{selectedNormalized}', Cache {(cacheHit ? "Hit" : "Miss")})");
+                AppLogger.Info($"[LIB-PAGE] Displaying {((ICollection)collection).Count} items for Category {category.CategoryName} (RawCatId='{selectedRaw}', NormalizedCatId='{selectedNormalized}', Cache {(cacheHit ? "Hit" : "Miss")})");
             }
             catch (Exception ex)
             {
-                AppLogger.Error($"[MediaLibraryPage] LoadCategoryItemsAsync Error", ex);
+                AppLogger.Error($"[LIB-PAGE] LoadCategoryItemsAsync Error", ex);
             }
             finally
             {
@@ -796,7 +795,7 @@ namespace ModernIPTVPlayer
         {
             // Lightweight diagnostic: avoid full scan hydration
             int itemCount = (_itemsByNormalizedCategoryId != null && _itemsByNormalizedCategoryId.TryGetValue(selectedNormalized, out var list)) ? list.Count : 0;
-            AppLogger.Info($"[Diag][MediaLibraryPage] Category: name='{category.CategoryName}' raw='{selectedRaw}' norm='{selectedNormalized}' items={itemCount}");
+            AppLogger.Info($"[Diag][LIB-PAGE] Category: name='{category.CategoryName}' raw='{selectedRaw}' norm='{selectedNormalized}' items={itemCount}");
         }
 
         private static string? GetStreamCategoryId(IMediaStream stream)

@@ -452,7 +452,7 @@ namespace ModernIPTVPlayer.Services
             }}
             if (event.data === 1 || event.data === 3) {{ 
                  if (event.data === 1) {{
-                    try {{ event.target.unMute(); event.target.setPlaybackQuality('{suggestedQ}'); }} catch(e) {{}}
+                    try {{ event.target.setPlaybackQuality('{suggestedQ}'); }} catch(e) {{}}
                  }}
                  window.chrome.webview.postMessage('READY');
             }}
