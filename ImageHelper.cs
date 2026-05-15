@@ -35,12 +35,16 @@ namespace ModernIPTVPlayer
         {
             if (string.IsNullOrEmpty(url)) return null;
 
-            // Use poster cache for small/medium images (DecodePixel < 500)
+            // [Senior] Aggressive Cache Check: If we already have this image (any version)
+            // returning the existing object allows for instant UI-thread 'isReady' detection.
+            if (_posterCache.TryGetValue(url, out var existing)) return existing;
+
             bool isThumbnail = (decodeWidth > 0 && decodeWidth < 500) || (decodeHeight > 0 && decodeHeight < 500);
-            if (isThumbnail && _posterCache.TryGetValue(url, out var existing)) return existing;
 
             try
             {
+
+
                 var bitmap = new BitmapImage();
                 
                 // CRITICAL: Prevent WinUI from holding the full-resolution source in its internal cache
@@ -51,9 +55,15 @@ namespace ModernIPTVPlayer
                     if (decodeWidth > 0) bitmap.DecodePixelWidth = decodeWidth;
                     if (decodeHeight > 0) bitmap.DecodePixelHeight = decodeHeight;
                 }
+                else
+                {
+                    // [Senior] If no decode constraints, still use the internal cache for performance
+                    // unless explicitly told otherwise. 'IgnoreImageCache' was causing 9s delays.
+                    bitmap.CreateOptions = BitmapCreateOptions.None;
+                }
 
-                bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache; // We'll manage hit-testing for big items ourselves
                 bitmap.UriSource = new Uri(url);
+
 
                 // [SENIOR] Hook into the bitmap's own lifecycle to detect placeholders globally.
                 // This ensures that once a 1x1 image is detected for a URL, every control in the app knows.
@@ -443,6 +453,76 @@ namespace ModernIPTVPlayer
             return lighten ? Color.FromArgb(255, 255, 255, 255) : Color.FromArgb(255, 0, 0, 0);
         }
 
+        /// <summary>
+        /// [Ambience] Extracts dominant colors from a BitmapImage on the UI thread.
+        /// </summary>
+        public static async Task<(Color Primary, Color Secondary)> ExtractColorsAsync(BitmapImage bitmap)
+        {
+            if (bitmap == null || bitmap.UriSource == null) return (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
+            var result = await GetOrExtractColorAsync(bitmap.UriSource.ToString());
+            return result ?? (Color.FromArgb(255, 30, 30, 30), Color.FromArgb(255, 30, 30, 30));
+        }
+
+        public static Color GenerateAreaBackground(Color primary)
+        {
+            // [Senior] Optimized Area Background generation:
+            // Desaturate and darken significantly to provide a subtle, depth-aware background
+            // that doesn't compete with the main content.
+            float h, s, v;
+            ColorToHsv(primary, out h, out s, out v);
+            
+            // Aim for 15% saturation and 12% value for a very subtle "ambient smoke" effect
+            return HsvToColor(h, s * 0.4f, v * 0.15f);
+        }
+
+        public static void ColorToHsv(Color color, out float h, out float s, out float v)
+        {
+            float r = color.R / 255f;
+            float g = color.G / 255f;
+            float b = color.B / 255f;
+
+            float max = Math.Max(r, Math.Max(g, b));
+            float min = Math.Min(r, Math.Min(g, b));
+            float delta = max - min;
+
+            h = 0;
+            if (delta > 0)
+            {
+                if (max == r) h = (g - b) / delta + (g < b ? 6 : 0);
+                else if (max == g) h = (b - r) / delta + 2;
+                else h = (r - g) / delta + 4;
+                h /= 6;
+            }
+
+            s = (max == 0) ? 0 : delta / max;
+            v = max;
+        }
+
+        public static Color HsvToColor(float h, float s, float v)
+        {
+            float r, g, b;
+            int i = (int)(h * 6);
+            float f = h * 6 - i;
+            float p = v * (1 - s);
+            float q = v * (1 - f * s);
+            float t = v * (1 - (1 - f) * s);
+
+            switch (i % 6)
+            {
+                case 0: r = v; g = t; b = p; break;
+                case 1: r = q; g = v; b = p; break;
+                case 2: r = p; g = v; b = t; break;
+                case 3: r = p; g = q; b = v; break;
+                case 4: r = t; g = p; b = v; break;
+                case 5: r = v; g = p; b = q; break;
+                default: r = g = b = v; break;
+            }
+
+            return Color.FromArgb(255, (byte)(r * 255), (byte)(g * 255), (byte)(b * 255));
+        }
+
+
+
         public static Color ExtractAreaAverageColor(byte[] pixels, int width, int height, double areaLeft, double areaTop, double areaWidth, double areaHeight)
         {
             try
@@ -483,7 +563,14 @@ namespace ModernIPTVPlayer
             }
         }
 
+        public static bool IsCached(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return false;
+            return _posterCache.ContainsKey(url);
+        }
+
         public static bool IsPlaceholder(string url)
+
         {
             if (string.IsNullOrWhiteSpace(url)) return true;
             if (_knownPlaceholders.ContainsKey(url)) return true;

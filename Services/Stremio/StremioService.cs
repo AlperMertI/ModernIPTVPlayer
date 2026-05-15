@@ -162,10 +162,15 @@ namespace ModernIPTVPlayer.Services.Stremio
         {
             string url = $"{baseUrl.TrimEnd('/')}/meta/{type}/{id}.json";
             string idPrefix = correlationId != null ? $"[{correlationId}] " : "";
-            System.Diagnostics.Debug.WriteLine($"{idPrefix}[StremioService] Fetching metadata URL: {url}");
+            string logMsg = $"[METADATA-FETCH] {idPrefix}URL: {url}";
+            System.Diagnostics.Debug.WriteLine(logMsg);
+            
+            App.DebugNdjson("StremioService.cs", $"Fetching Meta: {url}", 
+                new Dictionary<string, object?> { ["CorrelationId"] = correlationId, ["URL"] = url }, 
+                "metadata-fetch");
             try
             {
-                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
                 using var response = await _client.SendAsync(request, linkedCts.Token);
@@ -516,7 +521,8 @@ namespace ModernIPTVPlayer.Services.Stremio
                 {
                     using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(8));
                     using var combinedCts = System.Threading.CancellationTokenSource.CreateLinkedTokenSource(ct, cts.Token);
-                    var root = await GetCatalogAsync(url, combinedCts.Token);
+                    // [Senior] Search results are transient; we bypass disk cache to prevent disk bloat.
+                    var root = await GetCatalogAsync(url, combinedCts.Token, allowDiskCache: false);
                     if (root?.Metas != null)
                     {
                         results.AddRange(root.Metas.Select((m, index) => new StremioMediaStream(m) { SourceAddon = addonUrl, SourceIndex = index }));
@@ -611,7 +617,7 @@ namespace ModernIPTVPlayer.Services.Stremio
 
         private static readonly TimeSpan CatalogHardTtl = TimeSpan.FromHours(4);
 
-        public async Task<StremioCatalogRoot> GetCatalogAsync(string url, System.Threading.CancellationToken cancellationToken = default, bool bypassConditional = false, string? preloadedEtag = null, List<StremioMediaStream>? preloadedItems = null)
+        public async Task<StremioCatalogRoot> GetCatalogAsync(string url, System.Threading.CancellationToken cancellationToken = default, bool bypassConditional = false, string? preloadedEtag = null, List<StremioMediaStream>? preloadedItems = null, bool allowDiskCache = true)
         {
             // Extract Base URL (Source Addon)
             string addonBaseUrl = url;
@@ -621,8 +627,8 @@ namespace ModernIPTVPlayer.Services.Stremio
             string? etag = preloadedEtag;
             IReadOnlyList<StremioMediaStream>? cachedItems = null;
 
-            // 1. Only read disk if ETag wasn't provided by the caller (Phase 0 -> Phase 1 handover)
-            if (etag == null && !bypassConditional)
+            // 1. Only read disk if allowed and ETag wasn't provided by the caller (Phase 0 -> Phase 1 handover)
+            if (allowDiskCache && etag == null && !bypassConditional)
             {
                 var (diskEtag, diskItems, cachedTime) = await CatalogCacheManager.LoadCatalogBinaryAsync(url);
                 etag = diskEtag;
@@ -728,7 +734,7 @@ namespace ModernIPTVPlayer.Services.Stremio
                         s.SourceAddon = addonBaseUrl;
                         return s;
                     }).ToList();
-                    _ = Task.Run(() => CatalogCacheManager.SaveCatalogBinaryAsync(url, newEtag, itemsToCache));
+                    if (allowDiskCache) _ = Task.Run(() => CatalogCacheManager.SaveCatalogBinaryAsync(url, newEtag, itemsToCache));
                 }
 
                 return root;

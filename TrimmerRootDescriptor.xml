@@ -1,14 +1,22 @@
 <linker>
   <assembly fullname="ModernIPTVPlayer" preserve="all" />
   <assembly fullname="Mpv.UI" preserve="all" />
-  <assembly fullname="Mpv.Core" preserve="all" />
+  <assembly fullname="Richasy.Mpv.Core" preserve="all" />
   <assembly fullname="Microsoft.WinUI" preserve="all" />
   <assembly fullname="Microsoft.InteractiveExperiences.Projection" preserve="all" />
   <type fullname="Windows.Foundation.Uri" preserve="all" />
   <type fullname="Microsoft.UI.Xaml.ResourceDictionary" preserve="all" />
   
-  <type fullname="ModernIPTVPlayer.Models.*" preserve="all" />
-  <type fullname="ModernIPTVPlayer.Models.Stremio.*" preserve="all" />
-  <type fullname="ModernIPTVPlayer.Helpers.*" preserve="all" />
+  <!-- [STABILITY] Controls and ViewModels need metadata for XAML binding -->
   <type fullname="ModernIPTVPlayer.Controls.*" preserve="all" />
+  <type fullname="ModernIPTVPlayer.ViewModels.*" preserve="all" />
+  <type fullname="ModernIPTVPlayer.Models.*" preserve="all" />
+  <type fullname="ModernIPTVPlayer.Services.*" preserve="all" />
+  
+  <type fullname="System.Collections.ObjectModel.ObservableCollection`1" preserve="all" />
+  <type fullname="System.Collections.Generic.List`1" preserve="all" />
+  <type fullname="System.Collections.Specialized.INotifyCollectionChanged" preserve="all" />
+  <type fullname="System.ComponentModel.INotifyPropertyChanged" preserve="all" />
+  <type fullname="System.Numerics.Vector3" preserve="all" />
+  <type fullname="System.Numerics.Vector2" preserve="all" />
 </linker>

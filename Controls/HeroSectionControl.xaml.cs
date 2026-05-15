@@ -200,17 +200,31 @@ namespace ModernIPTVPlayer.Controls
         private void SetOpacity(FrameworkElement control, double opacity) { if (Math.Abs(control.Opacity - opacity) > 0.01) control.Opacity = opacity; }
         private void SetGlyph(FontIcon control, string glyph) { if (control.Glyph != glyph) control.Glyph = glyph; }
 
-        public async Task ReconcileAsync(List<StremioMediaStream>? newItems = null, bool forceHardReset = false)
+        public async Task ReconcileAsync(List<StremioMediaStream>? newItems = null, bool forceHardReset = false, bool animate = true)
         {
             try {
                 if (newItems != null) {
+                    // [Senior] Deep match check: if items and count are the same, don't restart the transition
+                    bool isSame = _heroItems.Count == newItems.Count;
+                    if (isSame)
+                    {
+                        for(int i=0; i<_heroItems.Count; i++) 
+                            if (_heroItems[i].Id != newItems[i].Id) { isSame = false; break; }
+                    }
+                    
+                    if (isSame && !forceHardReset) 
+                    {
+                        HeroLog("Data Sync: Match found, skipping full reconcile.");
+                        return;
+                    }
+
                     foreach(var old in _heroItems) old.Unpin();
                     _heroItems = newItems;
                     foreach(var item in _heroItems) item.Pin();
                     HeroLog($"Data Sync: Received {_heroItems.Count} items");
                 }
-                if (_heroItems.Count == 0) return;
-                await ApplyTransitionInternalAsync(forceHardReset);
+                
+                await ApplyTransitionInternalAsync(forceHardReset, animate);
             } catch (Exception ex) { HeroLog($"[RECONCILE] Exception: {ex.Message}"); }
         }
 
@@ -283,11 +297,13 @@ namespace ModernIPTVPlayer.Controls
                 var scrollPropSet = ElementCompositionPreview.GetScrollViewerManipulationPropertySet(scrollViewer);
                 
                 // Create parallax expression: Move at 40% speed of the scroll
-                // Translation.Y is negative during scroll, so we invert to move the image "up" slower.
+                // ScrollViewer Translation.Y is negative during scroll, so we invert it.
+                // Animate Offset.Y on the target visual; Translation is not available on all
+                // WinUI element visuals in packaged NativeAOT builds.
                 var parallaxAnim = compositor.CreateExpressionAnimation("-scroll.Translation.Y * 0.4f");
                 parallaxAnim.SetReferenceParameter("scroll", scrollPropSet);
                 
-                visual.StartAnimation("Translation.Y", parallaxAnim);
+                visual.StartAnimation("Offset.Y", parallaxAnim);
             }
             catch (Exception ex)
             {
@@ -310,10 +326,21 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private async Task ApplyTransitionInternalAsync(bool forceHardReset = false) {
+        private async Task ApplyTransitionInternalAsync(bool forceHardReset = false, bool animate = true) {
             await _compositionReadyTcs.Task;
             await _reconcilerLock.WaitAsync();
             try {
+                if (_heroItems.Count == 0)
+                {
+                    long t = ++_currentSessionTicket;
+                    _currentHeroId = null;
+                    _currentBgUrl = null;
+                    _currentLogoUrl = null;
+                    if (animate) await PlayExitAsync(t).ConfigureAwait(true);
+                    else ResetOutgoingStateSync();
+                    return;
+                }
+
                 int targetIndex = ResolveTargetIndex(forceHardReset);
                 if (targetIndex < 0) return;
                 var item = _heroItems[targetIndex];
@@ -330,7 +357,7 @@ namespace ModernIPTVPlayer.Controls
                 _activeAssets = assets; _phase = HeroPhase.Loading; StopAutoRotation();
                 _heroCts?.Cancel(); _heroCts = new CancellationTokenSource();
                 var token = _heroCts.Token; _assetManager.Clear(_currentLogoUrl, _currentBgUrl);
-                var exitTask = PlayExitAsync(ticket);
+                var exitTask = animate ? PlayExitAsync(ticket) : Task.CompletedTask;
                 var backdropTask = _assetManager.GetBackdropSurfaceAsync(_currentBgUrl, token);
                 var logoTask = assets.HasLogoUrl ? _assetManager.GetLogoSurfaceAsync(_currentLogoUrl, token) : Task.FromResult<LoadedImageSurface?>(null);
                 var svgBytesTask = (assets.HasLogoUrl && _currentLogoUrl!.EndsWith(".svg", StringComparison.OrdinalIgnoreCase)) 
@@ -341,14 +368,14 @@ namespace ModernIPTVPlayer.Controls
                 _ = ShowShimmerIfSlowAsync(ticket, assetsTask);
                 var budget = SafeDelayAsync(BACKDROP_BUDGET_MS, token);
                 await Task.WhenAny(assetsTask, budget).ConfigureAwait(true);
-                await exitTask.ConfigureAwait(true);
+                if (animate) await exitTask.ConfigureAwait(true);
                 if (ticket != _currentSessionTicket) return;
                 if (!assetsTask.IsCompleted) ShowShimmerWithIntro();
                 if (!assetsTask.IsCompleted) { try { await assetsTask.ConfigureAwait(true); } catch { return; } if (ticket != _currentSessionTicket) return; }
                 assets.Backdrop = backdropTask.IsCompletedSuccessfully ? backdropTask.Result : null;
                 assets.Logo = logoTask.IsCompletedSuccessfully ? logoTask.Result : null;
                 assets.SvgBytes = svgBytesTask.IsCompletedSuccessfully ? svgBytesTask.Result : null;
-                await CommitRevealAsync(ticket, assets, item, token).ConfigureAwait(true);
+                await CommitRevealAsync(ticket, assets, item, token, animate).ConfigureAwait(true);
                 UpdateNavigationVisibility();
             }
             catch (Exception ex)
@@ -394,8 +421,16 @@ namespace ModernIPTVPlayer.Controls
             if (!_shimmerIsVisible) { HeroAnimationHelper.AnimateShimmerIn(HeroShimmer); HeroAnimationHelper.AnimateShimmerIn(HeroTextShimmer); _shimmerIsVisible = true; }
         }
 
-        private async Task CommitRevealAsync(long t, HeroAssets a, StremioMediaStream item, CancellationToken tok) {
+        private async Task CommitRevealAsync(long t, HeroAssets a, StremioMediaStream item, CancellationToken tok, bool animate = true) {
             if (t !=_currentSessionTicket) return; _phase = HeroPhase.Ready;
+            
+            // [Instant Swap] if requested
+            if (!animate) {
+                ResetOutgoingStateSync();
+                HeroShimmer.Visibility = Visibility.Collapsed;
+                HeroTextShimmer.Visibility = Visibility.Collapsed;
+            }
+
             if (_heroImageBrush != null) _heroImageBrush.Surface = a.Backdrop;
             if (_heroLogoBrush != null) _heroLogoBrush.Surface = a.Logo;
             
@@ -426,7 +461,8 @@ namespace ModernIPTVPlayer.Controls
                         
                         // Use AnimateTextIn for the fallback to ensure both XAML and Composition 
                         // opacity are handled correctly and in sync with the other content.
-                        HeroAnimationHelper.AnimateTextIn(HeroLogoFallback, 600);
+                        if (animate) HeroAnimationHelper.AnimateTextIn(HeroLogoFallback, 600);
+                        else HeroLogoFallback.Opacity = 1;
                         
                         HeroLog($"[SVG-LOAD] Stream-based load OK: {item.LogoUrl}");
                     }
@@ -463,13 +499,30 @@ namespace ModernIPTVPlayer.Controls
                 });
             }
 
-            if (_shimmerIsVisible) { HeroAnimationHelper.FadeElement(HeroShimmer, 0, 400); HeroAnimationHelper.FadeElement(HeroTextShimmer, 0, 400); }
-            HeroRealContent.Visibility = Visibility.Visible; HeroRealContent.Opacity = 1;
-            HeroAnimationHelper.AnimateTextIn(HeroRealContent);
-            if (_heroVisual != null) HeroAnimationHelper.FadeVisualOpacity(_heroVisual, 1f, 1000);
-            if (_heroLogoVisual != null && a.Logo != null) HeroAnimationHelper.FadeVisualOpacity(_heroLogoVisual, 1f, 600);
+            if (_shimmerIsVisible) { 
+                if (animate) {
+                    HeroAnimationHelper.FadeElement(HeroShimmer, 0, 400); 
+                    HeroAnimationHelper.FadeElement(HeroTextShimmer, 0, 400); 
+                } else {
+                    HeroShimmer.Opacity = 0;
+                    HeroTextShimmer.Opacity = 0;
+                }
+            }
 
-            _ = Task.Delay(450).ContinueWith(_ => DispatcherQueue.TryEnqueue(() => {
+            HeroRealContent.Visibility = Visibility.Visible; HeroRealContent.Opacity = 1;
+            if (animate) HeroAnimationHelper.AnimateTextIn(HeroRealContent);
+            
+            if (_heroVisual != null) {
+                if (animate) HeroAnimationHelper.FadeVisualOpacity(_heroVisual, 1f, 1000);
+                else _heroVisual.Opacity = 1f;
+            }
+
+            if (_heroLogoVisual != null && a.Logo != null) {
+                if (animate) HeroAnimationHelper.FadeVisualOpacity(_heroLogoVisual, 1f, 600);
+                else _heroLogoVisual.Opacity = 1f;
+            }
+
+            _ = Task.Delay(animate ? 450 : 0).ContinueWith(_ => DispatcherQueue.TryEnqueue(() => {
                 if (t == _currentSessionTicket) { HeroShimmer.Visibility = Visibility.Collapsed; HeroTextShimmer.Visibility = Visibility.Collapsed; _shimmerIsVisible = false; }
             }));
 

@@ -22,6 +22,21 @@ namespace ModernIPTVPlayer
         {
             if (player == null) return;
 
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyEssentialSettingsAsync",
+                "Essential MPV settings started",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player.RenderApi,
+                    ["engine"] = AppSettings.PlayerSettings.Engine.ToString(),
+                    ["videoOutput"] = AppSettings.PlayerSettings.VideoOutput.ToString(),
+                    ["hardwareDecoding"] = AppSettings.PlayerSettings.HardwareDecoding.ToString(),
+                    ["urlLength"] = streamUrl?.Length ?? 0
+                },
+                "H7");
+            // #endregion
+
             try {
             var baseDir = @"C:\Users\ASUS\Documents\ModernIPTVPlayer\";
             System.IO.File.AppendAllText(System.IO.Path.Combine(baseDir, "init_debug.log"), $"[{DateTime.Now:HH:mm:ss.fff}] [INIT] ApplyEssentialSettingsAsync (Session Reset)\n");
@@ -35,7 +50,28 @@ namespace ModernIPTVPlayer
             player.RenderApi = pSettings.VideoOutput == Models.VideoOutput.GpuNext ? "d3d11" : "dxgi";
 
             // Phase 1 Optimization: Skip UI scripts (stats/osc) for background players
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyEssentialSettingsAsync",
+                "Calling MpvPlayer.InitializePlayerAsync",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player.RenderApi,
+                    ["urlLength"] = streamUrl?.Length ?? 0
+                },
+                "H7");
+            // #endregion
             await player.InitializePlayerAsync(skipScripts: isSecondary);
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyEssentialSettingsAsync",
+                "MpvPlayer.InitializePlayerAsync returned",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player.RenderApi
+                },
+                "H7");
+            // #endregion
 
             // 1. Globalization & Meta Probing Skip
             await player.SetPropertyAsync("ytdl", "no");
@@ -61,6 +97,16 @@ namespace ModernIPTVPlayer
                 if (streamUrl.Contains("youtube.com") || streamUrl.Contains("youtu.be"))
                     await player.SetPropertyAsync("ytdl-raw-options", $"user-agent=\"{userAgent}\",no-check-certificate=");
             }
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyEssentialSettingsAsync",
+                "MPV network/header settings completed",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player.RenderApi
+                },
+                "H7");
+            // #endregion
 
             // 3. Essential Playback & Decoder (Phase 1)
             
@@ -83,6 +129,18 @@ namespace ModernIPTVPlayer
 
             await player.SetPropertyAsync("d3d11va-zero-copy", zeroCopy ? "yes" : "no");
             await player.SetPropertyAsync("vd-lavc-dr", zeroCopy ? "yes" : "no");
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyEssentialSettingsAsync",
+                "MPV decoder/GPU base settings completed",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player.RenderApi,
+                    ["hwdec"] = hwdecValue,
+                    ["zeroCopy"] = zeroCopy
+                },
+                "H7");
+            // #endregion
             
             // [DYNAMIC] 10-bit/8-bit switching is now handled by MpvPlayer.SyncHdrStatusAsync
             // to ensure optimal GPU usage based on content.
@@ -121,6 +179,17 @@ namespace ModernIPTVPlayer
                 await player.SetPropertyAsync("autofit-larger", "");
                 await player.SetPropertyAsync("autofit-smaller", "");
             }
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyEssentialSettingsAsync",
+                "MPV gpu-next/cache display settings completed",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player.RenderApi,
+                    ["videoOutput"] = pSettings.VideoOutput.ToString()
+                },
+                "H7");
+            // #endregion
             
             // Monitor for decoder failure and fallback to safe d3d11va
             _ = MonitorHwdecFallbackAsync(player, hwdecValue);
@@ -130,6 +199,17 @@ namespace ModernIPTVPlayer
             bool isLikelyLive = streamUrl != null && (streamUrl.Contains("/live/") || streamUrl.Contains(".m3u8") || streamUrl.Contains(":8080") || streamUrl.Contains("/ts"));
             
             await ApplyBufferSettingsAsync(player, isSecondary, isLikelyLive);
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyEssentialSettingsAsync",
+                "MPV buffer settings completed",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player.RenderApi,
+                    ["isLikelyLive"] = isLikelyLive
+                },
+                "H7");
+            // #endregion
             
             // [TELEMETRY] Enable real-time property observation for UI synchronization
             // This eliminates the need for periodic polling in StatsTimer_Tick
@@ -164,6 +244,16 @@ namespace ModernIPTVPlayer
             }
 
             AppLogger.Info($"[MpvSetup] Essential Configuration (Phase 1) Complete. Secondary: {isSecondary}");
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyEssentialSettingsAsync",
+                "Essential MPV settings completed",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player.RenderApi
+                },
+                "H7");
+            // #endregion
         }
 
         public static async Task ApplyBufferSettingsAsync(MpvPlayer player, bool isSecondary, bool isLive)
@@ -197,6 +287,18 @@ namespace ModernIPTVPlayer
         {
             if (player == null) return;
             var pSettings = AppSettings.PlayerSettings;
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyVisualSettingsAsync",
+                "Visual MPV settings started",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["renderApi"] = player.RenderApi,
+                    ["toneMapping"] = pSettings.ToneMapping.ToString(),
+                    ["scaler"] = pSettings.Scaler.ToString(),
+                    ["targetDisplayMode"] = pSettings.TargetDisplayMode.ToString()
+                },
+                "H7");
+            // #endregion
 
             // Phase 2: User Settings & Visuals
             player.PreferredToneMapping = pSettings.ToneMapping.ToString().ToLower();
@@ -273,6 +375,15 @@ namespace ModernIPTVPlayer
             }
 
             AppLogger.Info($"[MpvSetup] Visual Enhancements (Phase 2) Complete.");
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ApplyVisualSettingsAsync",
+                "Visual MPV settings completed",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["renderApi"] = player.RenderApi
+                },
+                "H7");
+            // #endregion
         }
 
         /// <summary>
@@ -280,10 +391,41 @@ namespace ModernIPTVPlayer
         /// </summary>
         public static async Task ConfigurePlayerAsync(MpvPlayer player, string streamUrl, bool isSecondary = false)
         {
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ConfigurePlayerAsync",
+                "ConfigurePlayerAsync started",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player?.RenderApi,
+                    ["urlLength"] = streamUrl?.Length ?? 0
+                },
+                "H7");
+            // #endregion
             await ApplyEssentialSettingsAsync(player, streamUrl, isSecondary);
+            // #region agent log
+            App.DebugSessionNdjson("MpvSetupHelper.cs:ConfigurePlayerAsync",
+                "ConfigurePlayerAsync essential phase returned",
+                new System.Collections.Generic.Dictionary<string, object?>
+                {
+                    ["isSecondary"] = isSecondary,
+                    ["renderApi"] = player?.RenderApi
+                },
+                "H7");
+            // #endregion
             if (!isSecondary)
             {
                 await ApplyVisualSettingsAsync(player);
+                // #region agent log
+                App.DebugSessionNdjson("MpvSetupHelper.cs:ConfigurePlayerAsync",
+                    "ConfigurePlayerAsync visual phase returned",
+                    new System.Collections.Generic.Dictionary<string, object?>
+                    {
+                        ["isSecondary"] = isSecondary,
+                        ["renderApi"] = player?.RenderApi
+                    },
+                    "H7");
+                // #endregion
             }
         }
 

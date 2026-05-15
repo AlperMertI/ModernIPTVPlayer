@@ -13,7 +13,6 @@
     <CsWinRTAotOptimizerEnabled>true</CsWinRTAotOptimizerEnabled>
     <CsWinRTDirectCall>true</CsWinRTDirectCall>
     <CsWinRTIncludes>MpvWinUI;MpvWinUI.Common;Mpv.UI</CsWinRTIncludes>
-    <EnableMsixTooling>true</EnableMsixTooling>
     <GenerateLibraryLayout>true</GenerateLibraryLayout>
   </PropertyGroup>
 

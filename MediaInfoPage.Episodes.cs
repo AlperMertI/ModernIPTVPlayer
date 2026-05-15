@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Helpers;
+using ModernIPTVPlayer.Services;
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -174,25 +175,42 @@ namespace ModernIPTVPlayer
 
         private void EpisodesRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
         {
-            if (args.Element is FrameworkElement fe && args.Index >= 0 && args.Index < CurrentEpisodes.Count)
+            if (args.Element is not FrameworkElement fe || args.Index < 0 || args.Index >= CurrentEpisodes.Count) return;
+
+            fe.DataContext = CurrentEpisodes[args.Index];
+
+            int generation = _sourcesVisualGeneration;
+            int preparedIndex = args.Index;
+            var ep = CurrentEpisodes[args.Index];
+            bool isShimmer = ep?.IsPlaceholder == true;
+            string stamp = $"ep:{generation}:{preparedIndex}:{(isShimmer ? "shm" : "real")}";
+
+            // If transitioning from shimmer to real, allow a second reveal.
+            if (!isShimmer && fe.Tag?.ToString().Contains(":shm") == true)
             {
-                fe.DataContext = CurrentEpisodes[args.Index];
+                _animatedSourceRevealIndexes.Remove(preparedIndex);
+            }
 
-                int generation = _sourcesVisualGeneration;
-                int preparedIndex = args.Index;
-                string stamp = $"ep:{generation}:{preparedIndex}";
+            bool shouldReveal = !_animatedSourceRevealIndexes.Contains(preparedIndex);
 
-                bool shouldReveal = !_animatedSourceRevealIndexes.Contains(preparedIndex);
-
-                if (Equals(fe.Tag, stamp) || !shouldReveal)
-                {
-                    ResetRevealState(fe);
-                    return;
-                }
-
+            if (Equals(fe.Tag, stamp) || !shouldReveal)
+            {
+                ResetRevealState(fe);
                 fe.Tag = stamp;
-                _animatedSourceRevealIndexes.Add(preparedIndex);
-                ApplyStaggeredReveal(fe, args.Index);
+                return;
+            }
+
+            fe.Tag = stamp;
+            fe.Opacity = 0f;
+            _animatedSourceRevealIndexes.Add(preparedIndex);
+
+            if (isShimmer)
+            {
+                ApplyShimmerReveal(fe, preparedIndex);
+            }
+            else
+            {
+                ApplyStaggeredReveal(fe, preparedIndex, useIndexDelay: true, baseDelay: 0);
             }
         }
 
@@ -262,7 +280,8 @@ namespace ModernIPTVPlayer
                 
                 StartPrebuffering(_streamUrl);
                 if (!string.IsNullOrEmpty(_streamUrl)) _ = UpdateTechnicalBadgesAsync(_streamUrl);
-                ApplySelectedEpisodeHistoryActions(history);
+                
+                SyncActionButtonsInternal(history);
                 
                 RefreshAllAddonActiveFlags();
                 SyncAddonSelectionToActive();
@@ -281,59 +300,7 @@ namespace ModernIPTVPlayer
             // UPDATE INFO PANEL (Already handled in SelectEpisode for text, but can add more logic here)
         }
 
-        private void ApplySelectedEpisodeHistoryActions(HistoryItem history)
-        {
-            if (PlayButtonText == null) return;
 
-            bool hasProgress = history != null && history.Position > 0;
-            double progressPercent = history?.Duration > 0
-                ? (history.Position / history.Duration) * 100
-                : 0;
-            bool canContinue = hasProgress && !history.IsFinished && progressPercent < 98;
-
-            if (canContinue)
-            {
-                PlayButtonText.Text = "Devam Et";
-                if (StickyPlayButtonText != null) StickyPlayButtonText.Text = "Devam Et";
-
-                string subtext = "";
-                if (history.Duration > 0)
-                {
-                    subtext = BuildRemainingText(history);
-                }
-
-                if (PlayButtonSubtext != null)
-                {
-                    PlayButtonSubtext.Text = subtext;
-                    PlayButtonSubtext.Visibility = string.IsNullOrWhiteSpace(subtext) ? Visibility.Collapsed : Visibility.Visible;
-                }
-
-                if (StickyPlayButtonSubtext != null)
-                {
-                    StickyPlayButtonSubtext.Text = subtext;
-                    StickyPlayButtonSubtext.Visibility = string.IsNullOrWhiteSpace(subtext) ? Visibility.Collapsed : Visibility.Visible;
-                }
-
-                if (RestartButton != null) RestartButton.Visibility = Visibility.Visible;
-                return;
-            }
-
-            if (hasProgress && (history.IsFinished || progressPercent >= 98))
-            {
-                PlayButtonText.Text = "Tekrar İzle";
-                if (StickyPlayButtonText != null) StickyPlayButtonText.Text = "Tekrar İzle";
-                if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                if (StickyPlayButtonSubtext != null) StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
-                if (RestartButton != null) RestartButton.Visibility = Visibility.Visible;
-                return;
-            }
-
-            PlayButtonText.Text = "Oynat";
-            if (StickyPlayButtonText != null) StickyPlayButtonText.Text = "Oynat";
-            if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
-            if (StickyPlayButtonSubtext != null) StickyPlayButtonSubtext.Visibility = Visibility.Collapsed;
-            if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
-        }
 
         private void DeselectEpisode()
         {
@@ -352,12 +319,7 @@ namespace ModernIPTVPlayer
                 OpenEpisodesPanel(PanelChangeReason.EpisodeDeselected);
                 UpdateInfoPanelVisibility(false);
 
-                if (PlayButtonText != null)
-                {
-                    PlayButtonText.Text = "Oynat";
-                    if (PlayButtonSubtext != null) PlayButtonSubtext.Visibility = Visibility.Collapsed;
-                }
-                if (RestartButton != null) RestartButton.Visibility = Visibility.Collapsed;
+                SyncActionButtonsInternal(null);
 
                 if (!_isResettingPageState) SyncLayout();
             }

@@ -154,7 +154,7 @@ public sealed partial class Player
         Client.SetOption("load-scripts", !skipScripts);
         Client.SetOption("input-default-bindings", !skipScripts);
         Client.SetOption("input-vo-keyboard", false); 
-        Client.RequestLogMessage(MpvLogLevel.V);
+        Client.RequestLogMessage(MpvLogLevel.Info);
         
         // [FIX] Force correctly selected renderer (gpu-next vs gpu)
         string voName = api == "d3d11" ? "gpu-next" : "gpu";

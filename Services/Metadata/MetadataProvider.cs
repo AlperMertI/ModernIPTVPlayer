@@ -150,7 +150,7 @@ namespace ModernIPTVPlayer.Services.Metadata
         private readonly ConcurrentDictionary<string, Lazy<Task<UnifiedMetadata>>> _activeTasks = new();
         private readonly ConcurrentDictionary<string, (UnifiedMetadata Data, DateTime Expiry)> _resultCache = new();
         private readonly TimeSpan _cacheDuration = TimeSpan.FromMinutes(2); // Short term cache
-        private readonly ConcurrentDictionary<string, Task<AddonMetaCacheEntry>> _activeAddonMetaTasks = new();
+        private readonly ConcurrentDictionary<string, Lazy<Task<AddonMetaCacheEntry>>> _activeAddonMetaTasks = new();
         private readonly ConcurrentDictionary<string, (AddonMetaCacheEntry Data, DateTime Expiry)> _addonMetaCache = new();
         private readonly ConcurrentDictionary<string, string> _rawToCanonicalIdCache = new(StringComparer.OrdinalIgnoreCase);
         private readonly TimeSpan _addonMetaPositiveCacheDuration = TimeSpan.FromMinutes(20);
@@ -415,6 +415,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
 
                 // 1. Check Result Cache
+                System.Diagnostics.Debug.WriteLine($"[META-DEBUG] GetMetadataAsync for {id ?? stream.Title} (Key: {cacheKey})");
                 if (_resultCache.TryGetValue(cacheKey, out var cached) && DateTime.Now < cached.Expiry)
                 {
                     bool isCw = (stream as StremioMediaStream)?.IsContinueWatching ?? false;
@@ -454,7 +455,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                         return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
                         {
                             trace?.Log("Upgrade", $"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
-                            return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data, onUpdate, ct, trace);
+                            // [FIX] Do NOT pass caller's 'ct' to shared task
+                            return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data, onUpdate, CancellationToken.None, trace);
                         })).Value;
                     }
                 }
@@ -511,13 +513,14 @@ namespace ModernIPTVPlayer.Services.Metadata
                             
                             return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
                             {
-                                await _enrichmentSemaphore.WaitAsync(ct);
+                                // [FIX] Shared task must not be tied to caller's cancellation
+                                await _enrichmentSemaphore.WaitAsync();
                                 try 
                                 {
-                                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data, onUpdate, ct, trace);
+                                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data, onUpdate, CancellationToken.None, trace);
                                 }
                                 finally { _enrichmentSemaphore.Release(); }
-                            }, ct))).Value;
+                            }))).Value;
                         }
                     }
                 }
@@ -575,13 +578,16 @@ namespace ModernIPTVPlayer.Services.Metadata
                 {
                     trace?.Log("Phase3", $"NETWORK ENRICHMENT START | Reason: {fetchReason} | Context: {context} | Seeded: {seedData != null}");
                     
-                    await _enrichmentSemaphore.WaitAsync(ct);
+                    // [PROFESSIONAL FIX] We do NOT pass 'ct' to the shared Task inside the Lazy.
+                    // If the first caller is cancelled, the task must still complete to fill the cache 
+                    // for subsequent callers (like when the user re-opens the same card).
+                    await _enrichmentSemaphore.WaitAsync();
                     try 
                     {
-                        return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, seedData, onUpdate, ct, trace);
+                        return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, seedData, onUpdate, CancellationToken.None, trace);
                     }
                     finally { _enrichmentSemaphore.Release(); }
-                }, ct))).Value;
+                }))).Value;
             }
             catch (OperationCanceledException)
             {
@@ -1650,7 +1656,11 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             trace?.Log("AddonCache", $"MISS {GetHostSafe(addonUrl)}");
-            return await _activeAddonMetaTasks.GetOrAdd(key, _ => FetchAddonMetaInternalAsync(addonUrl, type, id, key, trace, ct));
+            // [FIX] Use Lazy Task pattern to prevent thundering herd and cancellation poisoning
+            return await _activeAddonMetaTasks.GetOrAdd(key, _ => new Lazy<Task<AddonMetaCacheEntry>>(() => Task.Run(async () => 
+            {
+                return await FetchAddonMetaInternalAsync(addonUrl, type, id, key, trace, CancellationToken.None);
+            }))).Value;
         }
 
         private async Task<AddonMetaCacheEntry> FetchAddonMetaInternalAsync(string addonUrl, string type, string id, string cacheKey, MetadataTrace trace, CancellationToken ct = default)

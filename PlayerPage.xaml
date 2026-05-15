@@ -10,6 +10,8 @@
     xmlns:local="using:ModernIPTVPlayer"
     xmlns:converters="using:ModernIPTVPlayer.Converters"
     xmlns:tmdb="using:ModernIPTVPlayer.Models.Tmdb"
+    xmlns:viewmodels="using:ModernIPTVPlayer.ViewModels"
+    x:DataType="local:PlayerPage"
 
     mc:Ignorable="d"
     Background="Black">
@@ -19,7 +21,11 @@
         <converters:BoolToCollapsedConverter x:Key="BoolToCollapsedConverter"/>
         <converters:BoolToColorConverter x:Key="BoolToColorConverter"/>
         <converters:BoolToColorInvertConverter x:Key="BoolToColorInvertConverter"/>
+        <local:BooleanToVisibilityConverter x:Key="BoolToVis"/>
+        <local:BooleanInverseToVisibilityConverter x:Key="BoolInverseToVis"/>
         <local:TickToTimeConverter x:Key="TickToTimeConverter"/>
+        <converters:BoolToOpacityConverter x:Key="BoolToOpacityConverter"/>
+        <converters:StringToVisibleConverter x:Key="StringToVis"/>
         
         <!-- Animations for Tracks Overlay -->
         <Storyboard x:Name="ShowTracksOverlayAnim">
@@ -138,7 +144,7 @@
                                 <!-- Filled Part (Col 0) -->
                                 <Rectangle x:Name="HorizontalDecreaseRect" Grid.Column="0" Height="4" Fill="{TemplateBinding Foreground}" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
                                 <!-- Thumb (Col 1) -->
-                                <Thumb x:Name="HorizontalThumb" Grid.Column="1" DataContext="{TemplateBinding Value}" Style="{StaticResource SliderThumbStyle}" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw"/>
+                                <Thumb x:Name="HorizontalThumb" Grid.Column="1" Style="{StaticResource SliderThumbStyle}" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw"/>
                             </Grid>
                         </Grid>
                     </ControlTemplate>
@@ -183,7 +189,7 @@
                                 <!-- Filled Part (Row 2 - Bottom) -->
                                 <Rectangle x:Name="VerticalDecreaseRect" Grid.Row="2" Width="4" Fill="{TemplateBinding Foreground}" RadiusX="2" RadiusY="2" HorizontalAlignment="Center" VerticalAlignment="Bottom"/>
                                 <!-- Thumb (Row 1) -->
-                                <Thumb x:Name="VerticalThumb" Grid.Row="1" DataContext="{TemplateBinding Value}" Style="{StaticResource SliderThumbStyle}" HorizontalAlignment="Center" AutomationProperties.AccessibilityView="Raw"/>
+                                <Thumb x:Name="VerticalThumb" Grid.Row="1" Style="{StaticResource SliderThumbStyle}" HorizontalAlignment="Center" AutomationProperties.AccessibilityView="Raw"/>
                             </Grid>
                         </Grid>
                     </ControlTemplate>
@@ -196,6 +202,7 @@
     </Page.Resources>
 
     <Grid x:Name="MainGrid" DoubleTapped="Page_DoubleTapped"
+          Tapped="MainGrid_Tapped"
           PointerPressed="MainGrid_PointerPressed"
           PointerEntered="MainGrid_PointerEntered"
           PointerMoved="MainGrid_PointerMoved"
@@ -218,6 +225,7 @@
         <!-- 1. Video Layer -->
         <!-- [OPTIMIZED] Removed Viewbox as it interferes with Platform Subtitle rendering in WinUI 3 -->
         <!-- Using Stretch=Uniform on the player itself is the high-performance way to scale -->
+        <!--
         <MediaPlayerElement x:Name="MediaFoundationPlayer"
                         Visibility="Collapsed"
                         AutoPlay="True"
@@ -228,58 +236,18 @@
                         HorizontalAlignment="Stretch"
                         VerticalAlignment="Stretch">
             <MediaPlayerElement.Resources>
-                <!-- Optimized: Apply style to the internal MediaTransportControls instance without replacing the object -->
                 <Style TargetType="MediaTransportControls">
                     <Setter Property="Visibility" Value="Collapsed"/>
                     <Setter Property="IsHitTestVisible" Value="False"/>
                 </Style>
             </MediaPlayerElement.Resources>
         </MediaPlayerElement>
+        -->
 
         <!-- [FIX] Snapshot Image for Smooth PiP Transition -->
         <Image x:Name="SnapshotImage" Stretch="Uniform" Visibility="Collapsed" IsHitTestVisible="False"/>
 
         <!-- 2. Brightness Overlay (Simulated Dimming) -->
-        <!-- 2. Brightness & Blur Overlay (Inactivity) -->
-        <Grid x:Name="InactivityOverlay" Visibility="Collapsed" HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
-            <!-- Semi-transparent Black Background to dim the video (Blur is handled by MPV) -->
-            <Grid.Background>
-                <SolidColorBrush Color="#CC000000" />
-            </Grid.Background>
-            
-            <!-- Info Panel (Top-Left Alignment) -->
-            <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" 
-                        Margin="80,80,0,0" Spacing="24" MaxWidth="1000">
-                
-                <!-- Title Section -->
-                <StackPanel Spacing="12">
-                    <Image x:Name="InactivityLogo" Height="100" Stretch="Uniform" HorizontalAlignment="Left" Visibility="Collapsed" Margin="0,0,0,8"/>
-                    <TextBlock x:Name="InactivityTitle" FontSize="56" FontWeight="Bold" Foreground="White" HorizontalAlignment="Left" Visibility="Visible"/>
-                    
-                    <!-- Meta Row -->
-                    <StackPanel Orientation="Horizontal" Spacing="16" HorizontalAlignment="Left" Opacity="0.8">
-                        <TextBlock x:Name="InactivityYear" Foreground="White" FontSize="20" FontWeight="SemiBold"/>
-                        <TextBlock x:Name="InactivityDuration" Foreground="White" FontSize="20" FontWeight="SemiBold"/>
-                        <Border x:Name="InactivityRatingBorder" Padding="8,2" CornerRadius="4" BorderThickness="1.5" BorderBrush="White">
-                            <TextBlock x:Name="InactivityRating" Foreground="White" FontSize="16" FontWeight="ExtraBold"/>
-                        </Border>
-                    </StackPanel>
-                </StackPanel>
-
-                <!-- Technical Badges -->
-                <StackPanel x:Name="InactivityBadges" Orientation="Horizontal" Spacing="12" HorizontalAlignment="Left"/>
-
-                <!-- Description -->
-                <TextBlock x:Name="InactivityDescription" FontSize="20" Foreground="#CCFFFFFF" 
-                           TextWrapping="Wrap" MaxWidth="700" MaxLines="3" TextTrimming="CharacterEllipsis" LineHeight="28"/>
-
-                <!-- Status / Remaining Time -->
-                <StackPanel Spacing="4" HorizontalAlignment="Left">
-                    <TextBlock x:Name="InactivityChapterInfo" Foreground="{ThemeResource GoldGradient}" FontSize="22" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="InactivityRemainingTime" Foreground="White" FontSize="32" FontWeight="Bold"/>
-                </StackPanel>
-            </StackPanel>
-        </Grid>
 
         <Rectangle x:Name="BrightnessOverlay"
                    Fill="Black"
@@ -290,7 +258,8 @@
 
         <!-- 2.5 Logo Loading Overlay -->
         <Grid x:Name="PlayerLoadingOverlay" 
-              Visibility="Collapsed" 
+              Width="300" Height="120"
+              Visibility="{x:Bind _viewModel.IsBuffering, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
               HorizontalAlignment="Center" 
               VerticalAlignment="Center"
               IsHitTestVisible="False"
@@ -310,7 +279,7 @@
 
         <!-- 3. OSD Overlay (Center Notification) -->
         <Border x:Name="OsdOverlay"
-                Visibility="Collapsed"
+                Visibility="{x:Bind _viewModel.IsOsdVisible, Mode=OneWay, Converter={StaticResource BoolToVisibilityConverter}}"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
                 Background="#CC000000"
@@ -318,7 +287,7 @@
                 CornerRadius="8"
                 IsHitTestVisible="False">
             <TextBlock x:Name="OsdText" 
-                       Text="Notification" 
+                       Text="{x:Bind _viewModel.OsdText, Mode=OneWay}" 
                        FontSize="24" 
                        FontWeight="SemiBold"
                        Foreground="White"/>
@@ -340,32 +309,32 @@
                 <!-- Video Group -->
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Çözünürlük:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtResolution" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtResolution" Text="{x:Bind _viewModel.Resolution, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="FPS / Monitor:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtFps" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtFps" Text="{x:Bind _viewModel.Fps, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Video Codec:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtCodec" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtCodec" Text="{x:Bind _viewModel.VideoCodec, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Audio Codec:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtAudioCodec" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtAudioCodec" Text="{x:Bind _viewModel.AudioCodec, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Colorspace:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtColorspace" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtColorspace" Text="{x:Bind _viewModel.Colorspace, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="HDR / Primaries:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtHdr" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtHdr" Text="{x:Bind _viewModel.Primaries, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <!-- Display Group -->
@@ -373,68 +342,68 @@
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Display HDR:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtDisplayHdrStatus" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtDisplayHdrStatus" Text="{x:Bind _viewModel.IsHdr, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="HDR Available:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtDisplayHdrAvailable" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtDisplayHdrAvailable" Text="{x:Bind _viewModel.HdrAvailable, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind _viewModel.IsSdrWhiteVisible, Mode=OneWay}">
                     <TextBlock Text="SDR White:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtDisplaySdrWhite" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtDisplaySdrWhite" Text="{x:Bind _viewModel.SdrWhite, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8" Visibility="{x:Bind _viewModel.IsDisplayPeakVisible, Mode=OneWay}">
                     <TextBlock Text="Luminance:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtDisplayLuminance" Text="-" Foreground="White" FontWeight="SemiBold" TextWrapping="WrapWholeWords"/>
+                    <TextBlock x:Name="TxtDisplayLuminance" Text="{x:Bind _viewModel.DisplayPeak, Mode=OneWay}" Foreground="White" FontWeight="SemiBold" TextWrapping="WrapWholeWords"/>
                 </StackPanel>
 
                 <StackPanel x:Name="RowAppliedPeak" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Applied Peak:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtAppliedPeak" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtAppliedPeak" Text="{x:Bind _viewModel.AppliedPeak, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel x:Name="RowSdrWhite" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Target SDR White:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtSdrWhite" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtSdrWhite" Text="{x:Bind _viewModel.TargetSdrWhite, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <!-- Connection Group -->
                 <StackPanel x:Name="RowSpeed" Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
                     <TextBlock Text="Download Speed:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtSpeed" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtSpeed" Text="{x:Bind _viewModel.DownloadSpeed, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel x:Name="RowBitrate" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Bitrate:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtBitrate" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtBitrate" Text="{x:Bind _viewModel.Bitrate, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Buffer:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtBuffer" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtBuffer" Text="{x:Bind _viewModel.BufferDuration, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,6,0,0">
                     <TextBlock Text="Hardware:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtHardware" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtHardware" Text="{x:Bind _viewModel.HardwareDecoding, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Renderer:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtRenderer" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtRenderer" Text="{x:Bind _viewModel.Renderer, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel x:Name="RowAvSync" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="A/V Sync:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtAvSync" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtAvSync" Text="{x:Bind _viewModel.AvSync, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
 
                 <StackPanel x:Name="RowDropped" Orientation="Horizontal" Spacing="8">
                     <TextBlock Text="Dropped:" Foreground="#AAAAAA" Width="135"/>
-                    <TextBlock x:Name="TxtDroppedDecoder" Text="-" Foreground="White" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TxtDroppedDecoder" Text="{x:Bind _viewModel.DroppedFrames, Mode=OneWay}" Foreground="White" FontWeight="SemiBold"/>
                 </StackPanel>
             </StackPanel>
         </Border>
@@ -467,56 +436,58 @@
             </StackPanel.Resources>
             
             <Border>
-                <TextBlock x:Name="PillResolution" Text="1080p"/>
+                <TextBlock x:Name="PillResolution" Text="{x:Bind _viewModel.Resolution, Mode=OneWay}"/>
             </Border>
             <Border>
-                <TextBlock x:Name="PillFps" Text="60 fps"/>
+                <TextBlock x:Name="PillFps" Text="{x:Bind _viewModel.Fps, Mode=OneWay}"/>
             </Border>
             <Border>
-                <TextBlock x:Name="PillCodec" Text="h264"/>
+                <TextBlock x:Name="PillCodec" Text="{x:Bind _viewModel.VideoCodec, Mode=OneWay}"/>
             </Border>
         </StackPanel>
 
-        <!-- 5. Top Controls -->
-        <Button x:Name="BackButton"
-                Click="BackButton_Click"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Top"
-                Margin="20"
-                Width="48" Height="48" CornerRadius="24"
-                Background="#99000000" Foreground="White"
-                BorderThickness="0"
-                ToolTipService.ToolTip="Geri Dön">
-            <FontIcon Glyph="&#xE72B;" FontSize="20"/>
-        </Button>
+        <!-- Player Interface Container -->
+        <Grid x:Name="ControlInterfaceGrid"
+              Visibility="{x:Bind _viewModel.AreControlsVisible, Mode=OneWay, Converter={StaticResource BoolToVis}}">
+            
+            <!-- 5. Top Controls -->
+            <Button x:Name="BackButton"
+                    Click="BackButton_Click"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
+                    Margin="20"
+                    Width="48" Height="48" CornerRadius="24"
+                    Background="#99000000" Foreground="White"
+                    BorderThickness="0"
+                    ToolTipService.ToolTip="Geri Dön">
+                <FontIcon Glyph="&#xE72B;" FontSize="20"/>
+            </Button>
 
-        <!-- Video Title (Top Center) -->
-        <TextBlock x:Name="VideoTitleText"
-                   Text=""
-                   HorizontalAlignment="Center"
-                   VerticalAlignment="Top"
-                   Margin="0,32,0,0"
-                   FontSize="20"
-                   FontWeight="SemiBold"
-                   Foreground="White"
-                   IsHitTestVisible="False"
-                   TextTrimming="CharacterEllipsis"
-                   MaxWidth="600">
-        </TextBlock>
+            <!-- Video Title (Top Center) -->
+            <TextBlock x:Name="VideoTitleText"
+                       Text="{x:Bind _viewModel.Title, Mode=OneWay}"
+                       HorizontalAlignment="Center"
+                       VerticalAlignment="Top"
+                       Margin="0,32,0,0"
+                       FontSize="20"
+                       FontWeight="SemiBold"
+                       Foreground="White"
+                       IsHitTestVisible="False"
+                       TextTrimming="CharacterEllipsis"
+                       MaxWidth="600">
+            </TextBlock>
 
-
-        <Button x:Name="FullScreenButton"
-                Click="FullScreenButton_Click"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="20,12,12,0"
-                Width="48" Height="48" CornerRadius="24"
-                Background="#99000000" Foreground="White"
-                BorderThickness="0"
-                ToolTipService.ToolTip="Tam Ekran">
-            <FontIcon x:Name="FullScreenIcon" Glyph="&#xE1D9;" FontSize="20"/>
-        </Button>
-
+            <Button x:Name="FullScreenButton"
+                    Click="FullScreenButton_Click"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="20,12,12,0"
+                    Width="48" Height="48" CornerRadius="24"
+                    Background="#99000000" Foreground="White"
+                    BorderThickness="0"
+                    ToolTipService.ToolTip="Tam Ekran">
+                <FontIcon x:Name="FullScreenIcon" Glyph="&#xE1D9;" FontSize="20"/>
+            </Button>
         <!-- 6. Bottom Control Bar -->
         <Border x:Name="ControlsBorder"
                 VerticalAlignment="Bottom"
@@ -546,13 +517,26 @@
                     </Grid.RowDefinitions>
 
                     <!-- Time & Live Status -->
-                    <Grid Grid.Row="0" Margin="4,0,4,4">
-                        <TextBlock x:Name="TimeTextBlock" 
-                                   Text="00:00 / 00:00" 
-                                   Foreground="#DDFFFFFF" 
-                                   HorizontalAlignment="Left"
-                                   FontSize="13"
-                                   FontWeight="Medium"/>
+                    <Grid Grid.Row="0" Margin="4,0,4,4" HorizontalAlignment="Stretch">
+                        <Grid x:Name="TimeContainer" 
+                              HorizontalAlignment="Left"
+                              PointerEntered="TimeContainer_PointerEntered"
+                              PointerExited="TimeContainer_PointerExited"
+                              Tapped="TimeContainer_Tapped"
+                              ToolTipService.ToolTip="Görünüm Modunu Değiştir (Tıkla)"
+                              Background="Transparent">
+                            <Border x:Name="TimeHoverBorder" 
+                                    Background="#22FFFFFF" 
+                                    Opacity="0" 
+                                    CornerRadius="4" 
+                                    Margin="-6,-2"/>
+                            <TextBlock x:Name="TimeTextBlock" 
+                                       Text="{x:Bind _viewModel.TimeText, Mode=OneWay}" 
+                                       Visibility="{x:Bind _viewModel.IsTimelineAvailable, Mode=OneWay, Converter={StaticResource BoolToVis}}"
+                                       Foreground="#DDFFFFFF" 
+                                       FontSize="13"
+                                       FontWeight="Medium"/>
+                        </Grid>
                         
                         <Button x:Name="LiveButton"
                                 Click="LiveButton_Click"
@@ -574,12 +558,15 @@
                     <Slider x:Name="SeekSlider"
                             Grid.Row="1"
                             VerticalAlignment="Center"
-                            IsThumbToolTipEnabled="True"
-                            ThumbToolTipValueConverter="{StaticResource TickToTimeConverter}"
+                            IsTabStop="False"
+                            IsThumbToolTipEnabled="False"
                             IsEnabled="True"
                             Style="{StaticResource PremiumHorizontalSliderStyle}"
                             Tapped="SeekSlider_Tapped"
-                            Visibility="Visible"/>
+                            PointerPressed="SeekSlider_PointerPressed"
+                            PointerReleased="SeekSlider_PointerReleased"
+                            PointerCaptureLost="SeekSlider_PointerCaptureLost"
+                            Visibility="{x:Bind _viewModel.IsTimelineAvailable, Mode=OneWay, Converter={StaticResource BoolToVis}}"/>
                 </Grid>
 
                 <!-- Left: Controls -->
@@ -594,7 +581,7 @@
                             ToolTipService.ToolTip="Oynat/Duraklat (Space)">
                         <Grid>
                             <Ellipse x:Name="PlayPauseGlow" Fill="White" Opacity="0" Margin="-20" IsHitTestVisible="False"/>
-                            <FontIcon x:Name="PlayPauseIcon" Glyph="&#xF5B0;" FontSize="24"/>
+                            <FontIcon x:Name="PlayPauseIcon" Glyph="{x:Bind _viewModel.PlayPauseIcon, Mode=OneWay}" FontSize="24"/>
                         </Grid>
                     </Button>
 
@@ -1042,6 +1029,7 @@
                 </StackPanel>
             </Grid>
         </Border>
+        </Grid>
 
         <!-- 7. PiP Hover Overlay (Only visible in PiP mode) -->
         <!-- Background is set to a very low opacity solid color to ensure hit-testing works reliably over the video surface -->
@@ -1077,7 +1065,7 @@
                         VerticalAlignment="Center"
                         Width="48" Height="48" CornerRadius="24"
                         Background="White" Foreground="Black" BorderThickness="0" Padding="0">
-                     <FontIcon x:Name="PipPlayPauseIcon" Glyph="&#xE768;" FontSize="20"/>
+                     <FontIcon x:Name="PipPlayPauseIcon" Glyph="{x:Bind _viewModel.PlayPauseIcon, Mode=OneWay}" FontSize="20"/>
                 </Button>
 
                 <!-- Top Right: Exit PiP (Back to Normal/Fullscreen) -->
@@ -1169,5 +1157,104 @@
             </StackPanel>
         </Border>
 
+        <!-- 10. Inactivity Overlay (Moved to Top Z-Order) -->
+        <!-- 10. Inactivity Overlay (Centered-Left Cinematic Redesign) -->
+        <Grid x:Name="InactivityOverlay" 
+              Visibility="Collapsed"
+              Opacity="0"
+              PointerPressed="PipOverlay_PointerPressed"
+              HorizontalAlignment="Stretch" VerticalAlignment="Stretch">
+            
+            <!-- Left-to-Transparent Cinematic Gradient (Deepened) -->
+            <Grid.Background>
+                <LinearGradientBrush StartPoint="0,0.5" EndPoint="1,0.5">
+                    <GradientStop Color="#FF000000" Offset="0"/>
+                    <GradientStop Color="#EE000000" Offset="0.2"/>
+                    <GradientStop Color="#99000000" Offset="0.5"/>
+                    <GradientStop Color="#00000000" Offset="1.0"/>
+                </LinearGradientBrush>
+            </Grid.Background>
+            
+            <!-- Centered-Left Info Panel -->
+            <StackPanel HorizontalAlignment="Left" VerticalAlignment="Center" 
+                        Margin="100,0,0,0" Spacing="32" MaxWidth="1100">
+                
+                <!-- 1. Identity Section (Logo or Big Title) -->
+                <StackPanel Spacing="16">
+                    <Image x:Name="InactivityLogo" Height="140" Stretch="Uniform" HorizontalAlignment="Left" 
+                           Source="{x:Bind _viewModel.InactivityLogoUrl, Mode=OneWay}"
+                           Visibility="{x:Bind _viewModel.HasInactivityLogo, Mode=OneWay, Converter={StaticResource BoolToVis}}" 
+                           Margin="0,0,0,8"/>
+                    
+                    <TextBlock x:Name="InactivityTitle" FontSize="72" FontWeight="Black" Foreground="White" 
+                               HorizontalAlignment="Left" CharacterSpacing="-20"
+                               Text="{x:Bind _viewModel.InactivityTitle, Mode=OneWay}"
+                               Visibility="{x:Bind _viewModel.HasInactivityLogo, Mode=OneWay, Converter={StaticResource BoolInverseToVis}}"/>
+
+                    <!-- 2. Refined Metadata Bar -->
+                    <StackPanel Orientation="Horizontal" Spacing="14" VerticalAlignment="Center">
+                        <!-- Year -->
+                        <TextBlock x:Name="InactivityYear" Foreground="White" FontSize="22" FontWeight="SemiBold" Opacity="0.9"
+                                   Text="{x:Bind _viewModel.InactivityYear, Mode=OneWay}"
+                                   Visibility="{x:Bind _viewModel.InactivityYear, Mode=OneWay, Converter={StaticResource StringToVis}}"/>
+                        
+                        <TextBlock Text="|" Foreground="White" Opacity="0.2" FontSize="18" VerticalAlignment="Center"
+                                   Visibility="{x:Bind _viewModel.InactivityYear, Mode=OneWay, Converter={StaticResource StringToVis}}"/>
+
+                        <!-- Duration -->
+                        <TextBlock x:Name="InactivityDuration" Foreground="White" FontSize="22" FontWeight="SemiBold" Opacity="0.9"
+                                   Text="{x:Bind _viewModel.InactivityDuration, Mode=OneWay}"
+                                   Visibility="{x:Bind _viewModel.InactivityDuration, Mode=OneWay, Converter={StaticResource StringToVis}}"/>
+
+                        <TextBlock Text="|" Foreground="White" Opacity="0.2" FontSize="18" VerticalAlignment="Center"
+                                   Visibility="{x:Bind _viewModel.InactivityDuration, Mode=OneWay, Converter={StaticResource StringToVis}}"/>
+
+                        <!-- Rating -->
+                        <Border x:Name="InactivityRatingBorder" Padding="10,2" CornerRadius="4" BorderThickness="2" BorderBrush="White" Opacity="0.9"
+                                Visibility="{x:Bind _viewModel.InactivityRating, Mode=OneWay, Converter={StaticResource StringToVis}}">
+                            <TextBlock x:Name="InactivityRating" Foreground="White" FontSize="14" FontWeight="Black"
+                                       Text="{x:Bind _viewModel.InactivityRating, Mode=OneWay}"/>
+                        </Border>
+
+                        <!-- Dynamic Technical Badges (Simplified Borders) -->
+                        <ItemsControl ItemsSource="{x:Bind _viewModel.InactivityBadges, Mode=OneWay}" Margin="12,0,0,0">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <StackPanel Orientation="Horizontal" Spacing="10"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="viewmodels:BadgeViewModel">
+                                    <Border BorderThickness="1" CornerRadius="3" Padding="8,1" 
+                                            BorderBrush="{x:Bind ColorBrush, Mode=OneWay}"
+                                            Background="#11000000">
+                                        <TextBlock Text="{x:Bind Text}" FontSize="12" FontWeight="Bold" 
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                   Foreground="{x:Bind ColorBrush, Mode=OneWay}"/>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </StackPanel>
+
+                <!-- 3. Plot / Description -->
+                <TextBlock x:Name="InactivityDescription" FontSize="22" Foreground="White" Opacity="0.7"
+                           Text="{x:Bind _viewModel.InactivityDescription, Mode=OneWay}"
+                           TextWrapping="Wrap" MaxWidth="850" MaxLines="4" 
+                           TextTrimming="CharacterEllipsis" LineHeight="34"/>
+
+                <!-- 4. Playback Status (Countdown) -->
+                <StackPanel Spacing="12">
+                    <TextBlock x:Name="InactivityChapterInfo" Foreground="#FFD700" FontSize="24" FontWeight="Bold"
+                               Text="{x:Bind _viewModel.InactivityChapterInfo, Mode=OneWay}"
+                               Visibility="{x:Bind _viewModel.InactivityChapterInfo, Mode=OneWay, Converter={StaticResource StringToVis}}"/>
+                    
+                    <TextBlock x:Name="InactivityRemainingTime" Foreground="White" FontSize="48" FontWeight="Light"
+                               Text="{x:Bind _viewModel.InactivityRemainingText, Mode=OneWay}" CharacterSpacing="30"/>
+                </StackPanel>
+            </StackPanel>
+        </Grid>
     </Grid>
 </Page>
+

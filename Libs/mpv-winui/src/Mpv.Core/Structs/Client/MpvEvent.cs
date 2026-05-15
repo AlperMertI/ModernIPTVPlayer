@@ -1,5 +1,6 @@
-﻿// Copyright (c) Bili Copilot. All rights reserved.
+// Copyright (c) Bili Copilot. All rights reserved.
 
+using System.Diagnostics.CodeAnalysis;
 using Mpv.Core.Enums.Client;
 using System.Runtime.InteropServices;
 
@@ -73,5 +74,5 @@ public partial struct MpvEvent
     /// <para>Note: future enhancements might add new event structs for existing or new</para>
     /// <para>event types.</para>
     /// </remarks>
-    public T GetData<T>() where T : struct => Marshal.PtrToStructure<T>(DataPtr);
+    public T GetData<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)] T>() where T : struct => Marshal.PtrToStructure<T>(DataPtr);
 }

@@ -11,7 +11,7 @@ namespace ModernIPTVPlayer.Controls
     {
         private Storyboard _storyboard;
         private bool _callbackRegistered = false;
-        private const double DefaultTravel = 520.0;
+        private const double DefaultTravel = 220.0;
 
         public ShimmerControl()
         {
@@ -37,13 +37,19 @@ namespace ModernIPTVPlayer.Controls
 
         private void SetupAnimation()
         {
+            if (ShimmerTransform == null) return;
+            
             _storyboard = new Storyboard();
             _storyboard.Children.Clear();
 
+            // [Senior] Calculate travel based on width for full coverage
+            double width = this.ActualWidth > 0 ? this.ActualWidth : 1200;
+            double travel = width * 1.5;
+
             var anim = new DoubleAnimation
             {
-                From = -DefaultTravel,
-                To = DefaultTravel,
+                From = -travel,
+                To = travel,
                 Duration = new Duration(ShimmerDuration),
                 RepeatBehavior = RepeatBehavior.Forever,
                 EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut }
@@ -52,7 +58,19 @@ namespace ModernIPTVPlayer.Controls
             Storyboard.SetTarget(anim, ShimmerTransform);
             Storyboard.SetTargetProperty(anim, "X");
             _storyboard.Children.Add(anim);
+
+            // Re-bind size changed to keep animation accurate
+
+            this.SizeChanged -= OnSizeChanged;
+            this.SizeChanged += OnSizeChanged;
         }
+
+        private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (e.NewSize.Width != e.PreviousSize.Width) SetupAnimation();
+        }
+
+
 
         private void OnVisibilityChanged(DependencyObject sender, DependencyProperty dp)
         {
@@ -104,7 +122,7 @@ namespace ModernIPTVPlayer.Controls
         }
 
         public static readonly DependencyProperty SweepWidthProperty =
-            DependencyProperty.Register(nameof(SweepWidth), typeof(double), typeof(ShimmerControl), new PropertyMetadata(360.0));
+            DependencyProperty.Register(nameof(SweepWidth), typeof(double), typeof(ShimmerControl), new PropertyMetadata(200.0));
 
         public double SweepWidth
         {
@@ -113,7 +131,7 @@ namespace ModernIPTVPlayer.Controls
         }
 
         public static readonly DependencyProperty ShimmerDurationProperty =
-            DependencyProperty.Register(nameof(ShimmerDuration), typeof(TimeSpan), typeof(ShimmerControl), new PropertyMetadata(TimeSpan.FromMilliseconds(1450), OnTimingChanged));
+            DependencyProperty.Register(nameof(ShimmerDuration), typeof(TimeSpan), typeof(ShimmerControl), new PropertyMetadata(TimeSpan.FromMilliseconds(3500), OnTimingChanged));
 
         public TimeSpan ShimmerDuration
         {

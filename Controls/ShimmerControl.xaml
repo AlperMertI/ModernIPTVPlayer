@@ -13,15 +13,17 @@
             <Rectangle.Fill>
                 <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                     <GradientStop Color="Transparent" Offset="0"/>
-                    <GradientStop Color="#05FFFFFF" Offset="0.22"/>
-                    <GradientStop Color="#38FFFFFF" Offset="0.5"/>
-                    <GradientStop Color="#08FFFFFF" Offset="0.78"/>
+                    <GradientStop Color="#08FFFFFF" Offset="0.2"/>
+                    <GradientStop Color="#1AFFFFFF" Offset="0.5"/>
+                    <GradientStop Color="#08FFFFFF" Offset="0.8"/>
                     <GradientStop Color="Transparent" Offset="1"/>
                 </LinearGradientBrush>
+
             </Rectangle.Fill>
             <Rectangle.RenderTransform>
-                <TranslateTransform x:Name="ShimmerTransform" X="-360"/>
+                <TranslateTransform x:Name="ShimmerTransform" X="-1200"/>
             </Rectangle.RenderTransform>
+
         </Rectangle>
     </Grid>
 </UserControl>

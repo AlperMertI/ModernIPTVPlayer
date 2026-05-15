@@ -6,45 +6,14 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Iptv;
+using ModernIPTVPlayer.Services;
+using ModernIPTVPlayer.Helpers;
 
 namespace ModernIPTVPlayer
 {
     public sealed partial class MediaInfoPage
     {
-        /// <summary>
-        /// The logical side panel requested by page state. Rendering and animation should derive from this,
-        /// so movie sources, series episodes, and source drill-in behavior do not fight through loose booleans.
-        /// </summary>
-        private enum MediaDetailPanelMode
-        {
-            None,
-            Episodes,
-            Sources
-        }
 
-        private enum MediaContentKind
-        {
-            Unknown,
-            Movie,
-            Series,
-            Live
-        }
-
-        private enum PanelChangeReason
-        {
-            Reset,
-            NavigationDefault,
-            MovieAutoSources,
-            SeriesDefaultEpisodes,
-            EpisodeSelected,
-            EpisodeDeselected,
-            SourcesRequested,
-            SourcesClosed,
-            BackToEpisodes,
-            SourceFetch,
-            SourceCache,
-            NoSources
-        }
 
         /// <summary>
         /// Immutable input for layout application. It captures what the UI should show before any controls
@@ -62,7 +31,8 @@ namespace ModernIPTVPlayer
                 bool isReady,
                 bool hasSelectedEpisode,
                 bool isSourcesFetchInProgress,
-                bool isSourcesPanelHidden)
+                bool isSourcesPanelHidden,
+                double viewportHeight)
             {
                 IsWide = isWide;
                 ContentKind = contentKind;
@@ -74,6 +44,7 @@ namespace ModernIPTVPlayer
                 HasSelectedEpisode = hasSelectedEpisode;
                 IsSourcesFetchInProgress = isSourcesFetchInProgress;
                 IsSourcesPanelHidden = isSourcesPanelHidden;
+                ViewportHeight = viewportHeight;
             }
 
             public bool IsWide { get; }
@@ -86,6 +57,7 @@ namespace ModernIPTVPlayer
             public bool HasSelectedEpisode { get; }
             public bool IsSourcesFetchInProgress { get; }
             public bool IsSourcesPanelHidden { get; }
+            public double ViewportHeight { get; }
             public bool ShowSourcesPanel => PanelMode == MediaDetailPanelMode.Sources;
             public bool ShowEpisodesPanel => PanelMode == MediaDetailPanelMode.Episodes;
         }
@@ -105,7 +77,8 @@ namespace ModernIPTVPlayer
                 _pageLoadState == PageLoadState.Ready,
                 _selectedEpisode != null,
                 _isSourcesFetchInProgress,
-                _isSourcesPanelHidden);
+                _isSourcesPanelHidden,
+                GetViewportHeight());
         }
 
         private MediaContentKind ResolveCurrentContentKind()
@@ -182,20 +155,58 @@ namespace ModernIPTVPlayer
             SyncLayout();
         }
 
-        private void OpenSourcesPanel(PanelChangeReason reason)
+        public void OpenSourcesPanel(PanelChangeReason reason)
         {
             _isSourcesPanelHidden = false;
             if (SourcesShowHandle != null) SourcesShowHandle.Visibility = Visibility.Collapsed;
             SetPanelMode(MediaDetailPanelMode.Sources, reason);
             if (BtnBackToEpisodes != null) BtnBackToEpisodes.Visibility = IsSeriesItem() ? Visibility.Visible : Visibility.Collapsed;
             UpdateInfoPanelVisibility(IsSeriesItem());
+
+            // [UX] If we are opening the panel with existing/cached content, force a re-reveal
+            // so the user gets the staggered animation experience even if data was already in memory.
+            if (reason == PanelChangeReason.SourceCache || reason == PanelChangeReason.NavigationDefault)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    _sourcesVisualGeneration++;
+                    _animatedSourceRevealIndexes.Clear();
+                    _sourcesRevealItemLimit = _visibleSourceStreams.Count;
+
+                    // Force full recycle: ElementClearing resets state, ElementPrepared hides
+                    // and animates each item. This is reliable for ALL items, not just realized ones.
+                    if (SourcesRepeater != null)
+                    {
+                        var src = _visibleSourceStreams;
+                        SourcesRepeater.ItemsSource = null;
+                        SourcesRepeater.ItemsSource = src;
+                    }
+                });
+            }
         }
 
-        private void OpenEpisodesPanel(PanelChangeReason reason)
+        public void OpenEpisodesPanel(PanelChangeReason reason)
         {
             SetPanelMode(MediaDetailPanelMode.Episodes, reason);
             if (BtnBackToEpisodes != null) BtnBackToEpisodes.Visibility = Visibility.Collapsed;
             UpdateInfoPanelVisibility(false);
+
+            // [UX] Staggered reveal for episodes when returning to the list
+            if (reason == PanelChangeReason.BackToEpisodes || reason == PanelChangeReason.SeriesDefaultEpisodes)
+            {
+                DispatcherQueue.TryEnqueue(() =>
+                {
+                    _sourcesVisualGeneration++;
+                    _animatedSourceRevealIndexes.Clear();
+
+                    if (EpisodesRepeater != null)
+                    {
+                        var src = CurrentEpisodes;
+                        EpisodesRepeater.ItemsSource = null;
+                        EpisodesRepeater.ItemsSource = src;
+                    }
+                });
+            }
         }
 
         private void CloseDetailPanel(PanelChangeReason reason)
@@ -215,12 +226,13 @@ namespace ModernIPTVPlayer
 
         private void SyncLayout()
         {
+            if (!this.IsLoaded || _pageCts?.IsCancellationRequested == true) return;
             if (LayoutRoot == null || ContentGrid == null) return;
 
             var panelState = BuildPanelLayoutSnapshot();
             LogPanelSnapshotIfChanged(panelState);
             ApplyResponsiveContentGrid(panelState);
-            ApplyContentVisualState(panelState);
+            ApplyVisualProperties(panelState);
             ApplyPanelLayoutState(panelState);
             ApplyInfoPriorityLayout(panelState.IsWide);
             ApplyMetadataVisibility(panelState);
@@ -230,8 +242,6 @@ namespace ModernIPTVPlayer
 
         private void LogPanelSnapshotIfChanged(MediaPanelLayoutSnapshot panelState)
         {
-            // [SUPPRESSION] Only log if the actual visual structure (Mode, Wide, Panels) changes. 
-            // We ignore _pageLoadState here to prevent "sync spam" during the 100ms loading sequence.
             string panelSyncSignature = $"{panelState.ContentKind}|{panelState.PanelMode}|{panelState.IsWide}|{panelState.ShowEpisodesPanel}|{panelState.ShowSourcesPanel}|{panelState.HasSelectedEpisode}|{panelState.IsSourcesFetchInProgress}|{panelState.IsSourcesPanelHidden}";
             if (_lastPanelSyncLogSignature == panelSyncSignature) return;
 
@@ -240,20 +250,147 @@ namespace ModernIPTVPlayer
                 $"[INFO-SYNC] Layout Synced | Mode: {panelState.PanelMode}, Kind: {panelState.ContentKind}, Wide: {panelState.IsWide}");
         }
 
-        private void ApplyContentVisualState(MediaPanelLayoutSnapshot panelState)
+        private void ApplyVisualProperties(MediaPanelLayoutSnapshot panelState)
         {
+            // 1. Handle Adaptive Layout States (Wide vs Narrow)
             int layoutIndex = panelState.IsWide ? 1 : 0;
             if (_isWideModeIndex != layoutIndex)
             {
                 _isWideModeIndex = layoutIndex;
-                VisualStateManager.GoToState(this, panelState.IsWide ? "WideState" : "NarrowState", true);
+                
+                if (panelState.IsWide)
+                {
+                    // WIDE MODE SETTERS
+                    if (OverviewText != null) OverviewText.TextAlignment = TextAlignment.Left;
+                    if (GenresText != null) GenresText.TextAlignment = TextAlignment.Left;
+
+                    if (InfoColumn != null)
+                    {
+                        InfoColumn.MaxWidth = 800;
+                        InfoColumn.HorizontalAlignment = HorizontalAlignment.Left;
+                        InfoColumn.Spacing = 12;
+                    }
+
+                    if (IdentityControl != null) IdentityControl.HorizontalAlignment = HorizontalAlignment.Left;
+                    
+                    if (MetadataRibbon != null)
+                        MetadataRibbon.Margin = new Thickness(2, 0, 0, 0);
+                    if (ActionBarGroup != null) ActionBarGroup.HorizontalAlignment = HorizontalAlignment.Left;
+                    if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = HorizontalAlignment.Left;
+
+                    if (InfoContainerInner != null) InfoContainerInner.Margin = new Thickness(0, 0, 0, 60);
+
+                    if (NarrowSectionsContainer != null) NarrowSectionsContainer.Visibility = Visibility.Collapsed;
+                    
+                    if (EpisodesPanel != null)
+                    {
+                        EpisodesPanel.VerticalAlignment = VerticalAlignment.Center;
+                        EpisodesPanel.HorizontalAlignment = HorizontalAlignment.Right;
+                        EpisodesPanel.Width = 440;
+                        EpisodesPanel.Margin = new Thickness(0);
+                    }
+
+                    if (SourcesPanel != null)
+                    {
+                        SourcesPanel.VerticalAlignment = VerticalAlignment.Stretch;
+                        SourcesPanel.HorizontalAlignment = HorizontalAlignment.Right;
+                        SourcesPanel.Width = 440;
+                        SourcesPanel.MaxWidth = 440;
+                        SourcesPanel.Margin = new Thickness(0);
+                    }
+                }
+                else
+                {
+                    if (OverviewText != null) OverviewText.TextAlignment = TextAlignment.Left;
+                    if (GenresText != null) GenresText.TextAlignment = TextAlignment.Center;
+
+                    if (InfoColumn != null)
+                    {
+                        InfoColumn.MaxWidth = 800;
+                        InfoColumn.HorizontalAlignment = HorizontalAlignment.Center;
+                        InfoColumn.VerticalAlignment = VerticalAlignment.Top;
+                        InfoColumn.Margin = new Thickness(0);
+                        InfoColumn.Spacing = 12;
+                    }
+
+                    if (IdentityControl != null) IdentityControl.HorizontalAlignment = HorizontalAlignment.Center;
+
+                    if (MetadataRibbon != null)
+                    {
+                        MetadataRibbon.HorizontalAlignment = HorizontalAlignment.Center;
+                        MetadataRibbon.Margin = new Thickness(0);
+                    }
+                    if (ActionBarGroup != null) ActionBarGroup.HorizontalAlignment = HorizontalAlignment.Center;
+                    if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = HorizontalAlignment.Center;
+
+                    if (InfoContainerInner != null) InfoContainerInner.Margin = new Thickness(0);
+                    if (NarrowSectionsContainer != null)
+                    {
+                        NarrowSectionsContainer.Visibility = Visibility.Visible;
+                        NarrowSectionsContainer.Spacing = 0;
+                    }
+
+                    if (NarrowEpisodesSection != null)
+                    {
+                        NarrowEpisodesSection.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        NarrowEpisodesSection.Margin = new Thickness(0, 12, 0, 0);
+                        NarrowEpisodesSection.Padding = new Thickness(20, 0, 20, 0);
+                    }
+                    if (NarrowEpisodesHeader != null) NarrowEpisodesHeader.HorizontalAlignment = HorizontalAlignment.Center;
+
+                    if (NarrowSourcesSection != null)
+                    {
+                        NarrowSourcesSection.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        NarrowSourcesHeader.HorizontalAlignment = HorizontalAlignment.Center;
+                    }
+                    if (NarrowAddonSelector != null) NarrowAddonSelector.HorizontalAlignment = HorizontalAlignment.Center;
+
+                    if (NarrowDirectorSection != null)
+                    {
+                        NarrowDirectorSection.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        NarrowDirectorSection.Padding = new Thickness(20, 0, 20, 0);
+                        NarrowDirectorHeader.HorizontalAlignment = HorizontalAlignment.Center;
+                    }
+                    if (NarrowCastSection != null)
+                    {
+                        NarrowCastSection.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        NarrowCastSection.Padding = new Thickness(20, 0, 20, 0);
+                        NarrowCastHeader.HorizontalAlignment = HorizontalAlignment.Center;
+                    }
+
+                    if (EpisodesPanel != null)
+                    {
+                        EpisodesPanel.VerticalAlignment = VerticalAlignment.Top;
+                        EpisodesPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        EpisodesPanel.Width = double.NaN;
+                        EpisodesPanel.MaxWidth = double.PositiveInfinity;
+                        EpisodesPanel.Margin = new Thickness(0, 20, 0, 0);
+                    }
+
+                    if (SourcesPanel != null)
+                    {
+                        SourcesPanel.VerticalAlignment = VerticalAlignment.Top;
+                        SourcesPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
+                        SourcesPanel.Width = double.NaN;
+                        SourcesPanel.MaxWidth = double.PositiveInfinity;
+                        SourcesPanel.Margin = new Thickness(0, 20, 0, 0);
+                    }
+
+                    if (SourcesRepeater != null) SourcesRepeater.MaxHeight = 800;
+                    
+                    if (CastSection != null) CastSection.Visibility = Visibility.Collapsed;
+                    if (DirectorSection != null) DirectorSection.Visibility = Visibility.Collapsed;
+                    if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
+                    if (CastShimmer != null) CastShimmer.Visibility = Visibility.Collapsed;
+                    if (DirectorShimmer != null) DirectorShimmer.Visibility = Visibility.Collapsed;
+                }
             }
 
+            // 2. Handle Content Lifecycle States (Loading vs Ready)
             string contentState = (panelState.IsReady || panelState.IsRevealing) ? "ReadyState" : "LoadingState";
             if (_currentContentStateName != contentState)
             {
                 _currentContentStateName = contentState;
-                VisualStateManager.GoToState(this, contentState, true);
             }
         }
 
@@ -262,21 +399,21 @@ namespace ModernIPTVPlayer
             if (panelState.IsWide)
             {
                 bool showSidebar = panelState.ShowSourcesPanel || panelState.ShowEpisodesPanel;
-                Grid.SetRow(InfoContainer, 0);
-                Grid.SetColumn(InfoContainer, 0);
-                Grid.SetColumnSpan(InfoContainer, 1);
                 ContentGrid.Padding = new Thickness(60, 40, 20, 40);
-                ContentGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
-                ContentGrid.ColumnDefinitions[1].MinWidth = showSidebar ? (panelState.ShowSourcesPanel ? WideSourcesColumnMinWidth : WideEpisodesColumnWidth) : 0;
-                ContentGrid.ColumnDefinitions[1].MaxWidth = showSidebar ? (panelState.ShowSourcesPanel ? WideSourcesColumnMaxWidth : WideEpisodesColumnWidth) : double.PositiveInfinity;
-                ContentGrid.ColumnDefinitions[1].Width = showSidebar
-                    ? (panelState.ShowSourcesPanel ? new GridLength(0.42, GridUnitType.Star) : new GridLength(WideEpisodesColumnWidth))
-                    : new GridLength(0);
+                if (Col0 != null) Col0.Width = new GridLength(1, GridUnitType.Star);
+                if (Col1 != null)
+                {
+                    Col1.MinWidth = showSidebar ? (panelState.ShowSourcesPanel ? WideSourcesColumnMinWidth : WideEpisodesColumnWidth) : 0;
+                    Col1.MaxWidth = showSidebar ? (panelState.ShowSourcesPanel ? WideSourcesColumnMaxWidth : WideEpisodesColumnWidth) : double.PositiveInfinity;
+                    Col1.Width = showSidebar
+                        ? (panelState.ShowSourcesPanel ? new GridLength(0.42, GridUnitType.Star) : GridLength.Auto)
+                        : new GridLength(0);
+                }
 
                 if (Row0 != null) Row0.Height = new GridLength(1, GridUnitType.Star);
                 if (Row1 != null) Row1.Height = new GridLength(0);
                 if (Row2 != null) Row2.Height = new GridLength(0);
-                if (ContentGrid.RowDefinitions.Count > 3) ContentGrid.RowDefinitions[3].Height = new GridLength(0);
+                if (Row3 != null) Row3.Height = new GridLength(0);
 
                 if (RootScrollViewer != null)
                 {
@@ -295,9 +432,6 @@ namespace ModernIPTVPlayer
             }
             else
             {
-                Grid.SetRow(InfoContainer, 0);
-                Grid.SetColumn(InfoContainer, 0);
-                Grid.SetColumnSpan(InfoContainer, 2);
                 ContentGrid.Padding = new Thickness(20, 60, 20, 40);
                 if (AdaptiveInfoHost != null)
                 {
@@ -305,15 +439,18 @@ namespace ModernIPTVPlayer
                     AdaptiveInfoHost.VerticalAlignment = VerticalAlignment.Top;
                     AdaptiveInfoHost.HorizontalAlignment = HorizontalAlignment.Stretch;
                 }
-                ContentGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
-                ContentGrid.ColumnDefinitions[1].MinWidth = 0;
-                ContentGrid.ColumnDefinitions[1].MaxWidth = double.PositiveInfinity;
-                ContentGrid.ColumnDefinitions[1].Width = new GridLength(0);
+                if (Col0 != null) Col0.Width = new GridLength(1, GridUnitType.Star);
+                if (Col1 != null)
+                {
+                    Col1.MinWidth = 0;
+                    Col1.MaxWidth = double.PositiveInfinity;
+                    Col1.Width = new GridLength(0);
+                }
 
                 if (Row0 != null) Row0.Height = new GridLength(1, GridUnitType.Auto);
                 if (Row1 != null) Row1.Height = new GridLength(1, GridUnitType.Auto);
                 if (Row2 != null) Row2.Height = new GridLength(1, GridUnitType.Auto);
-                if (ContentGrid.RowDefinitions.Count > 3) ContentGrid.RowDefinitions[3].Height = new GridLength(0);
+                if (Row3 != null) Row3.Height = new GridLength(1, GridUnitType.Auto);
 
                 if (RootScrollViewer != null)
                 {
@@ -333,39 +470,9 @@ namespace ModernIPTVPlayer
         {
             bool shouldShowMetadata = panelState.HasMetadata || panelState.IsReady || panelState.IsRevealing;
 
-            if (ContentLogoHost != null)
-            {
-                bool hasLogo = !string.IsNullOrWhiteSpace(_currentLogoUrl);
-                bool isTimedOut = (DateTime.Now - _navigationStartTime).TotalMilliseconds > IdentityGateTimeoutMs;
-                bool isWaitingForLogoDecision = _isLogoPending && !_isLogoFallbackActive && !isTimedOut;
-                bool showLogo = shouldShowMetadata && hasLogo && _isLogoReady && !_isLogoFallbackActive;
-                bool showEpisodeTitleUnderLogo = _selectedEpisode != null;
-
-                ContentLogoHost.Visibility = showLogo ? Visibility.Visible : Visibility.Collapsed;
-                ContentLogoHost.Margin = new Thickness(0);
-                ContentLogoHost.Opacity = 1;
-                var logoHostVisual = ElementCompositionPreview.GetElementVisual(ContentLogoHost);
-                logoHostVisual.StopAnimation(nameof(Visual.Opacity));
-                logoHostVisual.Opacity = 1f;
-                if (TitleText != null)
-                {
-                    bool showTitleFallback = !hasLogo || _isLogoFallbackActive || (hasLogo && !_isLogoReady && isTimedOut);
-                    bool showTitle = shouldShowMetadata && !isWaitingForLogoDecision && (showTitleFallback || showEpisodeTitleUnderLogo);
-                    TitleText.Visibility = showTitle ? Visibility.Visible : Visibility.Collapsed;
-                    if (!showTitle)
-                    {
-                        TitleText.Opacity = 0;
-                        var titleVisual = ElementCompositionPreview.GetElementVisual(TitleText);
-                        titleVisual.StopAnimation(nameof(Visual.Opacity));
-                        titleVisual.Opacity = 0f;
-                    }
-                    else
-                    {
-                        TitleText.Opacity = 1;
-                        ElementCompositionPreview.GetElementVisual(TitleText).Opacity = 1f;
-                    }
-                }
-            }
+            // MediaIdentityControl handles its own internal visibility based on Logo/Title
+            bool isIdentityVisible = shouldShowMetadata && (panelState.IsReady || panelState.IsRevealing || panelState.IsLoading);
+            if (IdentityControl != null) IdentityControl.Visibility = isIdentityVisible ? Visibility.Visible : Visibility.Collapsed;
 
             if (MetadataPanel != null) MetadataPanel.Visibility = shouldShowMetadata ? Visibility.Visible : Visibility.Collapsed;
             if (OverviewPanel != null) OverviewPanel.Visibility = shouldShowMetadata ? Visibility.Visible : Visibility.Collapsed;
@@ -377,42 +484,87 @@ namespace ModernIPTVPlayer
             if (ActualWidth <= 0) return;
 
             // 1. Identity (InfoContainer)
-            _infoPanelAnimator?.ApplyVisible(panelState.IsLoading || panelState.IsRevealing || panelState.IsReady, isHorizontalReveal: false);
+            if (DisableMediaInfoRevealAnimationsForCrashIsolation)
+            {
+                if (InfoContainer != null) InfoContainer.Visibility = (panelState.IsLoading || panelState.IsRevealing || panelState.IsReady) ? Visibility.Visible : Visibility.Collapsed;
+                if (InfoContainer != null) InfoContainer.Opacity = 1.0;
+            }
+            else
+            {
+                _infoPanelAnimator?.ApplyVisible(panelState.IsLoading || panelState.IsRevealing || panelState.IsReady, isHorizontalReveal: false);
+            }
 
             // 2. People Sections (Cast/Director)
-            // Rule: Reveal as soon as we have data. Reveal Sync (1-frame delay) in PopulateCastAndDirectors ensures we don't reveal 'blank'.
-            bool canShowPeople = panelState.IsWide && (panelState.IsLoading || panelState.IsRevealing || panelState.IsReady);
-            bool hasCast = CastList?.Count > 0 || panelState.IsLoading;
-            bool hasDirector = DirectorList?.Count > 0 || panelState.IsLoading;
+            // [NATIVE AOT SAFE] These are now managed by ParallelRevealCoordinator.
+            // We only handle basic structural visibility here if needed, but let the coordinator drive animations.
+            // [HEIGHT GUARD] We only show people if the window is tall enough to avoid overcrowding.
+            bool canShowPeople = panelState.IsWide && 
+                                 (panelState.IsLoading || panelState.IsRevealing || panelState.IsReady) &&
+                                 panelState.ViewportHeight >= WidePeopleComfortHeight;
+            bool hasCast = CastList?.Count > 0;
+            bool hasDirector = DirectorList?.Count > 0;
+            bool isStillTransitioning = panelState.IsLoading;
 
-            _castPanelAnimator?.ApplyVisible(canShowPeople && hasCast, isHorizontalReveal: false);
-            _directorPanelAnimator?.ApplyVisible(canShowPeople && hasDirector, isHorizontalReveal: false);
+            // If we are NOT wide, or have no data, ensure they are collapsed.
+            // [RACE CONDITION FIX] We only collapse if we are truly READY and still have no data.
+            // If we are Loading or Revealing, we must keep them available for the coordinator.
+            
+            if (!canShowPeople || (!hasCast && !isStillTransitioning))
+            {
+                if (CastSection != null) CastSection.Visibility = Visibility.Collapsed;
+                if (CastShimmer != null) CastShimmer.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                // [NATIVE AOT SAFE] If we have data or are loading/revealing, we allow them to be visible.
+                // The actual opacity is still managed by the reveal coordinator/animator for a smooth entry.
+                if (CastSection != null && CastSection.Visibility != Visibility.Visible) CastSection.Visibility = Visibility.Visible;
+                
+                // Keep shimmer visible ONLY if we don't have real data yet
+                if (CastShimmer != null) CastShimmer.Visibility = !hasCast ? Visibility.Visible : Visibility.Collapsed;
+            }
+
+            if (!canShowPeople || (!hasDirector && !isStillTransitioning))
+            {
+                if (DirectorSection != null) DirectorSection.Visibility = Visibility.Collapsed;
+                if (DirectorShimmer != null) DirectorShimmer.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                if (DirectorSection != null && DirectorSection.Visibility != Visibility.Visible) DirectorSection.Visibility = Visibility.Visible;
+                if (DirectorShimmer != null) DirectorShimmer.Visibility = !hasDirector ? Visibility.Visible : Visibility.Collapsed;
+            }
 
             // 3. Episodes
-            // Rule: Only reveal if we have at least one season and episodes are ready. 
-            // Prevents race conditions where the panel slides in empty before selection-changed fires.
             bool hasEpisodes = (Seasons?.Count > 0 && CurrentEpisodes?.Count > 0) || 
                                (panelState.IsLoading && panelState.ContentKind == MediaContentKind.Series);
-            _episodesPanelAnimator?.ApplyVisible(panelState.ShowEpisodesPanel && hasEpisodes, isHorizontalReveal: true);
+            if (DisableAllPanelAnimatorsForCrashIsolation)
+            {
+                if (EpisodesPanel != null) EpisodesPanel.Visibility = (panelState.ShowEpisodesPanel && hasEpisodes) ? Visibility.Visible : Visibility.Collapsed;
+                if (EpisodesPanel != null) EpisodesPanel.Opacity = 1.0;
+            }
+            else
+            {
+                _episodesPanelAnimator?.ApplyVisible(panelState.ShowEpisodesPanel && hasEpisodes, isHorizontalReveal: true);
+            }
 
             // 4. Sources
-            _sourcesPanelAnimator?.ApplyVisible(panelState.ShowSourcesPanel, isHorizontalReveal: false);
-        }
+            if (DisableMediaInfoRevealAnimationsForCrashIsolation)
+            {
+                if (SourcesPanel != null) SourcesPanel.Visibility = panelState.ShowSourcesPanel ? Visibility.Visible : Visibility.Collapsed;
+                if (SourcesPanel != null) SourcesPanel.Opacity = 1.0;
+            }
+            else
+            {
+                _sourcesPanelAnimator?.ApplyVisible(panelState.ShowSourcesPanel, isHorizontalReveal: true);
+            }
 
-        private void ApplyPeopleVisibility(MediaPanelLayoutSnapshot panelState)
-        {
-            // Legacy method kept for signature but logic moved to ApplyAtomicVisibility
-        }
-
-        private void ApplyDetailPanels(MediaPanelLayoutSnapshot panelState)
-        {
-            // Animation logic moved to ApplyAtomicVisibility
-            RefreshAllShimmers();
-
-            if (EpisodesRepeater != null) EpisodesRepeater.Visibility = panelState.ShowEpisodesPanel ? Visibility.Visible : Visibility.Collapsed;
-
-            if (NarrowSectionsContainer != null)
-                NarrowSectionsContainer.Visibility = Visibility.Collapsed;
+            // 5. Shared UI Controls
+            if (BtnHideSources != null) BtnHideSources.Visibility = (panelState.IsWide && panelState.ShowSourcesPanel) ? Visibility.Visible : Visibility.Collapsed;
+            if (BtnBackToEpisodes != null)
+            {
+                BtnBackToEpisodes.Visibility = (panelState.ShowSourcesPanel && panelState.ContentKind == MediaContentKind.Series) ? Visibility.Visible : Visibility.Collapsed;
+            }
         }
 
         private void ApplyPanelLayoutState(MediaPanelLayoutSnapshot panelState)
@@ -426,16 +578,20 @@ namespace ModernIPTVPlayer
                 _sourcesPanelAnimator?.MorphIfNeeded(LayoutRoot);
                 _episodesPanelAnimator?.MorphIfNeeded(LayoutRoot);
             }
+
+            if (InfoContainer != null)
+            {
+                Grid.SetRow(InfoContainer, 0);
+                Grid.SetColumn(InfoContainer, 0);
+                Grid.SetColumnSpan(InfoContainer, panelState.IsWide ? 1 : 2);
+            }
+
             if (SourcesPanel != null)
             {
                 Grid.SetRow(SourcesPanel, panelState.IsWide ? 0 : 1);
                 Grid.SetColumn(SourcesPanel, panelState.IsWide ? 1 : 0);
                 Grid.SetColumnSpan(SourcesPanel, panelState.IsWide ? 1 : 2);
                 SourcesPanel.VerticalAlignment = panelState.IsWide ? VerticalAlignment.Stretch : VerticalAlignment.Top;
-                SourcesPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
-                SourcesPanel.Width = double.NaN;
-                SourcesPanel.MaxWidth = panelState.IsWide ? 520 : double.PositiveInfinity;
-                SourcesPanel.Margin = panelState.IsWide ? new Thickness(24, 40, 0, 40) : new Thickness(0, 20, 0, 0);
             }
 
             if (EpisodesPanel != null)
@@ -444,29 +600,19 @@ namespace ModernIPTVPlayer
                 Grid.SetColumn(EpisodesPanel, panelState.IsWide ? 1 : 0);
                 Grid.SetColumnSpan(EpisodesPanel, panelState.IsWide ? 1 : 2);
                 EpisodesPanel.VerticalAlignment = panelState.IsWide ? VerticalAlignment.Center : VerticalAlignment.Top;
-                EpisodesPanel.HorizontalAlignment = panelState.IsWide ? HorizontalAlignment.Right : HorizontalAlignment.Stretch;
-                EpisodesPanel.Width = panelState.IsWide ? 400 : double.NaN;
-                EpisodesPanel.MaxWidth = panelState.IsWide ? 400 : double.PositiveInfinity;
-                EpisodesPanel.Margin = panelState.IsWide ? new Thickness(24, 40, 0, 40) : new Thickness(0, 20, 0, 0);
             }
 
-            if (BtnHideSources != null)
+            if (NarrowSectionsContainer != null)
             {
-                BtnHideSources.Visibility = (panelState.IsWide && panelState.ShowSourcesPanel) ? Visibility.Visible : Visibility.Collapsed;
+                Grid.SetRow(NarrowSectionsContainer, 3);
+                NarrowSectionsContainer.Visibility = !panelState.IsWide && (panelState.IsReady || panelState.IsRevealing) ? Visibility.Visible : Visibility.Collapsed;
             }
+        }
 
-            if (BtnBackToEpisodes != null)
-            {
-                BtnBackToEpisodes.Visibility = (panelState.ShowSourcesPanel && panelState.ContentKind == MediaContentKind.Series)
-                    ? Visibility.Visible
-                    : Visibility.Collapsed;
-            }
-
-            if (panelState.IsWide)
-            {
-                _sourcesPanelAnimator?.MorphIfNeeded(LayoutRoot);
-                _episodesPanelAnimator?.MorphIfNeeded(LayoutRoot);
-            }
+        private void ApplyDetailPanels(MediaPanelLayoutSnapshot panelState)
+        {
+            RefreshAllShimmers();
+            if (EpisodesRepeater != null) EpisodesRepeater.Visibility = panelState.ShowEpisodesPanel ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private double GetInfoPanelWidth()
@@ -477,15 +623,8 @@ namespace ModernIPTVPlayer
 
             if (viewportWidth >= LayoutAdaptiveThreshold)
             {
-                double sideWidth = ContentGrid?.ColumnDefinitions.Count > 1
-                    ? ContentGrid.ColumnDefinitions[1].ActualWidth
-                    : 0;
-
-                if (sideWidth <= 0)
-                {
-                    sideWidth = WideEpisodesColumnWidth;
-                }
-
+                double sideWidth = Col1 != null ? Col1.ActualWidth : 0;
+                if (sideWidth <= 0) sideWidth = WideEpisodesColumnWidth;
                 return Math.Max(360, viewportWidth - sideWidth - 96);
             }
 

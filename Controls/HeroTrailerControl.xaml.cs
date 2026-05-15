@@ -100,7 +100,7 @@ namespace ModernIPTVPlayer.Controls
             {
                 System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] Message: {msg}");
                 
-                if (msg == "READY")
+                if (msg.StartsWith("READY"))
                 {
                     _isTrailerPlaying = true;
                     
@@ -114,7 +114,7 @@ namespace ModernIPTVPlayer.Controls
 
                     PlayStateChanged?.Invoke(this, true);
                 }
-                else if (msg == "ENDED")
+                else if (msg.StartsWith("ENDED"))
                 {
                     _ = CleanupAsync();
                     VideoEnded?.Invoke(this, EventArgs.Empty);

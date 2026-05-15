@@ -46,7 +46,7 @@ namespace ModernIPTVPlayer.Services
         public static string ExtractYouTubeId(string source)
         {
             if (string.IsNullOrEmpty(source)) return source;
-            if (!source.Contains("/") && !source.Contains(".")) return source; // Already an ID
+            if (!source.Contains("/") && !source.Contains(".") && !source.Contains("=")) return source; // Already an ID
 
             try {
                 if (source.Contains("v=")) {
@@ -156,15 +156,15 @@ namespace ModernIPTVPlayer.Services
             }
         }
 
-        public async Task PlayTrailerAsync(WebView2 webView, string trailerId)
+        public async Task PlayTrailerAsync(WebView2 webView, string trailerId, bool unmute = false)
         {
             if (webView == null || string.IsNullOrEmpty(trailerId)) return;
             
             try 
             {
-                string json = $"{{\"type\":\"SET_VIDEO\", \"id\":\"{trailerId}\"}}";
+                string json = $"{{\"type\":\"SET_VIDEO\", \"id\":\"{trailerId}\", \"unmute\":{(unmute ? "true" : "false")}}}";
                 webView.CoreWebView2.PostWebMessageAsJson(json);
-                Debug.WriteLine($"[TRAILER_POOL_DEBUG] Live Switch Command Sent: {trailerId}");
+                Debug.WriteLine($"[TRAILER_POOL_DEBUG] Live Switch Command Sent: {trailerId} (Unmute: {unmute})");
             }
             catch (Exception ex)
             {
@@ -352,11 +352,15 @@ namespace ModernIPTVPlayer.Services
             // [DYNAMIC GHOST] Match the container aspect ratio exactly but at high-res scale
             var containerW = window.innerWidth;
             var containerH = window.innerHeight;
+            if (containerW <= 0 || containerH <= 0) return;
+            
             var aspectRatio = containerW / containerH;
+            if (!isFinite(aspectRatio)) return;
             
             // Determine virtual height based on quality setting
             var virtualH = targetH; // e.g. 1080
             var virtualW = Math.round(virtualH * aspectRatio);
+            if (!isFinite(virtualW)) return;
             
             // Apply the virtual size to the player to trick YouTube's bitrate logic
             player.style.width = virtualW + 'px';
@@ -382,10 +386,13 @@ namespace ModernIPTVPlayer.Services
         var player;
         var isReady = false;
         var pendingVideoId = null;
+        var pendingUnmute = false;
         
-        window.loadVideo = function(id) {{
-            log('loadVideo called for ' + id);
+        var currentVideoId = null;
+        window.loadVideo = function(id, unmute) {{
+            log('loadVideo called for ' + id + ' (unmute: ' + unmute + ')');
             if (!id) return;
+            currentVideoId = id;
 
             // 1. Reset Host State
             if (typeof window.resetSmartCrop === 'function') window.resetSmartCrop();
@@ -405,9 +412,12 @@ namespace ModernIPTVPlayer.Services
                     startSeconds: 0,
                     suggestedQuality: '{suggestedQ}'
                 }});
+                if (unmute) player.unMute();
+                else player.mute();
                 player.playVideo();
             }} else {{
                 pendingVideoId = id;
+                pendingUnmute = unmute;
             }}
         }};
 
@@ -435,12 +445,12 @@ namespace ModernIPTVPlayer.Services
             log('onPlayerReady');
             isReady = true;
             updateScale();
-            try {{ player.mute(); }} catch (e) {{}}
             window.chrome.webview.postMessage('PLAYER_READY');
             
             if (pendingVideoId) {{
-                loadVideo(pendingVideoId);
+                loadVideo(pendingVideoId, pendingUnmute);
                 pendingVideoId = null;
+                pendingUnmute = false;
             }}
 
         }}
@@ -448,24 +458,24 @@ namespace ModernIPTVPlayer.Services
         function onPlayerStateChange(event) {{
             // event.data: 0=ended, 1=playing, 2=paused, 3=buffering, 5=video cued
             if (event.data === 0) {{
-                 window.chrome.webview.postMessage('ENDED');
+                 window.chrome.webview.postMessage('ENDED:' + currentVideoId);
             }}
             if (event.data === 1 || event.data === 3) {{ 
                  if (event.data === 1) {{
                     try {{ event.target.setPlaybackQuality('{suggestedQ}'); }} catch(e) {{}}
                  }}
-                 window.chrome.webview.postMessage('READY');
+                 window.chrome.webview.postMessage('READY:' + currentVideoId);
             }}
         }}
 
         function onPlayerError(event) {{
-            window.chrome.webview.postMessage('ERROR:' + event.data);
+            window.chrome.webview.postMessage('ERROR:' + currentVideoId + ':' + event.data);
         }}
 
         window.chrome.webview.addEventListener('message', event => {{
             const data = event.data;
             if (data.type === 'SET_VIDEO') {{
-                window.loadVideo(data.id);
+                window.loadVideo(data.id, data.unmute);
             }} else if (data.type === 'STOP_VIDEO' && player && player.stopVideo) {{
                 player.stopVideo();
             }}

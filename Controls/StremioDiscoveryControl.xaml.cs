@@ -28,10 +28,10 @@ using System.Numerics;
 namespace ModernIPTVPlayer.Controls
 {
     [Microsoft.UI.Xaml.Data.Bindable]
-    public partial class RowStyleToTemplateConverter : IValueConverter
+    public sealed partial class RowStyleToTemplateConverter : IValueConverter
     {
-        public DataTemplate StandardTemplate { get; set; }
-        public DataTemplate LandscapeTemplate { get; set; }
+        public DataTemplate? StandardTemplate { get; set; }
+        public DataTemplate? LandscapeTemplate { get; set; }
 
         public object Convert(object value, Type targetType, object parameter, string language)
         {
@@ -52,10 +52,10 @@ namespace ModernIPTVPlayer.Controls
     }
 
     [Microsoft.UI.Xaml.Data.Bindable]
-    public partial class DiscoveryRowTemplateSelector : DataTemplateSelector
+    public sealed partial class DiscoveryRowTemplateSelector : DataTemplateSelector
     {
-        public DataTemplate StandardRowTemplate { get; set; }
-        public DataTemplate SpotlightRowTemplate { get; set; }
+        public DataTemplate? StandardRowTemplate { get; set; }
+        public DataTemplate? SpotlightRowTemplate { get; set; }
 
         protected override DataTemplate SelectTemplateCore(object item)
         {
@@ -123,6 +123,7 @@ namespace ModernIPTVPlayer.Controls
         private string _currentContentType;
         private int _discoveryVersion = 0; // Monotonic counter to invalidate stale runs
         private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _lastHeroColors;
+        private (Windows.UI.Color Primary, Windows.UI.Color Secondary)? _lastNotifiedColors; // [Senior] Prevent redundant color transitions
         private bool _isSourceActive = true;
         private DispatcherTimer? _heroDebounceTimer;
         
@@ -224,7 +225,7 @@ namespace ModernIPTVPlayer.Controls
             HeroControl.ColorExtracted += (s, e) => 
             {
                 _lastHeroColors = (e.Primary, e.Secondary);
-                BackdropColorChanged?.Invoke(this, e);
+                NotifyBackdropColorChanged(e.Primary, e.Secondary);
             };
 
             DiscoveryRepeater.ItemsSource = _discoveryRows;
@@ -310,6 +311,16 @@ namespace ModernIPTVPlayer.Controls
         {
             _isSourceActive = isActive;
             UpdateHeroLifecycle();
+        }
+
+        private void NotifyBackdropColorChanged(Windows.UI.Color primary, Windows.UI.Color secondary)
+        {
+            if (_lastNotifiedColors.HasValue && 
+                _lastNotifiedColors.Value.Primary == primary && 
+                _lastNotifiedColors.Value.Secondary == secondary) return;
+            
+            _lastNotifiedColors = (primary, secondary);
+            BackdropColorChanged?.Invoke(this, new ColorExtractedEventArgs(primary, secondary));
         }
 
         private void UpdateHeroLifecycle()
@@ -712,6 +723,10 @@ namespace ModernIPTVPlayer.Controls
 
             foreach (var stream in streams)
             {
+                // [Professional Fix] Check global cache before queuing. If we already have the data 
+                // in RAM or Disk for this ID, skip the background worker task entirely.
+                if (Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(stream, targetContext) != null) continue;
+
                 _enrichmentChannel.Writer.TryWrite(new EnrichmentTask(stream, targetContext, priority));
             }
             return Task.CompletedTask;
@@ -821,7 +836,7 @@ namespace ModernIPTVPlayer.Controls
                     // [RESTORE COLOR] Instantly update backdrop color from cache
                     _lastHeroColors = cachedState.HeroColors;
                     if (_lastHeroColors.HasValue)
-                        BackdropColorChanged?.Invoke(this, new ColorExtractedEventArgs(_lastHeroColors.Value.Primary, _lastHeroColors.Value.Secondary));
+                        NotifyBackdropColorChanged(_lastHeroColors.Value.Primary, _lastHeroColors.Value.Secondary);
 
                     // --- [EARLY PREWARM] ---
                     // Don't wait for Step 4! Start downloading high-res assets IMMEDIATELY from cache.
@@ -839,6 +854,7 @@ namespace ModernIPTVPlayer.Controls
                     {
                         HeroPerfLog($"[CACHE-EAGER] Triggering immediate asset prewarm for {cachedHeroItems.Count} items");
                         HeroControl.SetItems(cachedHeroItems.Take(5).ToList(), animate: true);
+                        _currentHeroIds = cachedHeroItems.Take(5).Select(i => i.IMDbId ?? i.Id.ToString()).ToList();
                         _heroItemsSet = true; // Prevents the network-load from double-resetting the UI if identical
                     }
 
@@ -850,6 +866,10 @@ namespace ModernIPTVPlayer.Controls
                     // [FIX] Refresh Continue Watching row after cache restoration to ensure it's current
                     RefreshContinueWatching();
                     HeroPerfLog($"[CACHE-RESTORE] Complete. CW Refreshed.");
+
+                    // [Senior] Mark initial load done IMMEDIATELY for cache hits to prevent "Duplicate Reveal"
+                    // when Step 4 (network) completes and potentially refreshes the rows.
+                    _isInitialLoadDone = true;
                 }
                 else
                 {
@@ -1636,10 +1656,12 @@ namespace ModernIPTVPlayer.Controls
             lock (_rowItemsBuffer) _rowItemsBuffer.Clear();
             lock (_rowEtags) _rowEtags.Clear();
             lock (_usedSpotlightIds) _usedSpotlightIds.Clear();
+            _heroPriorityOrder.Clear();
+            _currentHeroIds.Clear();
             
-            HeroControl.SetLoading(false, reset: false);
-            HeroControl.SetItems(null);
+            HeroControl.SetLoading(false, silent: true, reset: false);
             _currentContentType = string.Empty;
+            _lastNotifiedColors = null;
         }
         private void UpdateHeroState(bool skipShimmer = false)
         {
@@ -1661,6 +1683,7 @@ namespace ModernIPTVPlayer.Controls
             }
 
             // Immediate update for "New Content" (with shimmer)
+            _heroDebounceTimer.Stop();
             ExecuteHeroUpdate(false);
         }
 

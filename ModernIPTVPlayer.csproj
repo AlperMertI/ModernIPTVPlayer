@@ -5,17 +5,21 @@
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>ModernIPTVPlayer</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platform>x64</Platform>
     <Platforms>x64</Platforms>
-    <Platform Condition="'$(Platform)' == ''">x64</Platform>
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
-    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AssemblyName>ModernIPTVPlayer</AssemblyName>
+    <TargetName>ModernIPTVPlayer</TargetName>
+    <OutputPath>bin\x64\$(Configuration)\$(TargetFramework)\</OutputPath>
+    <IntermediateOutputPath>obj\x64\$(Configuration)\$(TargetFramework)\</IntermediateOutputPath>
     <PublishProfile Condition="Exists('Properties\PublishProfiles\win-x64.pubxml')">win-x64.pubxml</PublishProfile>
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>true</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Libs\**\*.cs;Libs\**\obj\**;Libs\**\bin\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Libs\**\*.cs;Libs\**\obj\**;Libs\**\bin\**;scratch\**</DefaultItemExcludes>
 
     <!-- WinRT & Interop Stability -->
     <IsAotCompatible>true</IsAotCompatible>
@@ -24,8 +28,19 @@
     <CsWinRTIncludes>ModernIPTVPlayer;MpvWinUI;MpvWinUI.Common;Mpv.UI;Microsoft.UI.Xaml.Hosting</CsWinRTIncludes>
     <TrimmerRootDescriptor>TrimmerRootDescriptor.xml</TrimmerRootDescriptor>
   </PropertyGroup>
+
+  <!-- Disable XAML-generated Debugger.Break() on UnhandledException -->
+  <PropertyGroup>
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_BREAK_ON_UNHANDLED_EXCEPTION</DefineConstants>
+  </PropertyGroup>
   <ItemGroup>
     <TrimmerRootDescriptor Include="TrimmerRootDescriptor.xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="scratch\**" />
+    <Content Remove="scratch\**" />
+    <None Remove="scratch\**" />
+    <Page Remove="scratch\**" />
   </ItemGroup>
   <ItemGroup>
     <None Remove="LiveTVPage.xaml" />
@@ -191,13 +206,13 @@
     <InvariantGlobalization>False</InvariantGlobalization>
     <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <PackageCertificateKeyFile>ModernIPTVPlayer_TemporaryKey.pfx</PackageCertificateKeyFile>
-    <AppxPackageSigningEnabled>True</AppxPackageSigningEnabled>
+    <PublishAppxPackage>true</PublishAppxPackage>
+    <GenerateAppxPackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GenerateAppxPackageOnBuild>
+    <AppxPackageBuildMode>SideloadOnly</AppxPackageBuildMode>
+    <AppxBundle>Never</AppxBundle>
+    <AppxPackageIncludeSymbols>false</AppxPackageIncludeSymbols>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
-    <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
-    <AppxAutoIncrementPackageRevision>False</AppxAutoIncrementPackageRevision>
-    <GenerateTestArtifacts>True</GenerateTestArtifacts>
-    <AppxBundle>Always</AppxBundle>
-    <AppxBundlePlatforms>x64</AppxBundlePlatforms>
     <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
   </PropertyGroup>
 
@@ -210,8 +225,8 @@
     <!-- Binary Size & Debugging -->
     <StackTraceSupport>true</StackTraceSupport>
     <DebuggerSupport>true</DebuggerSupport>
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>pdbonly</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>none</DebugType>
   </PropertyGroup>
 
   <ItemGroup>

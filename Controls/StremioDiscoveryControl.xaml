@@ -29,36 +29,6 @@
                                   Clicked="Card_Clicked"
                                   ElementSoundMode="Off"/>
         </DataTemplate>
-        <local:RowStyleToTemplateConverter x:Key="RowStyleToTemplateConverter" 
-                                           StandardTemplate="{StaticResource StandardCardTemplate}" 
-                                           LandscapeTemplate="{StaticResource LandscapeCardTemplate}" />
-                                           
-        <!-- Row Level Templates -->
-        <DataTemplate x:Key="StandardCatalogRowTemplate" x:DataType="models:CatalogRowViewModel">
-            <local:CatalogRow CatalogName="{x:Bind CatalogName, Mode=OneWay}" 
-                              ItemsSource="{x:Bind Items, Mode=OneWay}"
-                              IsLoading="{x:Bind IsLoading, Mode=OneWay}"
-                              RowStyle="{x:Bind RowStyle, Mode=OneWay}"
-                              IsHeaderInteractive="{x:Bind IsHeaderInteractive, Mode=OneWay}"
-                              ItemTemplate="{x:Bind RowStyle, Converter={StaticResource RowStyleToTemplateConverter}, Mode=OneWay}"
-                              ItemClicked="CatalogRow_ItemClicked"
-                              HoverStarted="CatalogRow_HoverStarted"
-                              HoverEnded="CatalogRow_HoverEnded"
-                              ScrollStarted="CatalogRow_ScrollStarted"
-                              ScrollEnded="CatalogRow_ScrollEnded"
-                              HeaderClicked="CatalogRow_HeaderClicked"
-                              LoadMoreAction="CatalogRow_LoadMoreAction"/>
-        </DataTemplate>
-
-        <DataTemplate x:Key="SpotlightCatalogRowTemplate" x:DataType="models:CatalogRowViewModel">
-            <local:SpotlightInjectRow ItemClicked="SpotlightInjectRow_ItemClicked"
-                                      HeaderClicked="CatalogRow_HeaderClicked" />
-        </DataTemplate>
-
-        <local:DiscoveryRowTemplateSelector x:Key="DiscoveryRowTemplateSelector"
-                                            StandardRowTemplate="{StaticResource StandardCatalogRowTemplate}"
-                                            SpotlightRowTemplate="{StaticResource SpotlightCatalogRowTemplate}" />
-
     </UserControl.Resources>
 
     <Grid>
@@ -75,7 +45,6 @@
                 <local:HeroSectionControl x:Name="HeroControl" />
                 
                 <ItemsRepeater x:Name="DiscoveryRepeater" 
-                               ItemsSource="{x:Bind _discoveryRows}"
                                VerticalCacheLength="1.5"
                                ElementPrepared="DiscoveryRepeater_ElementPrepared">
                     <ItemsRepeater.Layout>

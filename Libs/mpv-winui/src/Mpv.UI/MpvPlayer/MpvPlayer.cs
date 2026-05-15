@@ -35,13 +35,52 @@ public sealed partial class MpvPlayer : Control
         _instanceId = Interlocked.Increment(ref _nextInstanceId);
         Interlocked.Increment(ref _liveInstances);
         DefaultStyleKey = typeof(MpvPlayer);
-        LogMemory("ctor");
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] MpvPlayer ctor instance {_instanceId}");
+        Debug.WriteLine($"[SOURCE_FINDER] StackTrace: {Environment.StackTrace}");
     }
 
     private bool _mpvGpuIsDirty = false;
     private bool _isDisposed = false;
     private volatile bool _isCleaningUp = false;
     private Mpv.Core.Interop.MpvRenderContextNative.MpvRenderUpdateCallback? _updateCallback;
+
+    // #region agent log
+    private static void AgentLog(string location, string message, object? data, string hypothesisId, string runId = "pre-fix")
+    {
+        try
+        {
+            var payload = new
+            {
+                sessionId = "df5b0b",
+                runId,
+                hypothesisId,
+                location,
+                message,
+                data,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                tid = Environment.CurrentManagedThreadId
+            };
+            System.IO.File.AppendAllText(
+                @"C:\Users\ASUS\Documents\ModernIPTVPlayer\debug-df5b0b.log",
+                System.Text.Json.JsonSerializer.Serialize(payload) + Environment.NewLine);
+        }
+        catch { }
+    }
+
+    private static object DescribeUrlForLog(string? url)
+    {
+        Uri? uri = null;
+        bool hasUri = Uri.TryCreate(url, UriKind.Absolute, out uri);
+        return new
+        {
+            urlLength = url?.Length ?? 0,
+            scheme = hasUri ? uri!.Scheme : null,
+            host = hasUri ? uri!.Host : null,
+            isM3u8 = url?.Contains(".m3u8", StringComparison.OrdinalIgnoreCase) == true,
+            isLiveHeuristic = url?.Contains("/live/", StringComparison.OrdinalIgnoreCase) == true
+        };
+    }
+    // #endregion
 
     public static readonly DependencyProperty RenderApiProperty =
         DependencyProperty.Register("RenderApi", typeof(string), typeof(MpvPlayer), new PropertyMetadata("dxgi"));
@@ -92,6 +131,22 @@ public sealed partial class MpvPlayer : Control
     public string PreferredToneMapping { get; set; } = "auto";
     
     public IntPtr SharedTextureHandle => IntPtr.Zero;
+
+    protected override Windows.Foundation.Size MeasureOverride(Windows.Foundation.Size availableSize)
+    {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [MpvPlayer:{_instanceId}] MeasureOverride START | Size: {availableSize.Width}x{availableSize.Height} | Disposed: {_isDisposed}");
+        try
+        {
+            var result = base.MeasureOverride(availableSize);
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [MpvPlayer:{_instanceId}] MeasureOverride END | Result: {result.Width}x{result.Height}");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] !!! [MpvPlayer:{_instanceId}] MeasureOverride CRASH !!!: {ex.Message} (0x{ex.HResult:X8})");
+            throw;
+        }
+    }
 
     protected override void OnApplyTemplate()
     {
@@ -230,7 +285,7 @@ public sealed partial class MpvPlayer : Control
             _renderControl.Initialize();
             await _renderControl.WaitForHdrStatusAsync();
             Player.Client.SetProperty("vo", "libmpv");
-            Player.Client.RequestLogMessage(MpvLogLevel.V);
+            Player.Client.RequestLogMessage(MpvLogLevel.Info);
             Player.LogMessageReceived += OnLogMessageReceived;
             await Player.InitializeDXGIAsync(_renderControl.DeviceHandle, _renderControl.ContextHandle, _renderControl.AdapterName, RenderApi, colorspace: (int)_renderControl.SwapChainColorSpace);
             
@@ -289,6 +344,21 @@ public sealed partial class MpvPlayer : Control
     public async Task InitializePlayerAsync(bool skipScripts = false)
     {
         Player ??= new Player();
+        // #region agent log
+        AgentLog("MpvPlayer.cs:InitializePlayerAsync",
+            "MpvPlayer initialization entered",
+            new
+            {
+                instanceId = _instanceId,
+                skipScripts,
+                renderApi = RenderApi,
+                isDisposed = _isDisposed,
+                playerClientInitialized = Player.Client.IsInitialized,
+                hasRenderControl = _renderControl != null,
+                dispatcherThread = DispatcherQueue?.HasThreadAccess == true
+            },
+            "H2");
+        // #endregion
 
         if (!Player.Client.IsInitialized)
         {
@@ -300,7 +370,7 @@ public sealed partial class MpvPlayer : Control
             Player.PropertyChanged += OnPropertyChanged;
             _renderControl.Initialize();
             await _renderControl.WaitForHdrStatusAsync();
-            Player.Client.RequestLogMessage(MpvLogLevel.V);
+            Player.Client.RequestLogMessage(MpvLogLevel.Info);
             Player.LogMessageReceived += OnLogMessageReceived;
             
             // Note: vo is set to libmpv in InitializeDXGIAsync after gpu-next pre-init choice
@@ -309,14 +379,59 @@ public sealed partial class MpvPlayer : Control
             // Register callback
             if (_updateCallback != null) Player.RenderContext?.SetUpdateCallback(_updateCallback, IntPtr.Zero);
             
+            await SetPropertyAsync("terminal", "no");
+            await SetPropertyAsync("msg-level", "all=info");
+
             Debug.WriteLine($"[LOG] MPV Player Initialized Successfully with API: {RenderApi}");
+            // #region agent log
+            AgentLog("MpvPlayer.cs:InitializePlayerAsync",
+                "MpvPlayer DXGI initialization completed",
+                new
+                {
+                    instanceId = _instanceId,
+                    skipScripts,
+                    renderApi = RenderApi,
+                    isDisposed = _isDisposed,
+                    playerClientInitialized = Player.Client.IsInitialized,
+                    hasRenderContext = Player.RenderContext != null,
+                    hasRenderControl = _renderControl != null
+                },
+                "H2-H3");
+            // #endregion
         }
     }
 
     public async Task OpenAsync(string url)
     {
+        // #region agent log
+        AgentLog("MpvPlayer.cs:OpenAsync",
+            "MpvPlayer loadfile command starting",
+            new
+            {
+                instanceId = _instanceId,
+                renderApi = RenderApi,
+                isDisposed = _isDisposed,
+                playerExists = Player != null,
+                playerClientInitialized = Player?.Client?.IsInitialized == true,
+                url = DescribeUrlForLog(url)
+            },
+            "H2-H4");
+        // #endregion
         if (Player == null) await InitializePlayerAsync();
         await Player!.Client.ExecuteAsync($"loadfile \"{url.Replace("\"", "\\\"")}\"");
+        // #region agent log
+        AgentLog("MpvPlayer.cs:OpenAsync",
+            "MpvPlayer loadfile command completed",
+            new
+            {
+                instanceId = _instanceId,
+                renderApi = RenderApi,
+                isDisposed = _isDisposed,
+                playerClientInitialized = Player?.Client?.IsInitialized == true,
+                url = DescribeUrlForLog(url)
+            },
+            "H2-H4");
+        // #endregion
     }
 
     public async Task SetPropertyAsync<T>(string name, T value)
@@ -450,7 +565,8 @@ public sealed partial class MpvPlayer : Control
         _isCleaningUp = true;
         
         var cleanupId = _instanceId;
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] CleanupAsync START for instance {cleanupId}");
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] MpvPlayer CleanupAsync START for instance {cleanupId}");
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] CleanupAsync START for instance {cleanupId}");
         Interlocked.Increment(ref Mpv.Core.Interop.MpvRenderContextNative._globalCleanupRunning);
 
         _isDisposed = true;

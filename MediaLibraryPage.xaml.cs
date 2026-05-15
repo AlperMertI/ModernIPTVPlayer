@@ -359,6 +359,19 @@ namespace ModernIPTVPlayer
             _navigationCts = new System.Threading.CancellationTokenSource();
             var token = _navigationCts.Token;
 
+            // [Senior] Restore or Reset backdrop color immediately to prevent "stale color" during page slide
+            if (_heroColorsCache.TryGetValue(_mediaType, out var cachedColors) && cachedColors.HasValue)
+            {
+                _heroColors = cachedColors;
+                BackdropControl.TransitionTo(cachedColors.Value.Primary, cachedColors.Value.Secondary);
+            }
+            else
+            {
+                _heroColors = null;
+                // Neutral dark reset
+                BackdropControl.TransitionTo(Windows.UI.Color.FromArgb(255, 18, 18, 18), Windows.UI.Color.FromArgb(255, 10, 10, 10));
+            }
+
             if (_currentSource == ContentSource.IPTV)
             {
                 _ = LoadIptvDataAsync(token);
@@ -503,8 +516,6 @@ namespace ModernIPTVPlayer
                 // EXTREME PERFORMANCE: Move all CPU-bound work to background thread
                 await Task.Run(async () =>
                 {
-                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true, NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString };
-
                     // 1. Categories
                     var cats = await ContentCacheService.Instance.LoadCacheAsync<LiveCategory>(playlistId, $"{typeKey}_categories") ?? new List<LiveCategory>();
                     

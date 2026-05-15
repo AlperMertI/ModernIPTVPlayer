@@ -56,6 +56,7 @@ namespace ModernIPTVPlayer.Controls
                 else
                 {
                     // NEW INSTANCE MODE
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [DraggablePlayerControl] Creating NEW MpvPlayer instance...");
                     Player = new MpvPlayer();
 
                     try 

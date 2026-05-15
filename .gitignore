@@ -115,4 +115,9 @@ Libs/mpv-0.41.0/build/
 ## AI / Assistant tools
 .qwen/
 .dotnet-home/
-scratch/.dotnet-home*/
+.gemini/
+.opencode/
+.kilo/
+.commandcode/
+scratch/
+*.ps1

@@ -8,7 +8,7 @@ namespace ModernIPTVPlayer.Controls
     /// A high-performance element factory for the Stremio Discovery page.
     /// Manages object pooling for different row types to ensure 120fps scrolling.
     /// </summary>
-    public sealed class DiscoveryElementFactory : IElementFactory
+    public sealed partial class DiscoveryElementFactory : IElementFactory
     {
         public DataTemplate StandardCardTemplate { get; set; }
         public DataTemplate LandscapeCardTemplate { get; set; }

@@ -3480,7 +3480,7 @@ namespace ModernIPTVPlayer.Services
                 Services.CacheLogger.Info(Services.CacheLogger.Category.Content, "DISK HIT", cacheKey);
                 // [LOG FOR USER] Log the cached data as JSON
                 try {
-                    string cachedJson = JsonSerializer.Serialize(cached, new JsonSerializerOptions { WriteIndented = true });
+                    string cachedJson = JsonSerializer.Serialize(cached, AppJsonContext.Default.SeriesInfoResult);
                     AppLogger.Warn($"[IPTV_CACHE_SERIES] SeriesId: {seriesId} | CACHED JSON: {cachedJson}");
                 } catch { }
 
@@ -3578,7 +3578,7 @@ namespace ModernIPTVPlayer.Services
                 Services.CacheLogger.Info(Services.CacheLogger.Category.Content, "DISK HIT", cacheKey);
                 // [LOG FOR USER] Log the cached data as JSON
                 try {
-                    string cachedJson = JsonSerializer.Serialize(cached, new JsonSerializerOptions { WriteIndented = true });
+                    string cachedJson = JsonSerializer.Serialize(cached, AppJsonContext.Default.MovieInfoResult);
                     AppLogger.Warn($"[IPTV_CACHE_VOD] StreamId: {streamId} | CACHED JSON: {cachedJson}");
                 } catch { }
 

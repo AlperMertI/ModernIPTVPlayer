@@ -340,7 +340,7 @@ namespace ModernIPTVPlayer.Controls
             {
                 try
                 {
-                    if (message == "READY")
+                    if (message.StartsWith("READY"))
                     {
                        RevealTrailerInternal();
                     }
@@ -452,6 +452,7 @@ namespace ModernIPTVPlayer.Controls
             long currentTicks = DateTime.UtcNow.Ticks;
             if (sessionNonce == -1 && (currentTicks - _lastResetTicks) < TimeSpan.FromMilliseconds(16).Ticks)
             {
+                 System.Diagnostics.Debug.WriteLine("[EXP-RESET] Frame-Gated (Too fast)");
                  return;
             }
             _lastResetTicks = currentTicks;
@@ -713,33 +714,36 @@ namespace ModernIPTVPlayer.Controls
             if (stream == null) return;
             
             // [DE-DUPLICATION] 
-            // Skip loading if this is the same item AND the card is already visible.
-            if (_currentLoadingStream != null && _currentLoadingStream.Id == stream.Id && _currentLoadingStream.Title == stream.Title && this.Visibility == Visibility.Visible)
+            // Skip loading if this is the same item AND the card is already visible AND we have metadata.
+            if (_currentLoadingStream != null && _currentLoadingStream.Id == stream.Id && 
+                _currentLoadingStream.Title == stream.Title && this.Visibility == Visibility.Visible && 
+                _lastMetadata != null)
             {
                 return;
             }
 
             _isSeriesFinished = false; // Reset on new load
             _currentLoadingStream = stream;
+            _lastMetadata = null;
 
             // 1. Transactional Update
             _loadNonce++;
             long loadNonce = _loadNonce;
             
-            _cts?.Cancel();
-            _cts?.Dispose();
+            if (_cts != null)
+            {
+                try { _cts.Cancel(); } catch { }
+            }
             _cts = new CancellationTokenSource();
             var ct = _cts.Token;
 
             // [FIX] Instant Wipe: Reset state BEFORE the debounce delay.
-            // This ensures that any previous item's data is cleared immediately when the card opens.
             var seed = ModernIPTVPlayer.Models.Metadata.UnifiedMetadata.FromStream(stream);
             bool hasRealCache = Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(stream, Models.Metadata.MetadataContext.ExpandedCard) != null;
             bool isEligibleForSmartSwap = isMorphing || seed != null || hasRealCache;
 
             ResetState(isMorphing, forceSkeleton: !isEligibleForSmartSwap, sessionNonce: loadNonce, ct: ct);
 
-            // [PINNACLE] Intelligent Debounce (Silent Pattern):
             await Task.Delay(150);
             if (ct.IsCancellationRequested) return;
 
@@ -760,17 +764,18 @@ namespace ModernIPTVPlayer.Controls
                 UpdateWatchlistIcon(Services.WatchlistManager.Instance.IsOnWatchlist(stream), animate: false);
 
                 // 5. Authoritative Enrichment
+                System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Fetching metadata for: {stream.Title}");
                 var metadataTask = Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(stream, Models.Metadata.MetadataContext.ExpandedCard, onUpdate: (partial) => 
                 {
-                    this.DispatcherQueue.TryEnqueue(() => 
+                    DispatcherQueue.TryEnqueue(() => 
                     {
-                        if (loadNonce != _loadNonce) return;
-                        lock (partial.SyncRoot)
-                        {
-                             UpdateUiFromUnified(partial, ct: ct);
-                        }
+                        if (ct.IsCancellationRequested) return;
+                        System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] UI Update (Partial) for: {partial.Title}");
+                        UpdateUiFromUnified(partial, ct: ct);
                     });
-                });
+                }, ct: ct);
+
+                System.Diagnostics.Debug.WriteLine($"[EXP-LOAD] Awaiting metadata task for: {stream.Title}");
 
                 var timeoutTask = Task.Delay(8000, ct);
                 var completedTask = await Task.WhenAny(metadataTask, timeoutTask);
@@ -1271,7 +1276,7 @@ namespace ModernIPTVPlayer.Controls
                     // Mute state setup
                     _isMuted = true;
                     UpdateMuteIcon();
-                    _ = RefreshMuteStateFromPlayerAsync(defaultMutedWhenUnknown: true);
+                    // [FIX] Removed background refresh polling to prevent race conditions with manual toggles
                 }
             }
             catch (Exception ex)
@@ -1304,6 +1309,7 @@ namespace ModernIPTVPlayer.Controls
 
             MuteButton.Visibility = Visibility.Visible;
             ExpandButton.Visibility = Visibility.Visible;
+            UpdateMuteIcon();
         }
 
         private bool _isRevealed;
@@ -1332,31 +1338,34 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
-        private async Task SetMutedAsync(bool shouldMute)
-        {
-            try
-            {
-                if (_webView?.CoreWebView2 == null) return;
-                await _webView.CoreWebView2.ExecuteScriptAsync($"try {{ if ({ (shouldMute ? "true" : "false") }) player.mute(); else player.unMute(); }} catch(e) {{}}");
-                _isMuted = shouldMute;
-                UpdateMuteIcon();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"[ExpandedCard] Mute Error: {ex.Message}");
-            }
-        }
+         private async Task SetMutedAsync(bool shouldMute)
+         {
+             try
+             {
+                 if (_webView?.CoreWebView2 == null) return;
+                 
+                 string script = shouldMute ? "player.mute();" : "player.unMute();";
+                 
+                 await _webView.CoreWebView2.ExecuteScriptAsync(script);
+                 _isMuted = shouldMute;
+                 UpdateMuteIcon();
+             }
+             catch (Exception ex)
+             {
+                 Debug.WriteLine($"[ExpandedCard] Mute Error: {ex.Message}");
+             }
+         }
         
         private async void MuteButton_Click(object sender, RoutedEventArgs e)
         {
             await SetMutedAsync(!_isMuted);
         }
         
-        private void UpdateMuteIcon()
-        {
+         private void UpdateMuteIcon()
+         {
             // E74F = Volume, E74E = Mute
             MuteIcon.Glyph = _isMuted ? "\uE74F" : "\uE767";
-        }
+         }
 
         // Color Adaptation Public Method
         public void SetAmbienceColor(Color color)
@@ -1940,19 +1949,4 @@ namespace ModernIPTVPlayer.Controls
         }
     }
 
-    [Microsoft.UI.Xaml.Data.Bindable]
-    public class CastItem
-    {
-        public string Name { get; set; }
-        private string? _fullProfileUrl;
-        public string? FullProfileUrl 
-        { 
-            get => _fullProfileUrl; 
-            set => _fullProfileUrl = string.IsNullOrWhiteSpace(value) ? null : value; 
-        }
-        public string Initials { get; set; }
-        public SolidColorBrush ProfileBackground { get; set; }
-        public Visibility ImageVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Collapsed : Visibility.Visible;
-        public Visibility InitialsVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Visible : Visibility.Collapsed;
-    }
 }

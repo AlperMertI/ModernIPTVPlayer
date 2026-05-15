@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.ComponentModel;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using ModernIPTVPlayer.Models.Stremio;
 
@@ -9,19 +10,25 @@ namespace ModernIPTVPlayer
     /// Cast presentation row used by the MediaInfo cast/director lists.
     /// </summary>
     [Microsoft.UI.Xaml.Data.Bindable]
-    public class CastItem
+    public partial class CastItem
     {
         public string Name { get; set; }
         public string Character { get; set; }
-        public string FullProfileUrl { get; set; }
+        public string? FullProfileUrl { get; set; }
         public ImageSource ProfileImage { get; set; }
+        
+        // Properties needed for ExpandedCard compatibility
+        public string Initials { get; set; }
+        public Brush ProfileBackground { get; set; }
+        public Visibility ImageVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Collapsed : Visibility.Visible;
+        public Visibility InitialsVisibility => string.IsNullOrEmpty(FullProfileUrl) ? Visibility.Visible : Visibility.Collapsed;
     }
 
     /// <summary>
     /// Stream row view model for source cards, including shimmer and active-source state.
     /// </summary>
     [Microsoft.UI.Xaml.Data.Bindable]
-    public class StremioStreamViewModel : INotifyPropertyChanged
+    public partial class StremioStreamViewModel : INotifyPropertyChanged
     {
         public string Title { get; set; }
         public string Name { get; set; }
@@ -71,7 +78,7 @@ namespace ModernIPTVPlayer
     /// Addon tab view model for source selection.
     /// </summary>
     [Microsoft.UI.Xaml.Data.Bindable]
-    public class StremioAddonViewModel : INotifyPropertyChanged
+    public partial class StremioAddonViewModel : INotifyPropertyChanged
     {
         private string _name;
         public string Name { get => _name; set { if (_name != value) { _name = value; OnPropertyChanged(nameof(Name)); } } }

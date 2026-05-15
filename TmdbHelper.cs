@@ -461,7 +461,6 @@ namespace ModernIPTVPlayer
 
                 var allResults = new List<StremioMediaStream>();
                 var resultsLock = new System.Threading.Lock();
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                 var tasks = catalogs.Select(async url =>
                 {
                     System.Diagnostics.Debug.WriteLine($"[Stremio] People Search Start: {url}");

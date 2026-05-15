@@ -9,6 +9,7 @@ using ModernIPTVPlayer.Models.Stremio;
 using MessagePack;
 using ModernIPTVPlayer.Models.Common;
 using System.Linq;
+using MessagePack.Resolvers;
 
 namespace ModernIPTVPlayer.Services.Stremio
 {
@@ -18,11 +19,18 @@ namespace ModernIPTVPlayer.Services.Stremio
         private const string MAGIC = "CTLC";
         private const int VERSION = 3;
         
-        // [NATIVE AOT] Use a static options object with a composite resolver.
-        // This ensures compatibility with the AOT source generator and avoids runtime reflection.
+        // [NATIVE AOT] Keep this resolver chain free of DynamicGenericResolver.
+        // StandardResolver falls back to runtime formatter construction for List<T>,
+        // which is not available in NativeAOT.
         private static readonly MessagePackSerializerOptions AotOptions = MessagePackSerializerOptions.Standard
-            .WithResolver(MessagePack.Resolvers.CompositeResolver.Create(
-                MessagePack.Resolvers.StandardResolver.Instance
+            .WithResolver(CompositeResolver.Create(
+                CatalogCacheMessagePackFormatters.Formatters,
+                new MessagePack.IFormatterResolver[]
+                {
+                    BuiltinResolver.Instance,
+                    AttributeFormatterResolver.Instance,
+                    PrimitiveObjectResolver.Instance
+                }
             ));
 
         public static string CanonicalizeCatalogUrl(string url)

@@ -315,8 +315,28 @@ namespace ModernIPTVPlayer.Models.Stremio
                 string trimmed = json.TrimStart();
                 if (trimmed.Length > 0 && trimmed[0] == '[')
                 {
+                    // [POLYMORPHIC FALLBACK]
+                    // If we expect List<string> but the JSON starts with [{ (list of objects),
+                    // we try to parse it as StremioAppCast and extract the Names.
+                    // This happens when Stremio returns translated aliases/names as objects.
+                    if (typeof(T) == typeof(string))
+                    {
+                        string contentSnippet = trimmed.Length > 5 ? trimmed.Substring(0, 5) : trimmed;
+                        if (contentSnippet.Contains("{"))
+                        {
+                            try
+                            {
+                                var objectList = System.Text.Json.JsonSerializer.Deserialize(json, Services.Json.AppJsonContext.Default.ListStremioAppCast);
+                                if (objectList != null)
+                                {
+                                    return (List<T>)(object)objectList.Where(x => !string.IsNullOrEmpty(x.Name)).Select(x => x.Name).ToList();
+                                }
+                            }
+                            catch { /* Fall through to default attempt */ }
+                        }
+                    }
+
                     var result = System.Text.Json.JsonSerializer.Deserialize(json, typeInfo);
-                // System.Diagnostics.Debug.WriteLine($"[STREMIO_META_DEBUG] DeserializeList SUCCESS: Type={typeof(T).Name}, Count={result?.Count ?? 0}");
                     return result ?? new List<T>();
                 }
                 else if (typeof(T) == typeof(string))

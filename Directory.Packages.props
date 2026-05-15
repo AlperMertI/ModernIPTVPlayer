@@ -8,9 +8,9 @@
     <PackageVersion Include="CommunityToolkit.HighPerformance" Version="8.4.2" />
     <PackageVersion Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.3.260402-preview2" />
     <PackageVersion Include="MessagePack" Version="3.1.4" />
-    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.0.0-preview2" />
+    <PackageVersion Include="Microsoft.WindowsAppSDK" Version="2.0.1" />
     <PackageVersion Include="Microsoft.Windows.CsWinRT" Version="2.3.0-prerelease.251115.2" />
-    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.1761-preview" />
+    <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.1839" />
     <PackageVersion Include="Silk.NET.Core" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.Direct3D11" Version="2.23.0" />
     <PackageVersion Include="Silk.NET.DXGI" Version="2.23.0" />
@@ -20,12 +20,12 @@
     <PackageVersion Include="Microsoft.CSharp" Version="4.7.0" />
     <PackageVersion Include="Microsoft.DotNet.PlatformAbstractions" Version="5.0.0-preview.5.20278.1" />
     <PackageVersion Include="Microsoft.Extensions.DependencyModel" Version="10.0.6" />
-    <PackageVersion Include="Microsoft.Web.WebView2" Version="1.0.3965-prerelease" />
+    <PackageVersion Include="Microsoft.Web.WebView2" Version="1.0.4015-prerelease" />
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="1.7.260316102" />
     <PackageVersion Include="Silk.NET.Maths" Version="2.23.0" />
     <PackageVersion Include="System.IO.Pipelines" Version="10.0.6" />
     <PackageVersion Include="System.Memory" Version="4.6.3" />
-    <PackageVersion Include="System.Numerics.Tensors" Version="11.0.0-preview.3.26207.106" />
+    <PackageVersion Include="System.Numerics.Tensors" Version="11.0.0-preview.4.26230.115" />
     <PackageVersion Include="System.Numerics.Vectors" Version="4.6.1" />
     <PackageVersion Include="System.Runtime.CompilerServices.Unsafe" Version="6.1.2" />
     <PackageVersion Include="System.Text.Encodings.Web" Version="10.0.6" />
@@ -35,6 +35,6 @@
     <PackageVersion Include="CommunityToolkit.WinUI.UI.Controls" Version="7.1.2" />
     <PackageVersion Include="CommunityToolkit.WinUI.UI.Animations" Version="7.1.2" />
     <PackageVersion Include="XBindLeakFix" Version="1.0.0" />
-    <PackageVersion Include="ZstdSharp.Port" Version="0.8.7" />
+    <PackageVersion Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 </Project>

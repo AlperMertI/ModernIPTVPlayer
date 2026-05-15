@@ -62,6 +62,7 @@ public partial class D3D11RenderControl : ContentControl
     private bool _pendingResizeForce = false;
     private bool _disposed = false;
     private bool _resourcesDestroyed = false;
+    private bool _uiResourcesDetached = false;
     private double _targetWidth, _targetHeight;
     private double _targetScaleX = 1.0, _targetScaleY = 1.0;
     private long _lastPhysicalResizeTicks = 0; // Throttle for animations
@@ -173,6 +174,30 @@ public partial class D3D11RenderControl : ContentControl
         RenderFrame = _ => false;
         SwapChainPresented = () => { };
     }
+
+    // #region agent log
+    private static void AgentLog(string location, string message, object? data, string hypothesisId, string runId = "pre-fix")
+    {
+        try
+        {
+            var payload = new
+            {
+                sessionId = "df5b0b",
+                runId,
+                hypothesisId,
+                location,
+                message,
+                data,
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                tid = Environment.CurrentManagedThreadId
+            };
+            System.IO.File.AppendAllText(
+                @"C:\Users\ASUS\Documents\ModernIPTVPlayer\debug-df5b0b.log",
+                System.Text.Json.JsonSerializer.Serialize(payload) + Environment.NewLine);
+        }
+        catch { }
+    }
+    // #endregion
 
     public IntPtr DeviceHandle { get; private set; }
     public IntPtr ContextHandle { get; private set; }
@@ -302,11 +327,6 @@ public partial class D3D11RenderControl : ContentControl
     private int _monitorRefreshRate = 60;
     private IntPtr _lastHMonitor = IntPtr.Zero;
     private long _frameCounter = 0;
-
-    ~D3D11RenderControl()
-    {
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [FINALIZER] D3D11RenderControl finalizing for instance {GetHashCode()}");
-    }
 
     public D3D11RenderControl()
     {
@@ -464,6 +484,21 @@ public partial class D3D11RenderControl : ContentControl
     {
         if (_disposed) return;
         LogControl("Initialize() Called");
+        // #region agent log
+        AgentLog("D3D11RenderControl.cs:Initialize",
+            "D3D render control initialization started",
+            new
+            {
+                instanceId = _instanceId,
+                actualWidth = ActualWidth,
+                actualHeight = ActualHeight,
+                xamlRootReady = XamlRoot != null,
+                dispatcherThread = DispatcherQueue?.HasThreadAccess == true,
+                deviceAlreadyExists = _device.Handle != null,
+                disposed = _disposed
+            },
+            "H1-H2-H3");
+        // #endregion
         UpdateRefreshRate(); // Re-check on init
 
         lock (_staticInitLock)
@@ -502,12 +537,27 @@ public partial class D3D11RenderControl : ContentControl
         }
 
         _swapChainPanel = new SwapChainPanel();
+        _uiResourcesDetached = false;
         _compositionScaleChangedHandler = OnCompositionScaleChanged;
         _swapChainPanel.CompositionScaleChanged += _compositionScaleChangedHandler;
         SubscribeXamlRootChanged();
         HorizontalContentAlignment = HorizontalAlignment.Stretch;
         VerticalContentAlignment = VerticalAlignment.Stretch;
         Content = _swapChainPanel;
+        // #region agent log
+        AgentLog("D3D11RenderControl.cs:Initialize",
+            "SwapChainPanel created and assigned as content",
+            new
+            {
+                instanceId = _instanceId,
+                panelHash = _swapChainPanel.GetHashCode(),
+                actualWidth = ActualWidth,
+                actualHeight = ActualHeight,
+                xamlRootReady = XamlRoot != null,
+                dispatcherThread = DispatcherQueue?.HasThreadAccess == true
+            },
+            "H1-H3");
+        // #endregion
 
         _targetWidth = ActualWidth;
         _targetHeight = ActualHeight;
@@ -562,8 +612,29 @@ public partial class D3D11RenderControl : ContentControl
         {
             UpdateSwapChain(); 
             Ready?.Invoke(this, EventArgs.Empty);
-            StartRenderLoop();
-            Debug.WriteLine($"[D3D11] RenderLoop started immediately (Size: {effectiveWidth}x{effectiveHeight})");
+            // #region agent log
+            AgentLog("D3D11RenderControl.cs:Initialize",
+                "Initial swap chain update completed before render loop enqueue",
+                new
+                {
+                    instanceId = _instanceId,
+                    effectiveWidth,
+                    effectiveHeight,
+                    currentWidth = CurrentWidth,
+                    currentHeight = CurrentHeight,
+                    swapChainWidth = _swapChainWidth,
+                    swapChainHeight = _swapChainHeight,
+                    hasSwapChainSize = _swapChainWidth > 0 && _swapChainHeight > 0,
+                    needsFirstFrameLink = _needsFirstFrameLink
+                },
+                "H2-H3");
+            // #endregion
+            // [COREMESSAGING_FIX] Defer render loop start by one UI dispatcher turn.
+            // On fresh page navigation (Frame.Navigate), CoreMessaging's COM interfaces
+            // aren't fully wired during the first UI turn. Starting the render loop
+            // immediately causes a QI failure (E_NOINTERFACE 0x80004002) on first present.
+            DispatcherQueue.TryEnqueue(StartRenderLoop);
+            Debug.WriteLine($"[D3D11] RenderLoop deferred to next dispatcher turn (Size: {effectiveWidth}x{effectiveHeight})");
         }
         else
         {
@@ -601,9 +672,16 @@ public partial class D3D11RenderControl : ContentControl
         if (_subscribedXamlRoot != null && _xamlRootChangedHandler != null)
         {
             try { _subscribedXamlRoot.Changed -= _xamlRootChangedHandler; } catch { }
-            _subscribedXamlRoot = null;
-            _xamlRootChangedHandler = null;
         }
+        _subscribedXamlRoot = null;
+    }
+
+    [System.Runtime.InteropServices.DllImport("combase.dll")]
+    private static extern void RoClearError();
+
+    private static void ClearErrorInfo()
+    {
+        try { RoClearError(); } catch { }
     }
 
     private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args)
@@ -637,6 +715,23 @@ public partial class D3D11RenderControl : ContentControl
     private void StartRenderLoop()
     {
         if (_cts != null) return;
+        // #region agent log
+        AgentLog("D3D11RenderControl.cs:StartRenderLoop",
+            "Render loop starting",
+            new
+            {
+                instanceId = _instanceId,
+                disposed = _disposed,
+                resourcesDestroyed = _resourcesDestroyed,
+                hasPanel = _swapChainPanel != null,
+                hasSwapChainSize = _swapChainWidth > 0 && _swapChainHeight > 0,
+                currentWidth = CurrentWidth,
+                currentHeight = CurrentHeight,
+                atomicBackBuffer = _atomicBackBuffer != IntPtr.Zero,
+                needsFirstFrameLink = _needsFirstFrameLink
+            },
+            "H2-H3");
+        // #endregion
         _cts = new CancellationTokenSource();
         _renderTask = Task.Factory.StartNew(RenderLoop, _cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
     }
@@ -651,7 +746,7 @@ public partial class D3D11RenderControl : ContentControl
         IntPtr[] waitHandles = new IntPtr[3];
         bool lastPresentWasSuccess = false; 
 
-        while (!_cts.IsCancellationRequested && !_disposed)
+        while (!_cts.IsCancellationRequested && !_disposed && _swapChainPanel != null)
         {
             cycleSw.Restart();
             uint waitResult = 0;
@@ -1159,6 +1254,86 @@ public partial class D3D11RenderControl : ContentControl
         }
     }
 
+    protected override Windows.Foundation.Size MeasureOverride(Windows.Foundation.Size availableSize)
+    {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [D3D_CTRL:{GetHashCode()}] MeasureOverride START | Size: {availableSize.Width}x{availableSize.Height} | Disposed: {_disposed}");
+        try
+        {
+            var result = base.MeasureOverride(availableSize);
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [D3D_CTRL:{GetHashCode()}] MeasureOverride END | Result: {result.Width}x{result.Height}");
+            return result;
+        }
+        catch (InvalidCastException)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [D3D_CTRL:{GetHashCode()}] MeasureOverride SUPPRESSED CoreMessaging QI failure");
+            // #region agent log
+            AgentLog("D3D11RenderControl.cs:MeasureOverride",
+                "CoreMessaging InvalidCastException suppressed during measure",
+                new
+                {
+                    instanceId = _instanceId,
+                    availableWidth = availableSize.Width,
+                    availableHeight = availableSize.Height,
+                    disposed = _disposed,
+                    resourcesDestroyed = _resourcesDestroyed,
+                    hasPanel = _swapChainPanel != null,
+                    hasSwapChainSize = _swapChainWidth > 0 && _swapChainHeight > 0
+                },
+                "H1");
+            // #endregion
+            ClearErrorInfo();
+            return availableSize;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] !!! [D3D_CTRL:{GetHashCode()}] MeasureOverride CRASH !!!: {ex.Message} (0x{ex.HResult:X8})");
+            return availableSize;
+        }
+    }
+
+    protected override void OnApplyTemplate()
+    {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [D3D11] OnApplyTemplate START for instance {GetHashCode()}");
+        base.OnApplyTemplate();
+    }
+
+    protected override Windows.Foundation.Size ArrangeOverride(Windows.Foundation.Size finalSize)
+    {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [D3D_CTRL:{GetHashCode()}] ArrangeOverride START | Size: {finalSize.Width}x{finalSize.Height} | Disposed: {_disposed}");
+        try
+        {
+            var result = base.ArrangeOverride(finalSize);
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [D3D_CTRL:{GetHashCode()}] ArrangeOverride END | Result: {result.Width}x{result.Height}");
+            return result;
+        }
+        catch (InvalidCastException)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [D3D_CTRL:{GetHashCode()}] ArrangeOverride SUPPRESSED CoreMessaging QI failure");
+            // #region agent log
+            AgentLog("D3D11RenderControl.cs:ArrangeOverride",
+                "CoreMessaging InvalidCastException suppressed during arrange",
+                new
+                {
+                    instanceId = _instanceId,
+                    finalWidth = finalSize.Width,
+                    finalHeight = finalSize.Height,
+                    disposed = _disposed,
+                    resourcesDestroyed = _resourcesDestroyed,
+                    hasPanel = _swapChainPanel != null,
+                    hasSwapChainSize = _swapChainWidth > 0 && _swapChainHeight > 0
+                },
+                "H1");
+            // #endregion
+            ClearErrorInfo();
+            return finalSize;
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] !!! [D3D_CTRL:{GetHashCode()}] ArrangeOverride CRASH !!!: {ex.Message} (0x{ex.HResult:X8})");
+            return finalSize;
+        }
+    }
+
     private unsafe void UpdateHdrMetadata()
     {
         if (_swapChain.Handle == null) return;
@@ -1274,6 +1449,20 @@ public partial class D3D11RenderControl : ContentControl
 
                 if (_cachedNativePanel == IntPtr.Zero)
                 {
+                    // #region agent log
+                    AgentLog("D3D11RenderControl.cs:UpdateSwapChainOnUI",
+                        "Querying SwapChainPanel native interface before SetSwapChain",
+                        new
+                        {
+                            instanceId = _instanceId,
+                            currentVersion,
+                            resizeIdAtEnq,
+                            hasPanel = _swapChainPanel != null,
+                            disposed = _disposed,
+                            handle = handle.ToString("X")
+                        },
+                        "H3");
+                    // #endregion
                     // [AOT FIX] Use MarshalInspectable to safely get the ABI pointer for SwapChainPanel
                     IntPtr pBase = WinRT.MarshalInspectable<Microsoft.UI.Xaml.Controls.SwapChainPanel>.FromManaged(_swapChainPanel);
                     try
@@ -1296,6 +1485,21 @@ public partial class D3D11RenderControl : ContentControl
                     var setSc = Marshal.GetDelegateForFunctionPointer<SetSwapChainDelegate>(methodPtr);
                     
                     int hr = setSc(_cachedNativePanel, handle);
+                    // #region agent log
+                    AgentLog("D3D11RenderControl.cs:UpdateSwapChainOnUI",
+                        "SetSwapChain invoked on UI thread",
+                        new
+                        {
+                            instanceId = _instanceId,
+                            currentVersion,
+                            resizeIdAtEnq,
+                            hr,
+                            handle = handle.ToString("X"),
+                            cachedNativePanel = _cachedNativePanel.ToString("X"),
+                            disposed = _disposed
+                        },
+                        "H3");
+                    // #endregion
                     
                     var uiEndTicks = Stopwatch.GetTimestamp();
                     double lagMs = (uiStartTicks - queueTicks) * 1000.0 / Stopwatch.Frequency;
@@ -1303,7 +1507,25 @@ public partial class D3D11RenderControl : ContentControl
                     // LogSync($"[UI_WATCHDOG] ID: {resizeIdAtEnq} | Lag: {lagMs:F1}ms | Exec: {execMs:F1}ms");
                 }
             }
-            catch (Exception ex) { LogSync($"[FATAL] UI Core Fault: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                // #region agent log
+                AgentLog("D3D11RenderControl.cs:UpdateSwapChainOnUI",
+                    "SetSwapChain UI action threw",
+                    new
+                    {
+                        instanceId = _instanceId,
+                        currentVersion,
+                        resizeIdAtEnq,
+                        exceptionType = ex.GetType().FullName,
+                        hresult = ex.HResult,
+                        exceptionMessage = ex.Message,
+                        stack = ex.StackTrace
+                    },
+                    "H3-H5");
+                // #endregion
+                LogSync($"[FATAL] UI Core Fault: {ex.Message}");
+            }
             finally { Marshal.Release(handle); }
         }
 
@@ -1347,34 +1569,62 @@ public partial class D3D11RenderControl : ContentControl
 
     public Task DetachUiResourcesAsync()
     {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] DetachUiResourcesAsync START | Disposed: {_disposed} | Detached: {_uiResourcesDetached}");
+        
+        if (_uiResourcesDetached)
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] DetachUiResourcesAsync SKIP (Already Detached)");
+            return Task.CompletedTask;
+        }
+
+        if (DispatcherQueue == null) 
+        {
+            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] DetachUiResourcesAsync SKIP (No DispatcherQueue)");
+            return Task.CompletedTask;
+        }
+
         return RunOnUiThreadAsync(() =>
         {
             try
             {
+                if (_uiResourcesDetached) return;
+
                 if (_resizeDebounceTimer != null)
-            {
-                _resizeDebounceTimer = null;
-            }
+                {
+                    try
+                    {
+                        _resizeDebounceTimer.Stop();
+                        _resizeDebounceTimer.Tick -= OnResizeDebounceTimerTick;
+                    }
+                    catch { }
+                    _resizeDebounceTimer = null;
+                }
 
+                if (_swapChainPanel != null && _compositionScaleChangedHandler != null)
+                {
+                    try { _swapChainPanel.CompositionScaleChanged -= _compositionScaleChangedHandler; } catch { }
+                    _compositionScaleChangedHandler = null;
+                }
 
-            if (_swapChainPanel != null && _compositionScaleChangedHandler != null)
-            {
-                _compositionScaleChangedHandler = null;
-            }
+                UnsubscribeXamlRootChanged();
 
-            if (_subscribedXamlRoot != null && _xamlRootChangedHandler != null)
-            {
-                _subscribedXamlRoot = null;
-            }
+                if (_displayInfo != null && _advancedColorInfoChangedHandler != null)
+                {
+                    try { _displayInfo.AdvancedColorInfoChanged -= _advancedColorInfoChangedHandler; } catch { }
+                    _advancedColorInfoChangedHandler = null;
+                }
 
-            if (_displayInfo != null && _advancedColorInfoChangedHandler != null)
-            {
-                _advancedColorInfoChangedHandler = null;
-            }
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] Disconnecting SwapChain...");
+                DisconnectSwapChainOnUiThread();
 
-            DisconnectSwapChainOnUiThread();
+                if (Content == _swapChainPanel)
+                {
+                    Content = null;
+                }
 
-            _swapChainPanel = null!;
+                _swapChainPanel = null!;
+                _uiResourcesDetached = true;
+                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] DetachUiResourcesAsync END");
             }
             catch (Exception ex)
             {
@@ -1385,27 +1635,44 @@ public partial class D3D11RenderControl : ContentControl
 
     private unsafe void DisconnectSwapChainOnUiThread()
     {
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [D3D11] DisconnectSwapChainOnUiThread START for instance {GetHashCode()}");
         if (_swapChainPanel == null) return;
 
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DisconnectSwapChain STARTED");
+        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] DisconnectSwapChainOnUiThread START");
 
         try
         {
             if (_cachedNativePanel == IntPtr.Zero)
             {
-                IntPtr pBase = WinRT.MarshalInspectable<Microsoft.UI.Xaml.Controls.SwapChainPanel>.FromManaged(_swapChainPanel);
-                try
+                IntPtr pBase = IntPtr.Zero;
+                try 
                 {
-                    Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
-                    if (Marshal.QueryInterface(pBase, in g1w, out _cachedNativePanel) != 0)
-                    {
-                        Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
-                        Marshal.QueryInterface(pBase, in g1u, out _cachedNativePanel);
-                    }
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] Attempting WinRT.MarshalInspectable.FromManaged(_swapChainPanel)");
+                    pBase = WinRT.MarshalInspectable<Microsoft.UI.Xaml.Controls.SwapChainPanel>.FromManaged(_swapChainPanel);
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] WinRT.MarshalInspectable.FromManaged SUCCESS. Pointer: {pBase:X}");
                 }
-                finally
+                catch (Exception ex)
                 {
-                    if (pBase != IntPtr.Zero) Marshal.Release(pBase);
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] !!! WinRT MARSHAL FAILURE (SUPPRESSED) !!!");
+                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] Error: {ex.Message} (0x{ex.HResult:X8})");
+                    // [FIX] We do NOT re-throw here. If we can't get the native panel, it's likely already being destroyed by XAML.
+                }
+
+                if (pBase != IntPtr.Zero)
+                {
+                    try
+                    {
+                        Guid g1w = NSwapChainPanelNative.IID_ISwapChainPanelNative;
+                        if (Marshal.QueryInterface(pBase, in g1w, out _cachedNativePanel) != 0)
+                        {
+                            Guid g1u = NSwapChainPanelNative.IID_ISwapChainPanelNative_UWP;
+                            Marshal.QueryInterface(pBase, in g1u, out _cachedNativePanel);
+                        }
+                    }
+                    finally
+                    {
+                        Marshal.Release(pBase);
+                    }
                 }
             }
 
@@ -1500,6 +1767,7 @@ public partial class D3D11RenderControl : ContentControl
         Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] OnUnloaded TRIGGERED");
         _disposed = true;
         try { _resizeEvent.Set(); } catch { }
+        _ = DetachUiResourcesAsync();
     }
 
     public unsafe void DestroyResources()
@@ -1550,6 +1818,7 @@ public partial class D3D11RenderControl : ContentControl
                     
                     try
                     {
+                        /*
                         if (_device.Handle != null)
                         {
                             // [RESOURCE MANAGEMENT] Instead of disposing the device (which crashes WinUI composition),
@@ -1561,10 +1830,8 @@ public partial class D3D11RenderControl : ContentControl
                                 Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DXGI Trim completed successfully.");
                             }
                         }
-                        
-                        // Still run a GC collection to clean up managed COM wrappers
-                        GC.Collect();
-                        GC.WaitForPendingFinalizers();
+                        */
+                        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [D3D_CTRL] DXGI Trim SKIPPED to avoid navigation stalls.");
                     }
                     catch (Exception ex)
                     {

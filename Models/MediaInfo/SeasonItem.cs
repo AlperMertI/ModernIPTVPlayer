@@ -7,7 +7,7 @@ namespace ModernIPTVPlayer
     /// Kept in the root namespace so existing XAML bindings continue to resolve.
     /// </summary>
     [Microsoft.UI.Xaml.Data.Bindable]
-    public class SeasonItem
+    public partial class SeasonItem
     {
         public string Name { get; set; }
         public string SeasonName { get; set; }

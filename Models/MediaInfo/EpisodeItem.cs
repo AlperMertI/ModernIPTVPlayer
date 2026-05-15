@@ -10,7 +10,7 @@ namespace ModernIPTVPlayer
     /// watch-progress, and shimmer placeholder state used by ItemsRepeater templates.
     /// </summary>
     [Microsoft.UI.Xaml.Data.Bindable]
-    public class EpisodeItem : INotifyPropertyChanged
+    public partial class EpisodeItem : INotifyPropertyChanged
     {
         public string Id { get; set; }
         public string Title { get; set; }

@@ -70,7 +70,7 @@ namespace ModernIPTVPlayer.Helpers
         public override void Write(Utf8JsonWriter writer, System.Collections.Generic.List<string>? value, JsonSerializerOptions options)
         {
             if (value == null) writer.WriteNullValue();
-            else JsonSerializer.Serialize(writer, value, options);
+            else JsonSerializer.Serialize(writer, value, Services.Json.AppJsonContext.Default.ListString);
         }
     }
 }

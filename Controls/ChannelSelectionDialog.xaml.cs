@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using System.Text.Json;
 using Microsoft.UI.Xaml;
 using ModernIPTVPlayer.Services.Json;
+using System.Diagnostics.CodeAnalysis;
 
 // Assuming LiveStream model is available in global namespace or we need to define a local DTO?
 // Based on logs, LiveStream is likely in ModernIPTVPlayer namespace.
@@ -23,6 +24,7 @@ namespace ModernIPTVPlayer.Controls
         // Phase 3.4: Shared HttpClient (connection pool reuse)
         private readonly HttpClient _httpClient = HttpHelper.Client;
 
+        [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(LiveStream))]
         public ChannelSelectionDialog()
         {
             this.InitializeComponent();
@@ -108,7 +110,6 @@ namespace ModernIPTVPlayer.Controls
                     // JSON Deserialization
                     try 
                     {
-                        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
                         _allChannels = JsonSerializer.Deserialize(json, AppJsonContext.Default.ListLiveStream) ?? new List<LiveStream>();
                         
                         // DIAGNOSTIC: Track mass hydration in dialog
