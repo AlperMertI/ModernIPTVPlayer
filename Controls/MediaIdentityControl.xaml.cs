@@ -38,20 +38,15 @@ namespace ModernIPTVPlayer.Controls
             if (source == null)
             {
                 ContentLogoHost.Visibility = Visibility.Collapsed;
-                TitleText.Visibility = Visibility.Visible;
-                TitleText.FontSize = 48;
+                TitleText.Visibility = Visibility.Collapsed;
+                TitleShimmer.Visibility = Visibility.Visible;
                 return;
             }
 
             ContentLogoImage.Source = source;
             ContentLogoHost.Visibility = Visibility.Visible;
-            
-            // By default, hide title when logo is present. 
-            // The caller can override this (e.g. for episodes)
             TitleText.Visibility = Visibility.Collapsed;
-            TitleText.FontSize = 20;
-            TitleText.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
-            TitleText.Opacity = 0.8;
+            TitleShimmer.Visibility = Visibility.Collapsed;
             LogoLoadCompleted?.Invoke(this, true);
         }
 
@@ -60,8 +55,8 @@ namespace ModernIPTVPlayer.Controls
             if (string.IsNullOrEmpty(url))
             {
                 ContentLogoHost.Visibility = Visibility.Collapsed;
-                TitleText.Visibility = Visibility.Visible;
-                TitleText.FontSize = 48;
+                TitleText.Visibility = Visibility.Collapsed;
+                TitleShimmer.Visibility = Visibility.Visible;
                 return;
             }
 
@@ -71,23 +66,17 @@ namespace ModernIPTVPlayer.Controls
                 {
                     var svgSource = new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(new Uri(url));
                     ContentLogoImage.Source = svgSource;
-                    svgSource.Opened += (s, e) => LogoLoadCompleted?.Invoke(this, true);
+                    svgSource.Opened += (s, e) => OnLogoLoaded();
                     svgSource.OpenFailed += (s, e) => HandleLoadFailure();
                 }
                 else
                 {
-                    var bitmap = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(new Uri(url));
+                    var bitmap = Helpers.SharedImageManager.GetOptimizedImage(url, targetWidth: 500, xamlRoot: this.XamlRoot);
                     ContentLogoImage.Source = bitmap;
-                    // ImageOpened/Failed events handled in XAML for BitmapImage
                 }
 
                 ContentLogoHost.Visibility = Visibility.Visible;
-                
-                // By default, hide title when logo is present.
                 TitleText.Visibility = Visibility.Collapsed;
-                TitleText.FontSize = 20;
-                TitleText.FontWeight = Microsoft.UI.Text.FontWeights.SemiBold;
-                TitleText.Opacity = 0.8;
             }
             catch
             {
@@ -95,11 +84,20 @@ namespace ModernIPTVPlayer.Controls
             }
         }
 
+        private void OnLogoLoaded()
+        {
+            TitleShimmer.Visibility = Visibility.Collapsed;
+            ContentLogoHost.Visibility = Visibility.Visible;
+            TitleText.Visibility = Visibility.Collapsed;
+            LogoLoadCompleted?.Invoke(this, true);
+        }
+
         private void HandleLoadFailure()
         {
             ContentLogoHost.Visibility = Visibility.Collapsed;
             TitleText.Visibility = Visibility.Visible;
             TitleText.FontSize = 48;
+            TitleShimmer.Visibility = Visibility.Collapsed;
             LogoLoadCompleted?.Invoke(this, false);
         }
 

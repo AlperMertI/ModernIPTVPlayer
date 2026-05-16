@@ -878,21 +878,7 @@ namespace ModernIPTVPlayer
                     if (source == null) return;
                     foreach (var c in source)
                     {
-                        var release = c.ReleaseDate ?? c.FirstAirDate;
-                        DateTime? releaseDate = null;
-                        if (DateTime.TryParse(release, out var d)) releaseDate = d;
-
-                        list.Add(new PersonFilmographyItem
-                        {
-                            Id = c.Id,
-                            Title = c.Title ?? c.Name,
-                            Character = c.Character ?? c.Job,
-                            PosterPath = c.PosterPath,
-                            VoteAverage = c.VoteAverage,
-                            ReleaseDate = releaseDate,
-                            MediaType = c.MediaType,
-                            IsCast = isCast
-                        });
+                        list.Add(new PersonFilmographyItem(c, isCast));
                     }
                 }
 

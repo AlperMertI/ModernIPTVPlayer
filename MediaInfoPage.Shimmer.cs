@@ -9,11 +9,14 @@ namespace ModernIPTVPlayer
         /// Calculates enough shimmer rows to fill a panel while keeping a sensible lower and upper bound.
         /// Shared by source and episode placeholder generation so both panels feel consistent.
         /// </summary>
-        protected int CalculateSkeletonCount(double containerHeight, double itemHeight, int minCount = 6)
+        protected int CalculateSkeletonCount(double containerHeight, double itemHeight, int minCount = 8)
         {
-            double height = containerHeight > 0 ? containerHeight : (ActualHeight > 0 ? ActualHeight * 0.72 : 720);
-            int count = (int)Math.Ceiling(height / Math.Max(1, itemHeight));
-            return Math.Clamp(count, minCount, 20);
+            // [LOGIC] If height is not yet available, return the minimum count.
+            // If height is available, calculate the exact number needed to fill the viewport.
+            if (containerHeight <= 0) return minCount;
+
+            int count = (int)Math.Ceiling(containerHeight / Math.Max(1, itemHeight));
+            return Math.Clamp(count, minCount, 25);
         }
 
         /// <summary>

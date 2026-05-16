@@ -10,6 +10,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Threading;
+using Windows.Foundation;
 
 namespace ModernIPTVPlayer
 {
@@ -27,6 +28,11 @@ namespace ModernIPTVPlayer
                 {
                     // 1. ALWAYS populate CurrentEpisodes with what we have immediately
                     _isEpisodesLoading = season.Episodes.Count == 0;
+                    _sourcesPanelOpenedTime = DateTime.Now;
+                    _sourcesPresentationTime = DateTime.Now;
+                    _sourcesRevealItemLimit = Math.Min(30, season.Episodes.Count);
+                    _sourcesVisualGeneration++;
+                    _animatedSourceRevealIndexes.Clear();
                     CurrentEpisodes.Clear();
                     foreach (var ep in season.Episodes) CurrentEpisodes.Add(ep);
 
@@ -83,12 +89,6 @@ namespace ModernIPTVPlayer
                         }
                     }
                 }
-                
-                // [REVEAL SYNC] Re-evaluate layout now that episodes are in the binding collection.
-                // Using Low priority ensures ItemsRepeater has a chance to see the new collection.
-                DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => {
-                    SyncLayout();
-                });
             }
         }
 
@@ -148,8 +148,13 @@ namespace ModernIPTVPlayer
                          {
                               var selectedEpNum = (_selectedEpisode as EpisodeItem)?.EpisodeNumber;
                               
-                              _sourcesVisualGeneration++;
-                              _animatedSourceRevealIndexes.Clear();
+                               _sourcesVisualGeneration++;
+                               _sourcesPanelOpenedTime = DateTime.Now;
+                               _sourcesPresentationTime = DateTime.Now;
+                               _animatedSourceRevealIndexes.Clear();
+                               // [PERFORMANCE] Cap the reveal limit to the initial viewport.
+                               _sourcesRevealItemLimit = Math.Min(30, newEpList.Count);
+                              
                               _isEpisodesLoading = false;
                               CurrentEpisodes.Clear();
                               foreach(var ep in newEpList) CurrentEpisodes.Add(ep);
@@ -191,30 +196,30 @@ namespace ModernIPTVPlayer
                 _animatedSourceRevealIndexes.Remove(preparedIndex);
             }
 
-            bool shouldReveal = !_animatedSourceRevealIndexes.Contains(preparedIndex);
-
-            if (Equals(fe.Tag, stamp) || !shouldReveal)
-            {
-                ResetRevealState(fe);
-                fe.Tag = stamp;
-                return;
-            }
-
             fe.Tag = stamp;
-            fe.Opacity = 0f;
-            _animatedSourceRevealIndexes.Add(preparedIndex);
-
-            if (isShimmer)
+            
+            // [INITIAL REVEAL ONLY] 
+            // We only apply the staggered animation to the initial viewport items.
+            // Items scrolled into view later appear immediately.
+            
+            if (preparedIndex < _sourcesRevealItemLimit && !_animatedSourceRevealIndexes.Contains(preparedIndex))
             {
-                ApplyShimmerReveal(fe, preparedIndex);
+                PrepareForReveal(fe);
+                TriggerReveal(fe, preparedIndex);
             }
             else
             {
-                ApplyStaggeredReveal(fe, preparedIndex, useIndexDelay: true, baseDelay: 0);
+                LeanReset(fe);
             }
         }
 
-        private void EpisodesRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args) { }
+        private void EpisodesRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
+        {
+            if (args.Element is FrameworkElement fe)
+            {
+                LeanReset(fe);
+            }
+        }
 
         private void EpisodeItem_Tapped(object sender, TappedRoutedEventArgs e)
         {
@@ -262,6 +267,7 @@ namespace ModernIPTVPlayer
             }
 
             _selectedEpisode = ep;
+            _lastSyncedEpisodeId = ep?.Id ?? "";
             UpdateEpisodeUI(ep);
 
             UpdateInfoPanelVisibility(true);
@@ -289,7 +295,7 @@ namespace ModernIPTVPlayer
                 // Selecting an episode is intentionally side-effect light: it updates the hero
                 // metadata and selected row, but it does not request sources. The arrow/source
                 // commands own that panel transition so the episodes list stays visible.
-                SyncLayout();
+                OnIdentityChanged();
             }
             finally { _isProgrammaticSelection = false; }
         }
@@ -321,7 +327,7 @@ namespace ModernIPTVPlayer
 
                 SyncActionButtonsInternal(null);
 
-                if (!_isResettingPageState) SyncLayout();
+                if (!_isResettingPageState) OnDataCommitted();
             }
             finally
             {

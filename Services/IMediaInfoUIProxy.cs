@@ -86,6 +86,8 @@ namespace ModernIPTVPlayer.Services
 
         void SetLoadState(PageLoadState state);
         void SyncLayout();
+        void NotifySectionDataReady(string sectionName);
+        void RequestPanelOpen(MediaDetailPanelMode mode, PanelChangeReason reason);
         void ApplyOverviewTextLayout(bool isWide);
         void StartPrebuffering(string url, double position = 0);
         void RefreshAllAddonActiveFlags();
@@ -109,6 +111,9 @@ namespace ModernIPTVPlayer.Services
         Task PopulateCastAndDirectors(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata);
         Task LoadSeriesDataAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata);
         Task UpdateTechnicalBadgesAsync(string url);
+        void ShowTechBadgesShimmer();
+        Task WaitForPageLoadedAsync();
+        void ShowInfoContainerSkeleton();
         
         Task PlayTrailer(string videoKey);
         Task DownloadSingle();

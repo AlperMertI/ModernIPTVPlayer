@@ -8,22 +8,23 @@ using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Metadata;
 using ModernIPTVPlayer.Models.Tmdb;
 using Microsoft.UI.Dispatching;
+using System.Diagnostics;
 
 namespace ModernIPTVPlayer.Services.Metadata
 {
 
     /// <summary>
     /// Manages the atomic commitment of metadata snapshots to the UI.
-    /// Handles change detection (diffing) to prevent redundant UI updates.
+    /// Uses incremental section diffing for all commits (including initial) to prevent redundant UI updates.
     /// </summary>
     public class MediaInfoCommitService
     {
-        private const int IdentityGateTimeoutMs = 3500;
         private readonly IMediaInfoUIProxy _ui;
         private readonly Dictionary<string, string> _sectionKeys = new(StringComparer.Ordinal);
-        private bool _hasInitialCommit;
         private ModernIPTVPlayer.Models.Metadata.UnifiedMetadata? _lastMetadata;
         private IMediaStream? _lastItem;
+        private bool _deferVisuals;
+        private bool _techBadgesInitialized;
         
         public bool HasCommittedEpisodes { get; private set; }
 
@@ -35,21 +36,24 @@ namespace ModernIPTVPlayer.Services.Metadata
         public void Reset()
         {
             _sectionKeys.Clear();
-            _hasInitialCommit = false;
             HasCommittedEpisodes = false;
             _lastMetadata = null;
             _lastItem = null;
+            _deferVisuals = false;
+            _techBadgesInitialized = false;
         }
 
         public void RetryIdentityReveal()
         {
-            if (_hasInitialCommit || _lastMetadata == null || _lastItem == null) return;
+            if (_sectionKeys.Count > 0 || _lastMetadata == null || _lastItem == null) return;
             _ = CommitAsync(_lastMetadata, _lastItem);
         }
 
-        public async Task<bool> CommitAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata? metadata, IMediaStream item, bool forceInitialCommit = false)
+        public async Task<bool> CommitAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata? metadata, IMediaStream item, bool deferVisuals = false)
         {
             if (metadata == null || item == null) return false;
+
+            _deferVisuals = deferVisuals;
 
             // If we are on a background thread, marshal to UI thread and await
             if (!_ui.DispatcherQueue.HasThreadAccess)
@@ -59,7 +63,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 {
                     try
                     {
-                        bool result = await CommitAsync(metadata, item, forceInitialCommit);
+                        bool result = await CommitAsync(metadata, item, deferVisuals);
                         tcs.SetResult(result);
                     }
                     catch (Exception ex)
@@ -85,72 +89,76 @@ namespace ModernIPTVPlayer.Services.Metadata
 
             try
             {
-                if (!_hasInitialCommit)
-                {
-                    if (!forceInitialCommit && !IsIdentityAuthorityReady(metadata))
-                    {
-                        return false;
-                    }
-
-                    await ApplyInitialCommitAsync(metadata, item);
-                    _hasInitialCommit = true;
-                    CaptureAll(metadata, item);
-
-                    if (HasEpisodes(metadata))
-                    {
-                        await _ui.LoadSeriesDataAsync(metadata);
-                        HasCommittedEpisodes = true;
-                    }
-
-                    return true;
-                }
-
                 bool changed = false;
+                var sectionSw = Stopwatch.StartNew();
 
-                if (CommitSection("identity", BuildIdentityKey(metadata, item)))
+                if (CommitSection("identity", $"{metadata.IdentityKey}|{item.Title}"))
                 {
                     ApplyIdentity(metadata, item);
                     changed = true;
+                    NotifySectionIfNotDeferred("identity");
                 }
 
-                if (CommitSection("details", BuildDetailsKey(metadata)))
+                if (CommitSection("details", metadata.DetailsKey))
                 {
                     ApplyDetails(metadata);
                     changed = true;
+                    NotifySectionIfNotDeferred("overview");
                 }
 
-                if (CommitSection("actions", BuildActionsKey(metadata)))
+                if (CommitSection("actions", metadata.ActionsKey))
                 {
                     ApplyActions(metadata, item);
                     changed = true;
+                    NotifySectionIfNotDeferred("actionbar");
                 }
 
-                if (CommitSection("people", BuildPeopleKey(metadata)))
+                if (CommitSection("people", metadata.PeopleKey))
                 {
                     await _ui.PopulateCastAndDirectors(metadata);
                     changed = true;
+                    NotifySectionIfNotDeferred("cast");
+                    NotifySectionIfNotDeferred("director");
                 }
 
-                if (HasEpisodes(metadata) && CommitSection("episodes", BuildEpisodesKey(metadata)))
+                if (HasEpisodes(metadata) && CommitSection("episodes", metadata.EpisodesKey))
                 {
+                    var epSw = Stopwatch.StartNew();
                     await _ui.LoadSeriesDataAsync(metadata);
+                    epSw.Stop();
+                    System.Diagnostics.Debug.WriteLine($"[NAV-TIMING] LoadSeriesDataAsync (episodes): {epSw.ElapsedMilliseconds}ms");
                     HasCommittedEpisodes = true;
                     changed = true;
                 }
 
-                if (CommitSection("backdrop", BuildBackdropKey(metadata)))
+                if (CommitSection("backdrop", metadata.BackdropKey))
                 {
                     ApplyBackdrop(metadata);
                     changed = true;
                 }
 
-                if (CommitSection("attribution", BuildAttributionKey(metadata)))
+                if (CommitSection("attribution", metadata.AttributionKey))
                 {
                     ApplyAttribution(metadata);
                     changed = true;
                 }
 
-                if (changed)
+                // Tech badges setup — runs once when a stream URL is available
+                if (!_techBadgesInitialized && !string.IsNullOrEmpty(_ui.StreamUrl))
+                {
+                    _techBadgesInitialized = true;
+                    _ui.ShowTechBadgesShimmer();
+                    _ = _ui.UpdateTechnicalBadgesAsync(_ui.StreamUrl);
+                }
+
+                sectionSw.Stop();
+                System.Diagnostics.Debug.WriteLine($"[NAV-TIMING] Section commits (all sections): {sectionSw.ElapsedMilliseconds}ms");
+
+                if (changed && !_deferVisuals)
+                {
+                    _ui.SyncLayout();
+                }
+                else if (changed && _deferVisuals)
                 {
                     _ui.SyncLayout();
                 }
@@ -164,55 +172,15 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
         }
 
-        private async Task ApplyInitialCommitAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata, IMediaStream item)
+        /// <summary>
+        /// Flushes any deferred visual transitions after Page.Loaded has fired.
+        /// Called by the orchestrator once the visual tree is ready.
+        /// </summary>
+        public void FlushDeferredVisuals()
         {
-            PrepareMetadataDefaults(metadata, item);
-
-            ApplyIdentity(metadata, item);
-            ApplyDetails(metadata);
-            ApplyActions(metadata, item);
-            await _ui.PopulateCastAndDirectors(metadata);
-            ApplyBackdrop(metadata);
-            ApplyAttribution(metadata);
-
-            if (!string.IsNullOrEmpty(_ui.StreamUrl))
-            {
-                _ = _ui.UpdateTechnicalBadgesAsync(_ui.StreamUrl);
-            }
-
+            if (!_deferVisuals || _sectionKeys.Count == 0) return;
+            _deferVisuals = false;
             _ui.SyncLayout();
-        }
-
-        public bool IsIdentityAuthorityReady(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
-        {
-            if ((DateTime.Now - _ui.NavigationStartTime).TotalMilliseconds > IdentityGateTimeoutMs)
-            {
-                return true;
-            }
-
-            bool hasPrimary = HasPrimarySource(metadata);
-            if (!hasPrimary) return false;
-
-            bool logoUrlExists = !string.IsNullOrWhiteSpace(metadata.LogoUrl);
-            bool detailSweepFinished = metadata.CheckedFields.HasFlag(MetadataField.Logo);
-
-            if (logoUrlExists && !_ui.IsLogoImageLoaded)
-            {
-                return false;
-            }
-
-            if (!logoUrlExists && !detailSweepFinished)
-            {
-                return false;
-            }
-
-            bool hasOverview = !string.IsNullOrWhiteSpace(metadata.Overview);
-            if (!hasOverview && !metadata.CheckedFields.HasFlag(MetadataField.Overview))
-            {
-                return false;
-            }
-
-            return true;
         }
 
         private static bool HasPrimarySource(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
@@ -241,6 +209,14 @@ namespace ModernIPTVPlayer.Services.Metadata
             return true;
         }
 
+        private void NotifySectionIfNotDeferred(string sectionName)
+        {
+            if (!_deferVisuals)
+            {
+                _ui.NotifySectionDataReady(sectionName);
+            }
+        }
+
         private void PrepareMetadataDefaults(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata, IMediaStream item)
         {
             if (metadata == null || item == null) return;
@@ -249,17 +225,6 @@ namespace ModernIPTVPlayer.Services.Metadata
             {
                 metadata.BackdropUrl = (item as Models.Stremio.StremioMediaStream)?.Meta?.Background ?? item.BackdropUrl;
             }
-        }
-
-        private void CaptureAll(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata, IMediaStream item)
-        {
-            _sectionKeys["identity"] = BuildIdentityKey(metadata, item);
-            _sectionKeys["details"] = BuildDetailsKey(metadata);
-            _sectionKeys["actions"] = BuildActionsKey(metadata);
-            _sectionKeys["people"] = BuildPeopleKey(metadata);
-            _sectionKeys["episodes"] = BuildEpisodesKey(metadata);
-            _sectionKeys["backdrop"] = BuildBackdropKey(metadata);
-            _sectionKeys["attribution"] = BuildAttributionKey(metadata);
         }
 
         private void ApplyIdentity(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata, IMediaStream item)
@@ -374,9 +339,9 @@ namespace ModernIPTVPlayer.Services.Metadata
                     _ui.StartPrebuffering(_ui.StreamUrl);
                 }
 
-                // [UX] For movies, we always want to show the sources panel immediately
-                // so the user can see available quality options while reading metadata.
-                _ui.OpenSourcesPanel(PanelChangeReason.SourceCache);
+                // Request sources panel to open when the page reaches a stable state.
+                // If the page is still loading or revealing, the request is deferred.
+                _ui.RequestPanelOpen(MediaDetailPanelMode.Sources, PanelChangeReason.SourceCache);
             }
 
             _ui.UpdateWatchlistState();
@@ -452,46 +417,6 @@ namespace ModernIPTVPlayer.Services.Metadata
             return metadata.IsSeries &&
                    metadata.Seasons != null &&
                    metadata.Seasons.Any(s => s.Episodes != null && s.Episodes.Count > 0);
-        }
-
-        private static string BuildIdentityKey(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata, IMediaStream item)
-        {
-            return string.Join("|", metadata.Title, metadata.SubTitle, metadata.OriginalTitle, metadata.LogoUrl, item.Title);
-        }
-
-        private static string BuildDetailsKey(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
-        {
-            return string.Join("|", metadata.Overview, metadata.Year, metadata.Genres, metadata.Runtime, metadata.Rating);
-        }
-
-        private static string BuildActionsKey(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
-        {
-            return string.Join("|", metadata.TrailerUrl, metadata.IsAvailableOnIptv, metadata.StreamUrl);
-        }
-
-        private static string BuildPeopleKey(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
-        {
-            string cast = metadata.Cast == null ? "" : string.Join(";", metadata.Cast.Take(10).Select(c => $"{c.Name}:{c.Character}:{c.ProfileUrl}"));
-            string directors = metadata.Directors == null ? "" : string.Join(";", metadata.Directors.Take(5).Select(d => $"{d.Name}:{d.ProfileUrl}"));
-            return $"{cast}|{directors}|{metadata.TmdbInfo?.Id}";
-        }
-
-        private static string BuildEpisodesKey(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
-        {
-            if (!HasEpisodes(metadata)) return "";
-            return string.Join("|", metadata.Seasons.Select(s =>
-                $"{s.SeasonNumber}:{s.Name}:{(s.Episodes == null ? 0 : s.Episodes.Count)}:{string.Join(",", (s.Episodes ?? new List<UnifiedEpisode>()).Take(4).Select(e => $"{e.Id}:{e.Title}:{e.StreamUrl}"))}"));
-        }
-
-        private static string BuildBackdropKey(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
-        {
-            string gallery = metadata.BackdropUrls == null ? "" : string.Join(";", metadata.BackdropUrls);
-            return $"{metadata.BackdropUrl}|{metadata.PosterUrl}|{gallery}";
-        }
-
-        private static string BuildAttributionKey(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
-        {
-            return $"{metadata.DataSource}|{metadata.MetadataSourceInfo}";
         }
     }
 }

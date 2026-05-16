@@ -7,6 +7,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Text;
+using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Metadata;
 using ModernIPTVPlayer.Models.Stremio;
 using ModernIPTVPlayer.Services.Stremio;
@@ -158,6 +159,20 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private const string MAPPING_CACHE_FILE_BINARY = "metadata_mappings.bin";
         private readonly SemaphoreSlim _enrichmentSemaphore = new SemaphoreSlim(16);
+
+        private async Task<UnifiedMetadata> GetOrAddEnrichmentTaskAsync(string cacheKey, UnifiedMetadata? seedData, string fetchId, string fetchType, IMediaStream stream, MetadataContext context, Action<string>? onBackdropFound, Action<UnifiedMetadata>? onUpdate, MetadataTrace? trace)
+        {
+            return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () =>
+            {
+                trace?.Log("Phase3", $"NETWORK ENRICHMENT START | Context: {context} | Seeded: {seedData != null}");
+                await _enrichmentSemaphore.WaitAsync();
+                try
+                {
+                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, seedData, onUpdate, CancellationToken.None, trace);
+                }
+                finally { _enrichmentSemaphore.Release(); }
+            }))).Value;
+        }
 
         public void ClearCache()
         {
@@ -452,12 +467,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                         
                         // We have cached data but it's not enough for the current context.
                         // We continue to GetMetadataInternalAsync, passing the cached data as 'seed' to avoid redundant addon probes.
-                        return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => 
-                        {
-                            trace?.Log("Upgrade", $"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
-                            // [FIX] Do NOT pass caller's 'ct' to shared task
-                            return GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, cached.Data, onUpdate, CancellationToken.None, trace);
-                        })).Value;
+                        trace?.Log("Upgrade", $"START Fetching (Context Upgrade {context}): {id ?? stream.Title} | Missing: {missingFromCache}");
+                        return await GetOrAddEnrichmentTaskAsync(cacheKey, cached.Data, fetchId, fetchType, stream, context, onBackdropFound, onUpdate, trace);
                     }
                 }
                 // 2. Check High-Speed Persistent Disk Cache (BinaryEnrichmentCache)
@@ -511,16 +522,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                             
                             trace?.Log("Phase1", $"PROMOTING Discovery cache to Detail ({id ?? stream?.Title}) | Reason: {seedReason}");
                             
-                            return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
-                            {
-                                // [FIX] Shared task must not be tied to caller's cancellation
-                                await _enrichmentSemaphore.WaitAsync();
-                                try 
-                                {
-                                    return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, disc.Data, onUpdate, CancellationToken.None, trace);
-                                }
-                                finally { _enrichmentSemaphore.Release(); }
-                            }))).Value;
+                            return await GetOrAddEnrichmentTaskAsync(cacheKey, disc.Data, fetchId, fetchType, stream, context, onBackdropFound, onUpdate, trace);
                         }
                     }
                 }
@@ -574,20 +576,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 // We pass it to GetMetadataInternalAsync to avoid redundant network probes for fields we already have.
                 var seedData = (cached.Data != null && cached.Data.PriorityScore >= 0) ? cached.Data : null;
 
-                return await _activeTasks.GetOrAdd(cacheKey, _ => new Lazy<Task<UnifiedMetadata>>(() => Task.Run(async () => 
-                {
-                    trace?.Log("Phase3", $"NETWORK ENRICHMENT START | Reason: {fetchReason} | Context: {context} | Seeded: {seedData != null}");
-                    
-                    // [PROFESSIONAL FIX] We do NOT pass 'ct' to the shared Task inside the Lazy.
-                    // If the first caller is cancelled, the task must still complete to fill the cache 
-                    // for subsequent callers (like when the user re-opens the same card).
-                    await _enrichmentSemaphore.WaitAsync();
-                    try 
-                    {
-                        return await GetMetadataInternalAsync(fetchId, fetchType, stream, cacheKey, context, onBackdropFound, seedData, onUpdate, CancellationToken.None, trace);
-                    }
-                    finally { _enrichmentSemaphore.Release(); }
-                }))).Value;
+                return await GetOrAddEnrichmentTaskAsync(cacheKey, seedData, fetchId, fetchType, stream, context, onBackdropFound, onUpdate, trace);
             }
             catch (OperationCanceledException)
             {
@@ -801,25 +790,32 @@ namespace ModernIPTVPlayer.Services.Metadata
                     onUpdate?.Invoke(metadata);
                 }
 
-                // Global Catalog Seeding
-                var initialFragments = _stremioService.GetGlobalMetaCache(id);
-                if (initialFragments != null)
+                // Global Catalog Seeding - Skip if already enriched
+                if (metadata.MaxEnrichmentContext >= context && metadata.PriorityScore > 4000)
                 {
-                    var seededKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    if (sourceStream is StremioMediaStream sms) seededKeys.Add($"{sms.SourceAddon}_{sms.Meta.Id}");
-
-                    foreach (var fragment in initialFragments)
+                    trace?.Log("Phase2", "Skipping global cache re-seed (already enriched with high priority).");
+                }
+                else
+                {
+                    var initialFragments = _stremioService.GetGlobalMetaCache(id);
+                    if (initialFragments != null)
                     {
-                        string key = $"{fragment.SourceAddon}_{fragment.Meta.Id}";
-                        if (seededKeys.Contains(key)) continue;
-                        SeedFromCatalogMetadata(metadata, fragment, trace, quiet: true, context: context);
-                        if (metadata.IsSeries && fragment.Meta?.Videos != null && context != MetadataContext.Discovery && context != MetadataContext.ExpandedCard)
+                        var seededKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                        if (sourceStream is StremioMediaStream sms) seededKeys.Add($"{sms.SourceAddon}_{sms.Meta.Id}");
+
+                        foreach (var fragment in initialFragments)
                         {
-                            MergeStremioEpisodes(fragment.Meta, metadata, GetHostSafe(fragment.SourceAddon), false);
+                            string key = $"{fragment.SourceAddon}_{fragment.Meta.Id}";
+                            if (seededKeys.Contains(key)) continue;
+                            SeedFromCatalogMetadata(metadata, fragment, trace, quiet: true, context: context);
+                            if (metadata.IsSeries && fragment.Meta?.Videos != null && context != MetadataContext.Discovery && context != MetadataContext.ExpandedCard)
+                            {
+                                MergeStremioEpisodes(fragment.Meta, metadata, GetHostSafe(fragment.SourceAddon), false);
+                            }
+                            seededKeys.Add(key);
                         }
-                        seededKeys.Add(key);
+                        onUpdate?.Invoke(metadata);
                     }
-                    onUpdate?.Invoke(metadata);
                 }
 
                 missing = GetMissingFields(metadata, required);
@@ -889,6 +885,7 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                         if (sourceStream is StremioMediaStream sms) sms.UpdateFromUnified(metadata);
                         onUpdate?.Invoke(metadata);
+                        metadata.CheckedFields |= SatisfiedFields(metadata, required);
                         missing = GetMissingFields(metadata, required);
                     }
                     else
@@ -923,7 +920,8 @@ namespace ModernIPTVPlayer.Services.Metadata
                 }
 
                 // [ADDON PROBE CHAIN] - RESTORED FULL COMPLEXITY
-                if (!tmdbEnabled || (metadata.TmdbInfo == null && GetMissingFields(metadata, required) != MetadataField.None) || (metadata.TmdbInfo != null && GetMissingFields(metadata, required) != MetadataField.None))
+                var missingBeforeAddon = GetMissingFields(metadata, required);
+                if (!tmdbEnabled || (metadata.TmdbInfo == null && missingBeforeAddon != MetadataField.None) || (metadata.TmdbInfo != null && missingBeforeAddon != MetadataField.None))
                 {
                     var addonUrls = StremioAddonManager.Instance.GetAddonsByResource("meta");
                     if (addonUrls.Count > 0)
@@ -1137,9 +1135,11 @@ namespace ModernIPTVPlayer.Services.Metadata
                                  trace?.Log("Addon", "Found best-effort episode titles. Breaking probe chain to save time.");
                                  break;
                              }
-                        }
-                    }
-                }
+                         }
+                     }
+                 }
+
+                metadata.CheckedFields |= SatisfiedFields(metadata, required);
 
                 if (metadata.IsSeries && metadata.TmdbInfo != null) ReconcileTmdbSeasons(metadata, metadata.TmdbInfo);
                 trace?.Log("Phase3", $"ENRICHMENT COMPLETE | Final Source: {metadata.DataSource ?? metadata.MetadataSourceInfo}");
@@ -1234,33 +1234,38 @@ namespace ModernIPTVPlayer.Services.Metadata
             MetadataField missing = MetadataField.None;
             if (required == MetadataField.None) return MetadataField.None;
 
-            if (required.HasFlag(MetadataField.Title) && string.IsNullOrWhiteSpace(metadata.Title)) missing |= MetadataField.Title;
+            MetadataField checkedFields = metadata.CheckedFields;
+            if (checkedFields.HasFlag(required)) return MetadataField.None;
+
+            MetadataField toCheck = required & ~checkedFields;
+            if (toCheck == MetadataField.None) return MetadataField.None;
+
+            if (toCheck.HasFlag(MetadataField.Title) && string.IsNullOrWhiteSpace(metadata.Title)) missing |= MetadataField.Title;
             
             bool hasRealOverview = !string.IsNullOrWhiteSpace(metadata.Overview) && !IsPlaceholderOverview(metadata.Overview);
-            if (required.HasFlag(MetadataField.Overview) && !hasRealOverview) missing |= MetadataField.Overview;
+            if (toCheck.HasFlag(MetadataField.Overview) && !hasRealOverview) missing |= MetadataField.Overview;
             
-            if (required.HasFlag(MetadataField.Year) && string.IsNullOrWhiteSpace(metadata.Year)) missing |= MetadataField.Year;
+            if (toCheck.HasFlag(MetadataField.Year) && string.IsNullOrWhiteSpace(metadata.Year)) missing |= MetadataField.Year;
             
-            if (required.HasFlag(MetadataField.Rating) && metadata.Rating <= 0)
+            if (toCheck.HasFlag(MetadataField.Rating) && metadata.Rating <= 0)
             {
-                // [FIX] AioStreams exemption: If we have AioStreams data, we don't strictly require a rating to be satisfied
                 bool isAio = metadata.DataSource?.Contains("AioStreams", StringComparison.OrdinalIgnoreCase) == true;
                 if (!isAio) missing |= MetadataField.Rating;
             }
 
-            if (required.HasFlag(MetadataField.Genres) && string.IsNullOrWhiteSpace(metadata.Genres)) missing |= MetadataField.Genres;
-            if (required.HasFlag(MetadataField.Poster) && string.IsNullOrWhiteSpace(metadata.PosterUrl)) missing |= MetadataField.Poster;
-            if (required.HasFlag(MetadataField.Backdrop) && string.IsNullOrWhiteSpace(metadata.BackdropUrl)) missing |= MetadataField.Backdrop;
-            if (required.HasFlag(MetadataField.Trailer) && string.IsNullOrWhiteSpace(metadata.TrailerUrl)) missing |= MetadataField.Trailer;
-            if (required.HasFlag(MetadataField.Runtime) && string.IsNullOrWhiteSpace(metadata.Runtime)) missing |= MetadataField.Runtime;
-            if (required.HasFlag(MetadataField.Logo) && string.IsNullOrWhiteSpace(metadata.LogoUrl)) missing |= MetadataField.Logo;
+            if (toCheck.HasFlag(MetadataField.Genres) && string.IsNullOrWhiteSpace(metadata.Genres)) missing |= MetadataField.Genres;
+            if (toCheck.HasFlag(MetadataField.Poster) && string.IsNullOrWhiteSpace(metadata.PosterUrl)) missing |= MetadataField.Poster;
+            if (toCheck.HasFlag(MetadataField.Backdrop) && string.IsNullOrWhiteSpace(metadata.BackdropUrl)) missing |= MetadataField.Backdrop;
+            if (toCheck.HasFlag(MetadataField.Trailer) && string.IsNullOrWhiteSpace(metadata.TrailerUrl)) missing |= MetadataField.Trailer;
+            if (toCheck.HasFlag(MetadataField.Runtime) && string.IsNullOrWhiteSpace(metadata.Runtime)) missing |= MetadataField.Runtime;
+            if (toCheck.HasFlag(MetadataField.Logo) && string.IsNullOrWhiteSpace(metadata.LogoUrl)) missing |= MetadataField.Logo;
             
-            if (required.HasFlag(MetadataField.Gallery))
+            if (toCheck.HasFlag(MetadataField.Gallery))
             {
                 if (metadata.BackdropUrls == null || metadata.BackdropUrls.Count < 2) missing |= MetadataField.Gallery;
             }
 
-            if (required.HasFlag(MetadataField.Cast))
+            if (toCheck.HasFlag(MetadataField.Cast))
             {
                 bool hasCast = metadata.Cast != null && metadata.Cast.Count > 0;
                 bool hasDirectors = metadata.Directors != null && metadata.Directors.Count > 0;
@@ -1270,14 +1275,13 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (!castSatisfied) missing |= MetadataField.Cast;
             }
 
-            if (required.HasFlag(MetadataField.CastPortraits))
+            if (toCheck.HasFlag(MetadataField.CastPortraits))
             {
                 if (metadata.Cast != null && metadata.Cast.Count > 0 && !metadata.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl)))
                     missing |= MetadataField.CastPortraits;
             }
 
-            // [NEW] Check for generic episode titles in series
-            if (metadata.IsSeries && required.HasFlag(MetadataField.Seasons))
+            if (metadata.IsSeries && toCheck.HasFlag(MetadataField.Seasons))
             {
                 bool hasEpisodes = metadata.Seasons != null && metadata.Seasons.Any(s => s.Episodes != null && s.Episodes.Count > 0);
                 if (!hasEpisodes || HasGenericEpisodeTitles(metadata))
@@ -1285,6 +1289,53 @@ namespace ModernIPTVPlayer.Services.Metadata
             }
 
             return missing;
+        }
+
+        private MetadataField SatisfiedFields(UnifiedMetadata metadata, MetadataField required)
+        {
+            MetadataField satisfied = MetadataField.None;
+            if (required == MetadataField.None) return MetadataField.None;
+
+            if (required.HasFlag(MetadataField.Title) && !string.IsNullOrWhiteSpace(metadata.Title)) satisfied |= MetadataField.Title;
+            
+            bool hasRealOverview = !string.IsNullOrWhiteSpace(metadata.Overview) && !IsPlaceholderOverview(metadata.Overview);
+            if (required.HasFlag(MetadataField.Overview) && hasRealOverview) satisfied |= MetadataField.Overview;
+            
+            if (required.HasFlag(MetadataField.Year) && !string.IsNullOrWhiteSpace(metadata.Year)) satisfied |= MetadataField.Year;
+            
+            if (required.HasFlag(MetadataField.Rating) && metadata.Rating > 0) satisfied |= MetadataField.Rating;
+
+            if (required.HasFlag(MetadataField.Genres) && !string.IsNullOrWhiteSpace(metadata.Genres)) satisfied |= MetadataField.Genres;
+            if (required.HasFlag(MetadataField.Poster) && !string.IsNullOrWhiteSpace(metadata.PosterUrl)) satisfied |= MetadataField.Poster;
+            if (required.HasFlag(MetadataField.Backdrop) && !string.IsNullOrWhiteSpace(metadata.BackdropUrl)) satisfied |= MetadataField.Backdrop;
+            if (required.HasFlag(MetadataField.Trailer) && !string.IsNullOrWhiteSpace(metadata.TrailerUrl)) satisfied |= MetadataField.Trailer;
+            if (required.HasFlag(MetadataField.Runtime) && !string.IsNullOrWhiteSpace(metadata.Runtime)) satisfied |= MetadataField.Runtime;
+            if (required.HasFlag(MetadataField.Logo) && !string.IsNullOrWhiteSpace(metadata.LogoUrl)) satisfied |= MetadataField.Logo;
+            
+            if (required.HasFlag(MetadataField.Gallery) && metadata.BackdropUrls != null && metadata.BackdropUrls.Count >= 2)
+                satisfied |= MetadataField.Gallery;
+
+            if (required.HasFlag(MetadataField.Cast))
+            {
+                bool hasCast = metadata.Cast != null && metadata.Cast.Count > 0;
+                bool hasDirectors = metadata.Directors != null && metadata.Directors.Count > 0;
+                bool hasWriters = !string.IsNullOrEmpty(metadata.Writers);
+                if (hasCast && (hasDirectors || (metadata.IsSeries && hasWriters))) satisfied |= MetadataField.Cast;
+            }
+
+            if (required.HasFlag(MetadataField.CastPortraits))
+            {
+                if (metadata.Cast != null && metadata.Cast.Count > 0 && metadata.Cast.Any(c => !string.IsNullOrEmpty(c.ProfileUrl)))
+                    satisfied |= MetadataField.CastPortraits;
+            }
+
+            if (metadata.IsSeries && required.HasFlag(MetadataField.Seasons))
+            {
+                bool hasEpisodes = metadata.Seasons != null && metadata.Seasons.Any(s => s.Episodes != null && s.Episodes.Count > 0);
+                if (hasEpisodes && !HasGenericEpisodeTitles(metadata)) satisfied |= MetadataField.Seasons;
+            }
+
+            return satisfied;
         }
 
         private int GetAddonPriorityIndex(List<string> addonUrls, string? addonUrl)
@@ -1327,6 +1378,12 @@ namespace ModernIPTVPlayer.Services.Metadata
         private void SeedFromCatalogMetadata(UnifiedMetadata metadata, StremioMediaStream stream, MetadataTrace? trace, MetadataContext context, bool quiet = false)
         {
             if (stream?.Meta == null) return;
+
+            if (!string.IsNullOrWhiteSpace(metadata.Title) && metadata.PriorityScore > 4000)
+            {
+                if (!quiet) trace?.Log("Seed", "Skipping seed (already seeded with high priority).");
+                return;
+            }
 
             string? addonUrl = stream.SourceAddon;
             
@@ -3544,12 +3601,25 @@ namespace ModernIPTVPlayer.Services.Metadata
         {
             if (string.IsNullOrEmpty(id)) return id;
             
-            // Extract tt\d+ or tmdb:\d+ from prefixes (like "imdb_id:tt12345" or "torbox:tt12345")
-            var imdbMatch = Regex.Match(id, @"tt\d+", RegexOptions.IgnoreCase);
-            if (imdbMatch.Success) return imdbMatch.Value.ToLowerInvariant();
+            // Fast path: Check for tt\d+ pattern without Regex
+            int ttIdx = id.IndexOf("tt", StringComparison.OrdinalIgnoreCase);
+            if (ttIdx >= 0)
+            {
+                int start = ttIdx;
+                int end = start + 2;
+                while (end < id.Length && char.IsDigit(id[end])) end++;
+                if (end > start + 2) return id.Substring(start, end - start).ToLowerInvariant();
+            }
 
-            var tmdbMatch = Regex.Match(id, @"tmdb:\d+", RegexOptions.IgnoreCase);
-            if (tmdbMatch.Success) return tmdbMatch.Value.ToLowerInvariant();
+            // Fast path: Check for tmdb:\d+ pattern
+            int tmdbIdx = id.IndexOf("tmdb:", StringComparison.OrdinalIgnoreCase);
+            if (tmdbIdx >= 0)
+            {
+                int start = tmdbIdx;
+                int end = start + 5;
+                while (end < id.Length && char.IsDigit(id[end])) end++;
+                if (end > start + 5) return id.Substring(start, end - start).ToLowerInvariant();
+            }
             
             return id;
         }

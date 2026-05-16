@@ -41,11 +41,9 @@ using System.Diagnostics.CodeAnalysis;
 namespace ModernIPTVPlayer
 {
     [Microsoft.UI.Xaml.Data.Bindable]
-    public sealed partial class MediaInfoPage : Page, IRevealablePage, IMediaInfoUIProxy
+    public sealed partial class MediaInfoPage : Page, IMediaInfoUIProxy
     {
-        private ParallelRevealCoordinator _revealCoordinator;
         private MediaInfoCommitService _commitService;
-        private MediaInfoLifecycleOrchestrator _lifecycleOrchestrator;
         
         private IMediaStream _item;
         private bool _isProgrammaticSelection;
@@ -55,7 +53,6 @@ namespace ModernIPTVPlayer
         private DispatcherTimer? _personHoverTimer;
         private FrameworkElement? _pendingPersonSource;
         private bool _isPointerOverPersonCard;
-        private bool _isPointerOverCastSection;
         private CancellationTokenSource? _personCloseCts;
         private FrameworkElement? _activePersonAnchorSource;
         private CastItem? _activePersonCardItem;
@@ -92,10 +89,8 @@ namespace ModernIPTVPlayer
         private bool _isSourcesFetchInProgress;
         private bool _isEpisodesLoading;
         private bool _isCurrentSourcesComplete;
-        private MediaDetailPanelMode _requestedPanelMode = MediaDetailPanelMode.None;
         private bool _shouldAutoResume = false;
-        private string? _sourceAddonUrl; // New: tracking the source addon URL for the current stream
-        private bool _isSourcesPanelHidden = false; // <--- New: Tracking hidden (stashed) state
+        private string? _sourceAddonUrl;
         private Vector3 _sourcesPanelOriginalScale = new Vector3(1f, 1f, 1f);
         private double _sourcesPanelOriginalWidth = 0;
         
@@ -122,6 +117,7 @@ namespace ModernIPTVPlayer
         private CancellationTokenSource? _pageCts;
         private CancellationTokenSource? _feedbackCts;
         private bool _isNavigatingAway;
+        private TaskCompletionSource<bool>? _pageLoadedTcs;
 
         private string ResolveBestContentId(string? rawId)
         {
@@ -182,6 +178,7 @@ namespace ModernIPTVPlayer
         private bool _isRevealingInProgress = false; // [STABILITY] Prevent LayoutCycle during fast partial updates
         private int _revealedCastGeneration;
         private int _revealedDirectorGeneration;
+        private string _lastSyncedEpisodeId = "";
         private IMediaStream _pendingLoadItem;  // Item waiting for layout
 
         // Composition Logo System
@@ -220,17 +217,17 @@ namespace ModernIPTVPlayer
         private int _lastInfoLayoutSignature = 0;
         private bool _isResponsiveLayoutQueued;
         // Layout Perfection Constants
-        private const double LayoutAdaptiveThreshold = 800.0;
+        private const double LayoutAdaptiveThreshold = 950.0;
         private const double WideSourcesColumnMinWidth = 400.0;
         private const double WideSourcesColumnMaxWidth = 600.0;
         private const double WideEpisodesColumnWidth = 420.0;
-        private const double WideInfoCompactThreshold = 800.0;
+        private const double WideInfoCompactThreshold = 950.0;
         private const double WideInfoCastThreshold = 620.0;
         private const double WidePeopleComfortHeight = 720.0;
         private const double PrimaryActionMinExpandedWidth = 104.0;
         private const double RestartActionMinExpandedWidth = 122.0;
         private const double PrimaryActionIconWidth = 24.0;
-        private const double ActionBarOverflowGuard = 12.0;
+        private const double ActionBarOverflowGuard = 4.0;
         private const int ActionButtonExpandTextDelayMs = 280;
         private const int ActionButtonCollapseTextDelayMs = 115;
         private bool _lastPlayIconOnlyState = true;
@@ -242,13 +239,11 @@ namespace ModernIPTVPlayer
         private const double InfoInnerMarginBottom = 25.0;
         private const double LayoutBufferBottom = 5.0;
         private const double TotalBottomGap = ContentGridPaddingBottom + InfoInnerMarginBottom + LayoutBufferBottom;
-        private const int IdentityGateTimeoutMs = 750;
 
         private bool? _lastIsWideForPanels;
         private SpringVector3NaturalMotionAnimation _driftAnimation;
         private const bool DisableMediaInfoRevealAnimationsForCrashIsolation = false;
         private const bool DisableReadyPeopleRevealForCrashIsolation = false;
-        private const bool DisableAllPanelAnimatorsForCrashIsolation = false;
 
         private MediaInfoActionService _actionService;
 
@@ -339,23 +334,33 @@ namespace ModernIPTVPlayer
         [DynamicDependency(DynamicallyAccessedMemberTypes.All, typeof(EpisodeTemplateSelector))]
         public MediaInfoPage()
         {
+            var ctorSw = Stopwatch.StartNew();
             TraceMediaInfo("ctor enter");
+            
+            var sw = Stopwatch.StartNew();
             this.InitializeComponent();
+            sw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] InitializeComponent (XAML parse): {sw.ElapsedMilliseconds}ms");
             TraceMediaInfo("ctor InitializeComponent done");
+            
+            sw.Restart();
             _compositor = ElementCompositionPreview.GetElementVisual(this).Compositor;
+            sw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] Compositor acquire: {sw.ElapsedMilliseconds}ms");
             TraceMediaInfo("ctor compositor acquired");
             
-            _revealCoordinator = new ParallelRevealCoordinator(this);
+            sw.Restart();
             _commitService = new MediaInfoCommitService(this);
             _actionService = new MediaInfoActionService(this);
-            _lifecycleOrchestrator = new MediaInfoLifecycleOrchestrator(this, _revealCoordinator, _commitService);
+            sw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] Service construction (orchestrator+commit+action): {sw.ElapsedMilliseconds}ms");
 
-            _sourcesPanelAnimator = new PanelAnimator(SourcesPanel, _compositor, null, "SourcesPanel");
-            _episodesPanelAnimator = new PanelAnimator(EpisodesPanel, _compositor, null, "EpisodesPanel");
-            _infoPanelAnimator = new PanelAnimator(InfoContainer, _compositor, null, "InfoContainer");
-            _castPanelAnimator = new PanelAnimator(CastSection, _compositor, null, "CastSection");
-            _directorPanelAnimator = new PanelAnimator(DirectorSection, _compositor, null, "DirectorSection");
+            sw.Restart();
+            InitializeSectionArchitecture();
+            sw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] Section architecture initialization: {sw.ElapsedMilliseconds}ms");
 
+            sw.Restart();
             if (IdentityControl?.LogoImage != null)
             {
                 IdentityControl.LogoImage.ImageOpened += (s, e) => 
@@ -371,18 +376,38 @@ namespace ModernIPTVPlayer
                     _logoReadyTcs?.TrySetResult(false);
                 };
             }
+            sw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] Logo event wiring: {sw.ElapsedMilliseconds}ms");
 
-            this.Loaded += (s, e) => SetupParallax();
+            sw.Restart();
+            _pageLoadedTcs = new TaskCompletionSource<bool>();
+            this.Loaded += (s, e) => 
+            {
+                Services.NavigationService.LogPageLoaded();
+                _pageLoadedTcs?.TrySetResult(true);
+                SetupParallax();
+            };
             _sourcesPanelController = new SourcesPanelController(this);
+            sw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] SourcesPanelController creation: {sw.ElapsedMilliseconds}ms");
 
             // UI Audio Feedback Setup
             this.ElementSoundMode = global::Microsoft.UI.Xaml.ElementSoundMode.Off;
             BackButton.ElementSoundMode = global::Microsoft.UI.Xaml.ElementSoundMode.Default;
             
             this.SizeChanged += MediaInfoPage_SizeChanged;
-            this.NavigationCacheMode = NavigationCacheMode.Disabled;
-            SetupProfessionalAnimations();
 
+            // [EVENT-DRIVEN] Subscribe to specific panel size changes to update shimmers accurately
+            if (SourcesScrollViewer != null) SourcesScrollViewer.SizeChanged += PanelScrollViewer_SizeChanged;
+            if (EpisodesScrollViewer != null) EpisodesScrollViewer.SizeChanged += PanelScrollViewer_SizeChanged;
+            this.NavigationCacheMode = NavigationCacheMode.Disabled;
+            
+            sw.Restart();
+            SetupProfessionalAnimations();
+            sw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] SetupProfessionalAnimations: {sw.ElapsedMilliseconds}ms");
+
+            sw.Restart();
             // Robust Drag-to-Scroll Registration (Vertical)
             RootScrollViewer.AddHandler(PointerPressedEvent, new PointerEventHandler(OnMainPointerPressed), true);
             RootScrollViewer.AddHandler(PointerMovedEvent, new PointerEventHandler(OnMainPointerMoved), true);
@@ -397,7 +422,7 @@ namespace ModernIPTVPlayer
             CastListView.AddHandler(PointerCanceledEvent, new PointerEventHandler(OnCastPointerReleased), true);
             CastListView.AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnCastPointerReleased), true);
 
-            _personHoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            _personHoverTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
             _personHoverTimer.Tick += PersonHoverTimer_Tick;
 
             // Enable smooth morphing transitions
@@ -406,6 +431,11 @@ namespace ModernIPTVPlayer
 
             // Project Zero: Mandatory Cleanup Registration
             this.Unloaded += (s, e) => Cleanup();
+            sw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] Event handlers + misc setup: {sw.ElapsedMilliseconds}ms");
+            
+            ctorSw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] ===== TOTAL MediaInfoPage.ctor: {ctorSw.ElapsedMilliseconds}ms =====");
             TraceMediaInfo("ctor exit");
         }
 
@@ -420,6 +450,9 @@ namespace ModernIPTVPlayer
                 {
                     ActivePersonCard.SizeChanged -= ActivePersonCard_SizeChanged;
                 }
+
+                if (SourcesScrollViewer != null) SourcesScrollViewer.SizeChanged -= PanelScrollViewer_SizeChanged;
+                if (EpisodesScrollViewer != null) EpisodesScrollViewer.SizeChanged -= PanelScrollViewer_SizeChanged;
 
                 System.Diagnostics.Debug.WriteLine($"[INFO-CLEANUP] MediaInfoPage releasing resources for: {_item?.Title ?? "None"}");
 
@@ -484,12 +517,6 @@ namespace ModernIPTVPlayer
                 // 4. Break Metadata & Interop Links
                 _item = null;
                 _unifiedMetadata = null;
-                _infoPanelAnimator?.Dispose();
-                _infoPanelAnimator = null;
-                _sourcesPanelAnimator?.Dispose();
-                _sourcesPanelAnimator = null;
-                _episodesPanelAnimator?.Dispose();
-                _episodesPanelAnimator = null;
                 _compositor = null;
                 _trailerCts?.Cancel();
                 _trailerCts?.Dispose();
@@ -531,11 +558,6 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private PanelAnimator _sourcesPanelAnimator;
-        private PanelAnimator _episodesPanelAnimator;
-        private PanelAnimator _infoPanelAnimator;
-        private PanelAnimator _castPanelAnimator;
-        private PanelAnimator _directorPanelAnimator;
         private bool _isSelectionSyncing = false;
         private int _loadingVersion = 0;
         private long _historyChangedToken; // New field
@@ -572,6 +594,16 @@ namespace ModernIPTVPlayer
 
 
 
+        private void PanelScrollViewer_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            // Only refresh if height has changed significantly (more than 10 pixels)
+            // to avoid spamming updates during subtle animations.
+            if (Math.Abs(e.NewSize.Height - e.PreviousSize.Height) > 10)
+            {
+                RefreshAllShimmers();
+            }
+        }
+        
         private void MediaInfoPage_SizeChanged(object sender, SizeChangedEventArgs e)
         {
             if (_isProcessingSizeChanged) return;
@@ -584,13 +616,13 @@ namespace ModernIPTVPlayer
                 int layoutIndex = e.NewSize.Width >= LayoutAdaptiveThreshold ? 1 : 0;
                 int widthBucket = (int)Math.Round(e.NewSize.Width / 8.0);
                 int heightBucket = (int)Math.Round(e.NewSize.Height / 8.0);
-                bool forceSync = !_isFirstLayoutApplied || (_requestedPanelMode == MediaDetailPanelMode.Sources && SourcesPanel?.Visibility != Visibility.Visible);
+                bool forceSync = !_isFirstLayoutApplied || (_panelOwner != null && _panelOwner.PanelMode == MediaDetailPanelMode.Sources && SourcesPanel?.Visibility != Visibility.Visible);
 
                 if (_isWideModeIndex != layoutIndex || forceSync)
                 {
                     _isWideModeIndex = layoutIndex;
                     _isFirstLayoutApplied = true;
-                    SyncLayout();
+                    OnViewportChanged();
                     QueueInfoPriorityLayout(layoutIndex == 1);
                 }
                 else if (_lastResponsiveWidthBucket != widthBucket || _lastResponsiveHeightBucket != heightBucket)
@@ -710,12 +742,10 @@ namespace ModernIPTVPlayer
         {
             if (textHost == null || _compositor == null) return;
 
-            CompositionService.StopTranslationAnimation(textHost);
             var visual = ElementCompositionPreview.GetElementVisual(textHost);
             visual.StopAnimation(nameof(visual.Opacity));
             
             visual.Opacity = 0f;
-            // Handled by StartTranslationAnimation below
 
             var easing = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 0.9f), new Vector2(0.24f, 1f));
 
@@ -734,7 +764,6 @@ namespace ModernIPTVPlayer
         {
             if (textHost == null || _compositor == null) return;
 
-            CompositionService.StopTranslationAnimation(textHost);
             var visual = ElementCompositionPreview.GetElementVisual(textHost);
             visual.StopAnimation(nameof(visual.Opacity));
 
@@ -746,7 +775,6 @@ namespace ModernIPTVPlayer
             visual.StartAnimation(nameof(visual.Opacity), opacity);
 
             var translation = _compositor.CreateVector3KeyFrameAnimation();
-            // Slide slightly to the right as it fades out
             translation.InsertKeyFrame(1f, new Vector3(8f, 0f, 0f), easing);
             translation.Duration = TimeSpan.FromMilliseconds(110);
             CompositionService.StartTranslationAnimation(textHost, translation, Vector3.Zero);
@@ -805,68 +833,67 @@ namespace ModernIPTVPlayer
             if (button == null) return;
 
             bool modeChanged = lastIconOnlyState != iconOnly;
-            bool currentIconOnly = textHost == null || textHost.Visibility == Visibility.Collapsed;
             int version = ++transitionVersion;
 
-            if (iconOnly && !currentIconOnly)
+            if (modeChanged)
             {
-                // Transitioning to Icon-Only: Start with expanded width and fade out text
-                button.Width = expandedWidth;
-                button.Padding = new Thickness(expandedPadding, 0, expandedPadding, 0);
-                AnimateActionTextOut(textHost);
-                
-                DispatcherQueue.TryEnqueue(async () =>
+                if (iconOnly)
                 {
-                    await Task.Delay(ActionButtonCollapseTextDelayMs);
-                    int currentVersion = ReferenceEquals(button, PlayButton)
-                        ? _playActionTransitionVersion
-                        : _restartActionTransitionVersion;
-                    if (currentVersion != version) return;
+                    // Transitioning to Icon-Only: Start with expanded width and fade out text
+                    AnimateActionTextOut(textHost);
+                    AnimateButtonWidth(button, actionSize, 300);
+                    
+                    DispatcherQueue.TryEnqueue(async () =>
+                    {
+                        // Hide text early in the collapse to prevent overlap as width shrinks
+                        await Task.Delay(80);
+                        
+                        int currentVersion = ReferenceEquals(button, PlayButton)
+                            ? _playActionTransitionVersion
+                            : _restartActionTransitionVersion;
 
-                    SetActionTextVisible(textHost, false);
-                    button.Width = actionSize;
-                    button.Padding = new Thickness(0);
-                    AnimateActionButtonSettle(button);
-                });
-            }
-            else if (!iconOnly && currentIconOnly)
-            {
-                // Transitioning to Expanded: Set layout state immediately to avoid jumping during resize
-                button.Width = expandedWidth;
-                button.Padding = new Thickness(expandedPadding, 0, expandedPadding, 0);
+                        if (currentVersion != version) return;
+
+                        SetActionTextVisible(textHost, false);
+                        button.Padding = new Thickness(0);
+                        AnimateActionButtonSettle(button);
+                    });
+                }
+                else
+                {
+                    // Transitioning to Expanded: Smoothly expand
+                    AnimateButtonWidth(button, expandedWidth, 300);
+                    button.Padding = new Thickness(expandedPadding, 0, expandedPadding, 0);
+                    
+                    // Show textHost immediately and start fade-in animation
+                    SetActionTextVisible(textHost, true);
+                    AnimateActionTextIn(textHost);
+                }
                 
-                // Show textHost immediately and start fade-in animation
-                textHost.Visibility = Visibility.Visible;
-                AnimateActionTextIn(textHost);
+                lastIconOnlyState = iconOnly;
             }
             else
             {
                 // Stable state update (resizing within the same mode)
-                button.Width = iconOnly ? actionSize : expandedWidth;
-                button.Padding = iconOnly ? new Thickness(0) : new Thickness(expandedPadding, 0, expandedPadding, 0);
+                // Only update if we are not currently in the middle of a transition (version check is hard here, so we check physical state)
+                bool isTransitioning = Math.Abs(button.Width - (iconOnly ? actionSize : expandedWidth)) > 5.0 && !double.IsNaN(button.Width);
                 
-                // Ensure text visibility matches mode if not in transition
-                if (textHost != null)
+                if (!isTransitioning)
                 {
-                    if (!iconOnly)
+                    double targetWidth = iconOnly ? actionSize : expandedWidth;
+                    if (Math.Abs(button.Width - targetWidth) > 0.5 && !double.IsNaN(button.Width))
                     {
-                        // In expanded mode: ensure it's visible and opaque. 
-                        // If it's currently hidden or transparent (e.g. from initial load or interrupted animation), fix it.
-                        if (textHost.Visibility == Visibility.Collapsed || textHost.Opacity < 0.9)
-                        {
-                            textHost.Visibility = Visibility.Visible;
-                            textHost.Opacity = 1;
-                            var visual = ElementCompositionPreview.GetElementVisual(textHost);
-                            visual.Opacity = 1f;
-                            // Ensure translation is reset if it's stuck
-                            ElementCompositionPreview.SetIsTranslationEnabled(textHost, true);
-                            visual.Properties.InsertVector3("Translation", Vector3.Zero);
-                        }
+                        button.Width = targetWidth;
                     }
-                    else if (textHost.Visibility == Visibility.Visible)
+                    
+                    button.Padding = iconOnly ? new Thickness(0) : new Thickness(expandedPadding, 0, expandedPadding, 0);
+                    
+                    if (textHost != null)
                     {
-                        // In icon-only mode: ensure it's collapsed.
-                        textHost.Visibility = Visibility.Collapsed;
+                        if (!iconOnly && textHost.Visibility == Visibility.Collapsed)
+                            SetActionTextVisible(textHost, true);
+                        else if (iconOnly && textHost.Visibility == Visibility.Visible)
+                            SetActionTextVisible(textHost, false);
                     }
                 }
             }
@@ -877,8 +904,15 @@ namespace ModernIPTVPlayer
             button.CornerRadius = new CornerRadius(actionSize / 2);
             button.HorizontalContentAlignment = HorizontalAlignment.Center;
             button.VerticalContentAlignment = VerticalAlignment.Center;
+        }
 
-            lastIconOnlyState = iconOnly;
+        private double GetInfoPanelWidth()
+        {
+            if (InfoContainer != null && InfoContainer.ActualWidth > 0)
+            {
+                return InfoContainer.ActualWidth;
+            }
+            return _lastReportedWidth > 0 ? _lastReportedWidth : 400;
         }
 
         private void ApplyInfoPriorityLayout(bool isWide)
@@ -888,17 +922,17 @@ namespace ModernIPTVPlayer
             const double comfortableInfoWidth = 760.0;
             double layoutWidth = isWide ? infoWidth : Math.Min(infoWidth, 430.0);
 
-            double widthFactor = isWide ? Math.Clamp(layoutWidth / comfortableInfoWidth, 0.86, 1.0) : 1.0;
+            double widthFactor = 1.0; // Remove adaptive scaling in Wide mode to keep elements at 100%
             double visualFactor = widthFactor;
 
             bool compactActions = !isWide || layoutWidth < WideInfoCompactThreshold;
             // Keep the primary action controls visually stable in wide mode. Text can collapse
             // when space is tight, but the button diameter should not shrink during panel changes.
-            double actionSize = isWide ? 52 : 48;
-            double actionSpacing = compactActions ? 8 : 12;
-            double playPadding = compactActions ? 14 : 18;
-            double restartPadding = compactActions ? 14 : 16;
-            bool showPlaySubtext = !compactActions && !string.IsNullOrWhiteSpace(PlayButtonSubtext?.Text);
+            double actionSize = 52; // Keep button diameter consistent across all modes to avoid "shrinking" look
+            double actionSpacing = isWide ? 12 : 8; // Stable spacing in Wide mode
+            double playPadding = isWide ? 18 : 14;  // Stable padding in Wide mode
+            double restartPadding = isWide ? 16 : 14;
+            bool showPlaySubtext = !string.IsNullOrWhiteSpace(PlayButtonSubtext?.Text);
             double playExpandedWidth = GetExpandedActionWidth(
                 actionSize,
                 EstimateActionTextWidth(PlayButtonText, PlayButtonSubtext, showPlaySubtext),
@@ -1350,7 +1384,7 @@ namespace ModernIPTVPlayer
                 if (DownloadButton != null) DownloadButton.Visibility = Visibility.Visible;
                 if (CopyLinkButton != null) CopyLinkButton.Visibility = Visibility.Visible;
 
-                SyncLayout();
+                if (_pageLoadState != PageLoadState.Ready) OnViewportChanged();
                 
                 System.Diagnostics.Debug.WriteLine("[INFO-PAGE] UI Visibility restored.");
             }
@@ -1430,7 +1464,6 @@ namespace ModernIPTVPlayer
                     ["target"] = e.SourcePageType?.FullName,
                     ["isLoaded"] = IsLoaded,
                     ["xamlRootReady"] = XamlRoot != null,
-                    ["hasRevealCoordinator"] = _revealCoordinator != null,
                     ["hasLogoReadyTcs"] = _logoReadyTcs != null,
                     ["logoReadyCompleted"] = _logoReadyTcs?.Task.IsCompleted,
                     ["hasMediaInfoPlayer"] = MediaInfoPlayer != null
@@ -1604,6 +1637,7 @@ namespace ModernIPTVPlayer
 
         protected override void OnNavigatedTo(NavigationEventArgs e)
         {
+            var navSw = Stopwatch.StartNew();
             TraceMediaInfo("OnNavigatedTo enter", new Dictionary<string, object?> { ["mode"] = e.NavigationMode.ToString() });
             base.OnNavigatedTo(e);
 
@@ -1613,6 +1647,7 @@ namespace ModernIPTVPlayer
 
             if (e.Parameter is MediaNavigationArgs args)
             {
+                var sw = Stopwatch.StartNew();
                 incomingItem = args.Stream;
                 _shouldAutoResume = args.AutoResume && !isBackNav;
                 
@@ -1631,6 +1666,8 @@ namespace ModernIPTVPlayer
                     // [Senior] Prime the background immediately on the UI thread even if no source object was passed.
                     ApplyHeroBackgroundAction(incomingItem.PosterUrl, "navigation-sync-prime");
                 }
+                sw.Stop();
+                Debug.WriteLine($"[NAV-TIMING] OnNavigatedTo: parameter extraction + hero background: {sw.ElapsedMilliseconds}ms");
             }
             else if (e.Parameter is IMediaStream stream && !string.IsNullOrEmpty(stream.PosterUrl))
             {
@@ -1641,15 +1678,21 @@ namespace ModernIPTVPlayer
 
             if (incomingItem == null) return;
 
+            var sw2 = Stopwatch.StartNew();
             _item = incomingItem;
             _navigationStartTime = DateTime.Now;
 
             // Trigger the orchestrated load session. 
             // This service handles visual preparation, reset, fetch, and reveal.
             _ = LoadDetailsAsync(incomingItem, previousItem: previousItem);
+            sw2.Stop();
+            Debug.WriteLine($"[NAV-TIMING] OnNavigatedTo: LoadDetailsAsync (fire-and-forget): {sw2.ElapsedMilliseconds}ms");
             
+            sw2.Restart();
             StartHeroConnectedAnimation();
             SetupParallax();
+            sw2.Stop();
+            Debug.WriteLine($"[NAV-TIMING] OnNavigatedTo: ConnectedAnimation + Parallax: {sw2.ElapsedMilliseconds}ms");
             
             // Handoff logic (Logic-only/Safe)
             if (App.HandoffPlayer != null)
@@ -1657,22 +1700,99 @@ namespace ModernIPTVPlayer
                 MediaInfoPlayer = App.HandoffPlayer;
                 App.HandoffPlayer = null;
             }
+
+            navSw.Stop();
+            Debug.WriteLine($"[NAV-TIMING] ===== TOTAL OnNavigatedTo: {navSw.ElapsedMilliseconds}ms =====");
         }
 
         private async Task LoadDetailsAsync(IMediaStream item, TmdbMovieResult preFetchedTmdb = null, IMediaStream previousItem = null, int? loadSession = null, UnifiedMetadata prePeekedMetadata = null)
         {
-            TraceMediaInfo("LoadDetailsAsync orchestrated", new Dictionary<string, object?> { ["title"] = item?.Title });
+            TraceMediaInfo("LoadDetailsAsync start", new Dictionary<string, object?> { ["title"] = item?.Title });
             
             if (item == null) return;
 
-            // [PROFESSIONAL ORCHESTRATION]
-            // We delegate the multi-stage lifecycle (reset, fetch, commit, reveal)
-            // to the orchestrator to ensure atomic state transitions.
-            await _lifecycleOrchestrator.StartLoadSessionAsync(item, prePeekedMetadata, previousItem);
+            await LoadDetailsInternalAsync(item, prePeekedMetadata, previousItem);
 
             if (item is Models.Stremio.StremioMediaStream stremioMovie && stremioMovie.Meta?.Type == "movie")
             {
                 _ = PlayStremioContent(stremioMovie.Meta.Id, showGlobalLoading: false, autoPlay: false);
+            }
+        }
+
+        private async Task LoadDetailsInternalAsync(IMediaStream item, UnifiedMetadata prePeekedMetadata, IMediaStream previousItem)
+        {
+            int session = BeginLoadSession();
+
+            ResetPageState();
+            
+            _pageLoadState = PageLoadState.Initial;
+            SetLoadStateInternal(PageLoadState.Loading);
+
+            await PrepareInfoSkeletonForRevealAsync();
+
+            UnifiedMetadata metadata = null;
+            if (prePeekedMetadata != null)
+            {
+                metadata = prePeekedMetadata;
+            }
+            else if (item != null)
+            {
+                try
+                {
+                    metadata = await Services.Metadata.MetadataProvider.Instance.GetMetadataAsync(
+                        item,
+                        Models.Metadata.MetadataContext.Detail,
+                        ct: _pageCts?.Token ?? default);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[INFO-PAGE] Metadata fetch failed: {ex.Message}");
+                }
+            }
+
+            if (metadata != null && Volatile.Read(ref _loadingVersion) == session)
+            {
+                _unifiedMetadata = metadata;
+                await _commitService.CommitAsync(metadata, item);
+            }
+
+            if (Volatile.Read(ref _loadingVersion) == session)
+            {
+                StaggeredRevealContent();
+            }
+        }
+
+        private void ApplyMetadataToUI(UnifiedMetadata metadata)
+        {
+            try
+            {
+                if (metadata == null) return;
+
+                if (YearText != null && !string.IsNullOrEmpty(metadata.Year))
+                {
+                    YearText.Text = metadata.Year;
+                }
+
+                if (OverviewText != null && !string.IsNullOrEmpty(metadata.Overview))
+                {
+                    OverviewText.Text = metadata.Overview;
+                }
+
+                if (GenresText != null && !string.IsNullOrEmpty(metadata.Genres))
+                {
+                    GenresText.Text = metadata.Genres;
+                }
+
+                _ = PopulateCastAndDirectors(metadata);
+
+                if (_item is Models.Stremio.StremioMediaStream stremioStream && stremioStream.Meta?.Type == "series")
+                {
+                    _ = LoadSeriesDataAsync(metadata);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[INFO-PAGE] ApplyMetadataToUI error: {ex.Message}");
             }
         }
 
@@ -1730,7 +1850,6 @@ namespace ModernIPTVPlayer
 
                             if (CastListView != null) CastListView.ItemsSource = CastList;
                             if (NarrowCastListView != null) NarrowCastListView.ItemsSource = CastList;
-                            SyncLayout();
                         }
                         catch (Exception ex)
                         {
@@ -1811,7 +1930,6 @@ namespace ModernIPTVPlayer
                             
                             if (DirectorListView != null) DirectorListView.ItemsSource = DirectorList;
                             if (NarrowDirectorListView != null) NarrowDirectorListView.ItemsSource = DirectorList;
-                            SyncLayout();
                         }
                         catch (Exception ex)
                         {
@@ -1897,7 +2015,7 @@ namespace ModernIPTVPlayer
             Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] IMediaInfoUIProxy.SetLoadState({state}) called. IsNavigatingAway: {_isNavigatingAway}");
             SetLoadStateInternal(state);
         }
-        void IMediaInfoUIProxy.SyncLayout() => SyncLayoutInternal();
+        void IMediaInfoUIProxy.SyncLayout() => OnViewportChanged();
         void IMediaInfoUIProxy.ApplyOverviewTextLayout(bool isWide) => ApplyOverviewTextLayoutInternal(isWide);
         void IMediaInfoUIProxy.StartPrebuffering(string url, double position) {
             Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] IMediaInfoUIProxy.StartPrebuffering called. IsNavigatingAway: {_isNavigatingAway}");
@@ -1932,6 +2050,21 @@ namespace ModernIPTVPlayer
         async Task IMediaInfoUIProxy.PopulateCastAndDirectors(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata) => await PopulateCastAndDirectorsInternal(metadata);
         async Task IMediaInfoUIProxy.LoadSeriesDataAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata) => await LoadSeriesDataAsyncInternal(metadata);
         async Task IMediaInfoUIProxy.UpdateTechnicalBadgesAsync(string url) => await UpdateTechnicalBadgesAsyncInternal(url);
+        void IMediaInfoUIProxy.ShowTechBadgesShimmer() => SetBadgeLoadingState(true);
+        async Task IMediaInfoUIProxy.WaitForPageLoadedAsync()
+        {
+            if (this.IsLoaded) return;
+            var tcs = _pageLoadedTcs;
+            if (tcs != null) await tcs.Task;
+        }
+        void IMediaInfoUIProxy.ShowInfoContainerSkeleton()
+        {
+            if (InfoContainer != null)
+            {
+                InfoContainer.Visibility = Visibility.Visible;
+                InfoContainer.Opacity = 1.0;
+            }
+        }
 
         // Internal Helpers for Thread-Safe Proxy Implementation
         private void SyncActionButtonsInternal(HistoryItem history)
@@ -1992,7 +2125,7 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void SyncLayoutInternal() { if (this.DispatcherQueue.HasThreadAccess) SyncLayout(); else this.DispatcherQueue.TryEnqueue(() => SyncLayout()); }
+        private void SyncLayoutInternal() { if (this.DispatcherQueue.HasThreadAccess) OnViewportChanged(); else this.DispatcherQueue.TryEnqueue(() => OnViewportChanged()); }
         private void ApplyOverviewTextLayoutInternal(bool isWide) { if (this.DispatcherQueue.HasThreadAccess) ApplyOverviewTextLayout(isWide); else this.DispatcherQueue.TryEnqueue(() => ApplyOverviewTextLayout(isWide)); }
         private void StartPrebufferingInternal(string url, double position) { 
             Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] StartPrebufferingInternal called. Thread: {Environment.CurrentManagedThreadId}");
@@ -2007,7 +2140,7 @@ namespace ModernIPTVPlayer
         private void UpdateWatchlistStateInternal(bool? state) { if (this.DispatcherQueue.HasThreadAccess) UpdateWatchlistState(state ?? false); else this.DispatcherQueue.TryEnqueue(() => UpdateWatchlistState(state ?? false)); }
 
         private void PlayButton_ClickInternal(object sender, RoutedEventArgs e) { if (this.DispatcherQueue.HasThreadAccess) PlayButton_Click(sender, e); else this.DispatcherQueue.TryEnqueue(() => PlayButton_Click(sender, e)); }
-        private void MatchTitleSkeletonToContentInternal() { if (this.DispatcherQueue.HasThreadAccess) _revealCoordinator.MatchTitleSkeletonToContent(); else this.DispatcherQueue.TryEnqueue(() => _revealCoordinator.MatchTitleSkeletonToContent()); }
+        private void MatchTitleSkeletonToContentInternal() { if (this.DispatcherQueue.HasThreadAccess) MatchTitleSkeletonToContent(); else this.DispatcherQueue.TryEnqueue(() => MatchTitleSkeletonToContent()); }
 
         private async Task PopulateCastAndDirectorsInternal(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata) 
         { 
@@ -2035,7 +2168,6 @@ namespace ModernIPTVPlayer
         private void ResetPageState()
         {
             Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] ResetPageState START");
-            _lifecycleOrchestrator?.CancelCurrent();
             ResetCollectionsAndBindings();
             ResetActionAndBadgeVisibility();
             ClearMetadataUI();
@@ -2184,8 +2316,6 @@ namespace ModernIPTVPlayer
                 _currentContentStateName = "LoadingState";
                 // VisualStateManager.GoToState(this, "LoadingState", false);
                 _currentContentStateName = "LoadingState";
-                _revealCoordinator?.Initialize();
-                _revealCoordinator?.PrepareForLoading();
 
                 // Avoid showing technical skeletons if there is no URL to probe yet
                 if (string.IsNullOrEmpty(_streamUrl) && TechBadgesShimmer != null)
@@ -2201,7 +2331,7 @@ namespace ModernIPTVPlayer
                 }
                 
                 // Synchronize structural layout (Wide/Narrow)
-                if (!skipSync) SyncLayout();
+                if (!skipSync) OnViewportChanged();
 
                 // Trigger panel-specific shimmers
                 bool isSeries = IsSeriesItem();
@@ -2235,10 +2365,12 @@ namespace ModernIPTVPlayer
             _currentContentStateName = "ReadyState";
             // VisualStateManager.GoToState(this, "ReadyState", false);
             _currentContentStateName = "ReadyState";
-            _revealCoordinator?.ShowReadyImmediate();
             
-            // Final layout sync
-            SyncLayout();
+            if (_pageLoadState != PageLoadState.Ready)
+            {
+                _pageLoadState = PageLoadState.Ready;
+                OnDataCommitted();
+            }
             UpdateTechnicalSectionVisibility(HasVisibleBadges());
         }
 
@@ -2253,57 +2385,86 @@ namespace ModernIPTVPlayer
                 TraceMediaInfo("StaggeredRevealContent enter", new Dictionary<string, object?> { ["state"] = _pageLoadState });
                 if (_pageLoadState == PageLoadState.Ready) return;
 
+                if (!DispatcherQueue.HasThreadAccess)
+                {
+                    DispatcherQueue.TryEnqueue(() => StaggeredRevealContent());
+                    return;
+                }
+
                 System.Diagnostics.Debug.WriteLine($"[INFO-UI] State: REVEALING (Staggered)");
                 _pageLoadState = PageLoadState.Revealing;
 
                 _currentContentStateName = "ReadyState";
-                TraceMediaInfo("StaggeredRevealContent before ReadyState tracking");
                 _currentContentStateName = "ReadyState";
-                TraceMediaInfo("StaggeredRevealContent after ReadyState tracking");
                 
-                // Sync layout immediately to ensure Visibility tags match the new state
-                TraceMediaInfo("StaggeredRevealContent before SyncLayout initial");
-                SyncLayout();
-                TraceMediaInfo("StaggeredRevealContent after SyncLayout initial");
-                TraceMediaInfo("StaggeredRevealContent before RevealAsync");
-                
-                if (_revealCoordinator != null)
-                {
-                    await _revealCoordinator.StartRevealAsync();
-                }
-                
-                TraceMediaInfo("StaggeredRevealContent after RevealAsync");
+                OnDataCommitted();
 
-                // Finalize state after transition. Sync again after Ready is assigned so empty
-                // optional sections stop showing their loading skeletons without waiting for resize.
+                if (InfoContainer != null)
+                {
+                    InfoContainer.Visibility = Visibility.Visible;
+                    InfoContainer.Opacity = 1;
+                }
+
+                if (RootScrollViewer != null)
+                {
+                    RootScrollViewer.Visibility = Visibility.Visible;
+                    RootScrollViewer.Opacity = 1;
+                }
+
+                RevealAllContentPanels();
+
+                await Task.Delay(200);
+
+                CollapseAllShimmers();
+
+                await Task.Delay(100);
+
                 _pageLoadState = PageLoadState.Ready;
                 CollapseEmptyPeopleSkeletons();
-                TraceMediaInfo("StaggeredRevealContent before SyncLayout final");
-                SyncLayout();
-                TraceMediaInfo("StaggeredRevealContent after SyncLayout final");
+                FlushDeferredPanelRequest();
+                OnDataCommitted();
                 RevealReadyPeopleSections();
-                TraceMediaInfo("StaggeredRevealContent after RevealReadyPeopleSections");
+                _currentContentStateName = "ReadyState";
                 System.Diagnostics.Debug.WriteLine($"[INFO-UI] State: READY");
             }
             catch (Exception ex)
             {
-                TraceMediaInfo("StaggeredRevealContent catch", new Dictionary<string, object?>
-                {
-                    ["type"] = ex.GetType().FullName,
-                    ["hresult"] = ex.HResult,
-                    ["message"] = ex.Message,
-                    ["stack"] = ex.StackTrace
-                });
-                System.Diagnostics.Debug.WriteLine($"[INFO-UI] Reveal fallback after exception: {ex}");
+                System.Diagnostics.Debug.WriteLine($"[INFO-UI] Reveal fallback: {ex.Message}");
                 _pageLoadState = PageLoadState.Ready;
                 _currentContentStateName = "ReadyState";
-                // VisualStateManager.GoToState(this, "ReadyState", false);
                 _currentContentStateName = "ReadyState";
                 CollapseEmptyPeopleSkeletons();
-                SyncLayout();
+                CollapseAllShimmers();
+                FlushDeferredPanelRequest();
+                OnDataCommitted();
                 RevealReadyPeopleSections();
-                _revealCoordinator?.ShowReadyImmediate();
             }
+        }
+
+        private void CollapseAllShimmers()
+        {
+            if (TechBadgesShimmer != null) TechBadgesShimmer.Visibility = Visibility.Collapsed;
+            if (MetadataShimmer != null) MetadataShimmer.Visibility = Visibility.Collapsed;
+            if (ActionBarShimmer != null) ActionBarShimmer.Visibility = Visibility.Collapsed;
+            if (OverviewShimmer != null) OverviewShimmer.Visibility = Visibility.Collapsed;
+            if (CastShimmer != null) CastShimmer.Visibility = Visibility.Collapsed;
+            if (DirectorShimmer != null) DirectorShimmer.Visibility = Visibility.Collapsed;
+            if (HeroShimmer != null) HeroShimmer.Visibility = Visibility.Collapsed;
+        }
+
+        private void RevealAllContentPanels()
+        {
+            if (TechBadgesContent != null) TechBadgesContent.Visibility = Visibility.Visible;
+            if (MetadataPanel != null) MetadataPanel.Visibility = Visibility.Visible;
+            if (ActionBarPanel != null) ActionBarPanel.Visibility = Visibility.Visible;
+            if (OverviewPanel != null) OverviewPanel.Visibility = Visibility.Visible;
+            if (GenresText != null && !string.IsNullOrEmpty(GenresText.Text)) GenresText.Visibility = Visibility.Visible;
+            if (OverviewText != null && !string.IsNullOrEmpty(OverviewText.Text)) OverviewText.Visibility = Visibility.Visible;
+            if (CastSection != null && CastList?.Count > 0) CastSection.Visibility = Visibility.Visible;
+            if (DirectorSection != null && DirectorList?.Count > 0) DirectorSection.Visibility = Visibility.Visible;
+            if (IdentityControl != null) IdentityControl.Visibility = Visibility.Visible;
+
+            System.Diagnostics.Debug.WriteLine($"[INFO-UI] RevealAllContentPanels: Metadata={MetadataPanel?.Visibility}, Overview={OverviewPanel?.Visibility}, Identity={IdentityControl?.Visibility}, GenresText='{GenresText?.Text}', OverviewText='{OverviewText?.Text}'");
         }
 
         private void CollapseEmptyPeopleSkeletons()
@@ -2349,16 +2510,11 @@ namespace ModernIPTVPlayer
             TraceMediaInfo("RevealReadyPeopleSections exit");
         }
 
-        private bool IsIdentityRevealReady()
-        {
-            return !_isLogoPending || _isLogoReady || _isLogoFallbackActive;
-        }
-
         private async Task PrepareInfoSkeletonForRevealAsync()
         {
             if (!this.IsLoaded || _pageCts?.IsCancellationRequested == true) return;
 
-            SyncLayout();
+            OnViewportChanged();
             if (!TryUpdateLayout(this, nameof(PrepareInfoSkeletonForRevealAsync))) return;
             
             // Deterministic check: If ActualWidth is still 0, WinUI hasn't performed the layout pass yet.
@@ -2421,77 +2577,6 @@ namespace ModernIPTVPlayer
             {
                 System.Diagnostics.Debug.WriteLine($"[INFO-UI] UpdateLayout error in {caller}: {ex.Message}");
                 return false;
-            }
-        }
-
-        #region IRevealablePage Implementation
-
-        Task IRevealablePage.PrepareInfoSkeletonForRevealAsync() => PrepareInfoSkeletonForRevealAsync();
-        bool IRevealablePage.IsIdentityRevealReady() => IsIdentityRevealReady();
-        void IRevealablePage.MatchTitleSkeletonToContent() => MatchTitleSkeletonToContent();
-
-        FrameworkElement IRevealablePage.TitlePanel => IdentityControl?.TitlePanelElement;
-        FrameworkElement IRevealablePage.TitleShimmer => IdentityControl?.TitleShimmerElement;
-        FrameworkElement IRevealablePage.TechBadgesContent => TechBadgesContent;
-        FrameworkElement IRevealablePage.TechBadgesShimmer => TechBadgesShimmer;
-        FrameworkElement IRevealablePage.MetadataPanel => MetadataPanel;
-        FrameworkElement IRevealablePage.MetadataShimmer => MetadataShimmer;
-        FrameworkElement IRevealablePage.ActionBarPanel => ActionBarPanel;
-        FrameworkElement IRevealablePage.ActionBarShimmer => ActionBarShimmer;
-        FrameworkElement IRevealablePage.OverviewPanel => OverviewPanel;
-        FrameworkElement IRevealablePage.OverviewShimmer => OverviewShimmer;
-        FrameworkElement IRevealablePage.DirectorSection => DirectorSection;
-        FrameworkElement IRevealablePage.DirectorShimmer => DirectorShimmer;
-        FrameworkElement IRevealablePage.CastSection => CastSection;
-        FrameworkElement IRevealablePage.CastShimmer => CastShimmer;
-
-        // Lifecycle & Threading Implementation
-        Microsoft.UI.Dispatching.DispatcherQueue IRevealablePage.DispatcherQueue => this.DispatcherQueue;
-        bool IRevealablePage.IsLoaded => this.IsLoaded;
-
-        async Task IRevealablePage.WaitForIdentityReadyAsync(CancellationToken token)
-        {
-            // #region agent log
-            App.DebugSessionNdjson("MediaInfoPage.xaml.cs:WaitForIdentityReadyAsync",
-                "Identity readiness wait entered",
-                new Dictionary<string, object?>
-                {
-                    ["isNavigatingAway"] = _isNavigatingAway,
-                    ["isLoaded"] = IsLoaded,
-                    ["xamlRootReady"] = XamlRoot != null,
-                    ["tokenCanceled"] = token.IsCancellationRequested,
-                    ["identityReady"] = IsIdentityRevealReady(),
-                    ["hasLogoReadyTcs"] = _logoReadyTcs != null,
-                    ["logoReadyCompleted"] = _logoReadyTcs?.Task.IsCompleted
-                },
-                "H6");
-            // #endregion
-            if (IsIdentityRevealReady()) return;
-
-            _logoReadyTcs ??= new TaskCompletionSource<bool>();
-            
-            // Wait for logo or timeout (750ms is enough for most network logos)
-            var timeoutTask = Task.Delay(750, token);
-            var completedTask = await Task.WhenAny(_logoReadyTcs.Task, timeoutTask);
-
-            if (completedTask == timeoutTask)
-            {
-                // #region agent log
-                App.DebugSessionNdjson("MediaInfoPage.xaml.cs:WaitForIdentityReadyAsync",
-                    "Identity readiness wait timed out",
-                    new Dictionary<string, object?>
-                    {
-                        ["isNavigatingAway"] = _isNavigatingAway,
-                        ["isLoaded"] = IsLoaded,
-                        ["xamlRootReady"] = XamlRoot != null,
-                        ["tokenCanceled"] = token.IsCancellationRequested,
-                        ["identityReady"] = IsIdentityRevealReady(),
-                        ["hasLogoReadyTcs"] = _logoReadyTcs != null,
-                        ["logoReadyCompleted"] = _logoReadyTcs?.Task.IsCompleted
-                    },
-                    "H6");
-                // #endregion
-                TraceMediaInfo("WaitForIdentityReadyAsync timeout");
             }
         }
 
@@ -2742,21 +2827,11 @@ namespace ModernIPTVPlayer
             skeleton.Visibility = Visibility.Visible;
         }
 
-        #endregion
-
 
         internal void IdentityControl_LogoLoadCompleted(object sender, bool success)
         {
             _logoReadyTcs?.TrySetResult(success);
             System.Diagnostics.Debug.WriteLine($"[INFO-PAGE] Logo load completed. Success: {success}");
-            
-            if (success)
-            {
-                DispatcherQueue.TryEnqueue(() => 
-                {
-                    SyncLayout();
-                });
-            }
         }
         
 
@@ -2998,6 +3073,28 @@ namespace ModernIPTVPlayer
             sb.Begin();
         }
 
+        private void AnimateButtonWidth(Button? button, double targetWidth, double durationMs = 250)
+        {
+            if (button == null) return;
+
+            // Use a smooth DoubleAnimation for the Width property
+            var animation = new DoubleAnimation
+            {
+                To = targetWidth,
+                Duration = TimeSpan.FromMilliseconds(durationMs),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                FillBehavior = FillBehavior.Stop // Crucial: Don't lock the property
+            };
+
+            var storyboard = new Storyboard();
+            Storyboard.SetTarget(animation, button);
+            Storyboard.SetTargetProperty(animation, "Width");
+            
+            // Set the final value explicitly when the animation ends to ensure stability
+            storyboard.Completed += (s, e) => { button.Width = targetWidth; };
+            storyboard.Begin();
+        }
+
         private void AnimateReadabilityGradientOpacity(UIElement element, string label, double targetOpacity, double durationMs = 650.0)
         {
             if (element == null) return;
@@ -3227,17 +3324,13 @@ namespace ModernIPTVPlayer
                 if (Seasons.Count == 0)
                 {
                     _isEpisodesLoading = true;
-                    SyncLayout();
-                    _isEpisodesLoading = true;
                     RefreshAllShimmers();
                 }
                 
                 if (unified.Seasons == null || unified.Seasons.Count == 0)
                 {
                     _isEpisodesLoading = false;
-                    _isEpisodesLoading = false;
                     RefreshAllShimmers();
-                    SyncLayout();
                     return;
                 }
 
@@ -3378,7 +3471,6 @@ namespace ModernIPTVPlayer
                 System.Diagnostics.Debug.WriteLine($"[SERIES] LoadSeriesData Error: {ex.Message}");
             }
                 _isEpisodesLoading = false;
-                SyncLayout();
             }
 
         private void SetupStickyScroller()
@@ -3439,6 +3531,13 @@ namespace ModernIPTVPlayer
                 }
 
                 var actionButtons = new Button[] { PlayButton, RestartButton, TrailerButton, DownloadButton, CopyLinkButton, WatchlistButton };
+                
+                // Add children to glide as well
+                UIElement[] glideChildren = { 
+                    PlayButtonIcon, PlayButtonTextStack, 
+                    RestartButtonIcon, RestartButtonTextStack 
+                };
+
                 var centerPointExpression = _compositor.CreateExpressionAnimation("Vector3(this.Target.Size.X / 2, this.Target.Size.Y / 2, 0)");
 
                 foreach (var btn in actionButtons)
@@ -3446,6 +3545,13 @@ namespace ModernIPTVPlayer
                     if (btn == null) continue;
                     var visual = ElementCompositionPreview.GetElementVisual(btn);
                     visual.StartAnimation("CenterPoint", centerPointExpression);
+                    visual.ImplicitAnimations = buttonAnimations;
+                }
+
+                foreach (var child in glideChildren)
+                {
+                    if (child == null) continue;
+                    var visual = ElementCompositionPreview.GetElementVisual(child);
                     visual.ImplicitAnimations = buttonAnimations;
                 }
             }
@@ -4393,16 +4499,13 @@ namespace ModernIPTVPlayer
                     OpenSourcesPanel(PanelChangeReason.SourceCache);
                     ScrollToActiveSource();
                     
-                    // [FIX] Reset fetch state and refresh layout on early return to hide shimmers
                     _isSourcesFetchInProgress = !_isCurrentSourcesComplete; 
-                    SyncLayout();
                     return;
                 }
             }
             else
             {
                 _addonResults?.Clear();
-                SyncLayout();
             }
 
             _sourcesCts?.Cancel();
@@ -4615,9 +4718,6 @@ namespace ModernIPTVPlayer
 
                 // Show panel AFTER population to avoid global shimmer flicker
                 OpenSourcesPanel(PanelChangeReason.SourceFetch);
-                
-                // [FIX] Update layout AFTER population so hasSources=true for IPTV
-                SyncLayout();
 
                 var tasks = new List<Task>();
                 for (int i = 0; i < addons.Count; i++)
@@ -4738,11 +4838,6 @@ namespace ModernIPTVPlayer
                                             // [ROOT CAUSE FIX] Use controller to apply result and trigger correct staggered reveal
                                             var existing = _sourcesPanelController.ApplyAddonResult(baseUrl, addonDisplayName.ToUpper(), processedStreams, sortIndex);
 
-                                            if (SourcesPanel != null && _addonResults.Any(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0)) 
-                                            { 
-                                                SyncLayout(); 
-                                            }
-
                                             var partialSnapshot = _addonResults.Where(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0).Select(CloneAddonViewModel).ToList();
                                             if (partialSnapshot.Count > 0) _stremioSourcesCache[cacheKey] = new StremioSourcesCacheEntry { Addons = partialSnapshot, IsComplete = false };
 
@@ -4828,8 +4923,24 @@ namespace ModernIPTVPlayer
                         if (showGlobalLoading) SetLoadingState(false);
                         _isSourcesFetchInProgress = false; _isCurrentSourcesComplete = true;
                         
-                        System.Diagnostics.Debug.WriteLine($"[INFO-FLOW] Source fetch COMPLETE for {resolvedVideoId}. Results: {_addonResults.Count} addons.");
-                        SyncLayout();
+                        _sourcesPanelController.CompleteLoading();
+                        
+                        System.Diagnostics.Debug.WriteLine($"[INFO-FLOW] Source fetch COMPLETE for {resolvedVideoId}. Results: {_addonResults.Count} addons. Visible streams: {_visibleSourceStreams.Count}");
+                        
+                        if (_visibleSourceStreams.Count > 0)
+                        {
+                            DispatcherQueue.TryEnqueue(() =>
+                            {
+                                if (SourcesRepeater != null)
+                                {
+                                    SourcesRepeater.ItemsSource = null;
+                                    SourcesRepeater.ItemsSource = _visibleSourceStreams;
+                                    System.Diagnostics.Debug.WriteLine($"[SOURCES] ItemsRepeater rebound with {_visibleSourceStreams.Count} items");
+                                }
+                            });
+                        }
+                        
+                        OnDataCommitted();
 
                         if (!_addonResults.Any(a => !a.IsLoading && a.Streams != null && a.Streams.Count > 0))
                         {
@@ -4867,7 +4978,7 @@ namespace ModernIPTVPlayer
                 {
                     if (showGlobalLoading) SetLoadingState(false);
                     _isSourcesFetchInProgress = false;
-                    SyncLayout();
+                    OnDataCommitted();
                 }
                 System.Diagnostics.Debug.WriteLine($"PlayStremio Error: {ex}");
             }
@@ -5736,18 +5847,18 @@ namespace ModernIPTVPlayer
             try
             {
                 // 1. Offset/Translation Animation
+                // 1. Offset/Translation Animation
                 var offsetAnimation = _compositor.CreateVector3KeyFrameAnimation();
                 offsetAnimation.Target = "Offset";
-                offsetAnimation.InsertExpressionKeyFrame(1.0f, "this.FinalValue");
-                offsetAnimation.Duration = TimeSpan.FromMilliseconds(200); // Snappier glide (was 450ms)
-                var easing = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1f));
+                offsetAnimation.Duration = TimeSpan.FromMilliseconds(400); 
+                var easing = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1.0f));
                 offsetAnimation.InsertExpressionKeyFrame(1.0f, "this.FinalValue", easing);
 
                 // 2. Scale Animation
                 var scaleAnimation = _compositor.CreateVector3KeyFrameAnimation();
                 scaleAnimation.Target = "Scale";
                 scaleAnimation.InsertExpressionKeyFrame(1.0f, "this.FinalValue", easing);
-                scaleAnimation.Duration = TimeSpan.FromMilliseconds(200);
+                scaleAnimation.Duration = TimeSpan.FromMilliseconds(350);
 
                 // 3. Opacity Animation
                 var opacityAnimation = _compositor.CreateScalarKeyFrameAnimation();
@@ -5767,13 +5878,23 @@ namespace ModernIPTVPlayer
                 scaleOpacityCollection["Scale"] = scaleAnimation;
                 scaleOpacityCollection["Opacity"] = opacityAnimation;
 
-                // Elements that should "glide" during resize
+                // Elements that should "glide" and "morph" during resize/layout changes
                 UIElement[] glideElements = { 
-                    InfoContainer, InfoColumn, MetadataRibbon, ActionBarPanel, 
+                    InfoContainer, InfoContainerInner, AdaptiveInfoHost, InfoColumn, MetadataRibbon, ActionBarPanel, 
                     CastSection, DirectorSection, 
                     IdentityControl?.TitlePanelElement, IdentityControl?.LogoHost, IdentityControl?.TitleTextBlock,
                     IdentityControl?.IdentityPanel, OverviewPanel, GenresText, MetadataPanel,
-                    IdentityControl?.TitleShimmerElement, MetadataShimmer, ActionBarShimmer, OverviewShimmer
+                    IdentityControl?.TitleShimmerElement, MetadataShimmer, ActionBarShimmer, OverviewShimmer,
+                    EpisodesPanel, SourcesPanel 
+                };
+                
+                // Define which elements get the full Offset animation (gliding/morphing)
+                HashSet<UIElement> offsetGlideElements = new() { 
+                    EpisodesPanel, SourcesPanel, 
+                    InfoContainer, InfoContainerInner, AdaptiveInfoHost, InfoColumn,
+                    ActionBarPanel, MetadataPanel, OverviewPanel, GenresText, 
+                    IdentityControl?.IdentityPanel, IdentityControl?.TitlePanelElement,
+                    MetadataRibbon
                 };
 
                 foreach (var element in glideElements)
@@ -5781,28 +5902,9 @@ namespace ModernIPTVPlayer
                     if (element == null) continue;
                     var visual = ElementCompositionPreview.GetElementVisual(element);
                     
-                    bool isInfoStackElement =
-                        element == InfoContainer ||
-                        element == InfoColumn ||
-                        element == MetadataRibbon ||
-                        element == ActionBarPanel ||
-                        element == CastSection ||
-                        element == DirectorSection ||
-                        element == IdentityControl?.TitlePanelElement ||
-                        element == IdentityControl?.LogoHost ||
-                        element == IdentityControl?.TitleTextBlock ||
-                        element == IdentityControl?.IdentityPanel ||
-                        element == OverviewPanel ||
-                        element == GenresText ||
-                        element == MetadataPanel ||
-                        element == IdentityControl?.TitleShimmerElement ||
-                        element == MetadataShimmer ||
-                        element == ActionBarShimmer ||
-                        element == OverviewShimmer;
-
-                    if (isInfoStackElement)
+                    if (offsetGlideElements.Contains(element))
                     {
-                        visual.ImplicitAnimations = null;
+                        visual.ImplicitAnimations = implicitAnimationCollection;
                     }
                     else
                     {
@@ -6297,16 +6399,19 @@ namespace ModernIPTVPlayer
                 var container = FindParent<ListViewItem>(element);
                 if (container != null) Canvas.SetZIndex(container, 100);
 
+                // Immediate visual feedback
                 var visual = ElementCompositionPreview.GetElementVisual(element);
-                var compositor = visual.Compositor;
-
-                var scaleAnim = compositor.CreateVector3KeyFrameAnimation();
+                var scaleAnim = visual.Compositor.CreateVector3KeyFrameAnimation();
                 scaleAnim.InsertKeyFrame(1f, new System.Numerics.Vector3(1.08f, 1.08f, 1.0f));
                 scaleAnim.Duration = TimeSpan.FromMilliseconds(250);
                 visual.StartAnimation("Scale", scaleAnim);
 
                 // Start hover timer for person card (same pattern as ExpandedCardOverlayController)
                 _pendingPersonSource = element;
+                
+                bool isCardVisible = ActivePersonCard.Visibility == Visibility.Visible;
+                _personHoverTimer.Interval = TimeSpan.FromMilliseconds(isCardVisible ? 700 : 400);
+
                 _personHoverTimer?.Stop();
                 _personHoverTimer?.Start();
             }
@@ -6316,6 +6421,16 @@ namespace ModernIPTVPlayer
         {
             if (sender is FrameworkElement element)
             {
+                try
+                {
+                    var point = e.GetCurrentPoint(element).Position;
+                    if (point.X >= 0 && point.Y >= 0 && point.X <= element.ActualWidth && point.Y <= element.ActualHeight)
+                    {
+                        return;
+                    }
+                }
+                catch { }
+
                 var container = FindParent<ListViewItem>(element);
                 if (container != null) Canvas.SetZIndex(container, 0);
 
@@ -6325,10 +6440,7 @@ namespace ModernIPTVPlayer
                 scaleAnim.Duration = TimeSpan.FromMilliseconds(200);
                 visual.StartAnimation("Scale", scaleAnim);
 
-                // Stop hover timer immediately
                 _personHoverTimer?.Stop();
-
-                // Trigger intelligent close
                 _ = ClosePersonCardAsync();
             }
         }
@@ -6350,9 +6462,23 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void PersonCardOverlay_Tapped(object sender, TappedRoutedEventArgs e)
+        private void RootGrid_PointerPressed(object sender, PointerRoutedEventArgs e)
         {
-            if (!_isPointerOverPersonCard) ClosePersonCard();
+            if (PersonCardOverlay.Visibility == Visibility.Visible && !_isPointerOverPersonCard)
+            {
+                ClosePersonCard();
+            }
+        }
+
+        private bool IsPointerOverElement(FrameworkElement element, PointerRoutedEventArgs e)
+        {
+            if (element == null || element.Visibility != Visibility.Visible || element.XamlRoot == null) return false;
+            try
+            {
+                var point = e.GetCurrentPoint(element).Position;
+                return (point.X >= 0 && point.Y >= 0 && point.X <= element.ActualWidth && point.Y <= element.ActualHeight);
+            }
+            catch { return false; }
         }
 
         private void ActivePersonCard_PointerEntered(object sender, Microsoft.UI.Xaml.Input.PointerRoutedEventArgs e)
@@ -6386,26 +6512,26 @@ namespace ModernIPTVPlayer
             _activePersonAnchorSource = sourceAtRequest;
             _activePersonCardItem = castItem;
 
+            var visual = ElementCompositionPreview.GetElementVisual(ActivePersonCard);
+            bool isAlreadyVisible = ActivePersonCard.Visibility == Visibility.Visible && visual.Opacity > 0.1f;
+
             ActivePersonCard.LoadPersonAsync(castItem.Name, castItem.Character, castItem.FullProfileUrl,
                 _unifiedMetadata?.ImdbId, _item?.TmdbInfo, (stream) => { ClosePersonCard(); Frame.Navigate(typeof(MediaInfoPage), new MediaNavigationArgs(stream)); }, 
                 _lastApplyPrimary);
 
-            // Set invisible before forcing layout to prevent flickering at (0,0) on first show
-            ActivePersonCard.Opacity = 0;
+            if (!isAlreadyVisible) ActivePersonCard.Opacity = 0;
             PersonCardOverlay.Visibility = Visibility.Visible;
             ActivePersonCard.Visibility = Visibility.Visible;
             await WaitForPersonCardLayoutAsync();
             if (_pendingPersonSource != sourceAtRequest || sourceAtRequest == null) return;
 
-            var visual = ElementCompositionPreview.GetElementVisual(ActivePersonCard);
-            bool isAlreadyVisible = ActivePersonCard.Visibility == Visibility.Visible && visual.Opacity > 0.1f;
             PlacePersonCard(sourceAtRequest, animateMove: isAlreadyVisible);
 
             ActivePersonCard.Opacity = 1;
             if (!isAlreadyVisible && visual != null)
             {
                 var compositor = visual.Compositor;
-                visual.StopAnimation("Translation");
+                try { visual.StopAnimation("Translation"); } catch { }
                 try { visual.Properties.InsertVector3("Translation", System.Numerics.Vector3.Zero); } catch { }
                 visual.Scale = new System.Numerics.Vector3(0.85f, 0.85f, 1f);
                 visual.Opacity = 0f;
@@ -6458,12 +6584,22 @@ namespace ModernIPTVPlayer
 
                 double cardWidth = ActivePersonCard.ActualWidth > 0 ? ActivePersonCard.ActualWidth : (ActivePersonCard.Width > 0 ? ActivePersonCard.Width : 420);
                 double cardHeight = ActivePersonCard.ActualHeight > 0 ? ActivePersonCard.ActualHeight : (ActivePersonCard.Height > 0 ? ActivePersonCard.Height : 560);
-                double targetX = position.X + anchor.ActualWidth + 16;
-                double targetY = position.Y - 60;
+                
+                double targetX = position.X + (anchor.ActualWidth / 2) - (cardWidth / 2);
+                double targetY = position.Y - cardHeight - 16;
 
                 const double edgeMargin = 24.0;
-                if (targetX + cardWidth > overlayWidth - edgeMargin) targetX = position.X - cardWidth - 16;
+
+                if (targetY < edgeMargin + 48) 
+                {
+                    targetY = position.Y + anchor.ActualHeight + 16;
+                }
+
+                // Horizontal safety check
                 if (targetX < edgeMargin) targetX = edgeMargin;
+                if (targetX + cardWidth > overlayWidth - edgeMargin) targetX = overlayWidth - cardWidth - edgeMargin;
+
+                // Final vertical safety check
                 if (targetY + cardHeight > overlayHeight - edgeMargin) targetY = overlayHeight - cardHeight - edgeMargin;
                 if (targetY < edgeMargin + 20) targetY = edgeMargin + 20;
 
@@ -6487,11 +6623,11 @@ namespace ModernIPTVPlayer
                 // Set via initialTranslation parameter in StartTranslationAnimation
 
                 var offsetAnim = compositor.CreateVector3KeyFrameAnimation();
-                offsetAnim.Target = "Offset";
+                offsetAnim.Target = "Translation";
                 var cubic = compositor.CreateCubicBezierEasingFunction(new System.Numerics.Vector2(0.33f, 1f), new System.Numerics.Vector2(0.67f, 1f));
                 offsetAnim.InsertKeyFrame(1f, System.Numerics.Vector3.Zero, cubic);
                 offsetAnim.Duration = TimeSpan.FromMilliseconds(280);
-                try { CompositionService.StartTranslationAnimation(HeroContainer, offsetAnim, new System.Numerics.Vector3((float)-deltaX, (float)-deltaY, 0)); } catch { }
+                try { CompositionService.StartTranslationAnimation(ActivePersonCard, offsetAnim, new System.Numerics.Vector3((float)-deltaX, (float)-deltaY, 0)); } catch { }
             }
             catch (Exception ex)
             {
@@ -6510,7 +6646,7 @@ namespace ModernIPTVPlayer
             {
                 await Task.Delay(delayMs, token);
 
-                if (_isPointerOverPersonCard || _isPointerOverCastSection) return;
+                if (_isPointerOverPersonCard) return;
                 
                 ClosePersonCard();
             }
@@ -6520,6 +6656,23 @@ namespace ModernIPTVPlayer
         private void ClosePersonCard()
         {
             _personHoverTimer?.Stop(); 
+
+            // Ensure anchor card's scale is reset
+            if (_activePersonAnchorSource != null)
+            {
+                var anchorVisual = ElementCompositionPreview.GetElementVisual(_activePersonAnchorSource);
+                if (anchorVisual != null)
+                {
+                    var resetScale = anchorVisual.Compositor.CreateVector3KeyFrameAnimation();
+                    resetScale.InsertKeyFrame(1f, new System.Numerics.Vector3(1.0f, 1.0f, 1.0f));
+                    resetScale.Duration = TimeSpan.FromMilliseconds(200);
+                    anchorVisual.StartAnimation("Scale", resetScale);
+
+                    var container = FindParent<ListViewItem>(_activePersonAnchorSource);
+                    if (container != null) Canvas.SetZIndex(container, 0);
+                }
+            }
+
             _pendingPersonSource = null;
             _activePersonAnchorSource = null;
             _activePersonCardItem = null;
@@ -6563,20 +6716,6 @@ namespace ModernIPTVPlayer
             }
         }
 
-        private void CastListView_PointerEntered(object sender, PointerRoutedEventArgs e)
-        {
-            _isPointerOverCastSection = true;
-            _personCloseCts?.Cancel();
-            _personCloseCts?.Dispose();
-            _personCloseCts = null;
-        }
-
-        private void CastListView_PointerExited(object sender, PointerRoutedEventArgs e)
-        {
-            _isPointerOverCastSection = false;
-            _ = ClosePersonCardAsync(600);
-        }
-
         private T FindParent<T>(DependencyObject child) where T : DependencyObject
         {
             DependencyObject parentObject = VisualTreeHelper.GetParent(child);
@@ -6614,8 +6753,11 @@ namespace ModernIPTVPlayer
                     IdentityControl.TitleTextBlock.Visibility = Visibility.Visible;
                 }
 
-                // Let SyncLayout handle all Visibility and Opacity
-                SyncLayout();
+                // Let SyncLayout handle all Visibility and Opacity (only if state changed)
+                if (_pageLoadState != PageLoadState.Ready || _lastSyncedEpisodeId != (_selectedEpisode?.Id ?? ""))
+                {
+                    OnIdentityChanged();
+                }
             });
         }
 
@@ -6714,12 +6856,12 @@ namespace ModernIPTVPlayer
 
         private void FinalizeLogoReady(string url)
         {
+            bool stateChanged = !_isLogoReady;
             _isLogoReady = true;
             _isLogoPending = false;
             _isLogoFallbackActive = false;
             if (IdentityControl?.TitleTextBlock != null && _selectedEpisode == null) IdentityControl.TitleTextBlock.Visibility = Visibility.Collapsed;
-            SyncLayout();
-            _ = _revealCoordinator?.RevealIdentityOnlyAsync();
+            if (stateChanged) OnIdentityChanged();
         }
 
         private void HandleLogoLoadFailure(string url)
@@ -6727,6 +6869,7 @@ namespace ModernIPTVPlayer
             DispatcherQueue.TryEnqueue(() =>
             {
                 if (_currentLogoUrl != url) return;
+                bool stateChanged = !_isLogoFallbackActive;
                 _currentLogoUrl = null;
                 _isLogoReady = false;
                 _isLogoPending = false;
@@ -6736,8 +6879,7 @@ namespace ModernIPTVPlayer
                     if (IdentityControl.LogoHost != null) IdentityControl.LogoHost.Visibility = Visibility.Collapsed;
                     if (IdentityControl.TitleTextBlock != null) IdentityControl.TitleTextBlock.Visibility = Visibility.Visible;
                 }
-                SyncLayout();
-                _ = _revealCoordinator?.RevealIdentityOnlyAsync();
+                if (stateChanged) OnIdentityChanged();
                 System.Diagnostics.Debug.WriteLine($"[INFO-FLOW] Logo load failed - falling back to title text.");
             });
         }
@@ -6745,132 +6887,14 @@ namespace ModernIPTVPlayer
 
         private async Task HideSourcesPanelAsync()
         {
-            if (SourcesPanel == null || _isSourcesPanelHidden) return;
-
-            _isSourcesPanelHidden = true;
-            
-            // Enable high-performance translation/scale and get visuals
-            ElementCompositionPreview.SetIsTranslationEnabled(SourcesPanel, true);
-            var visual = ElementCompositionPreview.GetElementVisual(SourcesPanel);
-            var contentVisual = ElementCompositionPreview.GetElementVisual(SourcesPanelInnerContent);
-            var listVisual = ElementCompositionPreview.GetElementVisual(SourcesRepeater);
-            var compositor = visual.Compositor;
-
-            // Step 1: Prepare for Perfect Unsquashed Scaling (Expression-based)
-            float width = (float)SourcesPanel.ActualWidth;
-            float height = (float)SourcesPanel.ActualHeight;
-            visual.CenterPoint = new Vector3(width / 2f, height / 2f, 0);
-            contentVisual.CenterPoint = new Vector3(width / 2f, height / 2f, 0);
-
-            // Use ExpressionAnimation for perfect, distortion-free synchronization
-            var invScaleExpr = compositor.CreateExpressionAnimation("Vector3(1, 1.0 / panel.Scale.Y, 1)");
-            invScaleExpr.SetReferenceParameter("panel", visual);
-            contentVisual.StartAnimation("Scale", invScaleExpr);
-
-            float targetScale = 0.35f;
-            var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1f));
-
-            // Animate only the Panel Scale
-            var scaleAnim = compositor.CreateScalarKeyFrameAnimation();
-            scaleAnim.InsertKeyFrame(1f, targetScale, easing);
-            scaleAnim.Duration = TimeSpan.FromMilliseconds(550);
-
-            // Animate List Fade
-            var fadeOut = compositor.CreateScalarKeyFrameAnimation();
-            fadeOut.InsertKeyFrame(1f, 0f, easing);
-            fadeOut.Duration = TimeSpan.FromMilliseconds(350);
-
-            visual.StartAnimation("Scale.Y", scaleAnim);
-            listVisual.StartAnimation("Opacity", fadeOut);
-
-            await Task.Delay(450);
-
-            // Step 2: Slide Out (Translation.X) - Slower and more elegant
-            var slideOut = compositor.CreateVector3KeyFrameAnimation();
-            slideOut.InsertKeyFrame(1f, new Vector3(1000, 0, 0), easing); 
-            slideOut.Duration = TimeSpan.FromMilliseconds(650);
-            slideOut.StopBehavior = AnimationStopBehavior.LeaveCurrentValue;
-
-            var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
-            CompositionService.StartTranslationAnimation(SourcesPanel, slideOut, Vector3.Zero);
-            batch.End();
-
-            // Show handle earlier (around mid-way) with a gentle fade
-            await Task.Delay(400);
-            if (SourcesShowHandle != null)
-            {
-                SourcesShowHandle.Visibility = Visibility.Visible;
-                var handleVisual = ElementCompositionPreview.GetElementVisual(SourcesShowHandle);
-                var handleFade = compositor.CreateScalarKeyFrameAnimation();
-                handleFade.InsertKeyFrame(0f, 0f);
-                handleFade.InsertKeyFrame(1f, 1f, easing);
-                handleFade.Duration = TimeSpan.FromMilliseconds(450);
-                handleVisual.StartAnimation("Opacity", handleFade);
-            }
+            if (_panelOwner == null) return;
+            await _panelOwner.HideSourcesPanelAnimatedAsync();
         }
 
         private async Task ShowSourcesPanelAsync()
         {
-            if (SourcesPanel == null || !_isSourcesPanelHidden) return;
-
-            _isSourcesPanelHidden = false;
-            
-            // Fade out handle gracefully
-            if (SourcesShowHandle != null)
-            {
-                var handleVisual = ElementCompositionPreview.GetElementVisual(SourcesShowHandle);
-                var hFadeOut = handleVisual.Compositor.CreateScalarKeyFrameAnimation();
-                hFadeOut.InsertKeyFrame(1f, 0f);
-                hFadeOut.Duration = TimeSpan.FromMilliseconds(300);
-                handleVisual.StartAnimation("Opacity", hFadeOut);
-                await Task.Delay(250);
-                SourcesShowHandle.Visibility = Visibility.Collapsed;
-            }
-
-            var visual = ElementCompositionPreview.GetElementVisual(SourcesPanel);
-            var contentVisual = ElementCompositionPreview.GetElementVisual(SourcesPanelInnerContent);
-            var listVisual = ElementCompositionPreview.GetElementVisual(SourcesRepeater);
-            var compositor = visual.Compositor;
-            ElementCompositionPreview.SetIsTranslationEnabled(SourcesPanel, true);
-
-            // [FIX] Update CenterPoint for Resize/Fullscreen stability
-            float width = (float)SourcesPanel.ActualWidth;
-            float height = (float)SourcesPanel.ActualHeight;
-            visual.CenterPoint = new Vector3(width / 2f, height / 2f, 0);
-            contentVisual.CenterPoint = new Vector3(width / 2f, height / 2f, 0);
-
-            var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.1f, 0.9f), new Vector2(0.2f, 1f));
-
-            // Ensure Expression is active
-            var invScaleExpr = compositor.CreateExpressionAnimation("Vector3(1, 1.0 / panel.Scale.Y, 1)");
-            invScaleExpr.SetReferenceParameter("panel", visual);
-            contentVisual.StartAnimation("Scale", invScaleExpr);
-
-            // Ensure content is hidden during the slide-in phase
-            listVisual.Opacity = 0f;
-            visual.Scale = new Vector3(1f, 0.35f, 1f);
-
-            // Step 1: Slide In
-            var slideIn = compositor.CreateVector3KeyFrameAnimation();
-            slideIn.InsertKeyFrame(1f, new Vector3(0, 0, 0), easing);
-            slideIn.Duration = TimeSpan.FromMilliseconds(850); 
-            slideIn.StopBehavior = AnimationStopBehavior.LeaveCurrentValue;
-            
-            CompositionService.StartTranslationAnimation(SourcesPanel, slideIn, new Vector3(1000, 0, 0));
-
-            await Task.Delay(750);
-
-            // Step 2: Restore Unsquashed Scaling
-            var restoreScale = compositor.CreateScalarKeyFrameAnimation();
-            restoreScale.InsertKeyFrame(1f, 1.0f, easing);
-            restoreScale.Duration = TimeSpan.FromMilliseconds(550);
-
-            var fadeIn = compositor.CreateScalarKeyFrameAnimation();
-            fadeIn.InsertKeyFrame(1f, 1.0f, easing);
-            fadeIn.Duration = TimeSpan.FromMilliseconds(450);
-
-            visual.StartAnimation("Scale.Y", restoreScale);
-            listVisual.StartAnimation("Opacity", fadeIn);
+            if (_panelOwner == null) return;
+            await _panelOwner.ShowSourcesPanelAnimatedAsync();
         }
 
         private async void SourcesShowHandle_Tapped(object sender, TappedRoutedEventArgs e)
@@ -6880,67 +6904,18 @@ namespace ModernIPTVPlayer
 
         private void SourcesShowHandle_ManipulationStarted(object sender, ManipulationStartedRoutedEventArgs e)
         {
-            if (SourcesPanel == null) return;
-            
-            // Re-assert ExpressionAnimation for high-performance pulling
-            var visual = ElementCompositionPreview.GetElementVisual(SourcesPanel);
-            var contentVisual = ElementCompositionPreview.GetElementVisual(SourcesPanelInnerContent);
-            var invScaleExpr = visual.Compositor.CreateExpressionAnimation("Vector3(1, 1.0 / panel.Scale.Y, 1)");
-            invScaleExpr.SetReferenceParameter("panel", visual);
-            contentVisual.StartAnimation("Scale", invScaleExpr);
+            _panelOwner?.ReassertUnsquashExpression();
         }
 
         private void SourcesShowHandle_ManipulationDelta(object sender, ManipulationDeltaRoutedEventArgs e)
         {
-            if (SourcesPanel == null) return;
-
-            var visual = ElementCompositionPreview.GetElementVisual(SourcesPanel);
-            var contentVisual = ElementCompositionPreview.GetElementVisual(SourcesPanelInnerContent);
-            var listVisual = ElementCompositionPreview.GetElementVisual(SourcesRepeater);
-
-            visual.Properties.TryGetVector3("Translation", out var currentTrans);
-            float newX = currentTrans.X + (float)e.Delta.Translation.X;
-
-            if (newX < 0) newX = 0;
-            if (newX > 1000) newX = 1000;
-
-            // Use initialTranslation if needed, but here we just start it
-
-            // Keep it collapsed and content hidden during the manual pull
-            // Content reveal should only happen in ShowSourcesPanelAsync after commitment
-            visual.CenterPoint = new Vector3((float)SourcesPanel.ActualWidth / 2f, (float)SourcesPanel.ActualHeight / 2f, 0);
-            visual.Scale = new Vector3(1f, 0.35f, 1f);
-            listVisual.Opacity = 0f;
-            
-            var invScaleExpr = visual.Compositor.CreateExpressionAnimation("Vector3(1, 1.0 / panel.Scale.Y, 1)");
-            invScaleExpr.SetReferenceParameter("panel", visual);
-            contentVisual.StartAnimation("Scale", invScaleExpr);
-        }
-
-        private async void SourcesShowHandle_ManipulationCompleted(object sender, ManipulationCompletedRoutedEventArgs e)
-        {
-            if (SourcesPanel == null) return;
-
-            var visual = ElementCompositionPreview.GetElementVisual(SourcesPanel);
-            visual.Properties.TryGetVector3("Translation", out var currentTrans);
-            
-            // Lower threshold: 15% pull (150px) is enough to trigger restore
-            if (currentTrans.X < 850) 
-            {
-                await ShowSourcesPanelAsync();
-            }
-            else
-            {
-                _isSourcesPanelHidden = false; 
-                await HideSourcesPanelAsync();
-            }
+            _panelOwner?.HandleSourcesShowHandlePull(e.Delta.Translation.X);
         }
 
         private async void BtnHideSources_Click(object sender, RoutedEventArgs e)
         {
             if (ActualWidth < LayoutAdaptiveThreshold)
             {
-                _sourcesPanelAnimator.ResetVisuals();
                 if (ResolveCurrentContentKind() == MediaContentKind.Series)
                 {
                     OpenEpisodesPanel(PanelChangeReason.BackToEpisodes);
@@ -6952,7 +6927,7 @@ namespace ModernIPTVPlayer
                 return;
             }
 
-            if (!_isSourcesPanelHidden)
+            if (_panelOwner != null && !_panelOwner.IsSourcesPanelHidden)
             {
                 await HideSourcesPanelAsync();
             }
@@ -6960,13 +6935,29 @@ namespace ModernIPTVPlayer
 
         private void BtnCloseSources_Click(object sender, RoutedEventArgs e)
         {
-            _isSourcesPanelHidden = false; // Reset hidden state when fully closing
             DeselectEpisode();
         }
 
         private void BtnBackToEpisodes_Click(object sender, RoutedEventArgs e)
         {
             DeselectEpisode();
+        }
+
+        private async void SourcesShowHandle_ManipulationCompleted(object sender, ManipulationCompletedRoutedEventArgs e)
+        {
+            if (_panelOwner == null) return;
+
+            var visual = ElementCompositionPreview.GetElementVisual(SourcesPanel);
+            visual.Properties.TryGetVector3("Translation", out var currentTrans);
+
+            if (currentTrans.X < 850)
+            {
+                await ShowSourcesPanelAsync();
+            }
+            else
+            {
+                await HideSourcesPanelAsync();
+            }
         }
 
         private T FindVisualChild<T>(DependencyObject obj) where T : DependencyObject

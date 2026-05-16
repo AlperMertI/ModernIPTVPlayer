@@ -26,6 +26,7 @@
                 <Grid Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center" Width="90" Height="140">
                     <Border x:Name="PosterFrame" CornerRadius="6" Height="130" Background="#1AFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center">
                         <Grid>
+                            <local:ShimmerCard x:Name="ItemShimmer" Visibility="Visible" CornerRadius="6"/>
                             <Image x:Name="FilmPoster" Source="{x:Bind Poster}" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
                         </Grid>
                     </Border>
@@ -43,6 +44,7 @@
                 <Grid Grid.Row="0" HorizontalAlignment="Center" VerticalAlignment="Center" Width="104" Height="164">
                     <Border x:Name="PosterFrame" CornerRadius="7" Height="152" Background="#1AFFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center">
                         <Grid>
+                            <local:ShimmerCard x:Name="ItemShimmer" Visibility="Visible" CornerRadius="7"/>
                             <Image x:Name="FilmPoster" Source="{x:Bind Poster}" Stretch="UniformToFill" Opacity="0" ImageOpened="Image_ImageOpened"/>
                         </Grid>
                     </Border>
@@ -77,15 +79,18 @@
                         <Setter Target="FilmographyListView.ItemTemplate" Value="{StaticResource FilmographyItemTemplateStandard}"/>
                         <Setter Target="FilmographyListView.MaxHeight" Value="175"/>
                         <Setter Target="FilmographyListView.Padding" Value="0,5,0,10"/>
-                        <Setter Target="FilmographyShimmer.Height" Value="130"/>
-                        <Setter Target="ShimmerB1.Width" Value="90"/>
-                        <Setter Target="ShimmerB1.Height" Value="130"/>
+                        <Setter Target="FilmographyShimmer.Height" Value="175"/>
+                        <Setter Target="ShimmerF1.Width" Value="90"/>
+                        <Setter Target="ShimmerF1.Height" Value="130"/>
+                        <Setter Target="ShimmerF1.CornerRadius" Value="6"/>
                         <Setter Target="ShimmerB1.CornerRadius" Value="6"/>
-                        <Setter Target="ShimmerB2.Width" Value="90"/>
-                        <Setter Target="ShimmerB2.Height" Value="130"/>
+                        <Setter Target="ShimmerF2.Width" Value="90"/>
+                        <Setter Target="ShimmerF2.Height" Value="130"/>
+                        <Setter Target="ShimmerF2.CornerRadius" Value="6"/>
                         <Setter Target="ShimmerB2.CornerRadius" Value="6"/>
-                        <Setter Target="ShimmerB3.Width" Value="90"/>
-                        <Setter Target="ShimmerB3.Height" Value="130"/>
+                        <Setter Target="ShimmerF3.Width" Value="90"/>
+                        <Setter Target="ShimmerF3.Height" Value="130"/>
+                        <Setter Target="ShimmerF3.CornerRadius" Value="6"/>
                         <Setter Target="ShimmerB3.CornerRadius" Value="6"/>
                     </VisualState.Setters>
                 </VisualState>
@@ -104,15 +109,18 @@
                         <Setter Target="FilmographyListView.ItemTemplate" Value="{StaticResource FilmographyItemTemplateMinimalist}"/>
                         <Setter Target="FilmographyListView.MaxHeight" Value="242"/>
                         <Setter Target="FilmographyListView.Padding" Value="0,8,0,6"/>
-                        <Setter Target="FilmographyShimmer.Height" Value="152"/>
-                        <Setter Target="ShimmerB1.Width" Value="104"/>
-                        <Setter Target="ShimmerB1.Height" Value="152"/>
+                        <Setter Target="FilmographyShimmer.Height" Value="242"/>
+                        <Setter Target="ShimmerF1.Width" Value="104"/>
+                        <Setter Target="ShimmerF1.Height" Value="152"/>
+                        <Setter Target="ShimmerF1.CornerRadius" Value="7"/>
                         <Setter Target="ShimmerB1.CornerRadius" Value="7"/>
-                        <Setter Target="ShimmerB2.Width" Value="104"/>
-                        <Setter Target="ShimmerB2.Height" Value="152"/>
+                        <Setter Target="ShimmerF2.Width" Value="104"/>
+                        <Setter Target="ShimmerF2.Height" Value="152"/>
+                        <Setter Target="ShimmerF2.CornerRadius" Value="7"/>
                         <Setter Target="ShimmerB2.CornerRadius" Value="7"/>
-                        <Setter Target="ShimmerB3.Width" Value="104"/>
-                        <Setter Target="ShimmerB3.Height" Value="152"/>
+                        <Setter Target="ShimmerF3.Width" Value="104"/>
+                        <Setter Target="ShimmerF3.Height" Value="152"/>
+                        <Setter Target="ShimmerF3.CornerRadius" Value="7"/>
                         <Setter Target="ShimmerB3.CornerRadius" Value="7"/>
                     </VisualState.Setters>
                 </VisualState>
@@ -220,21 +228,36 @@
                                 </ListView.ItemTemplate>
                             </ListView>
 
-                            <Grid x:Name="FilmographyShimmer" Visibility="Collapsed" Height="130" VerticalAlignment="Top" Margin="0,5,0,0">
+                            <Grid x:Name="FilmographyShimmer" Visibility="Collapsed" Height="175" VerticalAlignment="Top" Margin="0">
                                 <ScrollViewer HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Hidden" VerticalScrollMode="Disabled" Padding="0">
-                                    <StackPanel Orientation="Horizontal" Spacing="12">
-                                        <StackPanel Spacing="8" Width="Auto">
-                                            <local:ShimmerCard x:Name="ShimmerB1" Width="90" Height="130" CornerRadius="6" Opacity="0.96"/>
-                                            <Border Style="{StaticResource ShimmerBlock}" Width="60" Height="10" HorizontalAlignment="Left" Opacity="0.42"/>
-                                        </StackPanel>
-                                        <StackPanel Spacing="8" Width="Auto">
-                                            <local:ShimmerCard x:Name="ShimmerB2" Width="90" Height="130" CornerRadius="6" Opacity="0.82"/>
-                                            <Border Style="{StaticResource ShimmerBlock}" Width="50" Height="10" HorizontalAlignment="Left" Opacity="0.34"/>
-                                        </StackPanel>
-                                        <StackPanel Spacing="8" Width="Auto">
-                                            <local:ShimmerCard x:Name="ShimmerB3" Width="90" Height="130" CornerRadius="6" Opacity="0.9"/>
-                                            <Border Style="{StaticResource ShimmerBlock}" Width="70" Height="10" HorizontalAlignment="Left" Opacity="0.38"/>
-                                        </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="0">
+                                        <!-- Shimmer Item 1 -->
+                                        <Grid Width="106">
+                                            <StackPanel Spacing="6" HorizontalAlignment="Center">
+                                                <Border x:Name="ShimmerF1" CornerRadius="6" Width="90" Height="130" Background="#1AFFFFFF">
+                                                    <local:ShimmerCard x:Name="ShimmerB1" CornerRadius="6"/>
+                                                </Border>
+                                                <Border Style="{StaticResource ShimmerBlock}" Width="70" Height="10" HorizontalAlignment="Center" Opacity="0.4"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <!-- Shimmer Item 2 -->
+                                        <Grid Width="106">
+                                            <StackPanel Spacing="6" HorizontalAlignment="Center">
+                                                <Border x:Name="ShimmerF2" CornerRadius="6" Width="90" Height="130" Background="#1AFFFFFF">
+                                                    <local:ShimmerCard x:Name="ShimmerB2" CornerRadius="6" Opacity="0.8"/>
+                                                </Border>
+                                                <Border Style="{StaticResource ShimmerBlock}" Width="60" Height="10" HorizontalAlignment="Center" Opacity="0.3"/>
+                                            </StackPanel>
+                                        </Grid>
+                                        <!-- Shimmer Item 3 -->
+                                        <Grid Width="106">
+                                            <StackPanel Spacing="6" HorizontalAlignment="Center">
+                                                <Border x:Name="ShimmerF3" CornerRadius="6" Width="90" Height="130" Background="#1AFFFFFF">
+                                                    <local:ShimmerCard x:Name="ShimmerB3" CornerRadius="6" Opacity="0.9"/>
+                                                </Border>
+                                                <Border Style="{StaticResource ShimmerBlock}" Width="80" Height="10" HorizontalAlignment="Center" Opacity="0.35"/>
+                                            </StackPanel>
+                                        </Grid>
                                     </StackPanel>
                                 </ScrollViewer>
                             </Grid>

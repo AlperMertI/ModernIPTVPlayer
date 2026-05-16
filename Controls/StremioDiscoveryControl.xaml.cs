@@ -177,7 +177,6 @@ namespace ModernIPTVPlayer.Controls
         {
             public List<CatalogRowViewModel> Rows { get; set; } = new();
             public Dictionary<string, RowState> RowStates { get; set; } = new();
-            public Dictionary<string, System.Collections.IList> RowItemsBuffer { get; set; } = new();
             public List<string> HeroPriorityOrder { get; set; } = new();
             public (Windows.UI.Color Primary, Windows.UI.Color Secondary)? HeroColors { get; set; }
         }
@@ -193,6 +192,9 @@ namespace ModernIPTVPlayer.Controls
 
         private readonly System.Threading.Channels.Channel<EnrichmentTask> _enrichmentChannel = 
             System.Threading.Channels.Channel.CreateUnboundedPrioritized<EnrichmentTask>();
+
+        private readonly HashSet<string> _enrichedRowIds = new();
+        private readonly object _enrichedRowsLock = new();
 
         private bool _isWorkerRunning = false;
         private const int STAGGER_DELAY_MS = 50; 
@@ -703,6 +705,12 @@ namespace ModernIPTVPlayer.Controls
 
             if (row.RowStyle != "Landscape" && row.RowStyle != "Spotlight" && row.RowStyle != "Hero") return Task.CompletedTask;
 
+            lock (_enrichedRowsLock)
+            {
+                if (_enrichedRowIds.Contains(row.RowId)) return Task.CompletedTask;
+                _enrichedRowIds.Add(row.RowId);
+            }
+
             var targetContext = context;
             if (row.RowStyle == "Landscape") targetContext = Models.Metadata.MetadataContext.Landscape;
             else if (row.RowStyle == "Spotlight") targetContext = Models.Metadata.MetadataContext.Spotlight;
@@ -723,8 +731,6 @@ namespace ModernIPTVPlayer.Controls
 
             foreach (var stream in streams)
             {
-                // [Professional Fix] Check global cache before queuing. If we already have the data 
-                // in RAM or Disk for this ID, skip the background worker task entirely.
                 if (Services.Metadata.MetadataProvider.Instance.TryPeekMetadata(stream, targetContext) != null) continue;
 
                 _enrichmentChannel.Writer.TryWrite(new EnrichmentTask(stream, targetContext, priority));
@@ -820,10 +826,10 @@ namespace ModernIPTVPlayer.Controls
                     lock (_rowItemsBuffer)
                     {
                         _rowStates = new Dictionary<string, RowState>(cachedState.RowStates);
-                        _rowItemsBuffer = new Dictionary<string, System.Collections.IList>(cachedState.RowItemsBuffer);
                     }
 
                     _discoveryRows.Clear();
+                    lock (_enrichedRowsLock) _enrichedRowIds.Clear();
                     // Batch addition to avoid excessive layout passes
                     HeroPerfLog($"[CACHE-RESTORE] Found {cachedState.Rows.Count} rows in memory cache");
                     foreach (var row in cachedState.Rows)
@@ -881,6 +887,7 @@ namespace ModernIPTVPlayer.Controls
                     // #endregion
                     _heroPriorityOrder.Clear(); 
                     _discoveryRows.Clear();
+                    lock (_enrichedRowsLock) _enrichedRowIds.Clear();
                     lock (_rowItemsBuffer)
                     {
                         _rowStates.Clear();
@@ -1253,7 +1260,6 @@ namespace ModernIPTVPlayer.Controls
             lock (_rowItemsBuffer)
             {
                 state.RowStates = new Dictionary<string, RowState>(_rowStates);
-                state.RowItemsBuffer = new Dictionary<string, System.Collections.IList>(_rowItemsBuffer);
             }
 
             _contentCache[contentType] = state;

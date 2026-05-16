@@ -20,6 +20,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         Seasons = 1L << 11,
         OriginalTitle = 1L << 12,
         Gallery = 1L << 13,
-        CastPortraits = 1L << 14
+        CastPortraits = 1L << 14,
+        TechBadges = 1L << 15
     }
 }

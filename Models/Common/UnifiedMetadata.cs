@@ -86,12 +86,12 @@ namespace ModernIPTVPlayer.Models.Metadata
         public bool IsAvailableOnIptv { get; set; }
         public bool IsFromIptv { get; set; }
 
-        [JsonPropertyName("iptvVods")] public System.Text.Json.JsonElement IptvVodsJson { set => (_ivodsOff, _ivodsLen) = MetadataBuffer.StoreJson(value.GetRawText()); }
+        [JsonPropertyName("iptvVods")] public System.Text.Json.JsonElement IptvVodsJson { set => (_ivodsOff, _ivodsLen) = value.ValueKind != System.Text.Json.JsonValueKind.Undefined ? MetadataBuffer.StoreJson(value.GetRawText()) : (-1, 0); }
         private int _ivodsOff = -1, _ivodsLen;
         private List<VodStream> _iptvVods;
         [JsonIgnore] public List<VodStream> IptvVods { get => _iptvVods ??= DeserializeList(_ivodsOff, _ivodsLen, Services.Json.AppJsonContext.Default.ListVodStream); set { _iptvVods = value; var r = SerializeList(value, Services.Json.AppJsonContext.Default.ListVodStream); _ivodsOff = r.Offset; _ivodsLen = r.Length; } }
 
-        [JsonPropertyName("iptvSeries")] public System.Text.Json.JsonElement IptvSeriesJson { set => (_iseriesOff, _iseriesLen) = MetadataBuffer.StoreJson(value.GetRawText()); }
+        [JsonPropertyName("iptvSeries")] public System.Text.Json.JsonElement IptvSeriesJson { set => (_iseriesOff, _iseriesLen) = value.ValueKind != System.Text.Json.JsonValueKind.Undefined ? MetadataBuffer.StoreJson(value.GetRawText()) : (-1, 0); }
         private int _iseriesOff = -1, _iseriesLen;
         private List<SeriesStream> _iptvSeries;
         [JsonIgnore] public List<SeriesStream> IptvSeries { get => _iptvSeries ??= DeserializeList(_iseriesOff, _iseriesLen, Services.Json.AppJsonContext.Default.ListSeriesStream); set { _iptvSeries = value; var r = SerializeList(value, Services.Json.AppJsonContext.Default.ListSeriesStream); _iseriesOff = r.Offset; _iseriesLen = r.Length; } }
@@ -116,6 +116,49 @@ namespace ModernIPTVPlayer.Models.Metadata
         [JsonIgnore] public HashSet<string> ProbedAddons { get; set; } = new HashSet<string>();
         [JsonIgnore] public string DurationFormatted => Runtime;
 
+        // --- Cached Section Keys (Phase 2.1) ---
+        private string? _identityKey;
+        [JsonIgnore] public string IdentityKey => _identityKey ??= ComputeIdentityKey();
+        private string ComputeIdentityKey() => $"{Title}|{SubTitle}|{OriginalTitle}|{LogoUrl}";
+
+        private string? _detailsKey;
+        [JsonIgnore] public string DetailsKey => _detailsKey ??= ComputeDetailsKey();
+        private string ComputeDetailsKey() => $"{Overview}|{Year}|{Genres}|{Runtime}|{Rating}";
+
+        private string? _actionsKey;
+        [JsonIgnore] public string ActionsKey => _actionsKey ??= ComputeActionsKey();
+        private string ComputeActionsKey() => $"{TrailerUrl}|{IsAvailableOnIptv}|{StreamUrl}";
+
+        private string? _peopleKey;
+        [JsonIgnore] public string PeopleKey => _peopleKey ??= ComputePeopleKey();
+        private string ComputePeopleKey()
+        {
+            string cast = Cast == null ? "" : string.Join(";", Cast.Take(10).Select(c => $"{c.Name}:{c.Character}:{c.ProfileUrl}"));
+            string directors = Directors == null ? "" : string.Join(";", Directors.Take(5).Select(d => $"{d.Name}:{d.ProfileUrl}"));
+            return $"{cast}|{directors}|{TmdbInfo?.Id}";
+        }
+
+        private string? _episodesKey;
+        [JsonIgnore] public string EpisodesKey => _episodesKey ??= ComputeEpisodesKey();
+        private string ComputeEpisodesKey()
+        {
+            if (!IsSeries || Seasons == null || !Seasons.Any(s => s.Episodes != null && s.Episodes.Count > 0)) return "";
+            return string.Join("|", Seasons.Select(s =>
+                $"{s.SeasonNumber}:{s.Name}:{(s.Episodes == null ? 0 : s.Episodes.Count)}:{string.Join(",", (s.Episodes ?? new List<UnifiedEpisode>()).Take(4).Select(e => $"{e.Id}:{e.Title}:{e.StreamUrl}"))}"));
+        }
+
+        private string? _backdropKey;
+        [JsonIgnore] public string BackdropKey => _backdropKey ??= ComputeBackdropKey();
+        private string ComputeBackdropKey()
+        {
+            string gallery = BackdropUrls == null ? "" : string.Join(";", BackdropUrls);
+            return $"{BackdropUrl}|{PosterUrl}|{gallery}";
+        }
+
+        private string? _attributionKey;
+        [JsonIgnore] public string AttributionKey => _attributionKey ??= ComputeAttributionKey();
+        private string ComputeAttributionKey() => $"{DataSource}|{MetadataSourceInfo}";
+
         // --- Technical & Collections ---
         private string _res; private int _resOff, _resLen;
         public string Resolution { get => _res ?? MetadataBuffer.GetString(_resOff, _resLen); set { var r = MetadataBuffer.Store(value); _resOff = r.Offset; _resLen = r.Length; _res = value; } }
@@ -131,12 +174,12 @@ namespace ModernIPTVPlayer.Models.Metadata
 
         private int _castOff = -1, _castLen;
         private List<UnifiedCast> _cast;
-        [JsonPropertyName("cast")] public System.Text.Json.JsonElement CastJson { set => (_castOff, _castLen) = MetadataBuffer.StoreJson(value.GetRawText()); }
+        [JsonPropertyName("cast")] public System.Text.Json.JsonElement CastJson { set => (_castOff, _castLen) = value.ValueKind != System.Text.Json.JsonValueKind.Undefined ? MetadataBuffer.StoreJson(value.GetRawText()) : (-1, 0); }
         [JsonIgnore] public List<UnifiedCast> Cast { get => _cast ??= DeserializeList(_castOff, _castLen, Services.Json.AppJsonContext.Default.ListUnifiedCast); set { _cast = value; var r = SerializeList(value, Services.Json.AppJsonContext.Default.ListUnifiedCast); _castOff = r.Offset; _castLen = r.Length; } }
 
         private int _dirOff = -1, _dirLen;
         private List<UnifiedCast> _directors;
-        [JsonPropertyName("directors")] public System.Text.Json.JsonElement DirectorsJson { set => (_dirOff, _dirLen) = MetadataBuffer.StoreJson(value.GetRawText()); }
+        [JsonPropertyName("directors")] public System.Text.Json.JsonElement DirectorsJson { set => (_dirOff, _dirLen) = value.ValueKind != System.Text.Json.JsonValueKind.Undefined ? MetadataBuffer.StoreJson(value.GetRawText()) : (-1, 0); }
         [JsonIgnore] public List<UnifiedCast> Directors { get => _directors ??= DeserializeList(_dirOff, _dirLen, Services.Json.AppJsonContext.Default.ListUnifiedCast); set { _directors = value; var r = SerializeList(value, Services.Json.AppJsonContext.Default.ListUnifiedCast); _dirOff = r.Offset; _dirLen = r.Length; } }
 
         private string _trUrl; private int _trOff, _trLen;
@@ -144,7 +187,7 @@ namespace ModernIPTVPlayer.Models.Metadata
 
         private int _trcOff = -1, _trcLen;
         private List<string> _trailerCandidates;
-        [JsonPropertyName("trailerCandidates")] public System.Text.Json.JsonElement TrailerCandidatesJson { set => (_trcOff, _trcLen) = MetadataBuffer.StoreJson(value.GetRawText()); }
+        [JsonPropertyName("trailerCandidates")] public System.Text.Json.JsonElement TrailerCandidatesJson { set => (_trcOff, _trcLen) = value.ValueKind != System.Text.Json.JsonValueKind.Undefined ? MetadataBuffer.StoreJson(value.GetRawText()) : (-1, 0); }
         [JsonIgnore] public List<string> TrailerCandidates { get => _trailerCandidates ??= DeserializeList(_trcOff, _trcLen, Services.Json.AppJsonContext.Default.ListString); set { _trailerCandidates = value; var r = SerializeList(value, Services.Json.AppJsonContext.Default.ListString); _trcOff = r.Offset; _trcLen = r.Length; } }
 
         private string _imdb; private int _imdbOff, _imdbLen;
@@ -158,7 +201,7 @@ namespace ModernIPTVPlayer.Models.Metadata
         
         private int _seaOff = -1, _seaLen;
         private List<UnifiedSeason> _seasons;
-        [JsonPropertyName("seasons")] public System.Text.Json.JsonElement SeasonsJson { set => (_seaOff, _seaLen) = MetadataBuffer.StoreJson(value.GetRawText()); }
+        [JsonPropertyName("seasons")] public System.Text.Json.JsonElement SeasonsJson { set => (_seaOff, _seaLen) = value.ValueKind != System.Text.Json.JsonValueKind.Undefined ? MetadataBuffer.StoreJson(value.GetRawText()) : (-1, 0); }
         [JsonIgnore] public List<UnifiedSeason> Seasons { get => _seasons ??= DeserializeList(_seaOff, _seaLen, Services.Json.AppJsonContext.Default.ListUnifiedSeason); set { _seasons = value; var r = SerializeList(value, Services.Json.AppJsonContext.Default.ListUnifiedSeason); _seaOff = r.Offset; _seaLen = r.Length; } }
 
         // --- PROJECT ZERO: Specialized Typed Serialization ---

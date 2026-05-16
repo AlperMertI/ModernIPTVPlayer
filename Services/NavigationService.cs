@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Animation;
 using ModernIPTVPlayer.Models;
+using System.Diagnostics;
 
 namespace ModernIPTVPlayer.Services
 {
@@ -52,6 +53,7 @@ namespace ModernIPTVPlayer.Services
         }
 
         private static string _lastNavTargetId = string.Empty;
+        private static readonly Stopwatch _overallNavStopwatch = new Stopwatch();
 
         private static void NavigateWithSlideAnimation(Frame frame, MediaNavigationArgs args)
         {
@@ -72,7 +74,22 @@ namespace ModernIPTVPlayer.Services
                 Effect = SlideNavigationTransitionEffect.FromRight
             };
 
+            _overallNavStopwatch.Restart();
+            System.Diagnostics.Debug.WriteLine($"[NAV-TIMING] ===== NAVIGATION START: {args.Stream.Title} =====");
+            
+            var sw = Stopwatch.StartNew();
             frame.Navigate(typeof(MediaInfoPage), args, transitionInfo);
+            sw.Stop();
+            System.Diagnostics.Debug.WriteLine($"[NAV-TIMING] Frame.Navigate call: {sw.ElapsedMilliseconds}ms");
+        }
+
+        public static void LogPageLoaded()
+        {
+            if (_overallNavStopwatch.IsRunning)
+            {
+                _overallNavStopwatch.Stop();
+                System.Diagnostics.Debug.WriteLine($"[NAV-TIMING] ===== PAGE LOADED (first frame): {_overallNavStopwatch.ElapsedMilliseconds}ms =====");
+            }
         }
     }
 }

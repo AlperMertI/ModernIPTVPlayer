@@ -27,6 +27,9 @@
     <CsWinRTDirectCall>true</CsWinRTDirectCall>
     <CsWinRTIncludes>ModernIPTVPlayer;MpvWinUI;MpvWinUI.Common;Mpv.UI;Microsoft.UI.Xaml.Hosting</CsWinRTIncludes>
     <TrimmerRootDescriptor>TrimmerRootDescriptor.xml</TrimmerRootDescriptor>
+
+    <!-- .NET 11 Runtime Async for cleaner async stack traces -->
+    <EnableRuntimeAsync>true</EnableRuntimeAsync>
   </PropertyGroup>
 
   <!-- Disable XAML-generated Debugger.Break() on UnhandledException -->
@@ -209,11 +212,15 @@
     <PublishAppxPackage>true</PublishAppxPackage>
     <GenerateAppxPackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GenerateAppxPackageOnBuild>
     <AppxPackageBuildMode>SideloadOnly</AppxPackageBuildMode>
-    <AppxBundle>Never</AppxBundle>
+    <AppxBundle>Auto</AppxBundle>
     <AppxPackageIncludeSymbols>false</AppxPackageIncludeSymbols>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
     <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
+    <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
+    <AppxAutoIncrementPackageRevision>True</AppxAutoIncrementPackageRevision>
+    <GenerateTestArtifacts>False</GenerateTestArtifacts>
+    <AppxBundlePlatforms>x64</AppxBundlePlatforms>
   </PropertyGroup>
 
 

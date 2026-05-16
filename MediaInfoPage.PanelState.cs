@@ -1,9 +1,7 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
-using Microsoft.UI.Composition;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Hosting;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Iptv;
 using ModernIPTVPlayer.Services;
@@ -13,73 +11,7 @@ namespace ModernIPTVPlayer
 {
     public sealed partial class MediaInfoPage
     {
-
-
-        /// <summary>
-        /// Immutable input for layout application. It captures what the UI should show before any controls
-        /// are mutated, keeping panel decisions auditable and easier to debug.
-        /// </summary>
-        private readonly struct MediaPanelLayoutSnapshot
-        {
-            public MediaPanelLayoutSnapshot(
-                bool isWide,
-                MediaContentKind contentKind,
-                MediaDetailPanelMode panelMode,
-                bool hasMetadata,
-                bool isLoading,
-                bool isRevealing,
-                bool isReady,
-                bool hasSelectedEpisode,
-                bool isSourcesFetchInProgress,
-                bool isSourcesPanelHidden,
-                double viewportHeight)
-            {
-                IsWide = isWide;
-                ContentKind = contentKind;
-                PanelMode = panelMode;
-                HasMetadata = hasMetadata;
-                IsLoading = isLoading;
-                IsRevealing = isRevealing;
-                IsReady = isReady;
-                HasSelectedEpisode = hasSelectedEpisode;
-                IsSourcesFetchInProgress = isSourcesFetchInProgress;
-                IsSourcesPanelHidden = isSourcesPanelHidden;
-                ViewportHeight = viewportHeight;
-            }
-
-            public bool IsWide { get; }
-            public MediaContentKind ContentKind { get; }
-            public MediaDetailPanelMode PanelMode { get; }
-            public bool HasMetadata { get; }
-            public bool IsLoading { get; }
-            public bool IsRevealing { get; }
-            public bool IsReady { get; }
-            public bool HasSelectedEpisode { get; }
-            public bool IsSourcesFetchInProgress { get; }
-            public bool IsSourcesPanelHidden { get; }
-            public double ViewportHeight { get; }
-            public bool ShowSourcesPanel => PanelMode == MediaDetailPanelMode.Sources;
-            public bool ShowEpisodesPanel => PanelMode == MediaDetailPanelMode.Episodes;
-        }
-
-        private MediaPanelLayoutSnapshot BuildPanelLayoutSnapshot()
-        {
-            var contentKind = ResolveCurrentContentKind();
-            var panelMode = NormalizePanelMode(_requestedPanelMode, contentKind);
-
-            return new MediaPanelLayoutSnapshot(
-                ActualWidth >= LayoutAdaptiveThreshold,
-                contentKind,
-                panelMode,
-                _unifiedMetadata != null,
-                _pageLoadState == PageLoadState.Loading,
-                _pageLoadState == PageLoadState.Revealing,
-                _pageLoadState == PageLoadState.Ready,
-                _selectedEpisode != null,
-                _isSourcesFetchInProgress,
-                _isSourcesPanelHidden,
-                GetViewportHeight());
-        }
+        #region Content Resolution
 
         private MediaContentKind ResolveCurrentContentKind()
         {
@@ -105,21 +37,37 @@ namespace ModernIPTVPlayer
             return MediaContentKind.Movie;
         }
 
-        private static MediaDetailPanelMode NormalizePanelMode(MediaDetailPanelMode requestedMode, MediaContentKind contentKind)
+        #endregion
+
+        #region Panel Owner
+
+        private PanelOwner _panelOwner;
+
+        private void InitializePanelOwner()
         {
-            if (contentKind == MediaContentKind.Live) return MediaDetailPanelMode.None;
-            if (requestedMode == MediaDetailPanelMode.Episodes && contentKind != MediaContentKind.Series)
-            {
-                return MediaDetailPanelMode.None;
-            }
+            if (_compositor == null || _sectionRegistry == null || _layoutApplier == null) return;
 
-            if (requestedMode == MediaDetailPanelMode.None && contentKind == MediaContentKind.Series)
-            {
-                return MediaDetailPanelMode.Episodes;
-            }
-
-            return requestedMode;
+            _panelOwner?.Dispose();
+            _panelOwner = new PanelOwner(
+                _compositor,
+                DispatcherQueue,
+                _sectionRegistry,
+                _layoutApplier,
+                BuildLayoutInputs,
+                OnPanelChanged,
+                SourcesPanel,
+                EpisodesPanel,
+                SourcesPanelInnerContent,
+                SourcesRepeater,
+                EpisodesRepeater,
+                SourcesShowHandle,
+                BtnHideSources,
+                BtnBackToEpisodes);
         }
+
+        #endregion
+
+        #region Panel Mode Management (delegated to PanelOwner)
 
         private MediaDetailPanelMode GetDefaultPanelModeForItem(IMediaStream item)
         {
@@ -131,69 +79,67 @@ namespace ModernIPTVPlayer
 
         private void ApplyDefaultPanelModeForItem(IMediaStream item, PanelChangeReason reason)
         {
-            SetPanelMode(GetDefaultPanelModeForItem(item), reason);
+            var defaultMode = GetDefaultPanelModeForItem(item);
+            if (defaultMode == MediaDetailPanelMode.Episodes)
+            {
+                OpenEpisodesPanel(reason);
+            }
+            else if (defaultMode == MediaDetailPanelMode.Sources)
+            {
+                OpenSourcesPanel(reason);
+            }
         }
 
         private void SetPanelMode(MediaDetailPanelMode mode, PanelChangeReason reason)
         {
-            var contentKind = ResolveCurrentContentKind();
-            var normalizedMode = NormalizePanelMode(mode, contentKind);
-            if (_requestedPanelMode == normalizedMode)
-            {
-                LogPanelState(reason, normalizedMode, contentKind, "unchanged");
-                return;
-            }
-
-            _requestedPanelMode = normalizedMode;
-            if (normalizedMode != MediaDetailPanelMode.Sources)
-            {
-                _isSourcesPanelHidden = false;
-                if (SourcesShowHandle != null) SourcesShowHandle.Visibility = Visibility.Collapsed;
-            }
-
-            LogPanelState(reason, normalizedMode, contentKind, "changed");
-            SyncLayout();
+            _panelOwner?.SetContentKind(ResolveCurrentContentKind());
         }
 
         public void OpenSourcesPanel(PanelChangeReason reason)
         {
-            _isSourcesPanelHidden = false;
-            if (SourcesShowHandle != null) SourcesShowHandle.Visibility = Visibility.Collapsed;
-            SetPanelMode(MediaDetailPanelMode.Sources, reason);
-            if (BtnBackToEpisodes != null) BtnBackToEpisodes.Visibility = IsSeriesItem() ? Visibility.Visible : Visibility.Collapsed;
+            _sourcesPanelOpenedTime = DateTime.Now;
+            _sourcesPresentationTime = DateTime.Now;
+            _sourcesRevealItemLimit = Math.Min(30, _visibleSourceStreams.Count);
+
+            _panelOwner?.SetContentKind(ResolveCurrentContentKind());
+            _panelOwner?.OpenSourcesPanel(reason);
+
             UpdateInfoPanelVisibility(IsSeriesItem());
 
-            // [UX] If we are opening the panel with existing/cached content, force a re-reveal
-            // so the user gets the staggered animation experience even if data was already in memory.
             if (reason == PanelChangeReason.SourceCache || reason == PanelChangeReason.NavigationDefault)
             {
-                DispatcherQueue.TryEnqueue(() =>
+                if (_visibleSourceStreams.Count > 0)
                 {
-                    _sourcesVisualGeneration++;
-                    _animatedSourceRevealIndexes.Clear();
-                    _sourcesRevealItemLimit = _visibleSourceStreams.Count;
-
-                    // Force full recycle: ElementClearing resets state, ElementPrepared hides
-                    // and animates each item. This is reliable for ALL items, not just realized ones.
-                    if (SourcesRepeater != null)
+                    DispatcherQueue.TryEnqueue(() =>
                     {
-                        var src = _visibleSourceStreams;
-                        SourcesRepeater.ItemsSource = null;
-                        SourcesRepeater.ItemsSource = src;
-                    }
-                });
+                        _sourcesVisualGeneration++;
+                        _animatedSourceRevealIndexes.Clear();
+                        _sourcesRevealItemLimit = _visibleSourceStreams.Count;
+
+                        if (SourcesRepeater != null)
+                        {
+                            SourcesRepeater.ItemsSource = null;
+                            SourcesRepeater.ItemsSource = _visibleSourceStreams;
+                        }
+                    });
+                }
             }
         }
 
         public void OpenEpisodesPanel(PanelChangeReason reason)
         {
-            SetPanelMode(MediaDetailPanelMode.Episodes, reason);
-            if (BtnBackToEpisodes != null) BtnBackToEpisodes.Visibility = Visibility.Collapsed;
+            Debug.WriteLine($"[INFO-STATE] OpenEpisodesPanel called. Reason={reason}");
+
+            _panelOwner?.SetContentKind(ResolveCurrentContentKind());
+            _panelOwner?.OpenEpisodesPanel(reason);
+
             UpdateInfoPanelVisibility(false);
 
-            // [UX] Staggered reveal for episodes when returning to the list
-            if (reason == PanelChangeReason.BackToEpisodes || reason == PanelChangeReason.SeriesDefaultEpisodes)
+            if (reason == PanelChangeReason.BackToEpisodes || reason == PanelChangeReason.SeriesDefaultEpisodes || reason == PanelChangeReason.EpisodeRequired)
             {
+                _sourcesPresentationTime = DateTime.Now;
+                _sourcesRevealItemLimit = Math.Min(30, CurrentEpisodes.Count);
+
                 DispatcherQueue.TryEnqueue(() =>
                 {
                     _sourcesVisualGeneration++;
@@ -201,9 +147,8 @@ namespace ModernIPTVPlayer
 
                     if (EpisodesRepeater != null)
                     {
-                        var src = CurrentEpisodes;
                         EpisodesRepeater.ItemsSource = null;
-                        EpisodesRepeater.ItemsSource = src;
+                        EpisodesRepeater.ItemsSource = CurrentEpisodes;
                     }
                 });
             }
@@ -213,9 +158,8 @@ namespace ModernIPTVPlayer
         {
             Interlocked.Increment(ref _sourcesRequestVersion);
             _isSourcesFetchInProgress = false;
-            SetPanelMode(MediaDetailPanelMode.None, reason);
-            if (BtnBackToEpisodes != null) BtnBackToEpisodes.Visibility = Visibility.Collapsed;
-            UpdateInfoPanelVisibility(false);
+            _panelOwner?.SetContentKind(ResolveCurrentContentKind());
+            _panelOwner?.CloseDetailPanel(reason);
         }
 
         private void LogPanelState(PanelChangeReason reason, MediaDetailPanelMode panelMode, MediaContentKind contentKind, string action)
@@ -224,411 +168,180 @@ namespace ModernIPTVPlayer
                 $"[INFO-STATE] {action} | Reason: {reason}, Mode: {panelMode}, Kind: {contentKind}, State: {_pageLoadState}");
         }
 
-        private void SyncLayout()
+        #endregion
+
+        #region Section Architecture
+
+        private SectionRegistry _sectionRegistry;
+        private LayoutApplier _layoutApplier;
+        private bool _layoutUpdatePending;
+        private MediaDetailPanelMode? _pendingPanelRequest;
+        private PanelChangeReason? _pendingPanelReason;
+
+        private void InitializeSectionArchitecture()
         {
-            if (!this.IsLoaded || _pageCts?.IsCancellationRequested == true) return;
+            try
+            {
+                if (_compositor == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("[SECTION-ARCH] Compositor not available, deferring initialization");
+                    return;
+                }
+
+                var elements = new LayoutElements
+                {
+                    Col0 = Col0,
+                    Col1 = Col1,
+                    Row0 = Row0,
+                    Row1 = Row1,
+                    Row2 = Row2,
+                    Row3 = Row3,
+                    Row4 = Row4,
+                    ContentGrid = ContentGrid,
+                    RootScrollViewer = RootScrollViewer,
+                    InfoContainer = InfoContainer,
+                    SourcesPanel = SourcesPanel,
+                    EpisodesPanel = EpisodesPanel,
+                    NarrowSectionsContainer = NarrowSectionsContainer,
+                    OverviewText = OverviewText,
+                    GenresText = GenresText,
+                    InfoColumn = InfoColumn,
+                    IdentityControl = IdentityControl,
+                    MetadataRibbon = MetadataRibbon,
+                    ActionBarGroup = ActionBarGroup,
+                    ActionBarPanel = ActionBarPanel,
+                    InfoContainerInner = InfoContainerInner,
+                    AdaptiveInfoHost = AdaptiveInfoHost,
+                    CastSection = CastSection,
+                    CastShimmer = CastShimmer,
+                    DirectorSection = DirectorSection,
+                    DirectorShimmer = DirectorShimmer,
+                    BtnHideSources = BtnHideSources,
+                    BtnBackToEpisodes = BtnBackToEpisodes,
+                    SourcesShowHandle = SourcesShowHandle,
+                    MetadataPanel = MetadataPanel,
+                    OverviewPanel = OverviewPanel,
+                };
+
+                _sectionRegistry = new SectionRegistry();
+                _sectionRegistry.SetDispatcher(DispatcherQueue);
+
+                _sectionRegistry.Register("identity", InfoContainer, IdentityControl, null, _compositor, 0);
+                _sectionRegistry.Register("metadata", InfoContainer, MetadataPanel, MetadataShimmer, _compositor, 1);
+                _sectionRegistry.Register("actionbar", InfoContainer, ActionBarPanel, ActionBarShimmer, _compositor, 2);
+                _sectionRegistry.Register("overview", InfoContainer, OverviewPanel, OverviewShimmer, _compositor, 3);
+                _sectionRegistry.Register("director", InfoContainer, DirectorSection, DirectorShimmer, _compositor, 4);
+                _sectionRegistry.Register("cast", InfoContainer, CastSection, CastShimmer, _compositor, 5);
+                _sectionRegistry.Register("sources", SourcesPanel, SourcesRepeater, null, _compositor, 6);
+                _sectionRegistry.Register("episodes", EpisodesPanel, EpisodesRepeater, null, _compositor, 7);
+
+                _layoutApplier = new LayoutApplier(elements);
+
+                InitializePanelOwner();
+
+                System.Diagnostics.Debug.WriteLine("[SECTION-ARCH] Section architecture initialized");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[SECTION-ARCH] Initialization failed: {ex.Message}");
+            }
+        }
+
+        #endregion
+
+        #region Layout Entry Points
+
+        private void OnViewportChanged()
+        {
+            if (_pageCts?.IsCancellationRequested == true) return;
             if (LayoutRoot == null || ContentGrid == null) return;
 
-            var panelState = BuildPanelLayoutSnapshot();
-            LogPanelSnapshotIfChanged(panelState);
-            ApplyResponsiveContentGrid(panelState);
-            ApplyVisualProperties(panelState);
-            ApplyPanelLayoutState(panelState);
-            ApplyInfoPriorityLayout(panelState.IsWide);
-            ApplyMetadataVisibility(panelState);
-            ApplyAtomicVisibility(panelState);
-            ApplyDetailPanels(panelState);
-        }
-
-        private void LogPanelSnapshotIfChanged(MediaPanelLayoutSnapshot panelState)
-        {
-            string panelSyncSignature = $"{panelState.ContentKind}|{panelState.PanelMode}|{panelState.IsWide}|{panelState.ShowEpisodesPanel}|{panelState.ShowSourcesPanel}|{panelState.HasSelectedEpisode}|{panelState.IsSourcesFetchInProgress}|{panelState.IsSourcesPanelHidden}";
-            if (_lastPanelSyncLogSignature == panelSyncSignature) return;
-
-            _lastPanelSyncLogSignature = panelSyncSignature;
-            System.Diagnostics.Debug.WriteLine(
-                $"[INFO-SYNC] Layout Synced | Mode: {panelState.PanelMode}, Kind: {panelState.ContentKind}, Wide: {panelState.IsWide}");
-        }
-
-        private void ApplyVisualProperties(MediaPanelLayoutSnapshot panelState)
-        {
-            // 1. Handle Adaptive Layout States (Wide vs Narrow)
-            int layoutIndex = panelState.IsWide ? 1 : 0;
-            if (_isWideModeIndex != layoutIndex)
+            try
             {
-                _isWideModeIndex = layoutIndex;
-                
-                if (panelState.IsWide)
-                {
-                    // WIDE MODE SETTERS
-                    if (OverviewText != null) OverviewText.TextAlignment = TextAlignment.Left;
-                    if (GenresText != null) GenresText.TextAlignment = TextAlignment.Left;
-
-                    if (InfoColumn != null)
-                    {
-                        InfoColumn.MaxWidth = 800;
-                        InfoColumn.HorizontalAlignment = HorizontalAlignment.Left;
-                        InfoColumn.Spacing = 12;
-                    }
-
-                    if (IdentityControl != null) IdentityControl.HorizontalAlignment = HorizontalAlignment.Left;
-                    
-                    if (MetadataRibbon != null)
-                        MetadataRibbon.Margin = new Thickness(2, 0, 0, 0);
-                    if (ActionBarGroup != null) ActionBarGroup.HorizontalAlignment = HorizontalAlignment.Left;
-                    if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = HorizontalAlignment.Left;
-
-                    if (InfoContainerInner != null) InfoContainerInner.Margin = new Thickness(0, 0, 0, 60);
-
-                    if (NarrowSectionsContainer != null) NarrowSectionsContainer.Visibility = Visibility.Collapsed;
-                    
-                    if (EpisodesPanel != null)
-                    {
-                        EpisodesPanel.VerticalAlignment = VerticalAlignment.Center;
-                        EpisodesPanel.HorizontalAlignment = HorizontalAlignment.Right;
-                        EpisodesPanel.Width = 440;
-                        EpisodesPanel.Margin = new Thickness(0);
-                    }
-
-                    if (SourcesPanel != null)
-                    {
-                        SourcesPanel.VerticalAlignment = VerticalAlignment.Stretch;
-                        SourcesPanel.HorizontalAlignment = HorizontalAlignment.Right;
-                        SourcesPanel.Width = 440;
-                        SourcesPanel.MaxWidth = 440;
-                        SourcesPanel.Margin = new Thickness(0);
-                    }
-                }
-                else
-                {
-                    if (OverviewText != null) OverviewText.TextAlignment = TextAlignment.Left;
-                    if (GenresText != null) GenresText.TextAlignment = TextAlignment.Center;
-
-                    if (InfoColumn != null)
-                    {
-                        InfoColumn.MaxWidth = 800;
-                        InfoColumn.HorizontalAlignment = HorizontalAlignment.Center;
-                        InfoColumn.VerticalAlignment = VerticalAlignment.Top;
-                        InfoColumn.Margin = new Thickness(0);
-                        InfoColumn.Spacing = 12;
-                    }
-
-                    if (IdentityControl != null) IdentityControl.HorizontalAlignment = HorizontalAlignment.Center;
-
-                    if (MetadataRibbon != null)
-                    {
-                        MetadataRibbon.HorizontalAlignment = HorizontalAlignment.Center;
-                        MetadataRibbon.Margin = new Thickness(0);
-                    }
-                    if (ActionBarGroup != null) ActionBarGroup.HorizontalAlignment = HorizontalAlignment.Center;
-                    if (ActionBarPanel != null) ActionBarPanel.HorizontalAlignment = HorizontalAlignment.Center;
-
-                    if (InfoContainerInner != null) InfoContainerInner.Margin = new Thickness(0);
-                    if (NarrowSectionsContainer != null)
-                    {
-                        NarrowSectionsContainer.Visibility = Visibility.Visible;
-                        NarrowSectionsContainer.Spacing = 0;
-                    }
-
-                    if (NarrowEpisodesSection != null)
-                    {
-                        NarrowEpisodesSection.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        NarrowEpisodesSection.Margin = new Thickness(0, 12, 0, 0);
-                        NarrowEpisodesSection.Padding = new Thickness(20, 0, 20, 0);
-                    }
-                    if (NarrowEpisodesHeader != null) NarrowEpisodesHeader.HorizontalAlignment = HorizontalAlignment.Center;
-
-                    if (NarrowSourcesSection != null)
-                    {
-                        NarrowSourcesSection.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        NarrowSourcesHeader.HorizontalAlignment = HorizontalAlignment.Center;
-                    }
-                    if (NarrowAddonSelector != null) NarrowAddonSelector.HorizontalAlignment = HorizontalAlignment.Center;
-
-                    if (NarrowDirectorSection != null)
-                    {
-                        NarrowDirectorSection.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        NarrowDirectorSection.Padding = new Thickness(20, 0, 20, 0);
-                        NarrowDirectorHeader.HorizontalAlignment = HorizontalAlignment.Center;
-                    }
-                    if (NarrowCastSection != null)
-                    {
-                        NarrowCastSection.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        NarrowCastSection.Padding = new Thickness(20, 0, 20, 0);
-                        NarrowCastHeader.HorizontalAlignment = HorizontalAlignment.Center;
-                    }
-
-                    if (EpisodesPanel != null)
-                    {
-                        EpisodesPanel.VerticalAlignment = VerticalAlignment.Top;
-                        EpisodesPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        EpisodesPanel.Width = double.NaN;
-                        EpisodesPanel.MaxWidth = double.PositiveInfinity;
-                        EpisodesPanel.Margin = new Thickness(0, 20, 0, 0);
-                    }
-
-                    if (SourcesPanel != null)
-                    {
-                        SourcesPanel.VerticalAlignment = VerticalAlignment.Top;
-                        SourcesPanel.HorizontalAlignment = HorizontalAlignment.Stretch;
-                        SourcesPanel.Width = double.NaN;
-                        SourcesPanel.MaxWidth = double.PositiveInfinity;
-                        SourcesPanel.Margin = new Thickness(0, 20, 0, 0);
-                    }
-
-                    if (SourcesRepeater != null) SourcesRepeater.MaxHeight = 800;
-                    
-                    if (CastSection != null) CastSection.Visibility = Visibility.Collapsed;
-                    if (DirectorSection != null) DirectorSection.Visibility = Visibility.Collapsed;
-                    if (NarrowCastSection != null) NarrowCastSection.Visibility = Visibility.Collapsed;
-                    if (CastShimmer != null) CastShimmer.Visibility = Visibility.Collapsed;
-                    if (DirectorShimmer != null) DirectorShimmer.Visibility = Visibility.Collapsed;
-                }
+                var inputs = BuildLayoutInputs();
+                var decision = LayoutEngine.Compute(inputs);
+                _layoutApplier?.Apply(decision);
             }
-
-            // 2. Handle Content Lifecycle States (Loading vs Ready)
-            string contentState = (panelState.IsReady || panelState.IsRevealing) ? "ReadyState" : "LoadingState";
-            if (_currentContentStateName != contentState)
+            catch (Exception ex)
             {
-                _currentContentStateName = contentState;
+                System.Diagnostics.Debug.WriteLine($"[LAYOUT] OnViewportChanged failed: {ex.Message}");
             }
         }
 
-        private void ApplyResponsiveContentGrid(MediaPanelLayoutSnapshot panelState)
+        private void OnPanelChanged()
         {
-            if (panelState.IsWide)
+            if (_pageCts?.IsCancellationRequested == true) return;
+            if (LayoutRoot == null || ContentGrid == null) return;
+
+            try
             {
-                bool showSidebar = panelState.ShowSourcesPanel || panelState.ShowEpisodesPanel;
-                ContentGrid.Padding = new Thickness(60, 40, 20, 40);
-                if (Col0 != null) Col0.Width = new GridLength(1, GridUnitType.Star);
-                if (Col1 != null)
-                {
-                    Col1.MinWidth = showSidebar ? (panelState.ShowSourcesPanel ? WideSourcesColumnMinWidth : WideEpisodesColumnWidth) : 0;
-                    Col1.MaxWidth = showSidebar ? (panelState.ShowSourcesPanel ? WideSourcesColumnMaxWidth : WideEpisodesColumnWidth) : double.PositiveInfinity;
-                    Col1.Width = showSidebar
-                        ? (panelState.ShowSourcesPanel ? new GridLength(0.42, GridUnitType.Star) : GridLength.Auto)
-                        : new GridLength(0);
-                }
-
-                if (Row0 != null) Row0.Height = new GridLength(1, GridUnitType.Star);
-                if (Row1 != null) Row1.Height = new GridLength(0);
-                if (Row2 != null) Row2.Height = new GridLength(0);
-                if (Row3 != null) Row3.Height = new GridLength(0);
-
-                if (RootScrollViewer != null)
-                {
-                    RootScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
-                    RootScrollViewer.VerticalScrollMode = ScrollMode.Disabled;
-                }
-
-                if (InfoContainerInner != null) InfoContainerInner.VerticalAlignment = VerticalAlignment.Stretch;
-                if (InfoContainerInner != null) InfoContainerInner.HorizontalAlignment = HorizontalAlignment.Left;
-                if (AdaptiveInfoHost != null)
-                {
-                    AdaptiveInfoHost.Width = double.NaN;
-                    AdaptiveInfoHost.VerticalAlignment = VerticalAlignment.Bottom;
-                    AdaptiveInfoHost.HorizontalAlignment = HorizontalAlignment.Left;
-                }
+                var inputs = BuildLayoutInputs();
+                var decision = LayoutEngine.Compute(inputs);
+                ApplyLayoutDecision(decision);
             }
-            else
+            catch (Exception ex)
             {
-                ContentGrid.Padding = new Thickness(20, 60, 20, 40);
-                if (AdaptiveInfoHost != null)
-                {
-                    AdaptiveInfoHost.Width = double.NaN;
-                    AdaptiveInfoHost.VerticalAlignment = VerticalAlignment.Top;
-                    AdaptiveInfoHost.HorizontalAlignment = HorizontalAlignment.Stretch;
-                }
-                if (Col0 != null) Col0.Width = new GridLength(1, GridUnitType.Star);
-                if (Col1 != null)
-                {
-                    Col1.MinWidth = 0;
-                    Col1.MaxWidth = double.PositiveInfinity;
-                    Col1.Width = new GridLength(0);
-                }
-
-                if (Row0 != null) Row0.Height = new GridLength(1, GridUnitType.Auto);
-                if (Row1 != null) Row1.Height = new GridLength(1, GridUnitType.Auto);
-                if (Row2 != null) Row2.Height = new GridLength(1, GridUnitType.Auto);
-                if (Row3 != null) Row3.Height = new GridLength(1, GridUnitType.Auto);
-
-                if (RootScrollViewer != null)
-                {
-                    RootScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-                    RootScrollViewer.VerticalScrollMode = ScrollMode.Auto;
-                }
-
-                if (InfoContainerInner != null)
-                {
-                    InfoContainerInner.VerticalAlignment = VerticalAlignment.Top;
-                    InfoContainerInner.HorizontalAlignment = HorizontalAlignment.Stretch;
-                }
+                System.Diagnostics.Debug.WriteLine($"[LAYOUT] OnPanelChanged failed: {ex.Message}");
             }
         }
 
-        private void ApplyMetadataVisibility(MediaPanelLayoutSnapshot panelState)
+        private void ApplyLayoutDecision(LayoutDecision decision)
         {
-            bool shouldShowMetadata = panelState.HasMetadata || panelState.IsReady || panelState.IsRevealing;
-
-            // MediaIdentityControl handles its own internal visibility based on Logo/Title
-            bool isIdentityVisible = shouldShowMetadata && (panelState.IsReady || panelState.IsRevealing || panelState.IsLoading);
-            if (IdentityControl != null) IdentityControl.Visibility = isIdentityVisible ? Visibility.Visible : Visibility.Collapsed;
-
-            if (MetadataPanel != null) MetadataPanel.Visibility = shouldShowMetadata ? Visibility.Visible : Visibility.Collapsed;
-            if (OverviewPanel != null) OverviewPanel.Visibility = shouldShowMetadata ? Visibility.Visible : Visibility.Collapsed;
-            if (ActionBarPanel != null) ActionBarPanel.Visibility = shouldShowMetadata ? Visibility.Visible : Visibility.Collapsed;
+            _layoutApplier?.Apply(decision);
         }
 
-        private void ApplyAtomicVisibility(MediaPanelLayoutSnapshot panelState)
+        private void OnDataCommitted()
         {
-            if (ActualWidth <= 0) return;
+            if (_pageCts?.IsCancellationRequested == true) return;
+            if (LayoutRoot == null || ContentGrid == null) return;
 
-            // 1. Identity (InfoContainer)
-            if (DisableMediaInfoRevealAnimationsForCrashIsolation)
+            try
             {
-                if (InfoContainer != null) InfoContainer.Visibility = (panelState.IsLoading || panelState.IsRevealing || panelState.IsReady) ? Visibility.Visible : Visibility.Collapsed;
-                if (InfoContainer != null) InfoContainer.Opacity = 1.0;
+                var inputs = BuildLayoutInputs();
+                var decision = LayoutEngine.Compute(inputs);
+                ApplyLayoutDecision(decision);
             }
-            else
+            catch (Exception ex)
             {
-                _infoPanelAnimator?.ApplyVisible(panelState.IsLoading || panelState.IsRevealing || panelState.IsReady, isHorizontalReveal: false);
-            }
-
-            // 2. People Sections (Cast/Director)
-            // [NATIVE AOT SAFE] These are now managed by ParallelRevealCoordinator.
-            // We only handle basic structural visibility here if needed, but let the coordinator drive animations.
-            // [HEIGHT GUARD] We only show people if the window is tall enough to avoid overcrowding.
-            bool canShowPeople = panelState.IsWide && 
-                                 (panelState.IsLoading || panelState.IsRevealing || panelState.IsReady) &&
-                                 panelState.ViewportHeight >= WidePeopleComfortHeight;
-            bool hasCast = CastList?.Count > 0;
-            bool hasDirector = DirectorList?.Count > 0;
-            bool isStillTransitioning = panelState.IsLoading;
-
-            // If we are NOT wide, or have no data, ensure they are collapsed.
-            // [RACE CONDITION FIX] We only collapse if we are truly READY and still have no data.
-            // If we are Loading or Revealing, we must keep them available for the coordinator.
-            
-            if (!canShowPeople || (!hasCast && !isStillTransitioning))
-            {
-                if (CastSection != null) CastSection.Visibility = Visibility.Collapsed;
-                if (CastShimmer != null) CastShimmer.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                // [NATIVE AOT SAFE] If we have data or are loading/revealing, we allow them to be visible.
-                // The actual opacity is still managed by the reveal coordinator/animator for a smooth entry.
-                if (CastSection != null && CastSection.Visibility != Visibility.Visible) CastSection.Visibility = Visibility.Visible;
-                
-                // Keep shimmer visible ONLY if we don't have real data yet
-                if (CastShimmer != null) CastShimmer.Visibility = !hasCast ? Visibility.Visible : Visibility.Collapsed;
-            }
-
-            if (!canShowPeople || (!hasDirector && !isStillTransitioning))
-            {
-                if (DirectorSection != null) DirectorSection.Visibility = Visibility.Collapsed;
-                if (DirectorShimmer != null) DirectorShimmer.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                if (DirectorSection != null && DirectorSection.Visibility != Visibility.Visible) DirectorSection.Visibility = Visibility.Visible;
-                if (DirectorShimmer != null) DirectorShimmer.Visibility = !hasDirector ? Visibility.Visible : Visibility.Collapsed;
-            }
-
-            // 3. Episodes
-            bool hasEpisodes = (Seasons?.Count > 0 && CurrentEpisodes?.Count > 0) || 
-                               (panelState.IsLoading && panelState.ContentKind == MediaContentKind.Series);
-            if (DisableAllPanelAnimatorsForCrashIsolation)
-            {
-                if (EpisodesPanel != null) EpisodesPanel.Visibility = (panelState.ShowEpisodesPanel && hasEpisodes) ? Visibility.Visible : Visibility.Collapsed;
-                if (EpisodesPanel != null) EpisodesPanel.Opacity = 1.0;
-            }
-            else
-            {
-                _episodesPanelAnimator?.ApplyVisible(panelState.ShowEpisodesPanel && hasEpisodes, isHorizontalReveal: true);
-            }
-
-            // 4. Sources
-            if (DisableMediaInfoRevealAnimationsForCrashIsolation)
-            {
-                if (SourcesPanel != null) SourcesPanel.Visibility = panelState.ShowSourcesPanel ? Visibility.Visible : Visibility.Collapsed;
-                if (SourcesPanel != null) SourcesPanel.Opacity = 1.0;
-            }
-            else
-            {
-                _sourcesPanelAnimator?.ApplyVisible(panelState.ShowSourcesPanel, isHorizontalReveal: true);
-            }
-
-            // 5. Shared UI Controls
-            if (BtnHideSources != null) BtnHideSources.Visibility = (panelState.IsWide && panelState.ShowSourcesPanel) ? Visibility.Visible : Visibility.Collapsed;
-            if (BtnBackToEpisodes != null)
-            {
-                BtnBackToEpisodes.Visibility = (panelState.ShowSourcesPanel && panelState.ContentKind == MediaContentKind.Series) ? Visibility.Visible : Visibility.Collapsed;
+                System.Diagnostics.Debug.WriteLine($"[LAYOUT] OnDataCommitted failed: {ex.Message}");
             }
         }
 
-        private void ApplyPanelLayoutState(MediaPanelLayoutSnapshot panelState)
+        private void OnIdentityChanged()
         {
-            bool modeChanged = _lastIsWideForPanels != panelState.IsWide;
-            _lastIsWideForPanels = panelState.IsWide;
+            if (_pageCts?.IsCancellationRequested == true) return;
+            if (LayoutRoot == null || ContentGrid == null) return;
 
-            if (modeChanged)
+            try
             {
-                _infoPanelAnimator?.MorphIfNeeded(LayoutRoot);
-                _sourcesPanelAnimator?.MorphIfNeeded(LayoutRoot);
-                _episodesPanelAnimator?.MorphIfNeeded(LayoutRoot);
+                var inputs = BuildLayoutInputs();
+                var decision = LayoutEngine.Compute(inputs);
+                ApplyLayoutDecision(decision);
             }
-
-            if (InfoContainer != null)
+            catch (Exception ex)
             {
-                Grid.SetRow(InfoContainer, 0);
-                Grid.SetColumn(InfoContainer, 0);
-                Grid.SetColumnSpan(InfoContainer, panelState.IsWide ? 1 : 2);
-            }
-
-            if (SourcesPanel != null)
-            {
-                Grid.SetRow(SourcesPanel, panelState.IsWide ? 0 : 1);
-                Grid.SetColumn(SourcesPanel, panelState.IsWide ? 1 : 0);
-                Grid.SetColumnSpan(SourcesPanel, panelState.IsWide ? 1 : 2);
-                SourcesPanel.VerticalAlignment = panelState.IsWide ? VerticalAlignment.Stretch : VerticalAlignment.Top;
-            }
-
-            if (EpisodesPanel != null)
-            {
-                Grid.SetRow(EpisodesPanel, panelState.IsWide ? 0 : 2);
-                Grid.SetColumn(EpisodesPanel, panelState.IsWide ? 1 : 0);
-                Grid.SetColumnSpan(EpisodesPanel, panelState.IsWide ? 1 : 2);
-                EpisodesPanel.VerticalAlignment = panelState.IsWide ? VerticalAlignment.Center : VerticalAlignment.Top;
-            }
-
-            if (NarrowSectionsContainer != null)
-            {
-                Grid.SetRow(NarrowSectionsContainer, 3);
-                NarrowSectionsContainer.Visibility = !panelState.IsWide && (panelState.IsReady || panelState.IsRevealing) ? Visibility.Visible : Visibility.Collapsed;
+                System.Diagnostics.Debug.WriteLine($"[LAYOUT] OnIdentityChanged failed: {ex.Message}");
             }
         }
 
-        private void ApplyDetailPanels(MediaPanelLayoutSnapshot panelState)
+        private LayoutInputs BuildLayoutInputs()
         {
-            RefreshAllShimmers();
-            if (EpisodesRepeater != null) EpisodesRepeater.Visibility = panelState.ShowEpisodesPanel ? Visibility.Visible : Visibility.Collapsed;
-        }
+            var contentKind = ResolveCurrentContentKind();
+            var panelMode = _panelOwner != null ? _panelOwner.PanelMode : MediaDetailPanelMode.None;
 
-        private double GetInfoPanelWidth()
-        {
-            double viewportWidth = RootGrid?.ActualWidth ?? 0;
-            if (viewportWidth <= 0) viewportWidth = _lastReportedWidth;
-            if (viewportWidth <= 0) return 800;
-
-            if (viewportWidth >= LayoutAdaptiveThreshold)
-            {
-                double sideWidth = Col1 != null ? Col1.ActualWidth : 0;
-                if (sideWidth <= 0) sideWidth = WideEpisodesColumnWidth;
-                return Math.Max(360, viewportWidth - sideWidth - 96);
-            }
-
-            return Math.Max(320, viewportWidth - 40);
+            return new LayoutInputs(
+                ViewportWidth: ActualWidth > 0 ? ActualWidth : _lastReportedWidth,
+                ViewportHeight: GetViewportHeight(),
+                LoadState: _pageLoadState,
+                PanelMode: panelMode,
+                ContentKind: contentKind,
+                IsSourcesPanelHidden: _panelOwner != null ? _panelOwner.IsSourcesPanelHidden : false,
+                IsSourcesFetchInProgress: _isSourcesFetchInProgress,
+                CastCount: CastList?.Count ?? 0,
+                DirectorCount: DirectorList?.Count ?? 0,
+                HasEpisodes: (Seasons?.Count > 0 && CurrentEpisodes?.Count > 0),
+                HasMetadata: _unifiedMetadata != null,
+                HasSelectedEpisode: _selectedEpisode != null);
         }
 
         private double GetViewportHeight()
@@ -636,5 +349,78 @@ namespace ModernIPTVPlayer
             double viewportHeight = ActualHeight > 0 ? ActualHeight : _lastReportedHeight;
             return viewportHeight > 0 ? viewportHeight : 720;
         }
+
+        #endregion
+
+        #region Section Notifications
+
+        void IMediaInfoUIProxy.NotifySectionDataReady(string sectionName)
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                try
+                {
+                    var section = _sectionRegistry?.Get(sectionName);
+                    if (section != null)
+                    {
+                        section.RevealContent();
+                        System.Diagnostics.Debug.WriteLine($"[SECTION] NotifySectionDataReady: {sectionName}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[SECTION] NotifySectionDataReady failed for '{sectionName}': {ex.Message}");
+                }
+            });
+        }
+
+        void IMediaInfoUIProxy.RequestPanelOpen(MediaDetailPanelMode mode, PanelChangeReason reason)
+        {
+            if (_pageLoadState == PageLoadState.Ready || _pageLoadState == PageLoadState.LayoutReady)
+            {
+                if (mode == MediaDetailPanelMode.Sources)
+                {
+                    OpenSourcesPanel(reason);
+                }
+                else if (mode == MediaDetailPanelMode.Episodes)
+                {
+                    OpenEpisodesPanel(reason);
+                }
+            }
+            else
+            {
+                _pendingPanelRequest = mode;
+                _pendingPanelReason = reason;
+                System.Diagnostics.Debug.WriteLine($"[SECTION] Panel request deferred: {mode} (state: {_pageLoadState})");
+            }
+        }
+
+        private void FlushDeferredPanelRequest()
+        {
+            if (_pendingPanelRequest.HasValue)
+            {
+                var mode = _pendingPanelRequest.Value;
+                var reason = _pendingPanelReason ?? PanelChangeReason.NavigationDefault;
+                _pendingPanelRequest = null;
+                _pendingPanelReason = null;
+
+                System.Diagnostics.Debug.WriteLine($"[SECTION] Flushing deferred panel request: {mode}");
+
+                if (mode == MediaDetailPanelMode.Sources)
+                {
+                    OpenSourcesPanel(reason);
+                }
+                else if (mode == MediaDetailPanelMode.Episodes)
+                {
+                    OpenEpisodesPanel(reason);
+                }
+            }
+            else
+            {
+                ApplyDefaultPanelModeForItem(_item, PanelChangeReason.NavigationDefault);
+            }
+        }
+
+        #endregion
     }
 }

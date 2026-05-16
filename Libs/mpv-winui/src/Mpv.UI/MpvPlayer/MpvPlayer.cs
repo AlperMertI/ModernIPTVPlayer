@@ -62,7 +62,7 @@ public sealed partial class MpvPlayer : Control
             };
             System.IO.File.AppendAllText(
                 @"C:\Users\ASUS\Documents\ModernIPTVPlayer\debug-df5b0b.log",
-                System.Text.Json.JsonSerializer.Serialize(payload) + Environment.NewLine);
+                payload?.ToString() + Environment.NewLine);
         }
         catch { }
     }

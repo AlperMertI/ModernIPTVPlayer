@@ -23,7 +23,7 @@
 
         <DataTemplate x:Key="RealStreamTemplate" x:DataType="local:StremioStreamViewModel">
             <!-- Root Grid for Stagger Animation (Default Hidden) -->
-            <Grid Background="Transparent" Opacity="0">
+            <Grid Background="Transparent" Opacity="1">
                 <Grid Tapped="SourceItem_Tapped" 
                       PointerEntered="SourceItem_PointerEntered" 
                       PointerExited="SourceItem_PointerExited"
@@ -62,7 +62,8 @@
 
                             <StackPanel Grid.Row="0" Orientation="Horizontal" Spacing="8" Margin="0,0,0,4">
                                 <TextBlock Text="{x:Bind SourceDisplayName, Mode=OneWay}" FontWeight="Bold" FontSize="14" 
-                                           Foreground="White" TextWrapping="NoWrap" MaxLines="1" TextTrimming="CharacterEllipsis"/>
+                                           Foreground="White" TextWrapping="NoWrap" MaxLines="1" TextTrimming="CharacterEllipsis"
+                                           ToolTipService.ToolTip="{x:Bind SourceDisplayName, Mode=OneWay}"/>
                                 
                                 <!-- Explicit Active Label -->
                                 <Border Background="{ThemeResource GoldGradient}" CornerRadius="4" Padding="6,1" 
@@ -106,7 +107,7 @@
         </DataTemplate>
 
         <DataTemplate x:Key="ShimmerStreamTemplate" x:DataType="local:StremioStreamViewModel">
-            <Grid Background="Transparent" MinHeight="86" Opacity="0">
+            <Grid Background="Transparent" MinHeight="86" Opacity="1">
                 <Grid Padding="12,10" Background="#1AFFFFFF" CornerRadius="12" BorderThickness="1" BorderBrush="#10FFFFFF" MinHeight="86">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="65"/>
@@ -137,7 +138,7 @@
         </DataTemplate>
 
         <DataTemplate x:Key="ShimmerEpisodeTemplate" x:DataType="local:EpisodeItem">
-            <Grid Background="Transparent" MinHeight="86" Opacity="0">
+            <Grid Background="Transparent" MinHeight="86" Opacity="1">
                 <Grid Padding="12,10" Background="#1AFFFFFF" CornerRadius="12" BorderThickness="1" BorderBrush="#10FFFFFF" MinHeight="86">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="100"/>
@@ -170,7 +171,7 @@
                                        ShimmerTemplate="{StaticResource ShimmerEpisodeTemplate}"/>
 
         <DataTemplate x:Key="RealEpisodeTemplate" x:DataType="local:EpisodeItem">
-            <Grid Background="Transparent" Padding="0" CornerRadius="12" Opacity="0"
+            <Grid Background="Transparent" Padding="0" CornerRadius="12" Opacity="1"
                   Tapped="EpisodeItem_Tapped"
                   PointerEntered="EpisodeItem_PointerEntered"
                   PointerExited="EpisodeItem_PointerExited">
@@ -467,7 +468,7 @@
         </Style>
     </Page.Resources>
 
-    <Grid x:Name="RootGrid">
+    <Grid x:Name="RootGrid" PointerPressed="RootGrid_PointerPressed">
 
         
         <!-- 1. CINEMATIC BACKGROUND -->
@@ -575,7 +576,7 @@
             <RowDefinition x:Name="Row1" Height="0"/> <!-- Sources / Episodes -->
             <RowDefinition x:Name="Row2" Height="0"/> <!-- Episodes (Narrow Only) -->
             <RowDefinition x:Name="Row3" Height="0"/> <!-- Narrow Sections (Cast/Director) -->
-            <RowDefinition Height="Auto"/>           <!-- Content Buffer -->
+            <RowDefinition x:Name="Row4" Height="Auto"/>           <!-- Content Buffer -->
         </Grid.RowDefinitions>
         
         <!-- LEFT: INFO PANEL -->
@@ -791,8 +792,6 @@
                         <TextBlock x:Name="CastHeader" Text="Oyuncular" FontSize="14" FontWeight="SemiBold" Foreground="#88FFFFFF" CharacterSpacing="50"/>
                         <ListView x:Name="CastListView" ScrollViewer.HorizontalScrollMode="Enabled" ScrollViewer.HorizontalScrollBarVisibility="Hidden"
                                   ScrollViewer.VerticalScrollMode="Disabled" SelectionMode="None" 
-                                  PointerEntered="CastListView_PointerEntered"
-                                  PointerExited="CastListView_PointerExited"
                                   Height="145" Padding="0" Margin="0">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
@@ -900,7 +899,9 @@
                                                     ItemsSource="{x:Bind CurrentEpisodes}"
                                                     ItemTemplate="{StaticResource EpisodeSelector}"
                                                     ElementPrepared="EpisodesRepeater_ElementPrepared"
-                                                    ElementClearing="EpisodesRepeater_ElementClearing">
+                                                    ElementClearing="EpisodesRepeater_ElementClearing"
+                                                    VerticalCacheLength="2.0"
+                                                    HorizontalCacheLength="0">
                                           <ItemsRepeater.Layout>
                                               <StackLayout Spacing="8"/>
                                           </ItemsRepeater.Layout>
@@ -911,7 +912,7 @@
                     </Grid>
 
                     <!-- SOURCES PANEL (Stremio Streams) -->
-                    <Grid x:Name="SourcesPanel" Grid.Column="1" Grid.Row="0" MaxWidth="600" Visibility="Collapsed" Opacity="0" CornerRadius="20" Margin="40,0,0,0" VerticalAlignment="Stretch">
+                    <Grid x:Name="SourcesPanel" Grid.Column="1" Grid.Row="0" MaxWidth="600" Visibility="Collapsed" Opacity="0" CornerRadius="20" Margin="40,16,0,0" VerticalAlignment="Stretch">
                         <Grid.RenderTransform>
                             <CompositeTransform x:Name="SourcesPanelTransform"/>
                         </Grid.RenderTransform>
@@ -1010,7 +1011,8 @@
                                                 Padding="16,0,16,36">
                                       <ItemsRepeater x:Name="SourcesRepeater" ItemsSource="{x:Bind VisibleSourceStreams}"
                                                     ElementPrepared="SourcesRepeater_ElementPrepared"
-                                                    ElementClearing="SourcesRepeater_ElementClearing">
+                                                    ElementClearing="SourcesRepeater_ElementClearing"
+                                                    VerticalCacheLength="2.0">
                                           <ItemsRepeater.RenderTransform>
                                               <CompositeTransform x:Name="SourcesListTransform"/>
                                           </ItemsRepeater.RenderTransform>
@@ -1213,7 +1215,7 @@
             </Grid.RowDefinitions>
 
             <!-- Interactive Background (Excludes TitleBar) -->
-            <Grid Grid.Row="1" Background="Transparent" Tapped="PersonCardOverlay_Tapped"/>
+            <Grid Grid.Row="1" Background="{x:Null}" IsHitTestVisible="False"/>
 
             <Canvas Grid.RowSpan="2">
                 <ctl:PersonExpandedCard x:Name="ActivePersonCard" Width="420" Height="560" Visibility="Collapsed" PointerEntered="ActivePersonCard_PointerEntered" PointerExited="ActivePersonCard_PointerExited"/>

@@ -1,4 +1,4 @@
-﻿using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media;
 using System;
 using ModernIPTVPlayer.Models.Stremio;
 
@@ -39,6 +39,23 @@ namespace ModernIPTVPlayer.Models
             ReleaseDate = null;
             MediaType = m.Type;
             IsCast = true;
+        }
+
+        public PersonFilmographyItem(TmdbPersonCredit c, bool isCast = true)
+        {
+            Id = c.Id;
+            Title = c.Title ?? c.Name;
+            Character = c.Character ?? c.Job;
+            PosterPath = c.PosterPath;
+            VoteAverage = c.VoteAverage;
+            MediaType = c.MediaType;
+            IsCast = isCast;
+
+            var release = c.ReleaseDate ?? c.FirstAirDate;
+            if (!string.IsNullOrEmpty(release) && DateTime.TryParse(release, out var d))
+            {
+                ReleaseDate = d;
+            }
         }
     }
 }

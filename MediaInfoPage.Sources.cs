@@ -17,6 +17,7 @@ using System.Threading.Tasks;
 using ModernIPTVPlayer.Helpers;
 using ModernIPTVPlayer.Services;
 using System.Diagnostics;
+using Windows.Foundation;
 
 namespace ModernIPTVPlayer
 {
@@ -39,6 +40,12 @@ namespace ModernIPTVPlayer
         private readonly ObservableCollection<StremioStreamViewModel> _visibleSourceStreams = new();
         public ObservableCollection<StremioStreamViewModel> VisibleSourceStreams => _visibleSourceStreams;
         private const int SourceRevealStaggerMs = 48;
+        private CubicBezierEasingFunction _staggerEasing;
+        private CubicBezierEasingFunction _shimmerEasing;
+        private DateTime _sourcesPanelOpenedTime;
+        private DateTime _sourcesPresentationTime;
+        private CompositionPropertySet _sourcesScrollProps;
+        private CompositionPropertySet _episodesScrollProps;
 
         private enum SourceSelectionReason
         {
@@ -58,6 +65,7 @@ namespace ModernIPTVPlayer
             _animatedSourceRevealIndexes.Clear();
             _sourcesRevealItemLimit = 0;
             _lastSourcesShimmerCount = -1;
+            _sourcesPresentationTime = DateTime.MinValue;
             _visibleSourceStreams.Clear();
             if (SourcesRepeater != null && SourcesRepeater.ItemsSource != _visibleSourceStreams)
             {
@@ -103,7 +111,7 @@ namespace ModernIPTVPlayer
             
             _sourcesPanelController.InitializeLoading(addons, GetDynamicShimmerCount());
             
-            SyncLayout();
+            OnDataCommitted();
         }
 
         private void SelectSourceAddon(StremioAddonViewModel addon, SourceSelectionReason reason)
@@ -124,47 +132,66 @@ namespace ModernIPTVPlayer
         /// </summary>
         private void ApplyStaggeredReveal(FrameworkElement fe, int index, bool useIndexDelay = true, int baseDelay = 0)
         {
-            if (fe == null) return;
+            if (fe == null || _compositor == null) return;
 
-            int delayMs = useIndexDelay ? Math.Min(index * SourceRevealStaggerMs, 480) + baseDelay : baseDelay;
-
-            DispatcherQueue.TryEnqueue(() =>
+            // [POOLING] Initialize shared easing if not already done
+            if (_staggerEasing == null)
             {
-                // Try to enable Translation (best-effort — opacity animation runs regardless).
-                CompositionService.EnableTranslation(fe);
+                _staggerEasing = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 0.86f), new Vector2(0.16f, 1.0f));
+            }
 
-                CompositionService.Run(fe, visual =>
-                {
-                    var compositor = visual.Compositor;
-                    var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.16f, 0.86f), new Vector2(0.16f, 1.0f));
+            // [RELATIVE STAGGERING] 
+            bool isInitialReveal = (DateTime.Now - _sourcesPresentationTime).TotalMilliseconds < 3000;
+            int delayMs = (useIndexDelay && isInitialReveal) ? Math.Min(index * SourceRevealStaggerMs, 400) : baseDelay;
 
-                    CompositionService.StopAll(visual);
-                    try { visual.StopAnimation("Translation"); } catch { }
+            var visual = ElementCompositionPreview.GetElementVisual(fe);
+            if (visual == null) return;
 
-                    visual.Opacity = 0f;
-                    fe.Opacity = 1f; // Hand off from XAML to Composition
+            // Ensure translation is enabled for the slide effect
+            ElementCompositionPreview.SetIsTranslationEnabled(fe, true);
 
-                    // Translation is best-effort — if it fails, opacity fade still plays.
-                    try { visual.Properties.InsertVector3("Translation", new Vector3(64, 32, 0)); } catch { }
+            CompositionService.StopAll(visual);
 
-                    var opacity = compositor.CreateScalarKeyFrameAnimation();
-                    opacity.InsertKeyFrame(0f, 0f);
-                    opacity.InsertKeyFrame(1f, 1f, easing);
-                    opacity.Duration = TimeSpan.FromMilliseconds(400);
-                    opacity.DelayTime = TimeSpan.FromMilliseconds(delayMs);
+            visual.Opacity = 0f;
+            try { visual.Properties.InsertVector3(CompositionService.TranslationProperty, new Vector3(0, 20, 0)); } catch { }
 
-                    var glide = compositor.CreateVector3KeyFrameAnimation();
-                    glide.InsertKeyFrame(0f, new Vector3(64, 32, 0));
-                    glide.InsertKeyFrame(1f, Vector3.Zero, easing);
-                    glide.Duration = TimeSpan.FromMilliseconds(650);
-                    glide.DelayTime = TimeSpan.FromMilliseconds(delayMs);
+            var opacity = _compositor.CreateScalarKeyFrameAnimation();
+            opacity.InsertKeyFrame(0f, 0f);
+            opacity.InsertKeyFrame(1f, 1f, _staggerEasing);
+            opacity.Duration = TimeSpan.FromMilliseconds(500);
+            opacity.DelayTime = TimeSpan.FromMilliseconds(delayMs);
 
-                    try { visual.StartAnimation(nameof(Visual.Opacity), opacity); }
-                    catch (Exception ex) { TraceMediaInfoException("ApplyStaggeredReveal opacity", ex, null); }
-                    try { visual.StartAnimation("Translation", glide); } catch { }
-                });
-            });
+            var slide = _compositor.CreateVector3KeyFrameAnimation();
+            slide.InsertKeyFrame(0f, new Vector3(0, 20, 0));
+            slide.InsertKeyFrame(1f, Vector3.Zero, _staggerEasing);
+            slide.Duration = TimeSpan.FromMilliseconds(600);
+            slide.DelayTime = TimeSpan.FromMilliseconds(delayMs);
+
+            try 
+            { 
+                visual.StartAnimation(CompositionService.OpacityProperty, opacity);
+                visual.StartAnimation(CompositionService.TranslationProperty, slide);
+            }
+            catch { }
         }
+
+        // Scroll-based reveal logic removed to ensure performance and prevent viewport clashes.
+        // The animation now only triggers during the initial data presentation.
+
+        private void TriggerReveal(FrameworkElement fe, int index)
+        {
+            // [REVEAL ONLY] Only stagger the initial items.
+            bool isInitial = (DateTime.Now - _sourcesPresentationTime).TotalMilliseconds < 3000;
+
+            if (!_animatedSourceRevealIndexes.Contains(index))
+            {
+                _animatedSourceRevealIndexes.Add(index);
+            }
+
+            // Since this is only for initial items, we use the pure index-based stagger
+            ApplyStaggeredReveal(fe, index, useIndexDelay: isInitial, baseDelay: 0);
+        }
+
 
         /// <summary>
         /// Applies a fast opacity-only fade for skeleton/placeholder items.
@@ -172,31 +199,29 @@ namespace ModernIPTVPlayer
         /// </summary>
         private void ApplyShimmerReveal(FrameworkElement fe, int index)
         {
-            if (fe == null) return;
+            if (fe == null || _compositor == null) return;
 
             int delayMs = index * 30;
 
-            DispatcherQueue.TryEnqueue(() =>
+            var visual = ElementCompositionPreview.GetElementVisual(fe);
+            if (visual == null) return;
+
+            if (_shimmerEasing == null)
             {
-                CompositionService.Run(fe, visual =>
-                {
-                    var compositor = visual.Compositor;
-                    var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.0f, 0.0f), new Vector2(0.4f, 1.0f));
+                _shimmerEasing = _compositor.CreateCubicBezierEasingFunction(new Vector2(0.0f, 0.0f), new Vector2(0.4f, 1.0f));
+            }
 
-                    CompositionService.StopAll(visual);
-                    visual.Opacity = 0f;
-                    fe.Opacity = 1f; // Hand off
+            CompositionService.StopAll(visual);
+            visual.Opacity = 0f;
 
-                    var opacity = compositor.CreateScalarKeyFrameAnimation();
-                    opacity.InsertKeyFrame(0f, 0f);
-                    opacity.InsertKeyFrame(1f, 1f, easing);
-                    opacity.Duration = TimeSpan.FromMilliseconds(250);
-                    opacity.DelayTime = TimeSpan.FromMilliseconds(delayMs);
+            var opacity = _compositor.CreateScalarKeyFrameAnimation();
+            opacity.InsertKeyFrame(0f, 0f);
+            opacity.InsertKeyFrame(1f, 1f, _shimmerEasing);
+            opacity.Duration = TimeSpan.FromMilliseconds(300);
+            opacity.DelayTime = TimeSpan.FromMilliseconds(delayMs);
 
-                    try { visual.StartAnimation(nameof(Visual.Opacity), opacity); }
-                    catch (Exception ex) { TraceMediaInfoException("ApplyShimmerReveal", ex, null); }
-                });
-            });
+            try { visual.StartAnimation(CompositionService.OpacityProperty, opacity); }
+            catch { }
         }
 
         private void CancelSourcesReveal()
@@ -213,10 +238,12 @@ namespace ModernIPTVPlayer
             _sourcesVisualGeneration++;
             _animatedSourceRevealIndexes.Clear();
             _sourceScrollVersion++;
+            _sourcesPresentationTime = DateTime.Now;
 
             var snapshot = streams?.Where(s => s != null).ToList() ?? new List<StremioStreamViewModel>();
-            // Allow both shimmers and real items to have reveal animations.
-            _sourcesRevealItemLimit = animate ? snapshot.Count : 0;
+            // [PERFORMANCE] Cap the reveal limit to the initial viewport for heavy staggering.
+            // Items scrolled into view later use the "Liquid Reveal" logic which is optimized for 120fps.
+            _sourcesRevealItemLimit = Math.Min(35, streams.Count);
 
 
             _visibleSourceStreams.Clear();
@@ -226,39 +253,49 @@ namespace ModernIPTVPlayer
                 return;
             }
 
-            if (!animate)
-            {
-                foreach (var stream in snapshot)
-                {
-                    _visibleSourceStreams.Add(stream);
-                }
-                return;
-            }
-
             foreach (var stream in snapshot)
             {
                 _visibleSourceStreams.Add(stream);
             }
         }
 
-        internal void ResetRevealState(FrameworkElement fe)
+        private void PrepareForReveal(FrameworkElement fe)
         {
             if (fe == null) return;
+            var visual = ElementCompositionPreview.GetElementVisual(fe);
+            if (visual == null) return;
+
+            // Ensure translation is enabled so property accesses don't throw ArgumentException
+            ElementCompositionPreview.SetIsTranslationEnabled(fe, true);
             
-            // 1. Reset XAML state
-            fe.Opacity = 1.0;
+            // Set to initial hidden/offset state
+            visual.StopAnimation(CompositionService.OpacityProperty);
+            visual.StopAnimation(CompositionService.TranslationProperty);
+            visual.Opacity = 0f;
+            visual.Properties.InsertVector3(CompositionService.TranslationProperty, new Vector3(0, 20, 0));
+        }
+
+        internal void LeanReset(FrameworkElement fe)
+        {
+            if (fe == null) return;
+            var visual = ElementCompositionPreview.GetElementVisual(fe);
+            if (visual == null) return;
+
+            // [ROOT FIX] StopAnimation("Translation") throws if the facade isn't enabled.
+            // We rely on property resets and StopAll in the next animation start to manage state.
+            // Ensure translation is enabled so property accesses don't throw ArgumentException
+            ElementCompositionPreview.SetIsTranslationEnabled(fe, true);
+
+            visual.StopAnimation(CompositionService.OpacityProperty);
+            visual.StopAnimation(CompositionService.TranslationProperty);
             
-            // 2. Reset Composition state
-            CompositionService.Run(fe, visual => 
-            {
-                CompositionService.StopAll(visual);
-                try { visual.StopAnimation("Translation"); } catch { }
-                
-                visual.Opacity = 1f;
-                // [ROOT FIX] Crucial: Reset Translation to zero so next user of this visual starts clean
-                visual.Properties.InsertVector3("Translation", Vector3.Zero);
-                try { visual.Offset = Vector3.Zero; } catch { }
-            });
+            visual.Opacity = 1f;
+            visual.Properties.InsertVector3(CompositionService.TranslationProperty, Vector3.Zero);
+        }
+
+        internal void ResetRevealState(FrameworkElement fe)
+        {
+            LeanReset(fe);
         }
 
         #endregion
@@ -791,41 +828,34 @@ namespace ModernIPTVPlayer
             bool isShimmer = rowViewModel?.IsPlaceholder == true;
             string stamp = $"src:{generation}:{preparedIndex}:{(isShimmer ? "shm" : "real")}";
 
-            // If this element was a shimmer and is now real, allow a re-reveal.
             if (!isShimmer && fe.Tag?.ToString().Contains(":shm") == true)
             {
                 _animatedSourceRevealIndexes.Remove(preparedIndex);
             }
 
-            // Should we animate this element in this generation?
-            bool shouldReveal = preparedIndex >= 0 &&
-                                preparedIndex < _sourcesRevealItemLimit &&
-                                !_animatedSourceRevealIndexes.Contains(preparedIndex);
-
-            // Already stamped identically — no-op.
             if (Equals(fe.Tag, stamp)) return;
 
-            if (!shouldReveal)
-            {
-                ResetRevealState(fe);
-                fe.Tag = stamp;
-                return;
-            }
-
             fe.Tag = stamp;
-            fe.Opacity = 0f; // Hide immediately; composition will take over
-            _animatedSourceRevealIndexes.Add(preparedIndex);
-
-            // Route to the correct animation path.
-            // RunOnceLoaded inside each method handles the case where the element
-            // is not yet fully in the visual tree (common in ItemsRepeater).
-            if (isShimmer)
+            
+            // [INITIAL REVEAL ONLY] 
+            // We only apply the staggered animation to the initial viewport items.
+            // Items scrolled into view later (beyond _sourcesRevealItemLimit) appear immediately.
+            
+            // [INITIAL REVEAL ONLY] 
+            // The staggered animation is now only triggered for the initial viewport batch.
+            // Items scrolled into view later appear instantly to avoid scroll jitter.
+            
+            if (preparedIndex < _sourcesRevealItemLimit && !_animatedSourceRevealIndexes.Contains(preparedIndex))
             {
-                ApplyShimmerReveal(fe, preparedIndex);
+                // Ensure translation is enabled for the slide effect
+                ElementCompositionPreview.SetIsTranslationEnabled(fe, true);
+                
+                PrepareForReveal(fe);
+                TriggerReveal(fe, preparedIndex);
             }
             else
             {
-                ApplyStaggeredReveal(fe, preparedIndex, useIndexDelay: true, baseDelay: 0);
+                ResetRevealState(fe);
             }
         }
 
@@ -903,7 +933,6 @@ namespace ModernIPTVPlayer
             {
                 if (_isApplyingSourceSelection) return;
                 _sourcesPanelController.HandleUserSelection(addon);
-                SyncLayout();
                 ScrollToActiveSource();
             }
         }
@@ -935,6 +964,7 @@ namespace ModernIPTVPlayer
             });
         }
 
+
         private void ToggleSourcesLoading(bool isLoading)
         {
             // Shimmer handled via placeholders
@@ -944,11 +974,11 @@ namespace ModernIPTVPlayer
         {
             try
             {
+                // [EVENT-DRIVEN] Rely on the actual measured height of the scroll viewer.
+                // If it hasn't been through a layout pass yet (Height=0), use a safe default.
                 double height = SourcesScrollViewer?.ActualHeight ?? 0;
-                if (height <= 0 && SourcesPanel != null)
-                {
-                    height = SourcesPanel.ActualHeight - 64 - 54 - 36;
-                }
+                
+                if (height <= 0) return 8; // Safe default for uninitialized UI
 
                 return CalculateSkeletonCount(height, 92.0);
             }
@@ -957,7 +987,7 @@ namespace ModernIPTVPlayer
 
         private void RefreshAllShimmers()
         {
-            if (_requestedPanelMode == MediaDetailPanelMode.None &&
+            if (_panelOwner != null && _panelOwner.PanelMode == MediaDetailPanelMode.None &&
                 (SourcesPanel == null || SourcesPanel.Visibility != Visibility.Visible) &&
                 (EpisodesPanel == null || EpisodesPanel.Visibility != Visibility.Visible)) return;
 

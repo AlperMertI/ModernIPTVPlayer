@@ -116,24 +116,124 @@ namespace ModernIPTVPlayer.Helpers
             if (visual == null) return;
             try
             {
-                // [NATIVE AOT SAFE] Name-based stop is okay, but we wrap in try-catch
                 visual.StopAnimation(OpacityProperty);
                 visual.StopAnimation(OffsetProperty);
                 visual.StopAnimation(ScaleProperty);
                 visual.StopAnimation(RotationProperty);
-                visual.StopAnimation(TranslationProperty);
             }
             catch { }
         }
 
         /// <summary>
+        /// Resets the visual to its default state (Opacity=1, Scale=1, Translation=0).
+        /// </summary>
+        public static void StopAllAnimationsImmediately(FrameworkElement? element)
+        {
+            if (element == null) return;
+            if (!element.IsLoaded) return;
+
+            try
+            {
+                var visual = ElementCompositionPreview.GetElementVisual(element);
+                if (visual == null) return;
+
+                visual.StopAnimation(OpacityProperty);
+                visual.StopAnimation(OffsetProperty);
+                visual.StopAnimation(ScaleProperty);
+                visual.StopAnimation(RotationProperty);
+
+                ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+                visual.StopAnimation(TranslationProperty);
+
+                visual.Opacity = 1.0f;
+                visual.Scale = new System.Numerics.Vector3(1, 1, 1);
+                visual.Properties.InsertVector3(TranslationProperty, System.Numerics.Vector3.Zero);
+            }
+            catch { }
+        }
+
+        public static void ResetVisual(FrameworkElement? element)
+        {
+            if (element == null) return;
+            string name = element.Name ?? element.GetType().Name;
+            
+            Debug.WriteLine($"[COMP-SERVICE] ResetVisual on {name}. Before: Vis={element.Visibility}, Opacity={element.Opacity}");
+            
+            element.Opacity = 1.0;
+            
+            if (element.IsLoaded)
+            {
+                try
+                {
+                    var visual = ElementCompositionPreview.GetElementVisual(element);
+                    if (visual != null)
+                    {
+                        visual.StopAnimation(OpacityProperty);
+                        visual.StopAnimation(ScaleProperty);
+
+                        ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+                        visual.StopAnimation(TranslationProperty);
+
+                        visual.Opacity = 1.0f;
+                        visual.Scale = new System.Numerics.Vector3(1, 1, 1);
+                        visual.Properties.InsertVector3(TranslationProperty, System.Numerics.Vector3.Zero);
+                        Debug.WriteLine($"[COMP-SERVICE] ResetVisual on {name}. After: visual.Opacity={visual.Opacity}");
+                    }
+                }
+                catch { }
+            }
+            else
+            {
+                RoutedEventHandler handler = null;
+                handler = (s, e) =>
+                {
+                    element.Loaded -= handler;
+                    try
+                    {
+                        var visual = ElementCompositionPreview.GetElementVisual(element);
+                        if (visual != null)
+                        {
+                            visual.StopAnimation(OpacityProperty);
+                            visual.StopAnimation(ScaleProperty);
+
+                            ElementCompositionPreview.SetIsTranslationEnabled(element, true);
+                            visual.StopAnimation(TranslationProperty);
+
+                            visual.Opacity = 1.0f;
+                            visual.Scale = new System.Numerics.Vector3(1, 1, 1);
+                            visual.Properties.InsertVector3(TranslationProperty, System.Numerics.Vector3.Zero);
+                            Debug.WriteLine($"[COMP-SERVICE] ResetVisual on {name}. After: visual.Opacity={visual.Opacity}");
+                        }
+                    }
+                    catch { }
+                };
+                element.Loaded += handler;
+            }
+        }
+
+        /// <summary>
+        /// Stops the Translation animation on a visual.
+        /// Translation is not a native Visual property — it requires SetIsTranslationEnabled to be called first.
+        /// Safe to call on any Visual; silently ignores if Translation is not enabled.
+        /// </summary>
+
+        /// <summary>
         /// Safely stops the translation animation on an element.
+        /// Safe to call on any element; silently ignores if Translation is not enabled.
         /// </summary>
         public static void StopTranslationAnimation(FrameworkElement? element)
         {
             Run(element, visual =>
             {
-                try { visual.StopAnimation(TranslationProperty); } catch { }
+                try 
+                { 
+                    var controller = visual.TryGetAnimationController(TranslationProperty);
+                    if (controller != null)
+                    {
+                        visual.StopAnimation(TranslationProperty);
+                    }
+                } 
+                catch { }
             });
         }
 
