@@ -29,7 +29,6 @@ namespace ModernIPTVPlayer.Services
         /// </summary>
         public static LayoutDecision Compute(LayoutInputs inputs)
         {
-            Debug.WriteLine($"[LAYOUT] Compute started. Width={inputs.ViewportWidth}, PanelMode={inputs.PanelMode}, HasEpisodes={inputs.HasEpisodes}");
             try
             {
                 bool isWide = inputs.ViewportWidth >= LayoutAdaptiveThreshold;
@@ -37,14 +36,13 @@ namespace ModernIPTVPlayer.Services
 
                 var grid = ComputeGridConfig(isWide, showSidebar, inputs.PanelMode);
                 var placement = ComputePanelPlacement(isWide);
-                var visual = ComputeVisualProperties(isWide);
+                var visual = ComputeVisualProperties(isWide, inputs);
                 var visibility = ComputeVisibility(inputs, isWide);
 
                 var decision = new LayoutDecision(
                     grid, placement, visual, visibility, isWide,
                     inputs.ViewportWidth, inputs.ViewportHeight);
 
-                Debug.WriteLine($"[LAYOUT] Compute finished. Width={decision.ViewportWidth}, Wide={decision.IsWide}");
                 return decision;
             }
             catch (Exception ex)
@@ -135,8 +133,14 @@ namespace ModernIPTVPlayer.Services
 
         #region Visual Properties
 
-        private static VisualProperties ComputeVisualProperties(bool isWide)
+        private static VisualProperties ComputeVisualProperties(bool isWide, LayoutInputs inputs)
         {
+            bool isLoading = inputs.LoadState == PageLoadState.Loading;
+            bool isRevealing = inputs.LoadState == PageLoadState.Revealing;
+            bool isReady = inputs.LoadState == PageLoadState.Ready;
+            bool isTransitioning = isLoading || isRevealing || isReady;
+            bool showPeopleList = isWide && isTransitioning && inputs.ViewportHeight >= WidePeopleComfortHeight;
+
             return new VisualProperties(
                 isWide: isWide,
                 overviewTextAlignment: TextAlignment.Left,
@@ -163,7 +167,8 @@ namespace ModernIPTVPlayer.Services
                 sourcesPanelWidth: isWide ? double.NaN : double.NaN,
                 sourcesPanelMaxWidth: isWide ? 600 : 600,
                 sourcesPanelMargin: isWide ? new Thickness(40, 16, 0, 0) : new Thickness(0),
-                infoContainerInnerMargin: new Thickness(0));
+                infoContainerInnerMargin: new Thickness(0),
+                showPeopleList: showPeopleList);
         }
 
         #endregion
@@ -180,17 +185,12 @@ namespace ModernIPTVPlayer.Services
             bool showSourcesPanel = inputs.PanelMode == MediaDetailPanelMode.Sources && !inputs.IsSourcesPanelHidden;
             bool showEpisodesPanel = inputs.PanelMode == MediaDetailPanelMode.Episodes;
 
-            bool canShowPeople = isWide && isTransitioning && inputs.ViewportHeight >= WidePeopleComfortHeight;
-            bool hasCast = inputs.CastCount > 0;
-            bool hasDirector = inputs.DirectorCount > 0;
-            bool isStillLoading = isLoading;
-
             return new VisibilityMap(
                 infoContainer: isTransitioning ? Visibility.Visible : Visibility.Collapsed,
-                castSection: (canShowPeople && (hasCast || isStillLoading)) ? Visibility.Visible : Visibility.Collapsed,
-                castShimmer: (canShowPeople && !hasCast && isStillLoading) ? Visibility.Visible : Visibility.Collapsed,
-                directorSection: (canShowPeople && (hasDirector || isStillLoading)) ? Visibility.Visible : Visibility.Collapsed,
-                directorShimmer: (canShowPeople && !hasDirector && isStillLoading) ? Visibility.Visible : Visibility.Collapsed,
+                castPanel: isWide && isTransitioning ? Visibility.Visible : Visibility.Collapsed,
+                castListView: (isWide && isTransitioning && inputs.ViewportHeight >= WidePeopleComfortHeight) ? Visibility.Visible : Visibility.Collapsed,
+                directorPanel: isWide && isTransitioning ? Visibility.Visible : Visibility.Collapsed,
+                directorListView: (isWide && isTransitioning && inputs.ViewportHeight >= WidePeopleComfortHeight) ? Visibility.Visible : Visibility.Collapsed,
                 narrowSectionsContainer: (!isWide && isTransitioning) ? Visibility.Visible : Visibility.Collapsed,
                 btnHideSources: (isWide && showSourcesPanel) ? Visibility.Visible : Visibility.Collapsed,
                 btnBackToEpisodes: (showSourcesPanel && inputs.ContentKind == MediaContentKind.Series) ? Visibility.Visible : Visibility.Collapsed,
@@ -327,7 +327,8 @@ namespace ModernIPTVPlayer.Services
             HorizontalAlignment.Center, VerticalAlignment.Top, HorizontalAlignment.Stretch,
             double.NaN, double.PositiveInfinity, new Thickness(0, 20, 0, 0),
             VerticalAlignment.Top, HorizontalAlignment.Stretch, double.NaN,
-            double.PositiveInfinity, new Thickness(0, 20, 0, 0), new Thickness(0));
+            double.PositiveInfinity, new Thickness(0, 20, 0, 0), new Thickness(0),
+            false);
 
         public VisualProperties(bool isWide, TextAlignment overviewTextAlignment, TextAlignment genresTextAlignment,
             HorizontalAlignment infoColumnHAlign, double infoColumnMaxWidth, int infoColumnSpacing,
@@ -340,7 +341,8 @@ namespace ModernIPTVPlayer.Services
             double episodesPanelWidth, double episodesPanelMaxWidth, Thickness episodesPanelMargin,
             VerticalAlignment sourcesPanelVAlign, HorizontalAlignment sourcesPanelHAlign,
             double sourcesPanelWidth, double sourcesPanelMaxWidth, Thickness sourcesPanelMargin,
-            Thickness infoContainerInnerMargin)
+            Thickness infoContainerInnerMargin,
+            bool showPeopleList)
         {
             IsWide = isWide;
             OverviewTextAlignment = overviewTextAlignment;
@@ -368,6 +370,7 @@ namespace ModernIPTVPlayer.Services
             SourcesPanelMaxWidth = sourcesPanelMaxWidth;
             SourcesPanelMargin = sourcesPanelMargin;
             InfoContainerInnerMargin = infoContainerInnerMargin;
+            ShowPeopleList = showPeopleList;
         }
 
         public bool IsWide { get; }
@@ -396,6 +399,7 @@ namespace ModernIPTVPlayer.Services
         public double SourcesPanelMaxWidth { get; }
         public Thickness SourcesPanelMargin { get; }
         public Thickness InfoContainerInnerMargin { get; }
+        public bool ShowPeopleList { get; }
     }
 
     internal readonly struct VisibilityMap
@@ -403,23 +407,23 @@ namespace ModernIPTVPlayer.Services
         public static VisibilityMap Default { get; } = new VisibilityMap(
             Visibility.Collapsed, Visibility.Collapsed, Visibility.Collapsed,
             Visibility.Collapsed, Visibility.Collapsed, Visibility.Collapsed, Visibility.Collapsed,
-            Visibility.Collapsed, Visibility.Collapsed, Visibility.Collapsed, Visibility.Collapsed,
-            Visibility.Collapsed, Visibility.Collapsed);
+            Visibility.Collapsed, Visibility.Collapsed, Visibility.Collapsed,
+            Visibility.Collapsed, Visibility.Collapsed, Visibility.Collapsed);
 
         public VisibilityMap(
             Visibility infoContainer,
-            Visibility castSection, Visibility castShimmer,
-            Visibility directorSection, Visibility directorShimmer,
+            Visibility castPanel, Visibility castListView,
+            Visibility directorPanel, Visibility directorListView,
             Visibility narrowSectionsContainer, Visibility btnHideSources,
             Visibility btnBackToEpisodes, Visibility sourcesShowHandle,
             Visibility identityControl, Visibility metadataPanel,
             Visibility overviewPanel, Visibility actionBarPanel)
         {
             InfoContainer = infoContainer;
-            CastSection = castSection;
-            CastShimmer = castShimmer;
-            DirectorSection = directorSection;
-            DirectorShimmer = directorShimmer;
+            CastPanel = castPanel;
+            CastListView = castListView;
+            DirectorPanel = directorPanel;
+            DirectorListView = directorListView;
             NarrowSectionsContainer = narrowSectionsContainer;
             BtnHideSources = btnHideSources;
             BtnBackToEpisodes = btnBackToEpisodes;
@@ -431,10 +435,10 @@ namespace ModernIPTVPlayer.Services
         }
 
         public Visibility InfoContainer { get; }
-        public Visibility CastSection { get; }
-        public Visibility CastShimmer { get; }
-        public Visibility DirectorSection { get; }
-        public Visibility DirectorShimmer { get; }
+        public Visibility CastPanel { get; }
+        public Visibility CastListView { get; }
+        public Visibility DirectorPanel { get; }
+        public Visibility DirectorListView { get; }
         public Visibility NarrowSectionsContainer { get; }
         public Visibility BtnHideSources { get; }
         public Visibility BtnBackToEpisodes { get; }

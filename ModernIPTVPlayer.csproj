@@ -28,8 +28,8 @@
     <CsWinRTIncludes>ModernIPTVPlayer;MpvWinUI;MpvWinUI.Common;Mpv.UI;Microsoft.UI.Xaml.Hosting</CsWinRTIncludes>
     <TrimmerRootDescriptor>TrimmerRootDescriptor.xml</TrimmerRootDescriptor>
 
-    <!-- .NET 11 Runtime Async for cleaner async stack traces -->
-    <EnableRuntimeAsync>true</EnableRuntimeAsync>
+    <!-- .NET 11 Runtime Async compilation for heap-allocation-free async methods -->
+    <Features>$(Features);runtime-async=on</Features>
   </PropertyGroup>
 
   <!-- Disable XAML-generated Debugger.Break() on UnhandledException -->
@@ -96,7 +96,6 @@
     <PackageReference Include="Microsoft.Windows.CsWinRT" />
     <PackageReference Include="System.Numerics.Tensors" />
     <PackageReference Include="XBindLeakFix" />
-    <PackageReference Include="ZstdSharp.Port" />
   </ItemGroup>
 
   <ItemGroup>

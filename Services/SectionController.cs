@@ -319,6 +319,15 @@ namespace ModernIPTVPlayer.Services
 
             try
             {
+                CompositionService.ResetVisual(_panel);
+                _panel.Visibility = Visibility.Visible;
+                _panel.Opacity = 1;
+
+                if (_content != null)
+                {
+                    _content.Visibility = Visibility.Visible;
+                }
+
                 var easing = _compositor.CreateCubicBezierEasingFunction(
                     new Vector2(0.16f, 0.86f), new Vector2(0.16f, 1.0f));
 
@@ -474,10 +483,10 @@ namespace ModernIPTVPlayer.Services
                                 return;
                             }
 
-                            Debug.WriteLine($"[SECTION] {Name} hide finalize. Vis={_panel.Visibility}, Opacity={_panel.Opacity}");
-                            _panel.Visibility = Visibility.Collapsed;
-                            CompositionService.StopAllAnimationsImmediately(_panel);
-                            _panel.Opacity = 1;
+                             Debug.WriteLine($"[SECTION] {Name} hide finalize. Vis={_panel.Visibility}, Opacity={_panel.Opacity}");
+                             CompositionService.StopAllAnimationsImmediately(_panel);
+                             _panel.Visibility = Visibility.Collapsed;
+                             _panel.Opacity = 1;
                             Debug.WriteLine($"[SECTION] {Name} panel dismissed. Vis={_panel.Visibility}, Opacity={_panel.Opacity}");
                         }
                         catch (Exception ex)
@@ -531,6 +540,7 @@ namespace ModernIPTVPlayer.Services
                         CompositionService.StopAll(visual);
                         visual.Opacity = 0f;
                     });
+                    _content.Visibility = Visibility.Visible;
                     _content.Opacity = 0;
                 }
                 if (_skeleton != null)

@@ -116,21 +116,17 @@ namespace ModernIPTVPlayer.Models.Metadata
         [JsonIgnore] public HashSet<string> ProbedAddons { get; set; } = new HashSet<string>();
         [JsonIgnore] public string DurationFormatted => Runtime;
 
-        // --- Cached Section Keys (Phase 2.1) ---
-        private string? _identityKey;
-        [JsonIgnore] public string IdentityKey => _identityKey ??= ComputeIdentityKey();
+        // --- Dynamic Section Keys (Fixing State Sync Issues) ---
+        [JsonIgnore] public string IdentityKey => ComputeIdentityKey();
         private string ComputeIdentityKey() => $"{Title}|{SubTitle}|{OriginalTitle}|{LogoUrl}";
 
-        private string? _detailsKey;
-        [JsonIgnore] public string DetailsKey => _detailsKey ??= ComputeDetailsKey();
+        [JsonIgnore] public string DetailsKey => ComputeDetailsKey();
         private string ComputeDetailsKey() => $"{Overview}|{Year}|{Genres}|{Runtime}|{Rating}";
 
-        private string? _actionsKey;
-        [JsonIgnore] public string ActionsKey => _actionsKey ??= ComputeActionsKey();
+        [JsonIgnore] public string ActionsKey => ComputeActionsKey();
         private string ComputeActionsKey() => $"{TrailerUrl}|{IsAvailableOnIptv}|{StreamUrl}";
 
-        private string? _peopleKey;
-        [JsonIgnore] public string PeopleKey => _peopleKey ??= ComputePeopleKey();
+        [JsonIgnore] public string PeopleKey => ComputePeopleKey();
         private string ComputePeopleKey()
         {
             string cast = Cast == null ? "" : string.Join(";", Cast.Take(10).Select(c => $"{c.Name}:{c.Character}:{c.ProfileUrl}"));
@@ -138,8 +134,7 @@ namespace ModernIPTVPlayer.Models.Metadata
             return $"{cast}|{directors}|{TmdbInfo?.Id}";
         }
 
-        private string? _episodesKey;
-        [JsonIgnore] public string EpisodesKey => _episodesKey ??= ComputeEpisodesKey();
+        [JsonIgnore] public string EpisodesKey => ComputeEpisodesKey();
         private string ComputeEpisodesKey()
         {
             if (!IsSeries || Seasons == null || !Seasons.Any(s => s.Episodes != null && s.Episodes.Count > 0)) return "";
@@ -147,16 +142,14 @@ namespace ModernIPTVPlayer.Models.Metadata
                 $"{s.SeasonNumber}:{s.Name}:{(s.Episodes == null ? 0 : s.Episodes.Count)}:{string.Join(",", (s.Episodes ?? new List<UnifiedEpisode>()).Take(4).Select(e => $"{e.Id}:{e.Title}:{e.StreamUrl}"))}"));
         }
 
-        private string? _backdropKey;
-        [JsonIgnore] public string BackdropKey => _backdropKey ??= ComputeBackdropKey();
+        [JsonIgnore] public string BackdropKey => ComputeBackdropKey();
         private string ComputeBackdropKey()
         {
             string gallery = BackdropUrls == null ? "" : string.Join(";", BackdropUrls);
             return $"{BackdropUrl}|{PosterUrl}|{gallery}";
         }
 
-        private string? _attributionKey;
-        [JsonIgnore] public string AttributionKey => _attributionKey ??= ComputeAttributionKey();
+        [JsonIgnore] public string AttributionKey => ComputeAttributionKey();
         private string ComputeAttributionKey() => $"{DataSource}|{MetadataSourceInfo}";
 
         // --- Technical & Collections ---

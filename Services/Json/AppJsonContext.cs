@@ -77,6 +77,8 @@ namespace ModernIPTVPlayer.Services.Json
     [JsonSerializable(typeof(VodInfo))]
     [JsonSerializable(typeof(VodStreamInfo))]
     [JsonSerializable(typeof(SeriesInfoResult))]
+    [JsonSerializable(typeof(SeriesSeasonDef))]
+    [JsonSerializable(typeof(List<SeriesSeasonDef>))]
     [JsonSerializable(typeof(MovieInfoResult))]
     [JsonSerializable(typeof(JsonElement))]
     [JsonSerializable(typeof(Dictionary<string, List<SeriesEpisodeDef>>))]

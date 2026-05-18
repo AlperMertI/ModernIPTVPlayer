@@ -37,6 +37,7 @@ namespace ModernIPTVPlayer.Controls
         {
             if (source == null)
             {
+                ContentLogoImage.Source = null;
                 ContentLogoHost.Visibility = Visibility.Collapsed;
                 TitleText.Visibility = Visibility.Collapsed;
                 TitleShimmer.Visibility = Visibility.Visible;
@@ -54,6 +55,7 @@ namespace ModernIPTVPlayer.Controls
         {
             if (string.IsNullOrEmpty(url))
             {
+                ContentLogoImage.Source = null;
                 ContentLogoHost.Visibility = Visibility.Collapsed;
                 TitleText.Visibility = Visibility.Collapsed;
                 TitleShimmer.Visibility = Visibility.Visible;
@@ -103,6 +105,7 @@ namespace ModernIPTVPlayer.Controls
 
         private void ContentLogoImage_ImageOpened(object sender, RoutedEventArgs e)
         {
+            TitleShimmer.Visibility = Visibility.Collapsed;
             LogoLoadCompleted?.Invoke(this, true);
         }
 

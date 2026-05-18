@@ -35,6 +35,5 @@
     <PackageVersion Include="CommunityToolkit.WinUI.UI.Controls" Version="7.1.2" />
     <PackageVersion Include="CommunityToolkit.WinUI.UI.Animations" Version="7.1.2" />
     <PackageVersion Include="XBindLeakFix" Version="1.0.0" />
-    <PackageVersion Include="ZstdSharp.Port" Version="0.8.8" />
   </ItemGroup>
 </Project>

@@ -583,7 +583,7 @@
         <!-- SKELETON LOADER -->
         <!-- LEFT: INFO PANEL -->
         <!-- LEFT: INFO PANEL -->
-        <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Padding="0" Opacity="0">
+        <Grid x:Name="InfoContainer" Grid.Column="0" Grid.Row="0" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" Padding="0" Opacity="1">
             <Grid.RenderTransform>
                 <CompositeTransform x:Name="InfoContainerTransform"/>
             </Grid.RenderTransform>
@@ -718,7 +718,7 @@
                  </Grid>
             
                 <!-- DIRECTOR SECTION (Compact) -->
-                <Grid>
+                <Grid x:Name="DirectorPanel">
                     <StackPanel x:Name="DirectorSection" Spacing="2" Visibility="Collapsed" Margin="0">
                         <StackPanel.RenderTransform>
                             <CompositeTransform x:Name="DirectorSectionTransform"/>
@@ -784,7 +784,7 @@
                     </StackPanel>
                 </Grid>
 
-                <Grid>
+                <Grid x:Name="CastPanel">
                     <StackPanel x:Name="CastSection" Spacing="2" Visibility="Collapsed" Margin="0">
                         <StackPanel.RenderTransform>
                             <CompositeTransform x:Name="CastSectionTransform"/>
@@ -892,21 +892,21 @@
                                      </ComboBox>
                                  </Grid>
                 
-                                  <ScrollViewer Grid.Row="1" x:Name="EpisodesScrollViewer" 
-                                                VerticalScrollBarVisibility="Auto" VerticalScrollMode="Enabled"
-                                                Padding="8,0,8,20">
-                                      <ItemsRepeater x:Name="EpisodesRepeater" 
-                                                    ItemsSource="{x:Bind CurrentEpisodes}"
-                                                    ItemTemplate="{StaticResource EpisodeSelector}"
-                                                    ElementPrepared="EpisodesRepeater_ElementPrepared"
-                                                    ElementClearing="EpisodesRepeater_ElementClearing"
-                                                    VerticalCacheLength="2.0"
-                                                    HorizontalCacheLength="0">
-                                          <ItemsRepeater.Layout>
-                                              <StackLayout Spacing="8"/>
-                                          </ItemsRepeater.Layout>
-                                      </ItemsRepeater>
-                                  </ScrollViewer>
+                                   <ScrollViewer Grid.Row="1" x:Name="EpisodesScrollViewer" 
+                                                 VerticalScrollBarVisibility="Auto" VerticalScrollMode="Enabled"
+                                                 Padding="8,0,8,20">
+                                       <ItemsRepeater x:Name="EpisodesRepeater" 
+                                                     ItemsSource="{x:Bind CurrentEpisodes}"
+                                                     ItemTemplate="{StaticResource EpisodeSelector}"
+                                                     ElementPrepared="EpisodesRepeater_ElementPrepared"
+                                                     ElementClearing="EpisodesRepeater_ElementClearing"
+                                                     VerticalCacheLength="2.0"
+                                                     HorizontalCacheLength="0">
+                                           <ItemsRepeater.Layout>
+                                               <StackLayout Spacing="8"/>
+                                           </ItemsRepeater.Layout>
+                                       </ItemsRepeater>
+                                   </ScrollViewer>
                            </Grid>
                           </Border>
                     </Grid>

@@ -264,8 +264,7 @@ namespace ModernIPTVPlayer.Services.MediaInfo
                         _page.StreamUrl = history.StreamUrl;
 
                     _page.StartPrebuffering(_page.StreamUrl);
-                    if (!string.IsNullOrEmpty(_page.StreamUrl))
-                        _ = _page.UpdateTechnicalBadgesAsync(_page.StreamUrl);
+                    _ = _page.UpdateTechnicalBadgesAsync(_page.StreamUrl);
 
                     _page.SyncActionButtonsInternal(history);
                     _page.RefreshAllAddonActiveFlags();

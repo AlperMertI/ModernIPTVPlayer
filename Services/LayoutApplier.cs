@@ -2,6 +2,9 @@ using System;
 using System.Diagnostics;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Composition;
+using Microsoft.UI.Xaml.Hosting;
+using System.Numerics;
 
 namespace ModernIPTVPlayer.Services
 {
@@ -33,15 +36,16 @@ namespace ModernIPTVPlayer.Services
         public StackPanel ActionBarPanel { get; set; }
         public Grid InfoContainerInner { get; set; }
         public Grid AdaptiveInfoHost { get; set; }
-        public FrameworkElement CastSection { get; set; }
-        public FrameworkElement CastShimmer { get; set; }
-        public FrameworkElement DirectorSection { get; set; }
-        public FrameworkElement DirectorShimmer { get; set; }
+        public FrameworkElement CastPanel { get; set; }
+        public ListView CastListView { get; set; }
+        public FrameworkElement DirectorPanel { get; set; }
+        public ListView DirectorListView { get; set; }
         public Button BtnHideSources { get; set; }
         public Button BtnBackToEpisodes { get; set; }
         public FrameworkElement SourcesShowHandle { get; set; }
         public FrameworkElement MetadataPanel { get; set; }
         public FrameworkElement OverviewPanel { get; set; }
+        public FrameworkElement StickyHeader { get; set; }
     }
 
     /// <summary>
@@ -114,10 +118,10 @@ namespace ModernIPTVPlayer.Services
                 && a.Placement.EpisodesColumnSpan == b.Placement.EpisodesColumnSpan
                 && a.Placement.NarrowSectionsVisible == b.Placement.NarrowSectionsVisible
                 && a.Visibility.InfoContainer == b.Visibility.InfoContainer
-                && a.Visibility.CastSection == b.Visibility.CastSection
-                && a.Visibility.CastShimmer == b.Visibility.CastShimmer
-                && a.Visibility.DirectorSection == b.Visibility.DirectorSection
-                && a.Visibility.DirectorShimmer == b.Visibility.DirectorShimmer
+                && a.Visibility.CastPanel == b.Visibility.CastPanel
+                && a.Visibility.CastListView == b.Visibility.CastListView
+                && a.Visibility.DirectorPanel == b.Visibility.DirectorPanel
+                && a.Visibility.DirectorListView == b.Visibility.DirectorListView
                 && a.Visibility.NarrowSectionsContainer == b.Visibility.NarrowSectionsContainer
                 && a.Visibility.BtnHideSources == b.Visibility.BtnHideSources
                 && a.Visibility.BtnBackToEpisodes == b.Visibility.BtnBackToEpisodes
@@ -302,21 +306,28 @@ namespace ModernIPTVPlayer.Services
         {
             if (!_hasPreviousDecision)
             {
-                ApplyVisualPropertiesValues(decision.Visual);
+                ApplyVisualPropertiesValues(decision);
                 return;
             }
 
             var prev = _lastDecision.Visual;
             var curr = decision.Visual;
 
-            if (prev.IsWide != curr.IsWide)
+            if (prev.IsWide != curr.IsWide || 
+                prev.ShowPeopleList != curr.ShowPeopleList || 
+                _lastDecision.ViewportWidth != decision.ViewportWidth ||
+                _lastDecision.Visibility.CastPanel != decision.Visibility.CastPanel ||
+                _lastDecision.Visibility.DirectorPanel != decision.Visibility.DirectorPanel ||
+                _lastDecision.Visibility.CastListView != decision.Visibility.CastListView ||
+                _lastDecision.Visibility.DirectorListView != decision.Visibility.DirectorListView)
             {
-                ApplyVisualPropertiesValues(curr);
+                ApplyVisualPropertiesValues(decision);
             }
         }
 
-        private void ApplyVisualPropertiesValues(VisualProperties v)
+        private void ApplyVisualPropertiesValues(LayoutDecision decision)
         {
+            var v = decision.Visual;
             if (_elements.OverviewText != null) _elements.OverviewText.TextAlignment = v.OverviewTextAlignment;
             if (_elements.GenresText != null) _elements.GenresText.TextAlignment = v.GenresTextAlignment;
 
@@ -359,7 +370,6 @@ namespace ModernIPTVPlayer.Services
                 _elements.EpisodesPanel.Width = v.EpisodesPanelWidth;
                 _elements.EpisodesPanel.MaxWidth = v.EpisodesPanelMaxWidth;
                 _elements.EpisodesPanel.Margin = v.EpisodesPanelMargin;
-                Debug.WriteLine($"[LAYOUT-APPLIER] EpisodesPanel props: Vis={_elements.EpisodesPanel.Visibility}, Opacity={_elements.EpisodesPanel.Opacity}, VA={v.EpisodesPanelVAlign}, Width={v.EpisodesPanelWidth}");
             }
 
             if (_elements.SourcesPanel != null)
@@ -370,6 +380,26 @@ namespace ModernIPTVPlayer.Services
                 _elements.SourcesPanel.MaxWidth = v.SourcesPanelMaxWidth;
                 _elements.SourcesPanel.Margin = v.SourcesPanelMargin;
             }
+
+            // Apply responsive dimensions and transitions for Cast & Crew panels
+            double peopleSectionWidth = Math.Clamp(decision.ViewportWidth, 360, 800);
+            double peopleHeight = 145;
+
+            if (_elements.CastPanel != null)
+            {
+                _elements.CastPanel.Width = peopleSectionWidth;
+                _elements.CastPanel.MaxWidth = peopleSectionWidth;
+                _elements.CastPanel.HorizontalAlignment = decision.Visual.IsWide ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+            }
+            if (_elements.DirectorPanel != null)
+            {
+                _elements.DirectorPanel.Width = peopleSectionWidth;
+                _elements.DirectorPanel.MaxWidth = peopleSectionWidth;
+                _elements.DirectorPanel.HorizontalAlignment = decision.Visual.IsWide ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+            }
+
+            ApplyPeopleListState(_elements.CastListView, v.ShowPeopleList, peopleHeight);
+            ApplyPeopleListState(_elements.DirectorListView, v.ShowPeopleList, peopleHeight);
         }
 
         #endregion
@@ -388,10 +418,10 @@ namespace ModernIPTVPlayer.Services
             var curr = decision.Visibility;
 
             SetVisibilityIfChanged(_elements.InfoContainer, prev.InfoContainer, curr.InfoContainer);
-            SetVisibilityIfChanged(_elements.CastSection, prev.CastSection, curr.CastSection);
-            SetVisibilityIfChanged(_elements.CastShimmer, prev.CastShimmer, curr.CastShimmer);
-            SetVisibilityIfChanged(_elements.DirectorSection, prev.DirectorSection, curr.DirectorSection);
-            SetVisibilityIfChanged(_elements.DirectorShimmer, prev.DirectorShimmer, curr.DirectorShimmer);
+            SetVisibilityIfChanged(_elements.CastPanel, prev.CastPanel, curr.CastPanel);
+            SetVisibilityIfChanged(_elements.CastListView, prev.CastListView, curr.CastListView);
+            SetVisibilityIfChanged(_elements.DirectorPanel, prev.DirectorPanel, curr.DirectorPanel);
+            SetVisibilityIfChanged(_elements.DirectorListView, prev.DirectorListView, curr.DirectorListView);
             SetVisibilityIfChanged(_elements.NarrowSectionsContainer, prev.NarrowSectionsContainer, curr.NarrowSectionsContainer);
             SetVisibilityIfChanged(_elements.BtnHideSources, prev.BtnHideSources, curr.BtnHideSources);
             SetVisibilityIfChanged(_elements.BtnBackToEpisodes, prev.BtnBackToEpisodes, curr.BtnBackToEpisodes);
@@ -405,10 +435,10 @@ namespace ModernIPTVPlayer.Services
         private void ApplyVisibilityValues(VisibilityMap v)
         {
             SetVisibility(_elements.InfoContainer, v.InfoContainer);
-            SetVisibility(_elements.CastSection, v.CastSection);
-            SetVisibility(_elements.CastShimmer, v.CastShimmer);
-            SetVisibility(_elements.DirectorSection, v.DirectorSection);
-            SetVisibility(_elements.DirectorShimmer, v.DirectorShimmer);
+            SetVisibility(_elements.CastPanel, v.CastPanel);
+            SetVisibility(_elements.CastListView, v.CastListView);
+            SetVisibility(_elements.DirectorPanel, v.DirectorPanel);
+            SetVisibility(_elements.DirectorListView, v.DirectorListView);
             SetVisibility(_elements.NarrowSectionsContainer, v.NarrowSectionsContainer);
             SetVisibility(_elements.BtnHideSources, v.BtnHideSources);
             SetVisibility(_elements.BtnBackToEpisodes, v.BtnBackToEpisodes);
@@ -428,8 +458,120 @@ namespace ModernIPTVPlayer.Services
         {
             if (element != null && element.Visibility != visibility)
             {
-                Debug.WriteLine($"[LAYOUT-APPLIER] SetVisibility {element.Name}: {element.Visibility} -> {visibility}");
                 element.Visibility = visibility;
+            }
+        }
+
+        #endregion
+
+        #region Transition Helpers
+
+        private void ApplyPeopleListState(ListView listView, bool showList, double expandedHeight)
+        {
+            if (listView == null) return;
+            
+            double targetHeight = showList ? expandedHeight : 0;
+
+            if (!listView.IsLoaded)
+            {
+                listView.Height = targetHeight;
+                listView.Visibility = showList ? Visibility.Visible : Visibility.Collapsed;
+                
+                ModernIPTVPlayer.Helpers.CompositionService.RunOnceLoaded(listView, visual =>
+                {
+                    try
+                    {
+                        ElementCompositionPreview.SetIsTranslationEnabled(listView, true);
+                        visual.StopAnimation("Opacity");
+                        visual.Opacity = showList ? 1f : 0f;
+                        visual.Clip = null;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"[LAYOUT-APPLIER] RunOnceLoaded callback failed: {ex.Message}");
+                    }
+                });
+                return;
+            }
+
+            try
+            {
+                var visual = ElementCompositionPreview.GetElementVisual(listView);
+                if (visual == null) return;
+
+                var compositor = visual.Compositor;
+                ElementCompositionPreview.SetIsTranslationEnabled(listView, true);
+
+                visual.StopAnimation("Opacity");
+                visual.Clip = null;
+
+                if (showList)
+                {
+                    listView.Height = targetHeight;
+                    listView.Visibility = Visibility.Visible;
+
+                    visual.Opacity = 0f;
+
+                    var fadeIn = compositor.CreateScalarKeyFrameAnimation();
+                    fadeIn.InsertKeyFrame(1f, 1f);
+                    fadeIn.Duration = TimeSpan.FromMilliseconds(450);
+
+                    var slideUp = compositor.CreateVector3KeyFrameAnimation();
+                    slideUp.InsertKeyFrame(1f, Vector3.Zero);
+                    slideUp.Duration = TimeSpan.FromMilliseconds(450);
+
+                    visual.StartAnimation("Opacity", fadeIn);
+                    if (_elements.StickyHeader != null)
+                    {
+                        ModernIPTVPlayer.Helpers.CompositionService.StartTranslationAnimation(_elements.StickyHeader, slideUp, new Vector3(0, 20, 0));
+                    }
+                }
+                else
+                {
+                    var duration = TimeSpan.FromMilliseconds(350);
+                    var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(0.2f, 1f));
+
+                    var clip = compositor.CreateInsetClip();
+                    visual.Clip = clip;
+
+                    var wipeAnim = compositor.CreateScalarKeyFrameAnimation();
+                    wipeAnim.InsertKeyFrame(0f, 0f);
+                    wipeAnim.InsertKeyFrame(1f, (float)listView.ActualHeight, easing);
+                    wipeAnim.Duration = duration;
+
+                    var fadeOut = compositor.CreateScalarKeyFrameAnimation();
+                    fadeOut.InsertKeyFrame(1f, 0f, easing);
+                    fadeOut.Duration = duration;
+
+                    var slideDown = compositor.CreateVector3KeyFrameAnimation();
+                    slideDown.InsertKeyFrame(1f, new Vector3(0, 15, 0), easing);
+                    slideDown.Duration = duration;
+
+                    var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
+                    
+                    clip.StartAnimation(nameof(InsetClip.BottomInset), wipeAnim);
+                    visual.StartAnimation("Opacity", fadeOut);
+                    if (_elements.StickyHeader != null)
+                    {
+                        ModernIPTVPlayer.Helpers.CompositionService.StartTranslationAnimation(_elements.StickyHeader, slideDown);
+                    }
+                    
+                    batch.Completed += (s, e) => {
+                        if (!showList) 
+                        {
+                            listView.Height = 0;
+                            listView.Visibility = Visibility.Collapsed;
+                            visual.Clip = null; 
+                        }
+                    };
+                    batch.End();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"[LAYOUT-APPLIER] ApplyPeopleListState failed: {ex.Message}");
+                listView.Height = targetHeight;
+                listView.Visibility = showList ? Visibility.Visible : Visibility.Collapsed;
             }
         }
 

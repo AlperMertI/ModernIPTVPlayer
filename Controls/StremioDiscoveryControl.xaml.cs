@@ -404,7 +404,7 @@ namespace ModernIPTVPlayer.Controls
                     try
                     {
                         using var ms = new System.IO.MemoryStream(raw);
-                        using var decompressor = new ZstdSharp.DecompressionStream(ms);
+                        using var decompressor = new System.IO.Compression.ZstandardStream(ms, System.IO.Compression.CompressionMode.Decompress);
                         // synchronous deserialize on the decompressed stream — no async boundary
                         diskCache = JsonSerializer.Deserialize(decompressor, AppJsonContext.Default.DictionaryStringListCachedSlot);
                     }
@@ -464,7 +464,7 @@ namespace ModernIPTVPlayer.Controls
                     // atomic write: serialize to tmp, then rename. Prevents ever leaving
                     // a half-written (or zero-byte) file behind on crash.
                     using (var fs = System.IO.File.Create(tmpPath))
-                    using (var compressor = new ZstdSharp.CompressionStream(fs, 3))
+                    using (var compressor = new System.IO.Compression.ZstandardStream(fs, System.IO.Compression.CompressionLevel.Optimal))
                     {
                         JsonSerializer.Serialize(compressor, copy, AppJsonContext.Default.DictionaryStringListCachedSlot);
                     }

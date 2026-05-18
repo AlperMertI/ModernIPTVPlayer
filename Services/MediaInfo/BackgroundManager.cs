@@ -72,7 +72,6 @@ namespace ModernIPTVPlayer.Services.MediaInfo
         public void SetHero(ImageSource source, string reason)
         {
             if (_disposed || source == null) return;
-            EnsureInitialized();
 
             var outgoing = GetActiveHero();
             if (outgoing.Source == source && outgoing.Opacity > 0.9)
@@ -90,7 +89,6 @@ namespace ModernIPTVPlayer.Services.MediaInfo
         public void SetHero(string imageUrl, string reason)
         {
             if (_disposed || string.IsNullOrWhiteSpace(imageUrl)) return;
-            EnsureInitialized();
 
             if (IsAlreadyShowing(imageUrl))
             {
@@ -123,6 +121,17 @@ namespace ModernIPTVPlayer.Services.MediaInfo
             _view.SetHeroImage2Source(null);
             _view.SetHeroImageOpacity(0);
             _view.SetHeroImage2Opacity(0);
+
+            if (_view.HeroImage != null)
+            {
+                var v1 = ElementCompositionPreview.GetElementVisual(_view.HeroImage);
+                v1.Opacity = 0f;
+            }
+            if (_view.HeroImage2 != null)
+            {
+                var v2 = ElementCompositionPreview.GetElementVisual(_view.HeroImage2);
+                v2.Opacity = 0f;
+            }
 
             _currentHeroUrl = null;
             _isFirstImageApplied = false;
@@ -686,13 +695,6 @@ namespace ModernIPTVPlayer.Services.MediaInfo
 
         private Microsoft.UI.Xaml.Controls.Image GetInactiveHero() =>
             _view.GetActiveHeroOpacity() < _view.GetInactiveHeroOpacity() ? _view.HeroImage : _view.HeroImage2;
-
-        private void EnsureInitialized()
-        {
-            _view.SetHeroImage2Opacity(0);
-            var v2 = ElementCompositionPreview.GetElementVisual(_view.HeroImage2);
-            v2.Opacity = 0f;
-        }
 
         private static string BuildAmbienceSignature(string? url, string sourceLabel) =>
             $"{url ?? "<null>"}|{NormalizeAmbienceSourceLabel(sourceLabel)}";

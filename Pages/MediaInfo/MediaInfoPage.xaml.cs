@@ -94,7 +94,19 @@ namespace ModernIPTVPlayer
         string IMediaInfoUIProxy.StreamUrl { get => _streamUrl; set { _streamUrl = value; } }
         ModernIPTVPlayer.Models.Metadata.UnifiedMetadata IMediaInfoUIProxy.Metadata { set => _unifiedMetadata = value; }
         bool IMediaInfoUIProxy.IsLogoImageLoaded => _isLogoImageLoaded;
-        bool IMediaInfoUIProxy.IsLogoPending { get => _isLogoPending; set => _isLogoPending = value; }
+        bool IMediaInfoUIProxy.IsLogoPending
+        {
+            get => _isLogoPending;
+            set
+            {
+                _isLogoPending = value;
+                if (value)
+                {
+                    _logoReadyTcs = new TaskCompletionSource<bool>();
+                    _isLogoImageLoaded = false;
+                }
+            }
+        }
         bool IMediaInfoUIProxy.IsLogoReady { get => _isLogoReady; set => _isLogoReady = value; }
         bool IMediaInfoUIProxy.IsLogoFallbackActive { get => _isLogoFallbackActive; set => _isLogoFallbackActive = value; }
         string IMediaInfoUIProxy.CurrentLogoUrl { get => _currentLogoUrl; set => _currentLogoUrl = value; }
@@ -263,6 +275,8 @@ namespace ModernIPTVPlayer
         private bool _lastRestartIconOnlyState = true;
         private int _playActionTransitionVersion;
         private int _restartActionTransitionVersion;
+        private bool _isPlayActionAnimating;
+        private bool _isRestartActionAnimating;
         private string _lastPanelSyncLogSignature = "";
         private const double ContentGridPaddingBottom = 30.0;
         private const double InfoInnerMarginBottom = 25.0;
@@ -683,6 +697,7 @@ namespace ModernIPTVPlayer
                 {
                     _lastResponsiveWidthBucket = widthBucket;
                     _lastResponsiveHeightBucket = heightBucket;
+                    OnViewportChanged();
                     QueueInfoPriorityLayout(layoutIndex == 1);
                     RefreshAllShimmers();
                 }
@@ -965,6 +980,8 @@ namespace ModernIPTVPlayer
             IMediaStream previousItem = _item;
             bool isBackNav = e.NavigationMode == NavigationMode.Back;
 
+            ResetPageState(resetBackground: true);
+
             if (e.Parameter is MediaNavigationArgs args)
             {
                 var sw = Stopwatch.StartNew();
@@ -1037,6 +1054,7 @@ namespace ModernIPTVPlayer
         Button IMediaInfoUIProxy.TrailerButton => TrailerButton;
         Button IMediaInfoUIProxy.DownloadButton => DownloadButton;
         Button IMediaInfoUIProxy.CopyLinkButton => CopyLinkButton;
+        Button IMediaInfoUIProxy.WatchlistButton => WatchlistButton;
 
         void IMediaInfoUIProxy.SetLoadState(PageLoadState state) {
             ModernIPTVPlayer.Services.AppLogger.Info($"IMediaInfoUIProxy.SetLoadState({state}) called. IsNavigatingAway: {_isNavigatingAway}");
@@ -1531,8 +1549,12 @@ namespace ModernIPTVPlayer
         }
 
         internal int CurrentLoadingVersion => Volatile.Read(ref _loadingVersion);
-        internal void ResetPageState() => ResetPageStateInternal();
-        internal async Task PrepareInfoSkeletonForRevealAsync() => await PrepareInfoSkeletonAsync();
+        internal void ResetPageState(bool resetBackground = true) => ResetPageStateInternal(resetBackground);
+        internal async Task PrepareInfoSkeletonForRevealAsync()
+        {
+            await ((IMediaInfoUIProxy)this).WaitForPageLoadedAsync();
+            await PrepareInfoSkeletonAsync();
+        }
         internal CancellationTokenSource? PageCts => _pageCts;
         internal UnifiedMetadata UnifiedMetadata { get => _unifiedMetadata; set => _unifiedMetadata = value; }
         internal Services.MediaInfo.TrailerManager TrailerManager => _trailerManager;

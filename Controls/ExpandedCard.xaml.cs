@@ -1004,7 +1004,7 @@ namespace ModernIPTVPlayer.Controls
                 {
                     try
                     {
-                        var info = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, App.CurrentLogin, ct);
+                        var info = await Services.ContentCacheService.Instance.GetSeriesInfoAsync(series.SeriesId, App.CurrentLogin, ct: ct);
                         if (info != null && info.Episodes != null && info.Episodes.Count > 0)
                         {
                              // Find First Season

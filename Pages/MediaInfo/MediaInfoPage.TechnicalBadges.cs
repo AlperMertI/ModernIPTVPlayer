@@ -118,6 +118,7 @@ namespace ModernIPTVPlayer
             if (string.IsNullOrEmpty(url))
             {
                 Services.CacheLogger.Info(Services.CacheLogger.Category.MediaInfo, "UpdateTechnicalBadges CANCELLED", "Null URL");
+                SetBadgeLoadingState(false);
                 UpdateTechnicalSectionVisibility(false);
                 return;
             }

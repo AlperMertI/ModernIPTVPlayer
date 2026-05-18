@@ -627,6 +627,12 @@ namespace ModernIPTVPlayer.Models.Iptv
                     {
                         stream.Dateadded = FastStringPool.Intern(reader.GetString());
                     }
+                    else if (propName.SequenceEqual("last_modified"u8))
+                    {
+                        stream.LastModified = reader.TokenType == JsonTokenType.Number
+                            ? reader.GetInt64().ToString()
+                            : reader.GetString();
+                    }
                 }
             }
             finally

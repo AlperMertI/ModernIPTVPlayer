@@ -72,7 +72,7 @@ namespace ModernIPTVPlayer.Services.MediaInfo
                 int session = _page.BeginLoadSession();
                 Debug.WriteLine($"[ORCHESTRATOR] Session {session} started for: {item?.Title ?? "Unknown"}");
 
-                _page.ResetPageState();
+                _page.ResetPageState(resetBackground: false);
                 _loadPipeline.Reset();
                 _loadPipeline.TransitionTo(LoadPipeline.State.Preparing);
                 _page.SetLoadStateInternal(PageLoadState.Loading);

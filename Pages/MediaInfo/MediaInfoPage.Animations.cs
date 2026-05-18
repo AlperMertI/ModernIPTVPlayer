@@ -39,6 +39,9 @@ namespace ModernIPTVPlayer
 
             // 5. Modern Layout: Implicit Animations (Force smooth resizing)
             SetupImplicitAnimations();
+
+            // 6. Action Bar Implicit Animations
+            SetupActionBarImplicitAnimations();
         }
 
         private void SetupImplicitAnimations()
@@ -69,16 +72,14 @@ namespace ModernIPTVPlayer
                 var implicitAnimationCollection = _compositor.CreateImplicitAnimationCollection();
                 implicitAnimationCollection["Offset"] = offsetAnimation;
                 implicitAnimationCollection["Scale"] = scaleAnimation;
-                implicitAnimationCollection["Opacity"] = opacityAnimation;
 
-                var scaleOpacityCollection = _compositor.CreateImplicitAnimationCollection();
-                scaleOpacityCollection["Scale"] = scaleAnimation;
-                scaleOpacityCollection["Opacity"] = opacityAnimation;
+                var scaleCollection = _compositor.CreateImplicitAnimationCollection();
+                scaleCollection["Scale"] = scaleAnimation;
 
                 // Elements that should "glide" and "morph" during resize/layout changes
                 UIElement[] glideElements = { 
                     InfoContainer, InfoContainerInner, AdaptiveInfoHost, InfoColumn, MetadataRibbon, ActionBarPanel, 
-                    CastSection, DirectorSection, 
+                    CastPanel, DirectorPanel, 
                     IdentityControl?.TitlePanelElement, IdentityControl?.LogoHost, IdentityControl?.TitleTextBlock,
                     IdentityControl?.IdentityPanel, OverviewPanel, GenresText, MetadataPanel,
                     IdentityControl?.TitleShimmerElement, MetadataShimmer, ActionBarShimmer, OverviewShimmer,
@@ -105,7 +106,7 @@ namespace ModernIPTVPlayer
                     }
                     else
                     {
-                        visual.ImplicitAnimations = scaleOpacityCollection;
+                        visual.ImplicitAnimations = scaleCollection;
                     }
 
                     // Enable translation facade
@@ -255,13 +256,6 @@ namespace ModernIPTVPlayer
                 }
 
                 var actionButtons = new Button[] { PlayButton, RestartButton, TrailerButton, DownloadButton, CopyLinkButton, WatchlistButton };
-                
-                // Add children to glide as well
-                UIElement[] glideChildren = { 
-                    PlayButtonIcon, PlayButtonTextStack, 
-                    RestartButtonIcon, RestartButtonTextStack 
-                };
-
                 var centerPointExpression = _compositor.CreateExpressionAnimation("Vector3(this.Target.Size.X / 2, this.Target.Size.Y / 2, 0)");
 
                 foreach (var btn in actionButtons)
@@ -269,13 +263,6 @@ namespace ModernIPTVPlayer
                     if (btn == null) continue;
                     var visual = ElementCompositionPreview.GetElementVisual(btn);
                     visual.StartAnimation("CenterPoint", centerPointExpression);
-                    visual.ImplicitAnimations = buttonAnimations;
-                }
-
-                foreach (var child in glideChildren)
-                {
-                    if (child == null) continue;
-                    var visual = ElementCompositionPreview.GetElementVisual(child);
                     visual.ImplicitAnimations = buttonAnimations;
                 }
             }
@@ -624,7 +611,7 @@ namespace ModernIPTVPlayer
             };
         }
 
-        private void AnimateButtonWidth(Button? button, double targetWidth, double durationMs = 250)
+        private void AnimateButtonWidth(Button? button, FrameworkElement? textHost, double targetWidth, double durationMs = 250)
         {
             if (button == null) return;
 
@@ -642,7 +629,16 @@ namespace ModernIPTVPlayer
             Storyboard.SetTargetProperty(animation, "Width");
             
             // Set the final value explicitly when the animation ends to ensure stability
-            storyboard.Completed += (s, e) => { button.Width = targetWidth; };
+            storyboard.Completed += (s, e) => 
+            { 
+                button.Width = targetWidth; 
+                button.InvalidateMeasure();
+                textHost?.InvalidateMeasure();
+                button.UpdateLayout();
+
+                if (ReferenceEquals(button, PlayButton)) _isPlayActionAnimating = false;
+                else _isRestartActionAnimating = false;
+            };
             storyboard.Begin();
         }
 

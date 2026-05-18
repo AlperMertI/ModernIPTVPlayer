@@ -73,6 +73,7 @@ namespace ModernIPTVPlayer.Services
         Button TrailerButton { get; }
         Button DownloadButton { get; }
         Button CopyLinkButton { get; }
+        Button WatchlistButton { get; }
         ModernIPTVPlayer.Models.Metadata.UnifiedMetadata Metadata { set; }
         
         string StreamUrl { get; set; }

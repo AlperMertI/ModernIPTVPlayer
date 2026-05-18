@@ -202,15 +202,16 @@ namespace ModernIPTVPlayer
                     ActionBarPanel = ActionBarPanel,
                     InfoContainerInner = InfoContainerInner,
                     AdaptiveInfoHost = AdaptiveInfoHost,
-                    CastSection = CastSection,
-                    CastShimmer = CastShimmer,
-                    DirectorSection = DirectorSection,
-                    DirectorShimmer = DirectorShimmer,
+                    CastPanel = CastPanel,
+                    CastListView = CastListView,
+                    DirectorPanel = DirectorPanel,
+                    DirectorListView = DirectorListView,
                     BtnHideSources = BtnHideSources,
                     BtnBackToEpisodes = BtnBackToEpisodes,
                     SourcesShowHandle = SourcesShowHandle,
                     MetadataPanel = MetadataPanel,
                     OverviewPanel = OverviewPanel,
+                    StickyHeader = StickyHeader,
                 };
 
                 _sectionRegistry = new SectionRegistry();
@@ -220,8 +221,8 @@ namespace ModernIPTVPlayer
                 _sectionRegistry.Register("metadata", InfoContainer, MetadataPanel, MetadataShimmer, _compositor, 1);
                 _sectionRegistry.Register("actionbar", InfoContainer, ActionBarPanel, ActionBarShimmer, _compositor, 2);
                 _sectionRegistry.Register("overview", InfoContainer, OverviewPanel, OverviewShimmer, _compositor, 3);
-                _sectionRegistry.Register("director", InfoContainer, DirectorSection, DirectorShimmer, _compositor, 4);
-                _sectionRegistry.Register("cast", InfoContainer, CastSection, CastShimmer, _compositor, 5);
+                _sectionRegistry.Register("director", DirectorPanel, DirectorSection, DirectorShimmer, _compositor, 4);
+                _sectionRegistry.Register("cast", CastPanel, CastSection, CastShimmer, _compositor, 5);
                 _sectionRegistry.Register("sources", SourcesPanel, SourcesRepeater, null, _compositor, 6);
                 _sectionRegistry.Register("episodes", EpisodesPanel, EpisodesRepeater, null, _compositor, 7);
 
@@ -279,6 +280,9 @@ namespace ModernIPTVPlayer
                 var inputs = BuildLayoutInputs();
                 var decision = LayoutEngine.Compute(inputs);
                 _layoutApplier?.Apply(decision);
+
+                // Synchronize action button widths and detail panel responsive alignment
+                ApplyInfoPriorityLayout(ActualWidth >= LayoutAdaptiveThreshold);
             }
             catch (Exception ex)
             {
@@ -364,6 +368,11 @@ namespace ModernIPTVPlayer
 
         private void FlushDeferredPanelRequest()
         {
+            if (_panelOwner != null && _panelOwner.PanelMode != MediaDetailPanelMode.None)
+            {
+                return;
+            }
+
             if (_pendingPanelRequest.HasValue)
             {
                 var mode = _pendingPanelRequest.Value;

@@ -231,23 +231,28 @@ namespace ModernIPTVPlayer
         {
             if (button == null) return;
 
+            bool isPlay = ReferenceEquals(button, PlayButton);
+            bool isAnimating = isPlay ? _isPlayActionAnimating : _isRestartActionAnimating;
             bool modeChanged = lastIconOnlyState != iconOnly;
             int version = ++transitionVersion;
 
             if (modeChanged)
             {
+                if (isPlay) _isPlayActionAnimating = true;
+                else _isRestartActionAnimating = true;
+
                 if (iconOnly)
                 {
                     // Transitioning to Icon-Only: Start with expanded width and fade out text
                     AnimateActionTextOut(textHost);
-                    AnimateButtonWidth(button, actionSize, 300);
+                    AnimateButtonWidth(button, textHost, actionSize, 300);
                     
                     DispatcherQueue.TryEnqueue(async () =>
                     {
                         // Hide text early in the collapse to prevent overlap as width shrinks
                         await Task.Delay(80);
                         
-                        int currentVersion = ReferenceEquals(button, PlayButton)
+                        int currentVersion = isPlay
                             ? _playActionTransitionVersion
                             : _restartActionTransitionVersion;
 
@@ -261,7 +266,7 @@ namespace ModernIPTVPlayer
                 else
                 {
                     // Transitioning to Expanded: Smoothly expand
-                    AnimateButtonWidth(button, expandedWidth, 300);
+                    AnimateButtonWidth(button, textHost, expandedWidth, 300);
                     button.Padding = new Thickness(expandedPadding, 0, expandedPadding, 0);
                     
                     // Show textHost immediately and start fade-in animation
@@ -274,12 +279,10 @@ namespace ModernIPTVPlayer
             else
             {
                 // Stable state update (resizing within the same mode)
-                bool isTransitioning = Math.Abs(button.Width - (iconOnly ? actionSize : expandedWidth)) > 5.0 && !double.IsNaN(button.Width);
-                
-                if (!isTransitioning)
+                if (!isAnimating)
                 {
                     double targetWidth = iconOnly ? actionSize : expandedWidth;
-                    if (Math.Abs(button.Width - targetWidth) > 0.5 && !double.IsNaN(button.Width))
+                    if (double.IsNaN(button.Width) || Math.Abs(button.Width - targetWidth) > 0.5)
                     {
                         button.Width = targetWidth;
                     }
@@ -520,29 +523,33 @@ namespace ModernIPTVPlayer
                 OverviewPanel.Width = double.NaN;
             }
 
+            if (CastPanel != null)
+            {
+                CastPanel.Width = peopleSectionWidth;
+                CastPanel.MaxWidth = peopleSectionWidth;
+                CastPanel.HorizontalAlignment = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
+            }
+
             if (CastSection != null)
             {
-                CastSection.Width = peopleSectionWidth;
-                CastSection.MaxWidth = peopleSectionWidth;
                 CastSection.MinHeight = 0;
                 CastSection.Height = double.NaN;
-                CastSection.Visibility = (showPeopleList && (CastList?.Count > 0 || CastShimmer?.Visibility == Visibility.Visible)) ? Visibility.Visible : Visibility.Collapsed;
                 CastSection.IsHitTestVisible = isWide;
+            }
+
+            if (DirectorPanel != null)
+            {
+                DirectorPanel.Width = peopleSectionWidth;
+                DirectorPanel.MaxWidth = peopleSectionWidth;
+                DirectorPanel.HorizontalAlignment = isWide ? HorizontalAlignment.Left : HorizontalAlignment.Stretch;
             }
 
             if (DirectorSection != null)
             {
-                DirectorSection.Width = peopleSectionWidth;
-                DirectorSection.MaxWidth = peopleSectionWidth;
                 DirectorSection.MinHeight = 0;
                 DirectorSection.Height = double.NaN;
-                bool showDirectorSkeleton = _pageLoadState != PageLoadState.Ready && DirectorShimmer?.Visibility == Visibility.Visible;
-                DirectorSection.Visibility = (showPeopleList && (DirectorList?.Count > 0 || showDirectorSkeleton)) ? Visibility.Visible : Visibility.Collapsed;
                 DirectorSection.IsHitTestVisible = isWide;
             }
-
-            ApplyPeopleListState(CastListView, peopleSectionWidth, peopleHeight, showPeopleList);
-            ApplyPeopleListState(DirectorListView, peopleSectionWidth, peopleHeight, showPeopleList);
 
             if (GenresText != null)
             {
@@ -621,90 +628,6 @@ namespace ModernIPTVPlayer
             OverviewText.TextWrapping = TextWrapping.Wrap;
             OverviewText.TextTrimming = isWide ? TextTrimming.CharacterEllipsis : TextTrimming.None;
             OverviewText.Width = double.NaN;
-        }
-
-        /// <summary>
-        /// Slide-reveals or accordion-collapses cast/crew lists dynamically via composition visual clips.
-        /// </summary>
-        private void ApplyPeopleListState(ListView listView, double width, double expandedHeight, bool showList)
-        {
-            if (listView == null) return;
-            
-            double targetHeight = showList ? expandedHeight : 0;
-            
-            listView.Width = width;
-            listView.MaxWidth = width;
-
-            var visual = ElementCompositionPreview.GetElementVisual(listView);
-            if (visual == null) return;
-
-            var compositor = visual.Compositor;
-            ElementCompositionPreview.SetIsTranslationEnabled(listView, true);
-
-            if (showList)
-            {
-                listView.Height = targetHeight;
-                listView.Visibility = Visibility.Visible;
-
-                if (visual.Opacity > 0.9f) return;
-
-                visual.Opacity = 0f;
-
-                var fadeIn = compositor.CreateScalarKeyFrameAnimation();
-                fadeIn.InsertKeyFrame(1f, 1f);
-                fadeIn.Duration = TimeSpan.FromMilliseconds(450);
-
-                var slideUp = compositor.CreateVector3KeyFrameAnimation();
-                slideUp.InsertKeyFrame(1f, Vector3.Zero);
-                slideUp.Duration = TimeSpan.FromMilliseconds(450);
-
-                visual.StartAnimation("Opacity", fadeIn);
-                CompositionService.StartTranslationAnimation(StickyHeader, slideUp, new Vector3(0, 20, 0));
-            }
-            else
-            {
-                if (visual.Opacity < 0.1f) 
-                {
-                    listView.Height = 0;
-                    listView.Visibility = Visibility.Collapsed;
-                    return;
-                }
-
-                var duration = TimeSpan.FromMilliseconds(350);
-                var easing = compositor.CreateCubicBezierEasingFunction(new Vector2(0.4f, 0f), new Vector2(0.2f, 1f));
-
-                var clip = compositor.CreateInsetClip();
-                visual.Clip = clip;
-
-                var wipeAnim = compositor.CreateScalarKeyFrameAnimation();
-                wipeAnim.InsertKeyFrame(0f, 0f);
-                wipeAnim.InsertKeyFrame(1f, (float)listView.ActualHeight, easing);
-                wipeAnim.Duration = duration;
-
-                var fadeOut = compositor.CreateScalarKeyFrameAnimation();
-                fadeOut.InsertKeyFrame(1f, 0f, easing);
-                fadeOut.Duration = duration;
-
-                var slideDown = compositor.CreateVector3KeyFrameAnimation();
-                slideDown.InsertKeyFrame(1f, new Vector3(0, 15, 0), easing);
-                slideDown.Duration = duration;
-
-                var batch = compositor.CreateScopedBatch(CompositionBatchTypes.Animation);
-                
-                clip.StartAnimation(nameof(InsetClip.BottomInset), wipeAnim);
-                visual.StartAnimation("Opacity", fadeOut);
-                CompositionService.StartTranslationAnimation(StickyHeader, slideDown);
-                
-                batch.Completed += (s, e) => {
-                    if (!showList) 
-                    {
-                        listView.Height = 0;
-                        listView.Visibility = Visibility.Collapsed;
-                        visual.Clip = null; 
-                    }
-                };
-                batch.End();
-            }
         }
 
         #endregion

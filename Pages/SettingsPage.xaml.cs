@@ -235,7 +235,7 @@ namespace ModernIPTVPlayer
             BtnRefreshNow.IsEnabled = false;
             ShowStatus("Yenileme Başlatıldı...");
             
-            await Services.ContentCacheService.Instance.SyncNowAsync(login);
+            await Services.SyncService.Instance.SyncNowAsync(login);
 
             ShowStatus("İçerik başarıyla güncellendi.");
             BtnRefreshNow.IsEnabled = true;

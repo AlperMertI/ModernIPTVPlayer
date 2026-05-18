@@ -25,14 +25,24 @@ namespace ModernIPTVPlayer
         /// <summary>
         /// Resets the page state to prepare the layout view for a new media item.
         /// </summary>
-        internal void ResetPageStateInternal()
+        internal void ResetPageStateInternal(bool resetBackground = true)
         {
             ModernIPTVPlayer.Services.AppLogger.Info("ResetPageState START");
+
+            if (InfoContainer != null)
+            {
+                _visualStateController.SetState(InfoContainer, Visibility.Visible, 1.0);
+                CompositionService.ResetVisual(InfoContainer);
+            }
+
             ResetCollectionsAndBindings();
             ResetActionAndBadgeVisibility();
             ClearMetadataUI();
 
-            _backgroundManager?.Reset();
+            if (resetBackground)
+            {
+                _backgroundManager?.Reset();
+            }
 
             if (HeroShimmer != null)
             {
@@ -74,6 +84,7 @@ namespace ModernIPTVPlayer
             TrailerButton.Visibility = Visibility.Collapsed;
             DownloadButton.Visibility = Visibility.Collapsed;
             CopyLinkButton.Visibility = Visibility.Collapsed;
+            WatchlistButton.Visibility = Visibility.Collapsed;
 
             PlayButtonSubtext.Visibility = Visibility.Collapsed;
             StickyPlayButton.Visibility = Visibility.Collapsed;
@@ -88,8 +99,15 @@ namespace ModernIPTVPlayer
             _visualStateController.Collapse(TechBadgesContent, MetadataSeparator, MetadataShimmer, TechBadgesShimmer);
 
             if (MetadataRibbon != null) MetadataRibbon.Opacity = 1;
-            if (IdentityControl?.TitleShimmerElement != null) IdentityControl.TitleShimmerElement.Visibility = Visibility.Collapsed;
-            _visualStateController.Collapse(ActionBarShimmer, OverviewShimmer, CastShimmer, DirectorShimmer, CastSection, DirectorSection);
+            if (IdentityControl != null)
+            {
+                if (IdentityControl.TitleShimmerElement != null) IdentityControl.TitleShimmerElement.Visibility = Visibility.Collapsed;
+                if (IdentityControl.TitlePanelElement != null) _visualStateController.SetOpacity(IdentityControl.TitlePanelElement, 0.0);
+            }
+            if (MetadataPanel != null) _visualStateController.SetOpacity(MetadataPanel, 0.0);
+            if (OverviewPanel != null) _visualStateController.SetOpacity(OverviewPanel, 0.0);
+            if (ActionBarPanel != null) _visualStateController.SetOpacity(ActionBarPanel, 0.0);
+            _visualStateController.Collapse(ActionBarShimmer, OverviewShimmer, CastShimmer, DirectorShimmer);
         }
 
         /// <summary>
@@ -173,18 +191,6 @@ namespace ModernIPTVPlayer
                 }
                 
                 if (!skipSync) OnViewportChanged();
-
-                bool isSeries = IsSeriesItem();
-                if (item != null)
-                {
-                    if (isSeries)
-                    {
-                        _isEpisodesLoading = true;
-                        var placeholders = _detailPanelController?.CreateEpisodePlaceholders(5);
-                        CurrentEpisodes.Clear();
-                        foreach (var p in placeholders) CurrentEpisodes.Add(p);
-                    }
-                }
             }
         }
 
@@ -227,23 +233,46 @@ namespace ModernIPTVPlayer
                     return;
                 }
 
+                if (_isLogoPending && _logoReadyTcs != null)
+                {
+                    TraceMediaInfo("StaggeredRevealContent: Logo will load asynchronously (not blocking reveal)");
+                    _ = Task.Run(async () =>
+                    {
+                        using var cts = new CancellationTokenSource(2500);
+                        try
+                        {
+                            await _logoReadyTcs.Task.WaitAsync(cts.Token);
+                        }
+                        catch { }
+                    });
+                }
+
                 _pageLoadState = PageLoadState.Revealing;
                 _loadPipeline?.TransitionTo(LoadPipeline.State.Revealing);
 
                 _currentContentStateName = "ReadyState";
                 
                 OnDataCommitted();
+                _layoutScheduler?.ForceLayout(LayoutRequestReason.DataCommitted);
 
                 _visualStateController.SetState(InfoContainer, Visibility.Visible, 1.0);
                 _visualStateController.SetState(RootScrollViewer, Visibility.Visible, 1.0);
 
-                RevealAllContentPanels();
+                RevealSectionIfReady(TechBadgesContent, TechBadgesShimmer, HasVisibleBadges());
+                RevealSectionIfReady(MetadataPanel, MetadataShimmer, _unifiedMetadata != null);
+                RevealSectionIfReady(ActionBarPanel, ActionBarShimmer, PlayButton?.Visibility == Visibility.Visible);
+                RevealSectionIfReady(OverviewPanel, OverviewShimmer, !string.IsNullOrEmpty(OverviewText?.Text));
 
-                var animResult = await _animationCoordinator.WaitAllAsync(2000);
+                if (IdentityControl != null)
+                {
+                    if (IdentityControl.TitlePanelElement != null) _visualStateController.SetOpacity(IdentityControl.TitlePanelElement, 1.0);
+                    if (IdentityControl.TitleShimmerElement != null) _visualStateController.Collapse(IdentityControl.TitleShimmerElement);
+                }
 
-                CollapseAllShimmers();
-
-                await Task.Delay(100);
+                if (GenresText != null && !string.IsNullOrEmpty(GenresText.Text))
+                    _visualStateController.SetVisibility(GenresText, Visibility.Visible);
+                if (OverviewText != null && !string.IsNullOrEmpty(OverviewText.Text))
+                    _visualStateController.SetVisibility(OverviewText, Visibility.Visible);
 
                 _pageLoadState = PageLoadState.Ready;
                 _loadPipeline?.TransitionTo(LoadPipeline.State.Ready);
@@ -254,6 +283,11 @@ namespace ModernIPTVPlayer
                 
                 OnDataCommitted();
                 RevealReadyPeopleSections();
+
+                _ = Task.Run(async () =>
+                {
+                    await _animationCoordinator.WaitAllAsync(2000);
+                });
             }
             catch (Exception ex)
             {
@@ -264,8 +298,11 @@ namespace ModernIPTVPlayer
                 
                 try
                 {
+                    RevealSectionIfReady(TechBadgesContent, TechBadgesShimmer, HasVisibleBadges());
+                    RevealSectionIfReady(MetadataPanel, MetadataShimmer, _unifiedMetadata != null);
+                    RevealSectionIfReady(ActionBarPanel, ActionBarShimmer, PlayButton?.Visibility == Visibility.Visible);
+                    RevealSectionIfReady(OverviewPanel, OverviewShimmer, !string.IsNullOrEmpty(OverviewText?.Text));
                     CollapseEmptyPeopleSkeletons();
-                    CollapseAllShimmers();
                     FlushDeferredPanelRequest();
                     OnDataCommitted();
                     RevealReadyPeopleSections();
@@ -274,6 +311,22 @@ namespace ModernIPTVPlayer
                 {
                     ModernIPTVPlayer.Services.AppLogger.Error("Fallback error during reveal", fallbackEx);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Reveals a section's content and collapses its shimmer if data is ready, or collapses the shimmer if no data is present.
+        /// </summary>
+        private void RevealSectionIfReady(FrameworkElement content, FrameworkElement shimmer, bool hasData)
+        {
+            if (hasData)
+            {
+                if (content != null) _visualStateController.SetState(content, Visibility.Visible, 1.0);
+                if (shimmer != null) _visualStateController.Collapse(shimmer);
+            }
+            else
+            {
+                if (shimmer != null) _visualStateController.Collapse(shimmer);
             }
         }
 
@@ -296,14 +349,16 @@ namespace ModernIPTVPlayer
                 TechBadgesContent, MetadataPanel, ActionBarPanel,
                 OverviewPanel, IdentityControl);
 
+            if (IdentityControl != null)
+            {
+                if (IdentityControl.TitlePanelElement != null) _visualStateController.SetOpacity(IdentityControl.TitlePanelElement, 1.0);
+                if (IdentityControl.TitleShimmerElement != null) _visualStateController.Collapse(IdentityControl.TitleShimmerElement);
+            }
+
             if (GenresText != null && !string.IsNullOrEmpty(GenresText.Text))
                 _visualStateController.SetVisibility(GenresText, Visibility.Visible);
             if (OverviewText != null && !string.IsNullOrEmpty(OverviewText.Text))
                 _visualStateController.SetVisibility(OverviewText, Visibility.Visible);
-            if (CastSection != null && CastList?.Count > 0)
-                _visualStateController.SetVisibility(CastSection, Visibility.Visible);
-            if (DirectorSection != null && DirectorList?.Count > 0)
-                _visualStateController.SetVisibility(DirectorSection, Visibility.Visible);
         }
 
         /// <summary>

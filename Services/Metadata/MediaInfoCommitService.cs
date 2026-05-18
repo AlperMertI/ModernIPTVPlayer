@@ -282,6 +282,7 @@ namespace ModernIPTVPlayer.Services.Metadata
             if (_ui.TrailerButton != null) _ui.TrailerButton.Visibility = !string.IsNullOrEmpty(metadata.TrailerUrl) ? Visibility.Visible : Visibility.Collapsed;
             if (_ui.DownloadButton != null) _ui.DownloadButton.Visibility = Visibility.Visible;
             if (_ui.CopyLinkButton != null) _ui.CopyLinkButton.Visibility = Visibility.Visible;
+            if (_ui.WatchlistButton != null) _ui.WatchlistButton.Visibility = Visibility.Visible;
 
             string metadataId = metadata.MetadataId;
             string imdbId = metadata.ImdbId ?? (item as Models.Stremio.StremioMediaStream)?.Meta?.ImdbId;
@@ -358,7 +359,8 @@ namespace ModernIPTVPlayer.Services.Metadata
 
         private void ApplyBackdrop(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata)
         {
-            // [Senior] Prime with Poster instantly if we have one (likely in memory cache)
+            AppLogger.Info($"[BACKDROP-COMMIT] PosterUrl={metadata.PosterUrl}, BackdropUrl={metadata.BackdropUrl}, BackdropUrls.Count={metadata.BackdropUrls?.Count ?? 0}");
+
             if (!string.IsNullOrEmpty(metadata.PosterUrl))
             {
                 _ui.ApplyHeroSeedImage(metadata.PosterUrl, "poster-prime");

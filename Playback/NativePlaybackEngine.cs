@@ -168,13 +168,8 @@ namespace ModernIPTVPlayer.Playback
             if (_isDisposed) return;
             _isDisposed = true;
 
-            _player.PlaybackSession.PlaybackStateChanged -= OnPlaybackStateChanged;
-            _player.PlaybackSession.PositionChanged -= OnPositionChanged;
-            _player.PlaybackSession.NaturalDurationChanged -= OnDurationChanged;
-            _player.MediaFailed -= OnMediaFailed;
-            _player.MediaOpened -= OnMediaOpened;
-            
-            // Note: MediaPlayer disposal usually handled by owner
+            try { _player.MediaFailed -= OnMediaFailed; } catch { }
+            try { _player.MediaOpened -= OnMediaOpened; } catch { }
         }
     }
 }

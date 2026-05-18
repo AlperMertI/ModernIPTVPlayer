@@ -50,7 +50,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 if (File.Exists(filePath))
                 {
                     using var fs = File.OpenRead(filePath);
-                    using var decompressor = new ZstdSharp.DecompressionStream(fs);
+                    using var decompressor = new System.IO.Compression.ZstandardStream(fs, System.IO.Compression.CompressionMode.Decompress);
                     using var reader = new BinaryReader(decompressor, System.Text.Encoding.UTF8);
 
                     if (reader.ReadUInt32() != MAGIC) return;
@@ -79,7 +79,7 @@ namespace ModernIPTVPlayer.Services.Metadata
                 
                 var snapshot = _imdbToTmdb.ToList();
                 using (var fs = File.Create(filePath))
-                using (var compressor = new ZstdSharp.CompressionStream(fs, 3))
+                using (var compressor = new System.IO.Compression.ZstandardStream(fs, System.IO.Compression.CompressionLevel.Optimal))
                 using (var writer = new BinaryWriter(compressor, System.Text.Encoding.UTF8))
                 {
                     writer.Write(MAGIC);

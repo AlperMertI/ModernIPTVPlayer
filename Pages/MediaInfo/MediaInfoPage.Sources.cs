@@ -148,8 +148,6 @@ namespace ModernIPTVPlayer
                 (SourcesPanel == null || SourcesPanel.Visibility != Visibility.Visible) &&
                 (EpisodesPanel == null || EpisodesPanel.Visibility != Visibility.Visible)) return;
 
-            // Root optimization: If nothing is currently in a loading state (neither episodes nor sources),
-            // there are no shimmers on screen. Do not waste CPU cycles.
             bool isSourcesLoading = AddonResults != null && AddonResults.Any(a => a.IsLoading);
             if (!_isEpisodesLoading && !isSourcesLoading) return;
 

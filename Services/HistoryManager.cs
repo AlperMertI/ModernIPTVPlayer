@@ -45,7 +45,7 @@ namespace ModernIPTVPlayer
 
                 var zstFile = await folder.GetFileAsync(FILENAME);
                 using (var stream = await zstFile.OpenStreamForReadAsync())
-                using (var decompressor = new ZstdSharp.DecompressionStream(stream))
+                using (var decompressor = new System.IO.Compression.ZstandardStream(stream, System.IO.Compression.CompressionMode.Decompress))
                 {
                     var list = await JsonSerializer.DeserializeAsync(decompressor, AppJsonContext.Default.ListHistoryItem);
                     if (list != null)
@@ -80,7 +80,7 @@ namespace ModernIPTVPlayer
                 {
                     var file = await folder.CreateFileAsync(FILENAME, CreationCollisionOption.ReplaceExisting);
                     using (var stream = await file.OpenStreamForWriteAsync())
-                    using (var compressor = new ZstdSharp.CompressionStream(stream, 3)) // Level 3 for balance
+                    using (var compressor = new System.IO.Compression.ZstandardStream(stream, System.IO.Compression.CompressionLevel.Optimal))
                     {
                         await JsonSerializer.SerializeAsync(compressor, list, AppJsonContext.Default.ListHistoryItem);
                     }

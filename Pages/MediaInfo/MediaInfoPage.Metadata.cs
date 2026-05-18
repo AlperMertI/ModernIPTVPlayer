@@ -71,7 +71,7 @@ namespace ModernIPTVPlayer
             {
                 int session = BeginLoadSession();
 
-                ResetPageState();
+                ResetPageState(resetBackground: false);
                 
                 _loadPipeline?.Reset();
                 _pageLoadState = PageLoadState.Initial;
@@ -174,7 +174,6 @@ namespace ModernIPTVPlayer
 
             revealedGeneration = itemCount;
             section.Visibility = Visibility.Visible;
-            section.Opacity = 1;
             if (shimmer != null) shimmer.Visibility = Visibility.Collapsed;
 
             CompositionService.Run(section, visual => 
