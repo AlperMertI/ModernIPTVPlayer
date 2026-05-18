@@ -35,8 +35,7 @@ public sealed partial class MpvPlayer : Control
         _instanceId = Interlocked.Increment(ref _nextInstanceId);
         Interlocked.Increment(ref _liveInstances);
         DefaultStyleKey = typeof(MpvPlayer);
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] MpvPlayer ctor instance {_instanceId}");
-        Debug.WriteLine($"[SOURCE_FINDER] StackTrace: {Environment.StackTrace}");
+        System.Diagnostics.Debug.WriteLine($"[INFO] MpvPlayer ctor instance {_instanceId}");
     }
 
     private bool _mpvGpuIsDirty = false;
@@ -134,16 +133,13 @@ public sealed partial class MpvPlayer : Control
 
     protected override Windows.Foundation.Size MeasureOverride(Windows.Foundation.Size availableSize)
     {
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [MpvPlayer:{_instanceId}] MeasureOverride START | Size: {availableSize.Width}x{availableSize.Height} | Disposed: {_isDisposed}");
         try
         {
-            var result = base.MeasureOverride(availableSize);
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] [MpvPlayer:{_instanceId}] MeasureOverride END | Result: {result.Width}x{result.Height}");
-            return result;
+            return base.MeasureOverride(availableSize);
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] !!! [MpvPlayer:{_instanceId}] MeasureOverride CRASH !!!: {ex.Message} (0x{ex.HResult:X8})");
+            System.Diagnostics.Debug.WriteLine($"[ERROR] [MpvPlayer:{_instanceId}] MeasureOverride CRASH: {ex.Message}");
             throw;
         }
     }
@@ -565,8 +561,7 @@ public sealed partial class MpvPlayer : Control
         _isCleaningUp = true;
         
         var cleanupId = _instanceId;
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] MpvPlayer CleanupAsync START for instance {cleanupId}");
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] CleanupAsync START for instance {cleanupId}");
+        System.Diagnostics.Debug.WriteLine($"[INFO] MpvPlayer CleanupAsync START for instance {cleanupId}");
         Interlocked.Increment(ref Mpv.Core.Interop.MpvRenderContextNative._globalCleanupRunning);
 
         _isDisposed = true;
@@ -632,7 +627,7 @@ public sealed partial class MpvPlayer : Control
         }
 
         Interlocked.Decrement(ref Mpv.Core.Interop.MpvRenderContextNative._globalCleanupRunning);
-        Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [RACE_PROBE] CleanupAsync FINISHED for instance {cleanupId}");
+        System.Diagnostics.Debug.WriteLine($"[INFO] MpvPlayer CleanupAsync FINISHED for instance {cleanupId}");
         Interlocked.Decrement(ref _liveInstances);
     }
 

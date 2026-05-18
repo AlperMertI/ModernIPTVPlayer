@@ -88,7 +88,12 @@ namespace ModernIPTVPlayer.Helpers
             }
 
             // 2. Token-based similarity (High Performance)
-            double similarity = CalculateSimilarity(title1, title2);
+            Span<char> norm1 = title1.Length <= 240 ? stackalloc char[256] : new char[title1.Length + 16];
+            int len1 = NormalizeToBuffer(title1, norm1);
+            Span<char> norm2 = title2.Length <= 240 ? stackalloc char[256] : new char[title2.Length + 16];
+            int len2 = NormalizeToBuffer(title2, norm2);
+
+            double similarity = CalculateSimilarityNormalized(norm1[..len1], norm2[..len2]);
             
             // Heuristic thresholds
             double threshold = (!y1.IsEmpty && !y2.IsEmpty) ? 0.40 : 0.85;
@@ -491,22 +496,22 @@ namespace ModernIPTVPlayer.Helpers
         /// Calculates similarity between İPTV titles using a high-performance hash-based sorted intersection.
         /// Complexity: O(N log N) instead of O(N*M). ZERO-ALLOCATION.
         /// </summary>
-        public static double CalculateSimilarity(ReadOnlySpan<char> title1, ReadOnlySpan<char> title2)
+        public static double CalculateSimilarityNormalized(ReadOnlySpan<char> clean1, ReadOnlySpan<char> clean2)
         {
-            if (title1.IsEmpty || title2.IsEmpty) return 0;
+            if (clean1.IsEmpty || clean2.IsEmpty) return 0;
             
             // Extract hashes of significant tokens into stack-allocated buffers
             Span<uint> hashes1 = stackalloc uint[16];
             Span<uint> hashes2 = stackalloc uint[16];
             
             int count1 = 0;
-            foreach (var t in GetTokens(title1))
+            foreach (var t in GetTokens(clean1))
             {
                 if (count1 < hashes1.Length) hashes1[count1++] = HashSpan(t);
             }
 
             int count2 = 0;
-            foreach (var t in GetTokens(title2))
+            foreach (var t in GetTokens(clean2))
             {
                 if (count2 < hashes2.Length) hashes2[count2++] = HashSpan(t);
             }
@@ -533,8 +538,6 @@ namespace ModernIPTVPlayer.Helpers
 
             return (double)common / Math.Max(count1, count2);
         }
-
-        public static double CalculateSimilarity(string? t1, string? t2) => CalculateSimilarity(t1.AsSpan(), t2.AsSpan());
 
         /// <summary>
         /// Calculates a stable, 32-bit deterministic fingerprint for a stream using SIMD-ready hashing
@@ -572,7 +575,8 @@ namespace ModernIPTVPlayer.Helpers
             uint hash = 2166136261;
             foreach (char c in span)
             {
-                hash = (hash ^ c) * 16777619;
+                char lower = char.ToLowerInvariant(c);
+                hash = (hash ^ lower) * 16777619;
             }
             return hash;
         }

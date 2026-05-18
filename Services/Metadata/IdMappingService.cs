@@ -145,6 +145,53 @@ namespace ModernIPTVPlayer.Services.Metadata
             return false;
         }
 
+        public string ResolveBestContentId(string rawId, string parentImdbId = null)
+        {
+            if (string.IsNullOrEmpty(rawId)) return rawId;
+
+            // 1. If we have a resolved IMDb ID for the parent show, use it to reconstruct the ID
+            if (!string.IsNullOrEmpty(parentImdbId) && parentImdbId.StartsWith("tt"))
+            {
+                // If the rawId is a TMDB episode ID (e.g. tmdb:79788:1:1)
+                if (rawId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase) && rawId.Contains(":"))
+                {
+                    var parts = rawId.Split(':');
+                    if (parts.Length >= 3) // tmdb:id:s:e
+                    {
+                        var resolved = $"{parentImdbId}:{parts[parts.Length - 2]}:{parts[parts.Length - 1]}";
+                        return resolved;
+                    }
+                }
+                
+                // If it's just the show ID
+                if (rawId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase) && !rawId.Contains(":"))
+                {
+                    return parentImdbId;
+                }
+            }
+
+            // 2. Fallback to persisted registry mapping database
+            if (rawId.StartsWith("tmdb:", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = rawId.Split(':');
+                if (parts.Length > 1)
+                {
+                    string tmdbIdOnly = parts[1];
+                    string resolved = GetImdbForTmdb(tmdbIdOnly);
+                    if (!string.IsNullOrEmpty(resolved))
+                    {
+                        if (rawId.Contains(":") && parts.Length >= 3)
+                        {
+                            return $"{resolved}:{parts[parts.Length-2]}:{parts[parts.Length-1]}";
+                        }
+                        return resolved;
+                    }
+                }
+            }
+
+            return rawId;
+        }
+
         public void Clear()
         {
             _imdbToTmdb.Clear();

@@ -190,6 +190,7 @@ namespace ModernIPTVPlayer
         private AppWindowPresenterKind _savedPresenterKind;
 
         private DispatcherTimer _logoLoadingTimer;
+        private DispatcherTimer _playbackWatchdogTimer;
         private double _fakeLogoProgress = 0;
 
         // ---------- PLAYER ENHANCEMENTS ----------
@@ -335,6 +336,7 @@ namespace ModernIPTVPlayer
         private void StartLogoLoading()
         {
             LogPlayerTrace($"[PlayerPage] StartLogoLoading: logoUrl={_navArgs?.LogoUrl?.Substring(0, Math.Min(50, _navArgs?.LogoUrl?.Length ?? 0))}");
+            StartPlaybackWatchdog();
             if (_navArgs != null && !string.IsNullOrWhiteSpace(_navArgs.LogoUrl))
             {
                 try
@@ -355,7 +357,9 @@ namespace ModernIPTVPlayer
                             if (_fakeLogoProgress < _loadingTargetProgress)
                             {
                                 double distance = _loadingTargetProgress - _fakeLogoProgress;
-                                _fakeLogoProgress += Math.Max(0.1, distance * 0.02);
+                                double speedFactor = _loadingTargetProgress >= 100 ? 0.35 : 0.02;
+                                double minStep = _loadingTargetProgress >= 100 ? 0.5 : 0.1;
+                                _fakeLogoProgress += Math.Max(minStep, distance * speedFactor);
                                 if (_fakeLogoProgress > _loadingTargetProgress) _fakeLogoProgress = _loadingTargetProgress;
                                 LogoProgressClip.Rect = new Windows.Foundation.Rect(0, 0, (_fakeLogoProgress / 100.0) * 300, 120);
                             }
@@ -375,6 +379,7 @@ namespace ModernIPTVPlayer
         private void StopLogoLoading()
         {
             LogPlayerTrace("[PlayerPage] StopLogoLoading: playback started, fading out");
+            StopPlaybackWatchdog();
             {
                 // Playback has definitively started, so we instantly snap to 100% 
                 // and skip waiting for the smooth animation to visually catch up.
@@ -404,6 +409,81 @@ namespace ModernIPTVPlayer
                     });
                 });
             }
+        }
+
+        private void StartPlaybackWatchdog()
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                _playbackWatchdogTimer?.Stop();
+                if (_playbackWatchdogTimer == null)
+                {
+                    _playbackWatchdogTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(12) };
+                    _playbackWatchdogTimer.Tick += (s, e) =>
+                    {
+                        _playbackWatchdogTimer?.Stop();
+                        if (PlayerLoadingOverlay.Visibility == Visibility.Visible)
+                        {
+                            if (!_useMpvPlayer)
+                            {
+                                AppLogger.Warn("[PlayerPage] Playback buffering watchdog timed out in Native mode! Triggering MPV fallback.");
+                                TriggerMpvFallback();
+                            }
+                            else
+                            {
+                                AppLogger.Error("[PlayerPage] Playback buffering watchdog timed out after 12 seconds!");
+                                TriggerPlaybackFailure("Yayın yükleme süresi doldu. Sunucu yanıt vermiyor olabilir veya bağlantınız yavaşlamış olabilir.");
+                            }
+                        }
+                    };
+                }
+                _playbackWatchdogTimer.Start();
+                AppLogger.Info("[PlayerPage] Playback buffering watchdog timer started (12 seconds).");
+            });
+        }
+
+        private void StopPlaybackWatchdog()
+        {
+            DispatcherQueue.TryEnqueue(() =>
+            {
+                if (_playbackWatchdogTimer != null && _playbackWatchdogTimer.IsEnabled)
+                {
+                    _playbackWatchdogTimer.Stop();
+                    AppLogger.Info("[PlayerPage] Playback buffering watchdog timer stopped.");
+                }
+            });
+        }
+
+        private void TriggerPlaybackFailure(string errorMsg)
+        {
+            DispatcherQueue.TryEnqueue(async () =>
+            {
+                StopPlaybackWatchdog();
+                _logoLoadingTimer?.Stop();
+                _viewModel.OnLoadingFinished(); // Hide normal loading overlay
+
+                // Show premium failure overlay and bind specific error details
+                PlaybackFailureOverlay.Visibility = Visibility.Visible;
+                PlaybackFailureDetails.Text = errorMsg;
+
+                AppLogger.Error($"[PlayerPage] TriggerPlaybackFailure: {errorMsg}");
+
+                // Release player engines to free network sockets
+                if (_useMpvPlayer && _mpvPlayer != null)
+                {
+                    try { await _mpvPlayer.SetPropertyAsync("pause", "yes"); } catch { }
+                }
+                else if (!_useMpvPlayer && _nativeMediaPlayer != null)
+                {
+                    try { _nativeMediaPlayer.Pause(); } catch { }
+                }
+            });
+        }
+
+        private void OnFailureBackClicked(object sender, RoutedEventArgs e)
+        {
+            ElementSoundPlayer.Play(ElementSoundKind.GoBack);
+            if (Frame.CanGoBack) Frame.GoBack();
         }
 
         private void ShowBufferingOverlay()
@@ -453,7 +533,10 @@ namespace ModernIPTVPlayer
                 isTimeAdvancing = position > 0.05 && !isCoreIdle && !isBuffering;
             }
             else if (_nativeMediaPlayer?.PlaybackSession != null)
-                isTimeAdvancing = _nativeMediaPlayer.PlaybackSession.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Playing;
+            {
+                var sess = _nativeMediaPlayer.PlaybackSession;
+                isTimeAdvancing = sess.PlaybackState == Windows.Media.Playback.MediaPlaybackState.Playing && sess.Position.TotalSeconds > 0.5;
+            }
 
             if (isTimeAdvancing)
             {
@@ -461,7 +544,7 @@ namespace ModernIPTVPlayer
                 return;
             }
 
-            if (_loadingTargetProgress == 100) return;
+            if (_loadingTargetProgress >= 90) return;
 
             if (_useMpvPlayer && _mpvPlayer != null && _mpvPlayer.IsMediaLoaded)
             {
@@ -470,7 +553,7 @@ namespace ModernIPTVPlayer
                     if (seekingStr == "yes") { _loadingTargetProgress = 30; _fakeLogoProgress = 30; }
                     else if (!string.IsNullOrEmpty(cacheBufferingStateStr) && cacheBufferingStateStr != "N/A" &&
                              double.TryParse(cacheBufferingStateStr, NumberStyles.Any, CultureInfo.InvariantCulture, out double bp))
-                        _loadingTargetProgress = 30.0 + (bp * 0.70);
+                        _loadingTargetProgress = 30.0 + (bp * 60.0); // Max 90%
                     else if (_loadingTargetProgress < 90) _loadingTargetProgress += 1;
                 }
                 catch { if (_loadingTargetProgress < 90) _loadingTargetProgress += 1; }
@@ -479,7 +562,10 @@ namespace ModernIPTVPlayer
             {
                 var sess = _nativeMediaPlayer.PlaybackSession;
                 if (seekingStr == "yes") { _loadingTargetProgress = 30; _fakeLogoProgress = 30; }
-                else _loadingTargetProgress = 30.0 + (sess.BufferingProgress * 70.0);
+                else 
+                {
+                    _loadingTargetProgress = 30.0 + (sess.BufferingProgress * 60.0); // Max 90%
+                }
             }
             else if (_loadingTargetProgress < 90) _loadingTargetProgress += 1;
         }
@@ -1134,10 +1220,10 @@ namespace ModernIPTVPlayer
                 return;
             }
 
+            SyncEngineWithViewModel();
+
             if (_playerUpdateTimer?.IsEnabled != true)
             {
-                SyncEngineWithViewModel();
-                
                 _playerUpdateTimer?.Start();
                 // #region agent log
                 App.DebugSessionNdjson("PlayerPage.xaml.cs:StartPlayerUpdateTimerIfReady",
@@ -1227,6 +1313,25 @@ namespace ModernIPTVPlayer
         private System.Threading.CancellationTokenSource? _backgroundTasksCts;
 
         private long CurrentNativeSessionId => System.Threading.Interlocked.Read(ref _nativeSessionId);
+
+        private Windows.Media.Playback.MediaPlaybackItem CreateNativePlaybackItem(Windows.Media.Core.MediaSource source, long nativeSessionId)
+        {
+            source.OpenOperationCompleted += (s, args) =>
+            {
+                if (args.Error != null)
+                {
+                    LogPlayerTrace($"[NATIVE-SOURCE] MediaSource OpenOperationCompleted failed: {args.Error.ExtendedError?.Message} (HRESULT: 0x{args.Error.ExtendedError?.HResult:X8}). Triggering fallback.");
+                    DispatcherQueue.TryEnqueue(() =>
+                    {
+                        if (SessionOwnsNativePlayer(_nativeMediaPlayer) && IsCurrentNativeSession(nativeSessionId))
+                        {
+                            TriggerMpvFallback();
+                        }
+                    });
+                }
+            };
+            return new Windows.Media.Playback.MediaPlaybackItem(source);
+        }
 
         private void ResetNativeTeardownState()
         {
@@ -1930,6 +2035,10 @@ namespace ModernIPTVPlayer
                 try { _compositor = ElementCompositionPreview.GetElementVisual(this).Compositor; } catch { }
             }
             ResetNativeTeardownState();
+            if (PlaybackFailureOverlay != null)
+            {
+                PlaybackFailureOverlay.Visibility = Visibility.Collapsed;
+            }
             LogLaunchTiming("PlayerPage Loaded");
 
             // Ensure keyboard shortcuts work immediately
@@ -2173,7 +2282,7 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] !!! [PlayerPage] MeasureOverride CRASH !!!: {ex.Message} (0x{ex.HResult:X8})");
+                ModernIPTVPlayer.Services.AppLogger.Error("[PlayerPage] MeasureOverride CRASH", ex);
                 return availableSize;
             }
         }
@@ -2343,7 +2452,7 @@ namespace ModernIPTVPlayer
                         _adaptiveMediaSource = adaptiveResult.MediaSource;
                         _adaptiveMediaSource.DownloadCompleted += AdaptiveSource_DownloadCompleted;
                         var source = Windows.Media.Core.MediaSource.CreateFromAdaptiveMediaSource(_adaptiveMediaSource);
-                        var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                        var item = CreateNativePlaybackItem(source, nativeSessionId);
                         _currentNativePlaybackItem = item;
                         _currentNativePlaybackUrl = uri.ToString();
                         _nativeMediaPlayer.Source = item;
@@ -2363,7 +2472,7 @@ namespace ModernIPTVPlayer
                         _currentNativeRoute = NativePlaybackRoute.LiveTsProxy;
                         string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString(), Services.StreamProxyMode.LiveTs);
                         var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(proxyUrl));
-                        var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                        var item = CreateNativePlaybackItem(source, nativeSessionId);
                         _currentNativePlaybackItem = item;
                         _currentNativePlaybackUrl = proxyUrl;
                         _nativeMediaPlayer.Source = item;
@@ -2386,7 +2495,7 @@ namespace ModernIPTVPlayer
 
                     string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString(), Services.StreamProxyMode.LiveTs);
                     var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(proxyUrl));
-                    var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                    var item = CreateNativePlaybackItem(source, nativeSessionId);
                     _currentNativePlaybackItem = item;
                     _currentNativePlaybackUrl = proxyUrl;
                     _nativeMediaPlayer.Source = item;
@@ -2408,7 +2517,7 @@ namespace ModernIPTVPlayer
 
                     string proxyUrl = Services.StreamProxyService.Instance.GetProxyUrl(uri.ToString(), Services.StreamProxyMode.ProgressiveVod);
                     var source = Windows.Media.Core.MediaSource.CreateFromUri(new Uri(proxyUrl));
-                    var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                    var item = CreateNativePlaybackItem(source, nativeSessionId);
                     _currentNativePlaybackItem = item;
                     _currentNativePlaybackUrl = proxyUrl;
                     _nativeMediaPlayer.Source = item;
@@ -2423,7 +2532,7 @@ namespace ModernIPTVPlayer
                     LogLaunchTiming("Native direct VOD path");
 
                     var source = Windows.Media.Core.MediaSource.CreateFromUri(uri);
-                    var item = new Windows.Media.Playback.MediaPlaybackItem(source);
+                    var item = CreateNativePlaybackItem(source, nativeSessionId);
                     _currentNativePlaybackItem = item;
                     _currentNativePlaybackUrl = uri.ToString();
                     _nativeMediaPlayer.Source = item;
@@ -2449,7 +2558,7 @@ namespace ModernIPTVPlayer
                 {
                     try
                     {
-                        await Task.Delay(TimeSpan.FromSeconds(30));
+                        await Task.Delay(TimeSpan.FromSeconds(12));
                         DispatcherQueue.TryEnqueue(() =>
                         {
                             if (!IsCurrentNativeSession(nativeSessionId) || nativeGeneration != _nativePlaybackGeneration)
@@ -3080,6 +3189,8 @@ namespace ModernIPTVPlayer
         {
             if (_useMpvPlayer) return; // Already in MPV
             _viewModel.ShowOsd("Native Oynatıcı desteklemiyor, MPV ile deneniyor...");
+            
+            StopPlaybackWatchdog();
             
             _useMpvPlayer = true;
             _forceMpvForCurrentPlayback = true;
@@ -5691,19 +5802,60 @@ namespace ModernIPTVPlayer
                 // [FIX] Resolve internal iptv:// protocol before checking or playing
                 if (url.StartsWith("iptv://", StringComparison.OrdinalIgnoreCase))
                 {
-                    string streamIdStr = url.Substring(7);
-                    if (int.TryParse(streamIdStr, out int streamId) && App.CurrentLogin != null)
+                    string innerPath = url.Substring(7);
+                    if (innerPath.StartsWith("series/", StringComparison.OrdinalIgnoreCase))
                     {
-                        var playlistId = App.CurrentLogin.PlaylistUrl ?? "default";
-                        // Try VOD first
-                        var vods = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod_streams");
-                        var match = vods?.FirstOrDefault(v => v.StreamId == streamId);
-                        if (match != null)
+                        string seriesIdStr = innerPath.Substring(7);
+                        if (int.TryParse(seriesIdStr, out int seriesId) && App.CurrentLogin != null)
                         {
-                            string ext = match.ContainerExtension ?? "mkv";
-                            if (!ext.StartsWith(".")) ext = "." + ext;
-                            url = $"{App.CurrentLogin.Host}/movie/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{match.StreamId}{ext}";
-                            Debug.WriteLine($"[PlayerPage] Resolved iptv://{streamId} to {url}");
+                            int targetSeason = _navArgs?.Season ?? 1;
+                            int targetEpisode = _navArgs?.Episode ?? 1;
+                            if (targetSeason <= 0) targetSeason = 1;
+                            if (targetEpisode <= 0) targetEpisode = 1;
+
+                            AppLogger.Info($"[PlayerPage] Resolving safety-net IPTV series ID={seriesId} for S{targetSeason}E{targetEpisode}...");
+                            var info = await ContentCacheService.Instance.GetSeriesInfoAsync(seriesId, App.CurrentLogin);
+                            if (info?.Episodes != null)
+                            {
+                                bool found = false;
+                                foreach (var kvp in info.Episodes)
+                                {
+                                    if (int.TryParse(kvp.Key, out int seasonNum) && seasonNum == targetSeason)
+                                    {
+                                        foreach (var ep in kvp.Value)
+                                        {
+                                            if (int.TryParse(ep.EpisodeNum?.ToString(), out int epNum) && epNum == targetEpisode)
+                                            {
+                                                string extension = ep.ContainerExtension;
+                                                if (string.IsNullOrEmpty(extension)) extension = "mkv";
+                                                if (!extension.StartsWith(".")) extension = "." + extension;
+
+                                                url = $"{App.CurrentLogin.Host}/series/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{ep.Id}{extension}";
+                                                AppLogger.Info($"[PlayerPage] Safety-net resolved IPTV series to direct URL: {url}");
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    if (found) break;
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        if (int.TryParse(innerPath, out int streamId) && App.CurrentLogin != null)
+                        {
+                            var playlistId = App.CurrentLogin.PlaylistUrl ?? "default";
+                            var vods = await ContentCacheService.Instance.LoadCacheAsync<VodStream>(playlistId, "vod_streams");
+                            var match = vods?.FirstOrDefault(v => v.StreamId == streamId);
+                            if (match != null)
+                            {
+                                string ext = match.ContainerExtension ?? "mkv";
+                                if (!ext.StartsWith(".")) ext = "." + ext;
+                                url = $"{App.CurrentLogin.Host}/movie/{App.CurrentLogin.Username}/{App.CurrentLogin.Password}/{match.StreamId}{ext}";
+                                Debug.WriteLine($"[PlayerPage] Resolved iptv://{streamId} to {url}");
+                            }
                         }
                     }
                 }

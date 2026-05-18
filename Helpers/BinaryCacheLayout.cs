@@ -35,9 +35,9 @@ namespace ModernIPTVPlayer.Helpers
         [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, Pack = 1, Size = 64)]
         public readonly record struct Header(int Magic, int Version, int Count, int StringsLength, bool IsDirty, long Fingerprint);
 
-        public static void WriteHeader(BinaryWriter writer, int count, int stringsLength, bool dirty, long fingerprint)
+        public static void WriteHeader(BinaryWriter writer, int magic, int count, int stringsLength, bool dirty, long fingerprint)
         {
-            writer.Write(Magic);
+            writer.Write(magic);
             writer.Write(Version);
             writer.Write(count);
             writer.Write(stringsLength);
@@ -79,7 +79,11 @@ namespace ModernIPTVPlayer.Helpers
             return header;
         }
 
-        public static bool IsKnownMagic(int magic) => magic == Magic;
+        public static bool IsKnownMagic(int magic) =>
+            magic == VodMagic ||
+            magic == SeriesMagic ||
+            magic == CategoryMagic ||
+            magic == LiveMagic;
 
         public static long GetRecordsOffset() => HeaderSize;
 

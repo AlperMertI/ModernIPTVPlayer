@@ -977,7 +977,7 @@ namespace ModernIPTVPlayer.Services.Stremio
             if (normT.SequenceEqual(normQ)) return 100;
             if (normT.StartsWith(normQ, StringComparison.OrdinalIgnoreCase)) return 85; 
             
-            double sim = TitleHelper.CalculateSimilarity(x.Title, normQ.ToString());
+            double sim = TitleHelper.CalculateSimilarityNormalized(normT, normQ);
             // DEBUG LOGGING (Temporarily)
             if (normQ.ToString().Contains("no") || x.Title.Contains("no")) {
                 AppLogger.Info($"[RankDebug] Q='{normQ.ToString()}' | T='{x.Title}' | Sim={sim:F2}");

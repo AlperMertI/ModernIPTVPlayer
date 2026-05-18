@@ -193,11 +193,12 @@ namespace ModernIPTVPlayer.Services.Iptv
         /// <summary>
         /// Returns all potential matches from internal indices above a threshold.
         /// </summary>
-        public List<IMediaStream> FindPotentialMatchesInIptv(string title, string category = "movie", double threshold = 0.3)
+        public List<IMediaStream> FindPotentialMatchesInIptv(string title, string category = "movie", double threshold = 0.3, string? year = null)
         {
-            if (category == "movie" && _vodCache != null) return FindPotentialMatchesGeneric(title, _vodCache, threshold);
-            if (category == "series" && _seriesCache != null) return FindPotentialMatchesGeneric(title, _seriesCache, threshold);
-            if (category == "live" && _liveCache != null) return FindPotentialMatchesGeneric(title, _liveCache, threshold);
+            AppLogger.Info($"[IPTV_MATCH] FindPotentialMatchesInIptv: Title='{title}', Category='{category}', Threshold={threshold}, Year='{year}', VodCache={(_vodCache != null ? _vodCache.Count : "null")}, SeriesCache={(_seriesCache != null ? _seriesCache.Count : "null")}, LiveCache={(_liveCache != null ? _liveCache.Count : "null")}");
+            if (category == "movie" && _vodCache != null) return FindPotentialMatchesGeneric(title, _vodCache, threshold, year);
+            if (category == "series" && _seriesCache != null) return FindPotentialMatchesGeneric(title, _seriesCache, threshold, year);
+            if (category == "live" && _liveCache != null) return FindPotentialMatchesGeneric(title, _liveCache, threshold, year);
             return [];
         }
 
@@ -293,9 +294,9 @@ namespace ModernIPTVPlayer.Services.Iptv
         /// Fully zero-allocation on the search path using TokenIterator.
         /// </summary>
         [SkipLocalsInit]
-        private List<IMediaStream> FindPotentialMatchesGeneric<T>(string title, IReadOnlyList<T> candidates, double threshold) where T : class, IMediaStream
+        private List<IMediaStream> FindPotentialMatchesGeneric<T>(string title, IReadOnlyList<T> candidates, double threshold, string? year = null) where T : class, IMediaStream
         {
-            var results = CalculateScoresGeneric(title, candidates);
+            var results = CalculateScoresGeneric(title, candidates, year);
             var list = new List<IMediaStream>();
             foreach (var r in CollectionsMarshal.AsSpan(results))
             {
@@ -331,19 +332,36 @@ namespace ModernIPTVPlayer.Services.Iptv
         }
 
         [SkipLocalsInit]
-        private List<MatchResult> CalculateScoresGeneric<T>(string query, IReadOnlyList<T> candidates) where T : class, IMediaStream
+        private List<MatchResult> CalculateScoresGeneric<T>(string query, IReadOnlyList<T> candidates, string? year = null) where T : class, IMediaStream
         {
-            if (string.IsNullOrEmpty(query) || candidates == null || candidates.Count == 0) return [];
+            if (string.IsNullOrEmpty(query) || candidates == null || candidates.Count == 0)
+            {
+                AppLogger.Warn($"[IPTV_MATCH] CalculateScoresGeneric early exit: QueryNull={string.IsNullOrEmpty(query)}, CandidatesNull={(candidates == null)}, Count={(candidates != null ? candidates.Count : 0)}");
+                return [];
+            }
 
             Span<char> normalized = stackalloc char[query.Length + 16];
             int normLen = TitleHelper.NormalizeToBuffer(query, normalized);
             var qSpan = normalized[..normLen];
+            string qNormalizedStr = qSpan.ToString();
+
+            // Extract target year for verification
+            var queryYear = !string.IsNullOrEmpty(year) ? TitleHelper.ExtractYear(year.AsSpan()) : TitleHelper.ExtractYear(query.AsSpan());
+
+            // Count the number of significant tokens in the query
+            int queryTokenCount = 0;
+            foreach (var _ in TitleHelper.GetTokens(qSpan)) queryTokenCount++;
+
+            AppLogger.Info($"[IPTV_MATCH] CalculateScoresGeneric: Query='{query}', Normalized='{qNormalizedStr}', Year='{queryYear.ToString()}', TokenCount={queryTokenCount}, T={typeof(T).Name}");
             
             var candidateMap = new Dictionary<int, int>();
 
             foreach (var token in TitleHelper.GetTokens(qSpan))
             {
+                string tokenStr = token.ToString();
                 var indices = GetIndexer(typeof(T) == typeof(SeriesStream) ? "series" : "vod").FindByToken(token);
+                AppLogger.Info($"   [IPTV_MATCH] Token='{tokenStr}' matched indices count: {indices.Length}");
+                
                 foreach (int idx in indices)
                 {
                     ref int score = ref CollectionsMarshal.GetValueRefOrAddDefault(candidateMap, idx, out _);
@@ -351,11 +369,15 @@ namespace ModernIPTVPlayer.Services.Iptv
                 }
             }
 
+            AppLogger.Info($"[IPTV_MATCH] CandidateMap count: {candidateMap.Count}");
+
             if (candidateMap.Count == 0) return [];
 
             var virtualList = candidates as IVirtualStreamList;
             var results = new List<MatchResult>(Math.Min(candidateMap.Count, 100));
             
+            string queryYearStr = queryYear.ToString();
+
             // [SENIOR] Strategic Parallelization
             // Only offload to thread pool if the candidate set is large enough to justify the overhead.
             if (candidateMap.Count > 500)
@@ -365,14 +387,35 @@ namespace ModernIPTVPlayer.Services.Iptv
                 
                 Parallel.ForEach(partitions, new ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, Environment.ProcessorCount - 1) }, kvp =>
                 {
-                    // Stackalloc buffer for each thread to ensure zero-allocation during similarity check
+                    // Stackalloc buffers for each thread to ensure zero-allocation during similarity check
                     Span<char> threadTitleBuffer = stackalloc char[256];
+                    Span<char> threadCleanBuffer = stackalloc char[256];
                     
                     int idx = kvp.Key;
                     if (idx >= 0 && idx < candidates.Count)
                     {
                         var itemTitleSpan = virtualList != null ? virtualList.GetTitleSpan(idx, threadTitleBuffer) : candidates[idx].Title.AsSpan();
-                        double sim = TitleHelper.CalculateSimilarity(itemTitleSpan, query.AsSpan());
+                        
+                        // 1. Year Verification (skip if mismatch)
+                        var threadQueryYear = queryYearStr.AsSpan();
+                        if (!threadQueryYear.IsEmpty)
+                        {
+                            var candidateYear = TitleHelper.ExtractYear(itemTitleSpan);
+                            if (!candidateYear.IsEmpty && !threadQueryYear.SequenceEqual(candidateYear))
+                                return;
+                        }
+
+                        // 2. Clean candidate title once using thread-local buffer
+                        int cleanLen = TitleHelper.NormalizeToBuffer(itemTitleSpan, threadCleanBuffer);
+                        var cleanItemTitle = threadCleanBuffer[..cleanLen];
+
+                        var threadQSpan = qNormalizedStr.AsSpan();
+                        double sim = TitleHelper.CalculateSimilarityNormalized(cleanItemTitle, threadQSpan);
+
+                        // 3. Strictness Check for Single-Token Queries (skip if mismatch)
+                        if (queryTokenCount == 1 && sim < 0.85)
+                            return;
+
                         sim += (kvp.Value * 0.1);
 
                         if (sim > 0.1) concurrentResults.Add(new MatchResult { Stream = candidates[idx], Score = (float)sim });
@@ -384,20 +427,49 @@ namespace ModernIPTVPlayer.Services.Iptv
             else
             {
                 Span<char> titleBuffer = stackalloc char[256];
+                Span<char> cleanBuffer = stackalloc char[256];
                 foreach (var kvp in candidateMap)
                 {
                     int idx = kvp.Key;
                     if (idx < 0 || idx >= candidates.Count) continue;
 
                     var itemTitleSpan = virtualList != null ? virtualList.GetTitleSpan(idx, titleBuffer) : candidates[idx].Title.AsSpan();
-                    double sim = TitleHelper.CalculateSimilarity(itemTitleSpan, qSpan);
+                    
+                    // 1. Year Verification (skip if mismatch)
+                    if (!queryYear.IsEmpty)
+                    {
+                        var candidateYear = TitleHelper.ExtractYear(itemTitleSpan);
+                        if (!candidateYear.IsEmpty && !queryYear.SequenceEqual(candidateYear))
+                            continue;
+                    }
+
+                    // 2. Clean candidate title once using loop stack-buffer
+                    int cleanLen = TitleHelper.NormalizeToBuffer(itemTitleSpan, cleanBuffer);
+                    var cleanItemTitle = cleanBuffer[..cleanLen];
+
+                    double sim = TitleHelper.CalculateSimilarityNormalized(cleanItemTitle, qSpan);
+
+                    // 3. Strictness Check for Single-Token Queries (skip if mismatch)
+                    if (queryTokenCount == 1 && sim < 0.85)
+                        continue;
+
                     sim += (kvp.Value * 0.1);
+
+                    string itemTitleStr = itemTitleSpan.ToString();
+                    AppLogger.Info($"   [IPTV_MATCH] Candidate ID={candidates[idx].Id}, Title='{itemTitleStr}', TokensMatched={kvp.Value}, Similarity={sim:F4}");
 
                     if (sim > 0.1) results.Add(new MatchResult { Stream = candidates[idx], Score = (float)sim });
                 }
             }
 
             if (results.Count > 1) CollectionsMarshal.AsSpan(results).Sort();
+
+            AppLogger.Info($"[IPTV_MATCH] CalculateScoresGeneric completed. Top matches count: {results.Count}");
+            for (int i = 0; i < Math.Min(5, results.Count); i++)
+            {
+                AppLogger.Info($"   [Top {i+1}] Score={results[i].Score:F4}, Title='{results[i].Stream.Title}', ID={results[i].Stream.Id}");
+            }
+
             return results;
         }
 

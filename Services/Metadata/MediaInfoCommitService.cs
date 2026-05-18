@@ -115,7 +115,6 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 if (CommitSection("people", metadata.PeopleKey))
                 {
-                    await _ui.PopulateCastAndDirectors(metadata);
                     changed = true;
                     NotifySectionIfNotDeferred("cast");
                     NotifySectionIfNotDeferred("director");
@@ -123,10 +122,6 @@ namespace ModernIPTVPlayer.Services.Metadata
 
                 if (HasEpisodes(metadata) && CommitSection("episodes", metadata.EpisodesKey))
                 {
-                    var epSw = Stopwatch.StartNew();
-                    await _ui.LoadSeriesDataAsync(metadata);
-                    epSw.Stop();
-                    System.Diagnostics.Debug.WriteLine($"[NAV-TIMING] LoadSeriesDataAsync (episodes): {epSw.ElapsedMilliseconds}ms");
                     HasCommittedEpisodes = true;
                     changed = true;
                 }

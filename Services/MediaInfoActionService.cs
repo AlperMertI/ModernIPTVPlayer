@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
 using ModernIPTVPlayer.Models;
 using ModernIPTVPlayer.Models.Iptv;
 using ModernIPTVPlayer.Helpers;
@@ -203,7 +204,7 @@ namespace ModernIPTVPlayer.Services
                 }
                 else
                 {
-                    _ui.ShowActionFeedback("Kaynak Bulunamadı", "Bu içerik için şu anda kullanılabilir bir yayın adresi yok.", sender);
+                    _ui.ShowActionFeedback("Kaynak Bulunamadı", "Bu içerik için şu anda kullanılabilir bir yayın adresi yok.", sender, Symbol.Important);
                 }
             }
         }
@@ -245,7 +246,7 @@ namespace ModernIPTVPlayer.Services
             }
             else
             {
-                _ui.ShowActionFeedback("Fragman Bulunamadı", "Bu içerik için şu anda izlenebilir bir fragman mevcut değil.", sender);
+                _ui.ShowActionFeedback("Fragman Bulunamadı", "Bu içerik için şu anda izlenebilir bir fragman mevcut değil.", sender, Symbol.Important);
             }
         }
 
@@ -253,7 +254,7 @@ namespace ModernIPTVPlayer.Services
         {
             if (string.IsNullOrEmpty(streamUrl))
             {
-                _ui.ShowActionFeedback("Kaynak Seçilmedi", "İndirme yapabilmek için önce bir yayın kaynağı seçmelisiniz.", sender);
+                _ui.ShowActionFeedback("Kaynak Seçilmedi", "İndirme yapabilmek için önce bir yayın kaynağı seçmelisiniz.", sender, Symbol.Important);
                 return;
             }
 
@@ -270,7 +271,7 @@ namespace ModernIPTVPlayer.Services
                 // Show feedback only if it's a direct file (m3u8 check is inside DownloadSingle)
                 if (!streamUrl.Contains(".m3u8") && !streamUrl.Contains(".ts"))
                 {
-                    _ui.ShowActionFeedback("İndirme Başlatıldı", "Dosya indirme işlemi arka planda başlatıldı.", sender);
+                    _ui.ShowActionFeedback("İndirme Başlatıldı", "Dosya indirme işlemi arka planda başlatıldı.", sender, Symbol.Download);
                 }
             }
         }
@@ -280,11 +281,11 @@ namespace ModernIPTVPlayer.Services
             if (!string.IsNullOrEmpty(streamUrl))
             {
                 _ui.CopyToClipboard(streamUrl);
-                _ui.ShowActionFeedback("Bağlantı Kopyalandı", "Yayın adresi başarıyla panoya kopyalandı.", sender);
+                _ui.ShowActionFeedback("Bağlantı Kopyalandı", "Yayın adresi başarıyla panoya kopyalandı.", sender, Symbol.Copy);
             }
             else
             {
-                _ui.ShowActionFeedback("Bağlantı Yok", "Kopyalanacak bir yayın adresi bulunamadı.", sender);
+                _ui.ShowActionFeedback("Bağlantı Yok", "Kopyalanacak bir yayın adresi bulunamadı.", sender, Symbol.Important);
             }
         }
 
@@ -296,12 +297,12 @@ namespace ModernIPTVPlayer.Services
             if (alreadyIn)
             {
                 await WatchlistManager.Instance.RemoveFromWatchlist(item);
-                _ui.ShowActionFeedback("Listeden Çıkarıldı", "İçerik izleme listenizden kaldırıldı.", sender);
+                _ui.ShowActionFeedback("Listeden Çıkarıldı", "İçerik izleme listenizden kaldırıldı.", sender, Symbol.Cancel);
             }
             else
             {
                 await WatchlistManager.Instance.AddToWatchlist(item);
-                _ui.ShowActionFeedback("Listeye Eklendi", "İçerik başarıyla izleme listenize eklendi.", sender);
+                _ui.ShowActionFeedback("Listeye Eklendi", "İçerik başarıyla izleme listenize eklendi.", sender, Symbol.Add);
             }
 
             _ui.SetWatchlistIcon(!alreadyIn, true);

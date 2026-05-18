@@ -479,8 +479,8 @@
                                 SweepWidth="1000" HighlightOpacity="0.4"/>
 
             
-            <Image x:Name="HeroImage2" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0" ImageOpened="HeroImage_ImageOpened" ImageFailed="HeroImage_ImageFailed"/>
-            <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="1" ImageOpened="HeroImage_ImageOpened" ImageFailed="HeroImage_ImageFailed"/>
+            <Image x:Name="HeroImage2" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="0"/>
+            <Image x:Name="HeroImage" Stretch="UniformToFill" HorizontalAlignment="Center" VerticalAlignment="Center" Opacity="1"/>
             <Image x:Name="BackdropValidator" Opacity="0" IsHitTestVisible="False" Width="100" Height="100" Stretch="UniformToFill"/>
             
             <!-- Source Attribution (Bottom Right of Hero) -->

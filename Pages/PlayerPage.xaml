@@ -1255,6 +1255,66 @@
                 </StackPanel>
             </StackPanel>
         </Grid>
+
+        <!-- Playback Failure Premium Glassmorphic Overlay -->
+        <Grid x:Name="PlaybackFailureOverlay" 
+              Visibility="Collapsed" 
+              HorizontalAlignment="Stretch" 
+              VerticalAlignment="Stretch"
+              Background="#E50F111A">
+            
+            <StackPanel HorizontalAlignment="Center" 
+                        VerticalAlignment="Center" 
+                        Spacing="28" 
+                        MaxWidth="500">
+                
+                <!-- Glowing Warning Icon Area -->
+                <Grid Width="96" Height="96" HorizontalAlignment="Center">
+                    <!-- Outer pulsating soft glow ring -->
+                    <Border CornerRadius="48" Background="#15FF3B30" BorderThickness="2" BorderBrush="#30FF3B30"/>
+                    <Border CornerRadius="48" Margin="8" Background="#25FF3B30">
+                        <FontIcon Glyph="&#xE783;" 
+                                  FontFamily="Segoe Fluent Icons" 
+                                  FontSize="36" 
+                                  Foreground="#FF3B30" 
+                                  HorizontalAlignment="Center" 
+                                  VerticalAlignment="Center"/>
+                    </Border>
+                </Grid>
+
+                <StackPanel Spacing="12" HorizontalAlignment="Center">
+                    <TextBlock Text="Oynatma Hatası" 
+                               FontSize="28" 
+                               FontWeight="Bold" 
+                               Foreground="White" 
+                               HorizontalAlignment="Center" />
+                    
+                    <TextBlock x:Name="PlaybackFailureDetails" 
+                               Text="Yayın yüklenirken bir sorun oluştu veya zaman aşımına uğradı. Lütfen internet bağlantınızı kontrol edip tekrar deneyin." 
+                               FontSize="15" 
+                               Foreground="#B0FFFFFF" 
+                               TextWrapping="Wrap" 
+                               TextAlignment="Center"
+                               LineHeight="22" 
+                               HorizontalAlignment="Center" />
+                </StackPanel>
+
+                <!-- Action Button -->
+                <Button x:Name="FailureBackBtn" 
+                        Content="Geri Dön" 
+                        Click="OnFailureBackClicked" 
+                        Width="180" 
+                        Height="44" 
+                        CornerRadius="8" 
+                        HorizontalAlignment="Center"
+                        Style="{StaticResource AccentButtonStyle}" 
+                        Background="#FF3B30"
+                        BorderBrush="#E5FF3B30"
+                        Foreground="White"
+                        FontSize="15" 
+                        FontWeight="SemiBold"/>
+            </StackPanel>
+        </Grid>
     </Grid>
 </Page>
 

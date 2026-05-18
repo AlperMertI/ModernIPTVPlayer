@@ -34,10 +34,16 @@ namespace ModernIPTVPlayer.Services
         private static DispatcherQueue s_dispatcher;
         private static bool s_batchPending;
         private static readonly object s_batchLock = new();
+        private static AnimationCoordinator s_animationCoordinator;
 
         internal static void SetDispatcher(DispatcherQueue dispatcher)
         {
             s_dispatcher = dispatcher;
+        }
+
+        internal static void SetAnimationCoordinator(AnimationCoordinator coordinator)
+        {
+            s_animationCoordinator = coordinator;
         }
 
         internal static void FlushPendingReveals()
@@ -73,6 +79,7 @@ namespace ModernIPTVPlayer.Services
                             catch (Exception ex)
                             {
                                 Debug.WriteLine($"[SECTION] {section.Name} crossfade failed: {ex.Message}");
+                                s_animationCoordinator?.Fail($"crossfade:{section.Name}", ex.Message);
                             }
                         });
                     });
@@ -307,6 +314,9 @@ namespace ModernIPTVPlayer.Services
                 return;
             }
 
+            var animKey = $"crossfade:{Name}";
+            var tcs = s_animationCoordinator?.Register(animKey, $"{Name} crossfade");
+
             try
             {
                 var easing = _compositor.CreateCubicBezierEasingFunction(
@@ -356,10 +366,12 @@ namespace ModernIPTVPlayer.Services
                             _content.Opacity = 1;
                             _state = SectionState.ContentVisible;
                             Debug.WriteLine($"[SECTION] {Name} crossfade complete");
+                            s_animationCoordinator?.Complete(animKey);
                         }
                         catch (Exception ex)
                         {
                             Debug.WriteLine($"[SECTION] {Name} crossfade finalize failed: {ex.Message}");
+                            s_animationCoordinator?.Fail(animKey, ex.Message);
                         }
                     });
                 });
@@ -367,6 +379,7 @@ namespace ModernIPTVPlayer.Services
             catch (Exception ex)
             {
                 Debug.WriteLine($"[SECTION] {Name} ExecuteCrossfade failed: {ex.Message}");
+                s_animationCoordinator?.Fail(animKey, ex.Message);
             }
         }
 

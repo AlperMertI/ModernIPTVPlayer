@@ -116,8 +116,6 @@ namespace ModernIPTVPlayer.Services
                 _btnBackToEpisodes.Visibility = (_contentKind == MediaContentKind.Series) ? Visibility.Visible : Visibility.Collapsed;
 
             ResetPanelVisuals(_sourcesPanel, _sourcesPanelInnerContent, _sourcesRepeater);
-            _sourcesPanel.Visibility = Visibility.Visible;
-            _sourcesPanel.Opacity = 1;
 
             ApplyLayoutAndSection("sources", "episodes");
         }
@@ -135,8 +133,6 @@ namespace ModernIPTVPlayer.Services
                 _btnBackToEpisodes.Visibility = Visibility.Collapsed;
 
             ResetPanelVisuals(_episodesPanel, null, _episodesRepeater);
-            _episodesPanel.Visibility = Visibility.Visible;
-            _episodesPanel.Opacity = 1;
 
             Debug.WriteLine($"[PANEL-OWNER] EpisodesPanel after reset: Vis={_episodesPanel?.Visibility}, Opacity={_episodesPanel?.Opacity}");
 
@@ -407,20 +403,14 @@ namespace ModernIPTVPlayer.Services
             Debug.WriteLine($"[PANEL-OWNER] ResetPanelVisuals on {panel.Name}. Before: Vis={panel.Visibility}, Opacity={panel.Opacity}");
             
             CompositionService.StopAllAnimationsImmediately(panel);
-            CompositionService.ResetVisual(panel);
-            panel.Opacity = 1;
-            panel.Visibility = Visibility.Visible;
-            Debug.WriteLine($"[PANEL-OWNER] ResetPanelVisuals on {panel.Name}. After: Vis={panel.Visibility}, Opacity={panel.Opacity}");
 
             if (innerContent != null)
             {
                 CompositionService.StopAllAnimationsImmediately(innerContent);
-                CompositionService.ResetVisual(innerContent);
             }
             if (repeater != null)
             {
                 CompositionService.StopAllAnimationsImmediately(repeater);
-                CompositionService.ResetVisual(repeater);
             }
         }
 

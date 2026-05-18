@@ -93,7 +93,9 @@ namespace ModernIPTVPlayer.Services.Iptv
                         {
                             foreach (var token in TitleHelper.GetTokens(titleSpan))
                             {
-                                var list = tokenRegistry.GetOrAdd(pool.GetOrAdd(token), _ => new List<int>());
+                                Span<char> lowerToken = stackalloc char[token.Length];
+                                token.ToLowerInvariant(lowerToken);
+                                var list = tokenRegistry.GetOrAdd(pool.GetOrAdd(lowerToken), _ => new List<int>());
                                 lock (list) { list.Add(i); }
                             }
                         }
@@ -101,7 +103,9 @@ namespace ModernIPTVPlayer.Services.Iptv
                         string? idStr = virtualList.GetId(i);
                         if (!string.IsNullOrEmpty(idStr) && idStr != "0")
                         {
-                            var list = idRegistry.GetOrAdd(pool.GetOrAdd(idStr), _ => new List<int>());
+                            Span<char> lowerId = stackalloc char[idStr.Length];
+                            idStr.AsSpan().ToLowerInvariant(lowerId);
+                            var list = idRegistry.GetOrAdd(pool.GetOrAdd(lowerId), _ => new List<int>());
                             lock (list) { list.Add(i); }
                         }
                     }

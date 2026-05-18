@@ -74,6 +74,11 @@ namespace ModernIPTVPlayer.Services
         {
             if (_disposed) return;
 
+            if (_hasPreviousDecision && IsDecisionIdentical(ref _lastDecision, ref decision))
+            {
+                return;
+            }
+
             try
             {
                 ApplyGridChanges(decision);
@@ -88,6 +93,39 @@ namespace ModernIPTVPlayer.Services
             {
                 Debug.WriteLine($"[LAYOUT-APPLIER] Apply failed: {ex.Message}");
             }
+        }
+
+        private static bool IsDecisionIdentical(ref LayoutDecision a, ref LayoutDecision b)
+        {
+            return a.IsWide == b.IsWide
+                && a.Grid.Col0Width == b.Grid.Col0Width
+                && a.Grid.Col1Width == b.Grid.Col1Width
+                && a.Grid.ContentGridPadding == b.Grid.ContentGridPadding
+                && a.Grid.ScrollBarVisibility == b.Grid.ScrollBarVisibility
+                && a.Grid.ScrollMode == b.Grid.ScrollMode
+                && a.Placement.InfoRow == b.Placement.InfoRow
+                && a.Placement.InfoColumn == b.Placement.InfoColumn
+                && a.Placement.InfoColumnSpan == b.Placement.InfoColumnSpan
+                && a.Placement.SourcesRow == b.Placement.SourcesRow
+                && a.Placement.SourcesColumn == b.Placement.SourcesColumn
+                && a.Placement.SourcesColumnSpan == b.Placement.SourcesColumnSpan
+                && a.Placement.EpisodesRow == b.Placement.EpisodesRow
+                && a.Placement.EpisodesColumn == b.Placement.EpisodesColumn
+                && a.Placement.EpisodesColumnSpan == b.Placement.EpisodesColumnSpan
+                && a.Placement.NarrowSectionsVisible == b.Placement.NarrowSectionsVisible
+                && a.Visibility.InfoContainer == b.Visibility.InfoContainer
+                && a.Visibility.CastSection == b.Visibility.CastSection
+                && a.Visibility.CastShimmer == b.Visibility.CastShimmer
+                && a.Visibility.DirectorSection == b.Visibility.DirectorSection
+                && a.Visibility.DirectorShimmer == b.Visibility.DirectorShimmer
+                && a.Visibility.NarrowSectionsContainer == b.Visibility.NarrowSectionsContainer
+                && a.Visibility.BtnHideSources == b.Visibility.BtnHideSources
+                && a.Visibility.BtnBackToEpisodes == b.Visibility.BtnBackToEpisodes
+                && a.Visibility.SourcesShowHandle == b.Visibility.SourcesShowHandle
+                && a.Visibility.IdentityControl == b.Visibility.IdentityControl
+                && a.Visibility.MetadataPanel == b.Visibility.MetadataPanel
+                && a.Visibility.OverviewPanel == b.Visibility.OverviewPanel
+                && a.Visibility.ActionBarPanel == b.Visibility.ActionBarPanel;
         }
 
         #endregion

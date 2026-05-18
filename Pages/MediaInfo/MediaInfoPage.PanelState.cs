@@ -97,10 +97,6 @@ namespace ModernIPTVPlayer
 
         public void OpenSourcesPanel(PanelChangeReason reason)
         {
-            _sourcesPanelOpenedTime = DateTime.Now;
-            _sourcesPresentationTime = DateTime.Now;
-            _sourcesRevealItemLimit = Math.Min(30, _visibleSourceStreams.Count);
-
             _panelOwner?.SetContentKind(ResolveCurrentContentKind());
             _panelOwner?.OpenSourcesPanel(reason);
 
@@ -110,12 +106,10 @@ namespace ModernIPTVPlayer
             {
                 if (_visibleSourceStreams.Count > 0)
                 {
+                    _detailPanelController?.PrepareSourcesOpen(_visibleSourceStreams.Count);
+
                     DispatcherQueue.TryEnqueue(() =>
                     {
-                        _sourcesVisualGeneration++;
-                        _animatedSourceRevealIndexes.Clear();
-                        _sourcesRevealItemLimit = _visibleSourceStreams.Count;
-
                         if (SourcesRepeater != null)
                         {
                             SourcesRepeater.ItemsSource = null;
@@ -137,14 +131,10 @@ namespace ModernIPTVPlayer
 
             if (reason == PanelChangeReason.BackToEpisodes || reason == PanelChangeReason.SeriesDefaultEpisodes || reason == PanelChangeReason.EpisodeRequired)
             {
-                _sourcesPresentationTime = DateTime.Now;
-                _sourcesRevealItemLimit = Math.Min(30, CurrentEpisodes.Count);
+                _detailPanelController?.PrepareEpisodesOpen(CurrentEpisodes.Count);
 
                 DispatcherQueue.TryEnqueue(() =>
                 {
-                    _sourcesVisualGeneration++;
-                    _animatedSourceRevealIndexes.Clear();
-
                     if (EpisodesRepeater != null)
                     {
                         EpisodesRepeater.ItemsSource = null;
@@ -255,6 +245,34 @@ namespace ModernIPTVPlayer
         {
             if (_pageCts?.IsCancellationRequested == true) return;
             if (LayoutRoot == null || ContentGrid == null) return;
+            _layoutScheduler?.RequestLayout(LayoutRequestReason.ViewportChanged);
+        }
+
+        private void OnPanelChanged()
+        {
+            if (_pageCts?.IsCancellationRequested == true) return;
+            if (LayoutRoot == null || ContentGrid == null) return;
+            _layoutScheduler?.RequestLayout(LayoutRequestReason.PanelChanged);
+        }
+
+        internal void OnDataCommitted()
+        {
+            if (_pageCts?.IsCancellationRequested == true) return;
+            if (LayoutRoot == null || ContentGrid == null) return;
+            _layoutScheduler?.RequestLayout(LayoutRequestReason.DataCommitted);
+        }
+
+        internal void OnIdentityChanged()
+        {
+            if (_pageCts?.IsCancellationRequested == true) return;
+            if (LayoutRoot == null || ContentGrid == null) return;
+            _layoutScheduler?.RequestLayout(LayoutRequestReason.IdentityChanged);
+        }
+
+        private void ExecuteLayout(LayoutRequestReason reason)
+        {
+            if (_pageCts?.IsCancellationRequested == true) return;
+            if (LayoutRoot == null || ContentGrid == null) return;
 
             try
             {
@@ -264,64 +282,13 @@ namespace ModernIPTVPlayer
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"[LAYOUT] OnViewportChanged failed: {ex.Message}");
-            }
-        }
-
-        private void OnPanelChanged()
-        {
-            if (_pageCts?.IsCancellationRequested == true) return;
-            if (LayoutRoot == null || ContentGrid == null) return;
-
-            try
-            {
-                var inputs = BuildLayoutInputs();
-                var decision = LayoutEngine.Compute(inputs);
-                ApplyLayoutDecision(decision);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LAYOUT] OnPanelChanged failed: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"[LAYOUT] ExecuteLayout({reason}) failed: {ex.Message}");
             }
         }
 
         private void ApplyLayoutDecision(LayoutDecision decision)
         {
             _layoutApplier?.Apply(decision);
-        }
-
-        private void OnDataCommitted()
-        {
-            if (_pageCts?.IsCancellationRequested == true) return;
-            if (LayoutRoot == null || ContentGrid == null) return;
-
-            try
-            {
-                var inputs = BuildLayoutInputs();
-                var decision = LayoutEngine.Compute(inputs);
-                ApplyLayoutDecision(decision);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LAYOUT] OnDataCommitted failed: {ex.Message}");
-            }
-        }
-
-        private void OnIdentityChanged()
-        {
-            if (_pageCts?.IsCancellationRequested == true) return;
-            if (LayoutRoot == null || ContentGrid == null) return;
-
-            try
-            {
-                var inputs = BuildLayoutInputs();
-                var decision = LayoutEngine.Compute(inputs);
-                ApplyLayoutDecision(decision);
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"[LAYOUT] OnIdentityChanged failed: {ex.Message}");
-            }
         }
 
         private LayoutInputs BuildLayoutInputs()

@@ -37,7 +37,6 @@ namespace ModernIPTVPlayer.Helpers
 
             if (!element.IsLoaded)
             {
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] {TraceTag} Skip: {caller} on {name} | Reason: Element not loaded.");
                 return false;
             }
 
@@ -46,7 +45,6 @@ namespace ModernIPTVPlayer.Helpers
                 var visual = ElementCompositionPreview.GetElementVisual(element);
                 if (visual == null)
                 {
-                    Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] {TraceTag} Skip: {caller} on {name} | Reason: Visual is null.");
                     return false;
                 }
 
@@ -55,12 +53,12 @@ namespace ModernIPTVPlayer.Helpers
             }
             catch (InvalidCastException ice)
             {
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] {TraceTag} INTERFACE FAILURE (0x80004002?) in {caller} on {name}: {ice.Message}");
+                ModernIPTVPlayer.Services.AppLogger.Error($"{TraceTag} INTERFACE FAILURE (0x80004002?) in {caller} on {name}", ice);
                 return false;
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] [SOURCE_FINDER] {TraceTag} ERROR in {caller} on {name}: {ex.Message}");
+                ModernIPTVPlayer.Services.AppLogger.Error($"{TraceTag} ERROR in {caller} on {name}", ex);
                 LogFailure(element, caller, ex);
                 return false;
             }

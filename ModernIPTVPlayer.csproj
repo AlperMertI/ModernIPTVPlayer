@@ -46,11 +46,9 @@
     <Page Remove="scratch\**" />
   </ItemGroup>
   <ItemGroup>
-    <None Remove="LiveTVPage.xaml" />
-    <None Remove="LoginPage.xaml" />
-    <None Remove="PlayerPage.xaml" />
-    <None Remove="MoviesPage.xaml" />
-    <None Remove="SeriesPage.xaml" />
+    <None Remove="Pages\LiveTVPage.xaml" />
+    <None Remove="Pages\LoginPage.xaml" />
+    <None Remove="Pages\PlayerPage.xaml" />
     <None Remove="Controls\ShimmerCard.xaml" />
   </ItemGroup>
 
@@ -141,15 +139,15 @@
 
 
   <ItemGroup>
-    <Page Update="PlayerPage.xaml">
+    <Page Update="Pages\PlayerPage.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
-    <Page Update="MediaInfoPage.xaml">
+    <Page Update="Pages\MediaInfo\MediaInfoPage.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
   <ItemGroup>
-    <Page Update="LiveTVPage.xaml">
+    <Page Update="Pages\LiveTVPage.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
@@ -164,17 +162,7 @@
     </Content>
   </ItemGroup>
   <ItemGroup>
-    <Page Update="LoginPage.xaml">
-      <Generator>MSBuild:Compile</Generator>
-    </Page>
-  </ItemGroup>
-  <ItemGroup>
-    <Page Update="MoviesPage.xaml">
-      <Generator>MSBuild:Compile</Generator>
-    </Page>
-  </ItemGroup>
-  <ItemGroup>
-    <Page Update="SeriesPage.xaml">
+    <Page Update="Pages\LoginPage.xaml">
       <Generator>MSBuild:Compile</Generator>
     </Page>
   </ItemGroup>
@@ -234,6 +222,8 @@
     <DebuggerSupport>true</DebuggerSupport>
     <DebugSymbols>false</DebugSymbols>
     <DebugType>none</DebugType>
+    <IlcGenerateMapFile>true</IlcGenerateMapFile>
+    <IlcGenerateMrtap>true</IlcGenerateMrtap>
   </PropertyGroup>
 
   <ItemGroup>

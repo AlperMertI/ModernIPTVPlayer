@@ -789,7 +789,7 @@ namespace ModernIPTVPlayer.Services
                     int recordSize = Marshal.SizeOf<LiveStreamData>();
                     long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
 
-                    BinaryCacheLayout.WriteHeader(writer, streams.Count, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.LiveMagic, streams.Count, 0, true, 0);
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
                     using var stringHeap = new MemoryStream();
                     var heap = new Utf8StringWriter(stringHeap, 0);
@@ -871,7 +871,7 @@ namespace ModernIPTVPlayer.Services
                 using (var writer = new BinaryWriter(buffered, Encoding.UTF8))
                 using (var stringHeap = new MemoryStream(1024 * 1024)) // 1MB initial string heap
                 {
-                    BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.LiveMagic, 0, 0, true, 0);
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                     var heap = new Utf8StringWriter(stringHeap, 0);
@@ -930,7 +930,7 @@ namespace ModernIPTVPlayer.Services
                 using (var writer = new BinaryWriter(buffered, Encoding.UTF8))
                 using (var stringHeap = new MemoryStream(1024 * 1024))
                 {
-                    BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.LiveMagic, 0, 0, true, 0);
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                     var heap = new Utf8StringWriter(stringHeap, 0);
@@ -1044,7 +1044,7 @@ namespace ModernIPTVPlayer.Services
                 using (var writer = new BinaryWriter(buffered, Encoding.UTF8))
                 using (var stringHeap = new MemoryStream(Math.Min(jsonBytes.Length, 8 * 1024 * 1024)))
                 {
-                    BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.LiveMagic, 0, 0, true, 0);
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                     var heap = new Utf8StringWriter(stringHeap, 0);
@@ -1151,7 +1151,7 @@ namespace ModernIPTVPlayer.Services
                 using (var stringsFileStream = await folder.OpenStreamForWriteAsync(stringsTempName, CreationCollisionOption.ReplaceExisting))
                 using (var heap = new Utf8StringWriter(stringsFileStream, 0))
                 {
-                    BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, 0, 0, true, 0);
                     long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
@@ -1277,7 +1277,7 @@ namespace ModernIPTVPlayer.Services
                 using (var stringsFileStream = await folder.OpenStreamForWriteAsync(stringsTempName, CreationCollisionOption.ReplaceExisting))
                 using (var heap = new Utf8StringWriter(stringsFileStream, 0))
                 {
-                    BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, 0, 0, true, 0);
                     writer.BaseStream.Seek(BinaryCacheLayout.GetRecordsOffset(), SeekOrigin.Begin);
 
                     byte[] bufferArray = ArrayPool<byte>.Shared.Rent(128 * 1024);
@@ -1389,7 +1389,7 @@ namespace ModernIPTVPlayer.Services
                     int recordSize = Marshal.SizeOf<Models.Metadata.VodRecord>();
                     long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
 
-                    BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, 0, 0, true, 0);
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                     var indexEntries = new List<(uint Fingerprint, int Index)>();
@@ -1450,7 +1450,7 @@ namespace ModernIPTVPlayer.Services
                 {
                     long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
 
-                    BinaryCacheLayout.WriteHeader(writer, 0, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, 0, 0, true, 0);
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
 
                     count = WriteSeriesRecordsFromJson(jsonBytes, writer, heap, out long datasetFingerprint);
@@ -1504,7 +1504,11 @@ namespace ModernIPTVPlayer.Services
                 using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
                     var header = BinaryCacheLayout.ReadHeader(accessor);
-                    if (!BinaryCacheLayout.IsKnownMagic(header.Magic)) return null;
+                    if (header.Magic != BinaryCacheLayout.LiveMagic)
+                    {
+                        AppLogger.Warn($"[BinaryLoad] Discarding Live Streams cache: Incompatible signature 0x{header.Magic:X8}");
+                        return null;
+                    }
                     count = header.Count;
                     bufferLen = header.StringsLength;
                     version = header.Version;
@@ -2813,7 +2817,7 @@ namespace ModernIPTVPlayer.Services
                 using (var stringHeap = new MemoryStream())
                 using (var heap = new Utf8StringWriter(stringHeap, 0))
                 {
-                    BinaryCacheLayout.WriteHeader(writer, streams.Count, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.VodMagic, streams.Count, 0, true, 0);
 
                     int recordSize = Marshal.SizeOf<Models.Metadata.VodRecord>();
                     long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
@@ -2906,7 +2910,11 @@ namespace ModernIPTVPlayer.Services
                 using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
                     var header = BinaryCacheLayout.ReadHeader(accessor);
-                    if (!BinaryCacheLayout.IsKnownMagic(header.Magic)) return null;
+                    if (header.Magic != BinaryCacheLayout.VodMagic)
+                    {
+                        AppLogger.Warn($"[BinaryLoad] Discarding VOD cache: Incompatible signature 0x{header.Magic:X8}");
+                        return null;
+                    }
                     version = header.Version;
                     
                     // Force rebuild if version is legacy
@@ -2972,7 +2980,7 @@ namespace ModernIPTVPlayer.Services
                 using (var stringHeap = new MemoryStream())
                 using (var heap = new Utf8StringWriter(stringHeap, 0))
                 {
-                    BinaryCacheLayout.WriteHeader(writer, streams.Count, 0, true, 0);
+                    BinaryCacheLayout.WriteHeader(writer, BinaryCacheLayout.SeriesMagic, streams.Count, 0, true, 0);
 
                     long recordsOffset = BinaryCacheLayout.GetRecordsOffset();
                     writer.BaseStream.Seek(recordsOffset, SeekOrigin.Begin);
@@ -3049,7 +3057,11 @@ namespace ModernIPTVPlayer.Services
                 using (var accessor = mmf.CreateViewAccessor(0, BinaryCacheLayout.HeaderSize, MemoryMappedFileAccess.Read))
                 {
                     var header = BinaryCacheLayout.ReadHeader(accessor);
-                    if (header.Magic != BinaryCacheLayout.SeriesMagic) return null; 
+                    if (header.Magic != BinaryCacheLayout.SeriesMagic)
+                    {
+                        AppLogger.Warn($"[BinaryLoad] Discarding Series cache: Incompatible signature 0x{header.Magic:X8}");
+                        return null;
+                    }
                     version = header.Version;
                     if (version < 4)
                     {

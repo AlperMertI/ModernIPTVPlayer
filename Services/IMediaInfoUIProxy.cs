@@ -104,12 +104,10 @@ namespace ModernIPTVPlayer.Services
         Task PerformHandoverAndNavigate(string url, string title, string id = null, string parentId = null, string seriesName = null, int season = 0, int episode = 0, double startSeconds = -1, string posterUrl = null, string type = null, string backdropUrl = null);
         void OpenSourcesPanel(PanelChangeReason reason);
         void OpenEpisodesPanel(PanelChangeReason reason);
-        void ShowActionFeedback(string title, string subtitle, object target = null);
+        void ShowActionFeedback(string title, string subtitle, object target = null, Microsoft.UI.Xaml.Controls.Symbol? symbol = null);
         string ResolveBestContentId(string id);
         string GetCurrentBackdrop();
         
-        Task PopulateCastAndDirectors(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata);
-        Task LoadSeriesDataAsync(ModernIPTVPlayer.Models.Metadata.UnifiedMetadata metadata);
         Task UpdateTechnicalBadgesAsync(string url);
         void ShowTechBadgesShimmer();
         Task WaitForPageLoadedAsync();
